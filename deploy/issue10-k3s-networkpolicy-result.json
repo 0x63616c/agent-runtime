@@ -1,0 +1,1 @@
+{"k3s_image":"rancher/k3s@sha256:846f86bdb15e4eef385e7d699d7c644f28711253c2f437c4aa30bea773214bb1","profile":"ci","default_deny_consecutive_failures":3,"declared_egress_consecutive_successes":3,"container_cleanup":"required"}

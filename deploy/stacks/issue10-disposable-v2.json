@@ -1,0 +1,982 @@
+{
+  "version": 1,
+  "name": "issue10-work",
+  "profiles": {
+    "local": {
+      "namespace": "ar-issue10-work",
+      "prerequisites": [
+        {
+          "name": "kubectl",
+          "kind": "executable",
+          "expected": "present",
+          "minimum_bytes": 0,
+          "repair": "Install the pinned kubectl client; do not let stackctl choose a context."
+        },
+        {
+          "name": "kubernetes-context",
+          "kind": "kubernetes_context",
+          "expected": "orbstack",
+          "minimum_bytes": 0,
+          "repair": "Start the declared OrbStack disposable-cluster harness target; do not change the current context."
+        },
+        {
+          "name": "host-architecture",
+          "kind": "architecture",
+          "expected": "arm64",
+          "minimum_bytes": 0,
+          "repair": "Use the declared arm64 disposable-cluster profile."
+        }
+      ],
+      "sandbox_quota_policy": {
+        "defaults": {
+          "milli_cpu": 500,
+          "memory_bytes": 536870912,
+          "root_disk_bytes": 4294967296,
+          "tmpfs_bytes": 268435456,
+          "pids": 128,
+          "process_count": 64,
+          "open_files": 1024,
+          "inodes": 100000,
+          "files": 50000,
+          "lifetime_seconds": 3600,
+          "produced_output_bytes": 67108864,
+          "retained_output_bytes": 16777216,
+          "transfer_bytes": 1073741824,
+          "network_connections": 64,
+          "volume_bytes": 10737418240,
+          "snapshot_bytes": 10737418240
+        },
+        "maximums": {
+          "milli_cpu": 4000,
+          "memory_bytes": 4294967296,
+          "root_disk_bytes": 34359738368,
+          "tmpfs_bytes": 2147483648,
+          "pids": 1024,
+          "process_count": 512,
+          "open_files": 8192,
+          "inodes": 1000000,
+          "files": 500000,
+          "lifetime_seconds": 86400,
+          "produced_output_bytes": 1073741824,
+          "retained_output_bytes": 268435456,
+          "transfer_bytes": 10737418240,
+          "network_connections": 1024,
+          "volume_bytes": 107374182400,
+          "snapshot_bytes": 107374182400
+        }
+      },
+      "resources": [
+        {
+          "id": "database-secret",
+          "kind": "secret_reference",
+          "owner": "platform-operator",
+          "scope": "namespace",
+          "dependencies": [],
+          "retention": {
+            "policy": "external",
+            "days": 0
+          },
+          "backup_restore_owner": "none",
+          "delete_behavior": "retain",
+          "external_controller": true,
+          "secret_reference": {
+            "provider": "disposable-harness",
+            "reference": "postgres-trust",
+            "version": "v1"
+          }
+        },
+        {
+          "id": "runtime-account",
+          "kind": "kubernetes",
+          "owner": "platform-operator",
+          "scope": "namespace",
+          "dependencies": [],
+          "retention": {
+            "policy": "ephemeral",
+            "days": 0
+          },
+          "backup_restore_owner": "none",
+          "delete_behavior": "delete",
+          "external_controller": false,
+          "kubernetes": {
+            "api_version": "v1",
+            "kind": "ServiceAccount",
+            "name": "runtime-account"
+          }
+        },
+        {
+          "id": "runtime-role",
+          "kind": "kubernetes",
+          "owner": "platform-operator",
+          "scope": "namespace",
+          "dependencies": [],
+          "retention": {
+            "policy": "ephemeral",
+            "days": 0
+          },
+          "backup_restore_owner": "none",
+          "delete_behavior": "delete",
+          "external_controller": false,
+          "kubernetes": {
+            "api_version": "rbac.authorization.k8s.io/v1",
+            "kind": "Role",
+            "name": "runtime-role",
+            "permissions": [
+              {
+                "api_group": "",
+                "resource": "configmaps",
+                "verbs": [
+                  "get"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "id": "runtime-binding",
+          "kind": "kubernetes",
+          "owner": "platform-operator",
+          "scope": "namespace",
+          "dependencies": [
+            "runtime-account",
+            "runtime-role"
+          ],
+          "retention": {
+            "policy": "ephemeral",
+            "days": 0
+          },
+          "backup_restore_owner": "none",
+          "delete_behavior": "delete",
+          "external_controller": false,
+          "kubernetes": {
+            "api_version": "rbac.authorization.k8s.io/v1",
+            "kind": "RoleBinding",
+            "name": "runtime-binding",
+            "service_account": "runtime-account",
+            "role": "runtime-role"
+          }
+        },
+        {
+          "id": "postgres",
+          "kind": "kubernetes",
+          "owner": "database-operator",
+          "scope": "namespace",
+          "dependencies": [
+            "runtime-account"
+          ],
+          "retention": {
+            "policy": "ephemeral",
+            "days": 0
+          },
+          "backup_restore_owner": "database-operator",
+          "delete_behavior": "delete",
+          "external_controller": false,
+          "kubernetes": {
+            "api_version": "apps/v1",
+            "kind": "Deployment",
+            "name": "postgres",
+            "image": "postgres:16@sha256:33f923b05f64ca54ac4401c01126a6b92afe839a0aa0a52bc5aeb5cc958e5f20",
+            "service_account": "runtime-account",
+            "environment": [
+              {
+                "name": "POSTGRES_HOST_AUTH_METHOD",
+                "value": "trust"
+              }
+            ],
+            "readiness": {
+              "command": ["pg_isready", "-U", "postgres", "-d", "postgres"],
+              "initial_delay_seconds": 1,
+              "period_seconds": 1,
+              "failure_threshold": 30
+            },
+            "ports": [
+              {
+                "name": "postgres",
+                "number": 5432,
+                "protocol": "TCP"
+              }
+            ],
+            "compute": {
+              "request_milli_cpu": 100,
+              "limit_milli_cpu": 500,
+              "request_memory_bytes": 134217728,
+              "limit_memory_bytes": 268435456
+            },
+            "storage": []
+          }
+        },
+        {
+          "id": "database-service",
+          "kind": "kubernetes",
+          "owner": "database-operator",
+          "scope": "namespace",
+          "dependencies": [
+            "postgres"
+          ],
+          "retention": {
+            "policy": "ephemeral",
+            "days": 0
+          },
+          "backup_restore_owner": "database-operator",
+          "delete_behavior": "delete",
+          "external_controller": false,
+          "kubernetes": {
+            "api_version": "v1",
+            "kind": "Service",
+            "name": "database-service",
+            "selector": "postgres",
+            "ports": [
+              {
+                "name": "postgres",
+                "number": 5432,
+                "protocol": "TCP"
+              }
+            ]
+          }
+        },
+        {
+          "id": "probe",
+          "kind": "kubernetes",
+          "owner": "platform-operator",
+          "scope": "namespace",
+          "dependencies": [
+            "runtime-account"
+          ],
+          "retention": {
+            "policy": "ephemeral",
+            "days": 0
+          },
+          "backup_restore_owner": "none",
+          "delete_behavior": "delete",
+          "external_controller": false,
+          "kubernetes": {
+            "api_version": "apps/v1",
+            "kind": "Deployment",
+            "name": "probe",
+            "image": "postgres:16@sha256:33f923b05f64ca54ac4401c01126a6b92afe839a0aa0a52bc5aeb5cc958e5f20",
+            "service_account": "runtime-account",
+            "command": [
+              "sh",
+              "-c"
+            ],
+            "arguments": [
+              "sleep infinity"
+            ],
+            "ports": [],
+            "compute": {
+              "request_milli_cpu": 100,
+              "limit_milli_cpu": 500,
+              "request_memory_bytes": 134217728,
+              "limit_memory_bytes": 268435456
+            },
+            "storage": []
+          }
+        },
+        {
+          "id": "deny-probe-egress",
+          "kind": "kubernetes",
+          "owner": "platform-operator",
+          "scope": "namespace",
+          "dependencies": [
+            "probe",
+            "postgres"
+          ],
+          "retention": {
+            "policy": "ephemeral",
+            "days": 0
+          },
+          "backup_restore_owner": "none",
+          "delete_behavior": "delete",
+          "external_controller": false,
+          "kubernetes": {
+            "api_version": "networking.k8s.io/v1",
+            "kind": "NetworkPolicy",
+            "name": "deny-probe-egress",
+            "network": {
+              "default_deny": true,
+              "subject": "probe",
+              "allowed_egress": [
+                "postgres"
+              ]
+            }
+          }
+        },
+        {
+          "id": "database-schema",
+          "kind": "database",
+          "owner": "database-operator",
+          "scope": "provider",
+          "dependencies": [
+            "database-secret",
+            "postgres"
+          ],
+          "retention": {
+            "policy": "persistent",
+            "days": 1
+          },
+          "backup_restore_owner": "database-operator",
+          "delete_behavior": "tombstone",
+          "external_controller": false,
+          "database": {
+            "database": "postgres",
+            "schema": "public",
+            "connection_reference": "database-secret",
+            "migration_target": "postgres",
+            "migrations": [
+              {
+                "version": 1,
+                "upgrade_digest": "sha256:a1218e48746a9312b16ee5a7712a497e922e26022c9faea6caf273f475f77537",
+                "rollback_digest": "sha256:ab18761cbe80508487dac1580309016d43433624d72e8bd36e27650cd00e26a6",
+                "upgrade_artifact": "deploy/migrations/issue10-v1.up.sql",
+                "rollback_artifact": "deploy/migrations/issue10-v1.down.sql"
+              },
+              {
+                "version": 2,
+                "upgrade_digest": "sha256:0baa85ac6d75e66c0e984bef3516854beff14b222505cc8ccca5eb83d0d0d239",
+                "rollback_digest": "sha256:7368ab91d70aadf236d5f166a211c799dbaa567e623226f3993c7ebea9da4bef",
+                "upgrade_artifact": "deploy/migrations/issue10-v2.up.sql",
+                "rollback_artifact": "deploy/migrations/issue10-v2.down.sql"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    "ci": {
+      "namespace": "ar-ci-issue10-work",
+      "prerequisites": [],
+      "sandbox_quota_policy": {
+        "defaults": {
+          "milli_cpu": 500,
+          "memory_bytes": 536870912,
+          "root_disk_bytes": 4294967296,
+          "tmpfs_bytes": 268435456,
+          "pids": 128,
+          "process_count": 64,
+          "open_files": 1024,
+          "inodes": 100000,
+          "files": 50000,
+          "lifetime_seconds": 3600,
+          "produced_output_bytes": 67108864,
+          "retained_output_bytes": 16777216,
+          "transfer_bytes": 1073741824,
+          "network_connections": 64,
+          "volume_bytes": 10737418240,
+          "snapshot_bytes": 10737418240
+        },
+        "maximums": {
+          "milli_cpu": 4000,
+          "memory_bytes": 4294967296,
+          "root_disk_bytes": 34359738368,
+          "tmpfs_bytes": 2147483648,
+          "pids": 1024,
+          "process_count": 512,
+          "open_files": 8192,
+          "inodes": 1000000,
+          "files": 500000,
+          "lifetime_seconds": 86400,
+          "produced_output_bytes": 1073741824,
+          "retained_output_bytes": 268435456,
+          "transfer_bytes": 10737418240,
+          "network_connections": 1024,
+          "volume_bytes": 107374182400,
+          "snapshot_bytes": 107374182400
+        }
+      },
+      "resources": [
+        {
+          "id": "database-secret",
+          "kind": "secret_reference",
+          "owner": "platform-operator",
+          "scope": "namespace",
+          "dependencies": [],
+          "retention": {
+            "policy": "external",
+            "days": 0
+          },
+          "backup_restore_owner": "none",
+          "delete_behavior": "retain",
+          "external_controller": true,
+          "secret_reference": {
+            "provider": "disposable-harness",
+            "reference": "postgres-trust",
+            "version": "v1"
+          }
+        },
+        {
+          "id": "runtime-account",
+          "kind": "kubernetes",
+          "owner": "platform-operator",
+          "scope": "namespace",
+          "dependencies": [],
+          "retention": {
+            "policy": "ephemeral",
+            "days": 0
+          },
+          "backup_restore_owner": "none",
+          "delete_behavior": "delete",
+          "external_controller": false,
+          "kubernetes": {
+            "api_version": "v1",
+            "kind": "ServiceAccount",
+            "name": "runtime-account"
+          }
+        },
+        {
+          "id": "runtime-role",
+          "kind": "kubernetes",
+          "owner": "platform-operator",
+          "scope": "namespace",
+          "dependencies": [],
+          "retention": {
+            "policy": "ephemeral",
+            "days": 0
+          },
+          "backup_restore_owner": "none",
+          "delete_behavior": "delete",
+          "external_controller": false,
+          "kubernetes": {
+            "api_version": "rbac.authorization.k8s.io/v1",
+            "kind": "Role",
+            "name": "runtime-role",
+            "permissions": [
+              {
+                "api_group": "",
+                "resource": "configmaps",
+                "verbs": [
+                  "get"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "id": "runtime-binding",
+          "kind": "kubernetes",
+          "owner": "platform-operator",
+          "scope": "namespace",
+          "dependencies": [
+            "runtime-account",
+            "runtime-role"
+          ],
+          "retention": {
+            "policy": "ephemeral",
+            "days": 0
+          },
+          "backup_restore_owner": "none",
+          "delete_behavior": "delete",
+          "external_controller": false,
+          "kubernetes": {
+            "api_version": "rbac.authorization.k8s.io/v1",
+            "kind": "RoleBinding",
+            "name": "runtime-binding",
+            "service_account": "runtime-account",
+            "role": "runtime-role"
+          }
+        },
+        {
+          "id": "postgres",
+          "kind": "kubernetes",
+          "owner": "database-operator",
+          "scope": "namespace",
+          "dependencies": [
+            "runtime-account"
+          ],
+          "retention": {
+            "policy": "ephemeral",
+            "days": 0
+          },
+          "backup_restore_owner": "database-operator",
+          "delete_behavior": "delete",
+          "external_controller": false,
+          "kubernetes": {
+            "api_version": "apps/v1",
+            "kind": "Deployment",
+            "name": "postgres",
+            "image": "postgres:16@sha256:33f923b05f64ca54ac4401c01126a6b92afe839a0aa0a52bc5aeb5cc958e5f20",
+            "service_account": "runtime-account",
+            "environment": [
+              {
+                "name": "POSTGRES_HOST_AUTH_METHOD",
+                "value": "trust"
+              }
+            ],
+            "readiness": {
+              "command": ["pg_isready", "-U", "postgres", "-d", "postgres"],
+              "initial_delay_seconds": 1,
+              "period_seconds": 1,
+              "failure_threshold": 30
+            },
+            "ports": [
+              {
+                "name": "postgres",
+                "number": 5432,
+                "protocol": "TCP"
+              }
+            ],
+            "compute": {
+              "request_milli_cpu": 100,
+              "limit_milli_cpu": 500,
+              "request_memory_bytes": 134217728,
+              "limit_memory_bytes": 268435456
+            },
+            "storage": []
+          }
+        },
+        {
+          "id": "database-service",
+          "kind": "kubernetes",
+          "owner": "database-operator",
+          "scope": "namespace",
+          "dependencies": [
+            "postgres"
+          ],
+          "retention": {
+            "policy": "ephemeral",
+            "days": 0
+          },
+          "backup_restore_owner": "database-operator",
+          "delete_behavior": "delete",
+          "external_controller": false,
+          "kubernetes": {
+            "api_version": "v1",
+            "kind": "Service",
+            "name": "database-service",
+            "selector": "postgres",
+            "ports": [
+              {
+                "name": "postgres",
+                "number": 5432,
+                "protocol": "TCP"
+              }
+            ]
+          }
+        },
+        {
+          "id": "probe",
+          "kind": "kubernetes",
+          "owner": "platform-operator",
+          "scope": "namespace",
+          "dependencies": [
+            "runtime-account"
+          ],
+          "retention": {
+            "policy": "ephemeral",
+            "days": 0
+          },
+          "backup_restore_owner": "none",
+          "delete_behavior": "delete",
+          "external_controller": false,
+          "kubernetes": {
+            "api_version": "apps/v1",
+            "kind": "Deployment",
+            "name": "probe",
+            "image": "postgres:16@sha256:33f923b05f64ca54ac4401c01126a6b92afe839a0aa0a52bc5aeb5cc958e5f20",
+            "service_account": "runtime-account",
+            "command": [
+              "sh",
+              "-c"
+            ],
+            "arguments": [
+              "sleep infinity"
+            ],
+            "ports": [],
+            "compute": {
+              "request_milli_cpu": 100,
+              "limit_milli_cpu": 500,
+              "request_memory_bytes": 134217728,
+              "limit_memory_bytes": 268435456
+            },
+            "storage": []
+          }
+        },
+        {
+          "id": "deny-probe-egress",
+          "kind": "kubernetes",
+          "owner": "platform-operator",
+          "scope": "namespace",
+          "dependencies": [
+            "probe",
+            "postgres"
+          ],
+          "retention": {
+            "policy": "ephemeral",
+            "days": 0
+          },
+          "backup_restore_owner": "none",
+          "delete_behavior": "delete",
+          "external_controller": false,
+          "kubernetes": {
+            "api_version": "networking.k8s.io/v1",
+            "kind": "NetworkPolicy",
+            "name": "deny-probe-egress",
+            "network": {
+              "default_deny": true,
+              "subject": "probe",
+              "allowed_egress": [
+                "postgres"
+              ]
+            }
+          }
+        },
+        {
+          "id": "database-schema",
+          "kind": "database",
+          "owner": "database-operator",
+          "scope": "provider",
+          "dependencies": [
+            "database-secret",
+            "postgres"
+          ],
+          "retention": {
+            "policy": "persistent",
+            "days": 1
+          },
+          "backup_restore_owner": "database-operator",
+          "delete_behavior": "tombstone",
+          "external_controller": false,
+          "database": {
+            "database": "postgres",
+            "schema": "public",
+            "connection_reference": "database-secret",
+            "migration_target": "postgres",
+            "migrations": [
+              {
+                "version": 1,
+                "upgrade_digest": "sha256:a1218e48746a9312b16ee5a7712a497e922e26022c9faea6caf273f475f77537",
+                "rollback_digest": "sha256:ab18761cbe80508487dac1580309016d43433624d72e8bd36e27650cd00e26a6",
+                "upgrade_artifact": "deploy/migrations/issue10-v1.up.sql",
+                "rollback_artifact": "deploy/migrations/issue10-v1.down.sql"
+              },
+              {
+                "version": 2,
+                "upgrade_digest": "sha256:0baa85ac6d75e66c0e984bef3516854beff14b222505cc8ccca5eb83d0d0d239",
+                "rollback_digest": "sha256:7368ab91d70aadf236d5f166a211c799dbaa567e623226f3993c7ebea9da4bef",
+                "upgrade_artifact": "deploy/migrations/issue10-v2.up.sql",
+                "rollback_artifact": "deploy/migrations/issue10-v2.down.sql"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    "production": {
+      "namespace": "issue10-work",
+      "prerequisites": [],
+      "sandbox_quota_policy": {
+        "defaults": {
+          "milli_cpu": 500,
+          "memory_bytes": 536870912,
+          "root_disk_bytes": 4294967296,
+          "tmpfs_bytes": 268435456,
+          "pids": 128,
+          "process_count": 64,
+          "open_files": 1024,
+          "inodes": 100000,
+          "files": 50000,
+          "lifetime_seconds": 3600,
+          "produced_output_bytes": 67108864,
+          "retained_output_bytes": 16777216,
+          "transfer_bytes": 1073741824,
+          "network_connections": 64,
+          "volume_bytes": 10737418240,
+          "snapshot_bytes": 10737418240
+        },
+        "maximums": {
+          "milli_cpu": 4000,
+          "memory_bytes": 4294967296,
+          "root_disk_bytes": 34359738368,
+          "tmpfs_bytes": 2147483648,
+          "pids": 1024,
+          "process_count": 512,
+          "open_files": 8192,
+          "inodes": 1000000,
+          "files": 500000,
+          "lifetime_seconds": 86400,
+          "produced_output_bytes": 1073741824,
+          "retained_output_bytes": 268435456,
+          "transfer_bytes": 10737418240,
+          "network_connections": 1024,
+          "volume_bytes": 107374182400,
+          "snapshot_bytes": 107374182400
+        }
+      },
+      "resources": [
+        {
+          "id": "database-secret",
+          "kind": "secret_reference",
+          "owner": "platform-operator",
+          "scope": "namespace",
+          "dependencies": [],
+          "retention": {
+            "policy": "external",
+            "days": 0
+          },
+          "backup_restore_owner": "none",
+          "delete_behavior": "retain",
+          "external_controller": true,
+          "secret_reference": {
+            "provider": "disposable-harness",
+            "reference": "postgres-trust",
+            "version": "v1"
+          }
+        },
+        {
+          "id": "runtime-account",
+          "kind": "kubernetes",
+          "owner": "platform-operator",
+          "scope": "namespace",
+          "dependencies": [],
+          "retention": {
+            "policy": "ephemeral",
+            "days": 0
+          },
+          "backup_restore_owner": "none",
+          "delete_behavior": "delete",
+          "external_controller": false,
+          "kubernetes": {
+            "api_version": "v1",
+            "kind": "ServiceAccount",
+            "name": "runtime-account"
+          }
+        },
+        {
+          "id": "runtime-role",
+          "kind": "kubernetes",
+          "owner": "platform-operator",
+          "scope": "namespace",
+          "dependencies": [],
+          "retention": {
+            "policy": "ephemeral",
+            "days": 0
+          },
+          "backup_restore_owner": "none",
+          "delete_behavior": "delete",
+          "external_controller": false,
+          "kubernetes": {
+            "api_version": "rbac.authorization.k8s.io/v1",
+            "kind": "Role",
+            "name": "runtime-role",
+            "permissions": [
+              {
+                "api_group": "",
+                "resource": "configmaps",
+                "verbs": [
+                  "get"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "id": "runtime-binding",
+          "kind": "kubernetes",
+          "owner": "platform-operator",
+          "scope": "namespace",
+          "dependencies": [
+            "runtime-account",
+            "runtime-role"
+          ],
+          "retention": {
+            "policy": "ephemeral",
+            "days": 0
+          },
+          "backup_restore_owner": "none",
+          "delete_behavior": "delete",
+          "external_controller": false,
+          "kubernetes": {
+            "api_version": "rbac.authorization.k8s.io/v1",
+            "kind": "RoleBinding",
+            "name": "runtime-binding",
+            "service_account": "runtime-account",
+            "role": "runtime-role"
+          }
+        },
+        {
+          "id": "postgres",
+          "kind": "kubernetes",
+          "owner": "database-operator",
+          "scope": "namespace",
+          "dependencies": [
+            "runtime-account"
+          ],
+          "retention": {
+            "policy": "ephemeral",
+            "days": 0
+          },
+          "backup_restore_owner": "database-operator",
+          "delete_behavior": "delete",
+          "external_controller": false,
+          "kubernetes": {
+            "api_version": "apps/v1",
+            "kind": "Deployment",
+            "name": "postgres",
+            "image": "postgres:16@sha256:33f923b05f64ca54ac4401c01126a6b92afe839a0aa0a52bc5aeb5cc958e5f20",
+            "service_account": "runtime-account",
+            "environment": [
+              {
+                "name": "POSTGRES_HOST_AUTH_METHOD",
+                "value": "trust"
+              }
+            ],
+            "readiness": {
+              "command": ["pg_isready", "-U", "postgres", "-d", "postgres"],
+              "initial_delay_seconds": 1,
+              "period_seconds": 1,
+              "failure_threshold": 30
+            },
+            "ports": [
+              {
+                "name": "postgres",
+                "number": 5432,
+                "protocol": "TCP"
+              }
+            ],
+            "compute": {
+              "request_milli_cpu": 100,
+              "limit_milli_cpu": 500,
+              "request_memory_bytes": 134217728,
+              "limit_memory_bytes": 268435456
+            },
+            "storage": []
+          }
+        },
+        {
+          "id": "database-service",
+          "kind": "kubernetes",
+          "owner": "database-operator",
+          "scope": "namespace",
+          "dependencies": [
+            "postgres"
+          ],
+          "retention": {
+            "policy": "ephemeral",
+            "days": 0
+          },
+          "backup_restore_owner": "database-operator",
+          "delete_behavior": "delete",
+          "external_controller": false,
+          "kubernetes": {
+            "api_version": "v1",
+            "kind": "Service",
+            "name": "database-service",
+            "selector": "postgres",
+            "ports": [
+              {
+                "name": "postgres",
+                "number": 5432,
+                "protocol": "TCP"
+              }
+            ]
+          }
+        },
+        {
+          "id": "probe",
+          "kind": "kubernetes",
+          "owner": "platform-operator",
+          "scope": "namespace",
+          "dependencies": [
+            "runtime-account"
+          ],
+          "retention": {
+            "policy": "ephemeral",
+            "days": 0
+          },
+          "backup_restore_owner": "none",
+          "delete_behavior": "delete",
+          "external_controller": false,
+          "kubernetes": {
+            "api_version": "apps/v1",
+            "kind": "Deployment",
+            "name": "probe",
+            "image": "postgres:16@sha256:33f923b05f64ca54ac4401c01126a6b92afe839a0aa0a52bc5aeb5cc958e5f20",
+            "service_account": "runtime-account",
+            "command": [
+              "sh",
+              "-c"
+            ],
+            "arguments": [
+              "sleep infinity"
+            ],
+            "ports": [],
+            "compute": {
+              "request_milli_cpu": 100,
+              "limit_milli_cpu": 500,
+              "request_memory_bytes": 134217728,
+              "limit_memory_bytes": 268435456
+            },
+            "storage": []
+          }
+        },
+        {
+          "id": "deny-probe-egress",
+          "kind": "kubernetes",
+          "owner": "platform-operator",
+          "scope": "namespace",
+          "dependencies": [
+            "probe",
+            "postgres"
+          ],
+          "retention": {
+            "policy": "ephemeral",
+            "days": 0
+          },
+          "backup_restore_owner": "none",
+          "delete_behavior": "delete",
+          "external_controller": false,
+          "kubernetes": {
+            "api_version": "networking.k8s.io/v1",
+            "kind": "NetworkPolicy",
+            "name": "deny-probe-egress",
+            "network": {
+              "default_deny": true,
+              "subject": "probe",
+              "allowed_egress": [
+                "postgres"
+              ]
+            }
+          }
+        },
+        {
+          "id": "database-schema",
+          "kind": "database",
+          "owner": "database-operator",
+          "scope": "provider",
+          "dependencies": [
+            "database-secret",
+            "postgres"
+          ],
+          "retention": {
+            "policy": "persistent",
+            "days": 1
+          },
+          "backup_restore_owner": "database-operator",
+          "delete_behavior": "tombstone",
+          "external_controller": false,
+          "database": {
+            "database": "postgres",
+            "schema": "public",
+            "connection_reference": "database-secret",
+            "migration_target": "postgres",
+            "migrations": [
+              {
+                "version": 1,
+                "upgrade_digest": "sha256:a1218e48746a9312b16ee5a7712a497e922e26022c9faea6caf273f475f77537",
+                "rollback_digest": "sha256:ab18761cbe80508487dac1580309016d43433624d72e8bd36e27650cd00e26a6",
+                "upgrade_artifact": "deploy/migrations/issue10-v1.up.sql",
+                "rollback_artifact": "deploy/migrations/issue10-v1.down.sql"
+              },
+              {
+                "version": 2,
+                "upgrade_digest": "sha256:0baa85ac6d75e66c0e984bef3516854beff14b222505cc8ccca5eb83d0d0d239",
+                "rollback_digest": "sha256:7368ab91d70aadf236d5f166a211c799dbaa567e623226f3993c7ebea9da4bef",
+                "upgrade_artifact": "deploy/migrations/issue10-v2.up.sql",
+                "rollback_artifact": "deploy/migrations/issue10-v2.down.sql"
+              }
+            ]
+          }
+        }
+      ]
+    }
+  }
+}

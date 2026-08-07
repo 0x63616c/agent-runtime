@@ -4,7 +4,7 @@
 
 Use one public `agent-runtime` monorepo and one already-running local OrbStack
 Kubernetes cluster. Each working directory runs an independent Tilt stack in its
-own Kubernetes namespace with instance-specific image names and host ports.
+own Kubernetes namespace with stack-specific image names and host ports.
 
 The design is deliberately stricter than "a namespace per developer": one
 developer can run several Git worktrees at once without a database, workflow,
@@ -30,10 +30,10 @@ The finished repository exposes this small command surface:
 
 ```text
 just dev                         # start this worktree's isolated Tilt stack
-just dev INSTANCE=feature-x      # choose a readable, validated instance id
+just dev STACK=feature-x         # choose a readable, validated stack id
 just dev-status                  # show the selected namespace and endpoints
 just dev-api                     # foreground API port-forward on an OS-selected port
-just dev-down                    # delete only this instance's namespace
+just dev-down                    # delete only this stack's namespace
 just dev-preflight               # verify the local, non-secret prerequisites
 ```
 
@@ -42,9 +42,9 @@ just dev-preflight               # verify the local, non-secret prerequisites
 ```text
 tilt up \
   --context orbstack \
-  --namespace ar-<instance> \
+  --namespace ar-<stack> \
   --port <free-dashboard-port> \
-  -- --instance <instance> --profile local
+  -- --stack=<stack> --profile=local
 ```
 
 Tilt supports `--context`, `--namespace`, `--port`, and Tiltfile arguments
@@ -53,14 +53,14 @@ See [Tilt `up`](https://docs.tilt.dev/cli/tilt_up.html) and
 [Tiltfile configuration](https://docs.tilt.dev/api.html#config-parse).
 
 The launcher owns the derived values in a gitignored per-worktree state file,
-for example `.runtime/dev/<instance>.json`. That file contains only the
+for example `.runtime/dev/<stack>.json`. That file contains only the
 worktree path fingerprint, namespace, dashboard port, and creation timestamp;
 it contains no credentials or secret values. It lets `dev-status` and `dev-down`
-address the same instance after a restart.
+address the same stack after a restart.
 
-### Instance identity
+### Stack identity
 
-The default instance id is deterministic for a worktree, not a branch:
+The default stack id is deterministic for a worktree, not a branch:
 
 ```text
 <sanitised-local-user>-<first-8-hex-of-canonical-worktree-path>
@@ -68,7 +68,7 @@ The default instance id is deterministic for a worktree, not a branch:
 
 The launcher derives the canonical path, converts the supplied or derived id to
 lowercase DNS-label characters, and rejects anything that cannot form the
-namespace `ar-<instance>` within Kubernetes' 63-character limit. `INSTANCE` is
+namespace `ar-<stack>` within Kubernetes' 63-character limit. `STACK` is
 an optional human-friendly override. An override is still validated and is
 recorded before it is used for a teardown.
 
@@ -82,14 +82,14 @@ The Tiltfile must contain both a static allow-list and a runtime assertion:
 ```python
 allow_k8s_contexts('orbstack')
 
-config.define_string('instance', usage='unique local stack id')
+config.define_string('stack', usage='unique local stack id')
 config.define_string('profile', usage='local or ci')
 cfg = config.parse()
-instance = cfg.get('instance')
+stack = cfg.get('stack')
 if k8s_context() != 'orbstack':
     fail('agent-runtime local development only permits Kubernetes context orbstack')
-if not instance:
-    fail('use just dev or pass -- --instance <id>')
+if not stack:
+    fail('use just dev or pass -- --stack=<id>')
 ```
 
 `allow_k8s_contexts` is an intentional second layer, not a replacement for the
@@ -99,17 +99,17 @@ clusters. [Tiltfile API](https://docs.tilt.dev/api.html#allow-k8s-contexts)
 
 The render step must meet these rules:
 
-- It emits one `Namespace` named `ar-<instance>` and no other Namespace.
+- It emits one `Namespace` named `ar-<stack>` and no other Namespace.
 - Namespaced objects omit `metadata.namespace`; Tilt's explicit `--namespace`
   supplies the target namespace. A manifest test rejects hard-coded `default`
   or any other namespace.
 - It emits no CRD, `ClusterRole`, `ClusterRoleBinding`, `StorageClass`,
   `IngressClass`, admission webhook, or other cluster-scoped object.
 - All objects carry `app.kubernetes.io/part-of: agent-runtime` and
-  `agent-runtime.dev/instance: <instance>`. The cleanup command validates both
-  the stored namespace and that instance label before it calls Tilt.
+  `agent-runtime.dev/stack: <stack>`. The cleanup command validates both
+  the stored namespace and that stack label before it calls Tilt.
 - `just dev-down` invokes the matching `tilt down --context orbstack
-  --namespace ar-<instance> --delete-namespaces -- --instance <instance>`.
+  --namespace ar-<stack> --delete-namespaces -- --stack=<stack>`.
   Tilt documents that namespaces are retained by default and are deleted only
   with `--delete-namespaces`; the explicit flag makes teardown behavior
   inspectable rather than implicit.
@@ -121,12 +121,12 @@ The CLI must never write the user's current kubeconfig namespace. Selecting
 
 ### Images
 
-Every Tilt build reference includes the instance id:
+Every Tilt build reference includes the stack id:
 
 ```text
-agent-runtime-dev/<instance>/api
-agent-runtime-dev/<instance>/worker
-agent-runtime-dev/<instance>/example-<name>
+agent-runtime-dev/<stack>/api
+agent-runtime-dev/<stack>/worker
+agent-runtime-dev/<stack>/example-<name>
 ```
 
 The same image name must appear in the rendered workload so Tilt can inject the
@@ -144,11 +144,11 @@ release images are a separate release concern, verified in Linux CI.
 
 Fixed host ports make parallel Tilt stacks fragile, including Tilt's dashboard
 port (which otherwise defaults to 10350). `just dev` allocates an available
-localhost dashboard port, stores it with the instance state, and prints its
+localhost dashboard port, stores it with the stack state, and prints its
 URL. It retries the launch if another program wins the short allocation race.
 
 Application services have no fixed `k8s_resource(port_forwards=...)` mapping.
-`just dev-api` starts a foreground, instance-scoped `kubectl port-forward` with
+`just dev-api` starts a foreground, stack-scoped `kubectl port-forward` with
 an omitted local port, lets `kubectl` choose a free port, and prints the URL.
 The forward dies when the command exits. This avoids invisible background
 processes and lets multiple stacks run simultaneously. Tilt's documented
@@ -161,7 +161,7 @@ endpoints](https://docs.tilt.dev/accessing_resource_endpoints.html).
 | Boundary | Included | Excluded |
 | --- | --- | --- |
 | Host prerequisites | Git checkout, `just`, Tilt, Docker, an already-running OrbStack Kubernetes cluster | A host PostgreSQL, Temporal server, MinIO, broker, local daemon, cloud account, or persistent kubeconfig change |
-| Per-instance namespace | API, worker, all example applications, Temporal development server, PostgreSQL, S3-compatible blob store, development telemetry collector, migrations, and generated dev-only secrets | Cluster-scoped controllers, CRDs, a shared database, shared message broker, a production certificate, a production registry credential |
+| Per-stack namespace | API, worker, all example applications, Temporal development server, PostgreSQL, S3-compatible blob store, development telemetry collector, migrations, and generated dev-only secrets | Cluster-scoped controllers, CRDs, a shared database, shared message broker, a production certificate, a production registry credential |
 | Sandbox | A contract-compatible development/test driver with an explicit `development` security mode | A claim that macOS containers are Firecracker microVMs or that they are appropriate for hostile multi-tenant code |
 | Production / KVM | Linux KVM Firecracker driver, Jailer configuration, egress policy, host hardening, production secrets | Tilt and a developer's laptop |
 
@@ -181,7 +181,7 @@ The proposed layout stays inside the monorepo:
 ```text
 Tiltfile
 justfile
-tools/dev/                    # instance validation, state, preflight, forwarding
+tools/dev/                    # stack validation, state, preflight, forwarding
 deploy/dev/                   # namespaced Helm/Kustomize inputs and dev values
 deploy/production/            # separately reviewed production deployment inputs
 cmd/ internal/ pkg/           # Go API, worker, SDK, and shared contracts

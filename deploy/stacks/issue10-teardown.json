@@ -1,0 +1,226 @@
+{
+  "version": 1,
+  "name": "issue10-teardown",
+  "profiles": {
+    "local": {
+      "namespace": "ar-issue10-teardown",
+      "prerequisites": [
+        {
+          "name": "kubectl",
+          "kind": "executable",
+          "expected": "present",
+          "minimum_bytes": 0,
+          "repair": "Install the pinned kubectl client; do not let stackctl choose a context."
+        },
+        {
+          "name": "kubernetes-context",
+          "kind": "kubernetes_context",
+          "expected": "orbstack",
+          "minimum_bytes": 0,
+          "repair": "Start the declared OrbStack disposable-cluster harness target; do not change the current context."
+        },
+        {
+          "name": "host-architecture",
+          "kind": "architecture",
+          "expected": "arm64",
+          "minimum_bytes": 0,
+          "repair": "Use the declared arm64 disposable-cluster profile."
+        }
+      ],
+      "sandbox_quota_policy": {
+        "defaults": {
+          "milli_cpu": 500,
+          "memory_bytes": 536870912,
+          "root_disk_bytes": 4294967296,
+          "tmpfs_bytes": 268435456,
+          "pids": 128,
+          "process_count": 64,
+          "open_files": 1024,
+          "inodes": 100000,
+          "files": 50000,
+          "lifetime_seconds": 3600,
+          "produced_output_bytes": 67108864,
+          "retained_output_bytes": 16777216,
+          "transfer_bytes": 1073741824,
+          "network_connections": 64,
+          "volume_bytes": 10737418240,
+          "snapshot_bytes": 10737418240
+        },
+        "maximums": {
+          "milli_cpu": 4000,
+          "memory_bytes": 4294967296,
+          "root_disk_bytes": 34359738368,
+          "tmpfs_bytes": 2147483648,
+          "pids": 1024,
+          "process_count": 512,
+          "open_files": 8192,
+          "inodes": 1000000,
+          "files": 500000,
+          "lifetime_seconds": 86400,
+          "produced_output_bytes": 1073741824,
+          "retained_output_bytes": 268435456,
+          "transfer_bytes": 10737418240,
+          "network_connections": 1024,
+          "volume_bytes": 107374182400,
+          "snapshot_bytes": 107374182400
+        }
+      },
+      "resources": [
+        {
+          "id": "teardown-config",
+          "kind": "kubernetes",
+          "owner": "platform-operator",
+          "scope": "namespace",
+          "dependencies": [],
+          "retention": {
+            "policy": "ephemeral",
+            "days": 0
+          },
+          "backup_restore_owner": "none",
+          "delete_behavior": "delete",
+          "external_controller": false,
+          "kubernetes": {
+            "api_version": "v1",
+            "kind": "ConfigMap",
+            "name": "teardown-config",
+            "data": {
+              "purpose": "uid-label-digest-containment"
+            }
+          }
+        }
+      ]
+    },
+    "ci": {
+      "namespace": "ar-ci-issue10-teardown",
+      "prerequisites": [],
+      "sandbox_quota_policy": {
+        "defaults": {
+          "milli_cpu": 500,
+          "memory_bytes": 536870912,
+          "root_disk_bytes": 4294967296,
+          "tmpfs_bytes": 268435456,
+          "pids": 128,
+          "process_count": 64,
+          "open_files": 1024,
+          "inodes": 100000,
+          "files": 50000,
+          "lifetime_seconds": 3600,
+          "produced_output_bytes": 67108864,
+          "retained_output_bytes": 16777216,
+          "transfer_bytes": 1073741824,
+          "network_connections": 64,
+          "volume_bytes": 10737418240,
+          "snapshot_bytes": 10737418240
+        },
+        "maximums": {
+          "milli_cpu": 4000,
+          "memory_bytes": 4294967296,
+          "root_disk_bytes": 34359738368,
+          "tmpfs_bytes": 2147483648,
+          "pids": 1024,
+          "process_count": 512,
+          "open_files": 8192,
+          "inodes": 1000000,
+          "files": 500000,
+          "lifetime_seconds": 86400,
+          "produced_output_bytes": 1073741824,
+          "retained_output_bytes": 268435456,
+          "transfer_bytes": 10737418240,
+          "network_connections": 1024,
+          "volume_bytes": 107374182400,
+          "snapshot_bytes": 107374182400
+        }
+      },
+      "resources": [
+        {
+          "id": "teardown-config",
+          "kind": "kubernetes",
+          "owner": "platform-operator",
+          "scope": "namespace",
+          "dependencies": [],
+          "retention": {
+            "policy": "ephemeral",
+            "days": 0
+          },
+          "backup_restore_owner": "none",
+          "delete_behavior": "delete",
+          "external_controller": false,
+          "kubernetes": {
+            "api_version": "v1",
+            "kind": "ConfigMap",
+            "name": "teardown-config",
+            "data": {
+              "purpose": "uid-label-digest-containment"
+            }
+          }
+        }
+      ]
+    },
+    "production": {
+      "namespace": "issue10-teardown",
+      "prerequisites": [],
+      "sandbox_quota_policy": {
+        "defaults": {
+          "milli_cpu": 500,
+          "memory_bytes": 536870912,
+          "root_disk_bytes": 4294967296,
+          "tmpfs_bytes": 268435456,
+          "pids": 128,
+          "process_count": 64,
+          "open_files": 1024,
+          "inodes": 100000,
+          "files": 50000,
+          "lifetime_seconds": 3600,
+          "produced_output_bytes": 67108864,
+          "retained_output_bytes": 16777216,
+          "transfer_bytes": 1073741824,
+          "network_connections": 64,
+          "volume_bytes": 10737418240,
+          "snapshot_bytes": 10737418240
+        },
+        "maximums": {
+          "milli_cpu": 4000,
+          "memory_bytes": 4294967296,
+          "root_disk_bytes": 34359738368,
+          "tmpfs_bytes": 2147483648,
+          "pids": 1024,
+          "process_count": 512,
+          "open_files": 8192,
+          "inodes": 1000000,
+          "files": 500000,
+          "lifetime_seconds": 86400,
+          "produced_output_bytes": 1073741824,
+          "retained_output_bytes": 268435456,
+          "transfer_bytes": 10737418240,
+          "network_connections": 1024,
+          "volume_bytes": 107374182400,
+          "snapshot_bytes": 107374182400
+        }
+      },
+      "resources": [
+        {
+          "id": "teardown-config",
+          "kind": "kubernetes",
+          "owner": "platform-operator",
+          "scope": "namespace",
+          "dependencies": [],
+          "retention": {
+            "policy": "ephemeral",
+            "days": 0
+          },
+          "backup_restore_owner": "none",
+          "delete_behavior": "delete",
+          "external_controller": false,
+          "kubernetes": {
+            "api_version": "v1",
+            "kind": "ConfigMap",
+            "name": "teardown-config",
+            "data": {
+              "purpose": "uid-label-digest-containment"
+            }
+          }
+        }
+      ]
+    }
+  }
+}
