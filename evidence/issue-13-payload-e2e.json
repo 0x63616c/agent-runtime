@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "issue": 13,
+  "observed_at_utc": "2026-08-07T05:31:07Z",
+  "tested_revision": "86ad7511e00a2a5f2df862b9d718b6a5ed3f5acd",
+  "scope": "M2 reusable Temporal payload and immutable S3-compatible blob pipeline",
+  "commands": [
+    "go test -race ./temporalpayload/... ./internal/temporalpayloadruntime ./tests/architecture",
+    "deploy/temporalpayload/minio/run-integration.sh",
+    "docker ps/network/volume label inspection for the disposable Compose project"
+  ],
+  "results": {
+    "codec_and_architecture": "passed",
+    "real_minio_protocol": "passed",
+    "concurrent_identical_create": "passed",
+    "conflicting_same_key_rejected": "passed",
+    "bounded_read_and_integrity": "passed",
+    "authenticated_ui_inspection": "passed",
+    "startup_compatibility_round_trip": "passed",
+    "cleanup": "no container, network, or volume remained for project agent-runtime-payload-16311-22207"
+  },
+  "redaction": "No generated credentials, payload bodies, blob keys, authorization values, or container logs are retained."
+}
