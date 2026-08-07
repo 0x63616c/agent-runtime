@@ -24,23 +24,15 @@ var _ = Describe("Temporal payload composition", func() {
 			if relative == allowed || strings.HasSuffix(relative, "_test.go") {
 				continue
 			}
-			contents, err := os.ReadFile(path)
-			Expect(err).NotTo(HaveOccurred(), relative)
-			constructors, err := rawTemporalConstructors(path)
+			constructors, err := rawTemporalSymbols(path)
 			Expect(err).NotTo(HaveOccurred(), relative)
 			Expect(constructors).To(BeEmpty(), relative)
-			for _, forbidden := range []string{
-				"NewRemotePayloadCodec(",
-				"NewRemoteDataConverter(",
-			} {
-				Expect(string(contents)).NotTo(ContainSubstring(forbidden), relative)
-			}
 		}
 	})
 
 	It("rejects every Temporal client constructor even when the package is aliased", func() {
 		fixture := filepath.Join("testdata", "temporal_client_constructors.go")
-		constructors, err := rawTemporalConstructors(fixture)
+		constructors, err := rawTemporalSymbols(fixture)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(constructors).To(ConsistOf(
 			"client.Dial",
@@ -51,6 +43,16 @@ var _ = Describe("Temporal payload composition", func() {
 			"client.NewLazyClient",
 			"client.NewNamespaceClient",
 			"worker.New",
+		))
+	})
+
+	It("rejects remote codec constructors used through aliases and dot imports", func() {
+		fixture := filepath.Join("testdata", "temporal_remote_codec_constructors.go")
+		constructors, err := rawTemporalSymbols(fixture)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(constructors).To(ConsistOf(
+			"converter.NewRemoteDataConverter",
+			"converter.NewRemotePayloadCodec",
 		))
 	})
 
@@ -135,25 +137,40 @@ func goSourceFiles(root string) []string {
 	return paths
 }
 
-func rawTemporalConstructors(path string) ([]string, error) {
+func rawTemporalSymbols(path string) ([]string, error) {
 	fileSet := token.NewFileSet()
 	file, err := parser.ParseFile(fileSet, path, nil, 0)
 	if err != nil {
 		return nil, err
 	}
 	imports := make(map[string]string)
+	var dotImports []string
 	for _, imported := range file.Imports {
 		pathValue := strings.Trim(imported.Path.Value, "\"")
 		name := filepath.Base(pathValue)
 		if imported.Name != nil {
 			name = imported.Name.Name
 		}
+		if name == "." {
+			dotImports = append(dotImports, pathValue)
+			continue
+		}
 		imports[name] = pathValue
 	}
-	clientConstructors := map[string]bool{
-		"Dial": true, "DialContext": true, "NewLazyClient": true, "NewClient": true,
-		"NewClientFromExisting": true, "NewClientFromExistingWithContext": true,
-		"NewNamespaceClient": true,
+	forbiddenByImport := map[string]map[string]string{
+		"go.temporal.io/sdk/client": {
+			"Dial": "client.Dial", "DialContext": "client.DialContext", "NewLazyClient": "client.NewLazyClient",
+			"NewClient": "client.NewClient", "NewClientFromExisting": "client.NewClientFromExisting",
+			"NewClientFromExistingWithContext": "client.NewClientFromExistingWithContext",
+			"NewNamespaceClient":               "client.NewNamespaceClient",
+		},
+		"go.temporal.io/sdk/worker": {
+			"New": "worker.New",
+		},
+		"go.temporal.io/sdk/converter": {
+			"NewRemotePayloadCodec":  "converter.NewRemotePayloadCodec",
+			"NewRemoteDataConverter": "converter.NewRemoteDataConverter",
+		},
 	}
 	var constructors []string
 	ast.Inspect(file, func(node ast.Node) bool {
@@ -163,23 +180,15 @@ func rawTemporalConstructors(path string) ([]string, error) {
 			if !ok {
 				return true
 			}
-			switch imports[packageName.Name] {
-			case "go.temporal.io/sdk/client":
-				if clientConstructors[function.Sel.Name] {
-					constructors = append(constructors, "client."+function.Sel.Name)
-				}
-			case "go.temporal.io/sdk/worker":
-				if function.Sel.Name == "New" {
-					constructors = append(constructors, "worker.New")
-				}
+			if symbol := forbiddenByImport[imports[packageName.Name]][function.Sel.Name]; symbol != "" {
+				constructors = append(constructors, symbol)
 			}
 			return false
 		case *ast.Ident:
-			if imports["."] == "go.temporal.io/sdk/client" && clientConstructors[function.Name] {
-				constructors = append(constructors, "client."+function.Name)
-			}
-			if imports["."] == "go.temporal.io/sdk/worker" && function.Name == "New" {
-				constructors = append(constructors, "worker.New")
+			for _, importPath := range dotImports {
+				if symbol := forbiddenByImport[importPath][function.Name]; symbol != "" {
+					constructors = append(constructors, symbol)
+				}
 			}
 		}
 		return true

@@ -4,6 +4,7 @@ import (
 	"context"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 )
 
@@ -46,18 +47,24 @@ func TestGarbageCollectorTreatsConcurrentFenceAndDeleteAsOneSafeOutcome(t *testi
 		t.Fatalf("NewGarbageCollector() error = %v", err)
 	}
 
-	errs := make(chan error, 2)
-	for range 2 {
-		go func() {
-			_, collectErr := collector.Collect(context.Background(), now)
-			errs <- collectErr
-		}()
-	}
-	for range 2 {
-		if collectErr := <-errs; collectErr != nil {
-			t.Fatalf("Collect() error = %v", collectErr)
+	synctest.Test(t, func(t *testing.T) {
+		ctx, cancel := context.WithCancel(t.Context())
+		var waitGroup sync.WaitGroup
+		errs := make([]error, 2)
+		for index := range errs {
+			waitGroup.Go(func() {
+				_, errs[index] = collector.Collect(ctx, now)
+			})
 		}
-	}
+		synctest.Wait()
+		cancel()
+		waitGroup.Wait()
+		for _, collectErr := range errs {
+			if collectErr != nil {
+				t.Fatalf("Collect() error = %v", collectErr)
+			}
+		}
+	})
 	if got := coordinator.deleteCount(); got != 1 {
 		t.Fatalf("successful deletions = %d, want 1", got)
 	}
