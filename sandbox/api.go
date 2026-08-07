@@ -25,12 +25,27 @@ type ClientConfig struct {
 	Endpoint       Endpoint
 	TLS            TLSConfig
 	Credentials    CredentialSource
+	TrustBundles   TrustBundleSource
 	RequestTimeout time.Duration
 }
 type Endpoint struct{ URL string }
 type TLSConfig struct {
 	ServerName     string
-	TrustBundleRef string
+	TrustBundleRef TrustBundleRef
+}
+
+// TrustBundleRef is an opaque reference to a versioned set of trusted roots.
+type TrustBundleRef string
+
+// TrustBundle is a resolved, versioned PEM root bundle.
+type TrustBundle struct {
+	Version  string
+	PEMRoots []byte
+}
+
+// TrustBundleSource resolves trust bundle references without ambient system roots.
+type TrustBundleSource interface {
+	ResolveTrustBundle(context.Context, TrustBundleRef) (TrustBundle, error)
 }
 type CredentialSource interface {
 	Apply(context.Context, CredentialSink) error
@@ -40,17 +55,17 @@ type CredentialSink interface {
 	ClearAuthorization()
 }
 
-// NewClient validates public client configuration before durable control transport composition exists.
-func NewClient(_ context.Context, config ClientConfig) (Client, error) {
+// NewClient constructs and binds a Principal-scoped HTTPS control client.
+func NewClient(ctx context.Context, config ClientConfig) (Client, error) {
 	if err := validateClientConfig(config); err != nil {
 		return nil, err
 	}
-	return nil, newFailure(FailureUnavailable, "sandbox control transport is not configured", RetryAfterReconcile)
+	return newHTTPControlClient(ctx, config)
 }
 
 func validateClientConfig(config ClientConfig) error {
 	endpoint, err := url.Parse(config.Endpoint.URL)
-	if err != nil || endpoint.Scheme != "https" || endpoint.Host == "" || endpoint.User != nil || endpoint.RawQuery != "" || endpoint.Fragment != "" {
+	if err != nil || endpoint.Scheme != "https" || endpoint.Host == "" || endpoint.User != nil || endpoint.RawQuery != "" || endpoint.Fragment != "" || (endpoint.Path != "" && endpoint.Path != "/") {
 		return newFailure(FailureInvalidArgument, "sandbox endpoint must be an HTTPS origin", RetryNever)
 	}
 	if config.TLS.ServerName == "" || config.TLS.TrustBundleRef == "" {
@@ -58,6 +73,9 @@ func validateClientConfig(config ClientConfig) error {
 	}
 	if config.Credentials == nil {
 		return newFailure(FailureInvalidArgument, "sandbox credential source is required", RetryNever)
+	}
+	if config.TrustBundles == nil {
+		return newFailure(FailureInvalidArgument, "sandbox trust bundle source is required", RetryNever)
 	}
 	if config.RequestTimeout <= 0 || config.RequestTimeout > time.Minute {
 		return newFailure(FailureInvalidArgument, "sandbox request timeout must be finite and positive", RetryNever)

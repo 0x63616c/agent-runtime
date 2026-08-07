@@ -5,6 +5,8 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"strings"
+	"sync"
 	"time"
 )
 
@@ -36,16 +38,29 @@ func newClientWithBindTransportAt(ctx context.Context, config ClientConfig, tran
 	if err := validateClientConfig(config); err != nil {
 		return nil, err
 	}
+	if err := contextFailure(ctx); err != nil {
+		return nil, err
+	}
 	if transport == nil {
 		return nil, newFailure(FailureUnavailable, "sandbox bind transport is required", RetryAfterReconcile)
 	}
 	sink := &credentialSink{}
+	defer sink.ClearAuthorization()
 	if err := config.Credentials.Apply(ctx, sink); err != nil {
+		if contextErr := contextFailure(ctx); contextErr != nil {
+			return nil, contextErr
+		}
 		return nil, newFailure(FailureUnavailable, "sandbox credentials are unavailable", RetryAfterReconcile)
 	}
-	response, err := transport.Bind(ctx, sink.authorization)
-	sink.ClearAuthorization()
+	authorization, err := sink.consumeAuthorization()
 	if err != nil {
+		return nil, err
+	}
+	response, err := transport.Bind(ctx, authorization)
+	if err != nil {
+		if contextErr := contextFailure(ctx); contextErr != nil {
+			return nil, contextErr
+		}
 		return nil, newFailure(FailureUnavailable, "sandbox bind failed", RetryAfterReconcile)
 	}
 	if response.Version != controlV1 || response.Kind != bindResponseKind || response.Assertion == "" || response.ExpiresAt.IsZero() || !response.ExpiresAt.After(now.UTC()) {
@@ -55,16 +70,72 @@ func newClientWithBindTransportAt(ctx context.Context, config ClientConfig, tran
 	return &boundClient{coreClient: core, assertion: response.Assertion, expiresAt: response.ExpiresAt.UTC()}, nil
 }
 
-type credentialSink struct{ authorization string }
+type credentialSink struct {
+	mu            sync.Mutex
+	authorization string
+	setCalls      uint8
+	invalid       bool
+	revoked       bool
+}
 
 func (sink *credentialSink) SetAuthorization(scheme, value string) error {
-	if scheme == "" || value == "" || sink.authorization != "" {
+	sink.mu.Lock()
+	defer sink.mu.Unlock()
+	if sink.revoked {
+		return newFailure(FailureUnavailable, "credential sink is revoked", RetryNever)
+	}
+	sink.setCalls++
+	if sink.setCalls != 1 || !validAuthorizationPart(scheme) || !validAuthorizationValue(value) {
+		sink.invalid = true
 		return newFailure(FailureUnavailable, "credential source returned invalid authorization", RetryNever)
 	}
 	sink.authorization = scheme + " " + value
 	return nil
 }
-func (sink *credentialSink) ClearAuthorization() { sink.authorization = "" }
+func (sink *credentialSink) ClearAuthorization() {
+	sink.mu.Lock()
+	defer sink.mu.Unlock()
+	sink.authorization = ""
+	sink.revoked = true
+}
+
+func (sink *credentialSink) consumeAuthorization() (string, error) {
+	sink.mu.Lock()
+	defer sink.mu.Unlock()
+	if sink.revoked || sink.invalid || sink.setCalls != 1 || sink.authorization == "" {
+		sink.authorization = ""
+		sink.revoked = true
+		return "", newFailure(FailureUnavailable, "credential source returned invalid authorization", RetryNever)
+	}
+	authorization := sink.authorization
+	sink.authorization = ""
+	sink.revoked = true
+	return authorization, nil
+}
+
+func validAuthorizationPart(value string) bool {
+	if value == "" {
+		return false
+	}
+	for _, character := range value {
+		if character <= 0x20 || character >= 0x7f || strings.ContainsRune("()<>@,;:\\\"/[]?={}\t", character) {
+			return false
+		}
+	}
+	return true
+}
+
+func validAuthorizationValue(value string) bool {
+	if value == "" {
+		return false
+	}
+	for _, character := range value {
+		if character == '\r' || character == '\n' || character == 0 || character == 0x7f {
+			return false
+		}
+	}
+	return true
+}
 func decodeBindResponse(data []byte) (bindResponse, error) {
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.DisallowUnknownFields()

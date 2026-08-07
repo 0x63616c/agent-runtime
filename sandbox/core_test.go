@@ -202,9 +202,9 @@ func TestCoreRejectsResourceRequestAboveInjectedPolicyMaximum(t *testing.T) {
 
 type recordingCredentialSource struct{ calls int }
 
-func (source *recordingCredentialSource) Apply(context.Context, CredentialSink) error {
+func (source *recordingCredentialSource) Apply(_ context.Context, sink CredentialSink) error {
 	source.calls++
-	return nil
+	return sink.SetAuthorization("Bearer", "test-credential")
 }
 
 func validCreateRequest(id OperationID) OperationRequest {

@@ -6,20 +6,27 @@ semantic authority is the accepted [sandbox specification](../specs/sandbox.md).
 
 ## Current implementation boundary
 
-The package currently provides a deterministic in-memory control fixture and
-strict bind-envelope validation for unit and conformance evidence. It does not
-ship a public HTTP transport, database-backed ledger, host agent, local process
-adapter, or Firecracker implementation. `NewClient` therefore validates its
-endpoint, TLS, credentials, and finite timeout, then returns `unavailable`
-until a real control transport is composed. Nothing in this package is evidence
-of isolation, durable storage across a process restart, or host execution.
+The package currently provides a deterministic in-memory control fixture and a
+public HTTPS construction/bind slice for unit and conformance evidence.
+`NewClient` resolves an explicit named trust bundle, parses private cloned TLS
+roots, refuses redirects and ambient system trust, applies a request-scoped
+credential, and completes the strict `/sandbox.control/v1/bind` handshake
+before returning. Operation transport methods remain `unavailable` until their
+strict response/stream envelopes land. The package does not yet ship a
+database-backed ledger, host agent, local process adapter, or Firecracker
+implementation. Nothing here is evidence of isolation, durable storage across
+a process restart, or host execution.
 
 ## Client and identity
 
-Construct a client with an HTTPS origin, explicit TLS server name and trust
-bundle reference, a credential source, and a positive timeout no greater than
-one minute. A credential source applies one request-scoped authorization value
-to a sink; it must not be serialized or retained in a public operation.
+Construct a client with an HTTPS origin, explicit TLS server name, opaque trust
+bundle reference plus a `TrustBundleSource`, a credential source, and a
+positive timeout no greater than one minute. Trust resolution returns bounded
+versioned cloned public PEM roots; missing or invalid roots fail without system
+root, file-path, or insecure-TLS fallback. `NewStaticTrustBundleSource` is the
+ordinary finite in-memory adapter. A credential source applies exactly one
+request-scoped authorization value to a revocable sink; it must not be
+serialized or retained in a public operation.
 
 The control bind envelope has version `sandbox.control/v1`. A bind response is
 an exact JSON object with `version`, `kind`, `assertion`, and `expires_at`.

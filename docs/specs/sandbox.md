@@ -364,12 +364,17 @@ resources.
 
 `NewClient(ctx, ClientConfig)` is the only public construction path. It creates
 the runtime-owned HTTP/event client for a validated HTTPS endpoint, TLS server
-name/trust-bundle reference and non-nil credential source, then completes the
+name, non-nil explicit trust-bundle source/reference and non-nil credential
+source, then completes the
 section 3.7 authenticated bind handshake before returning a Client. The
 service, never the caller or source, derives and pins the Principal.
 `ClientConfig` never accepts a Principal, binding assertion, tenant, subject,
 host agent, backend, plaintext credential, insecure-TLS override or default
-global transport. A caller that needs a test transport uses an explicitly
+global transport. `TrustBundleSource` resolves the opaque declared reference
+to a bounded versioned snapshot of cloned public PEM roots; it cannot return a
+private key or host path. Construction parses a private `x509.CertPool` from
+that snapshot and never falls back to ambient system roots. A caller that needs
+a test transport uses an explicitly
 test-only composition adapter, not a second public client contract.
 Construction authentication/authorization failure is non-enumerating
 `FailureNotFoundOrDenied`; local validation, cancellation, deadline and service
@@ -507,10 +512,18 @@ type ClientConfig struct {
 	Endpoint Endpoint
 	TLS TLSConfig
 	Credentials CredentialSource
+	TrustBundles TrustBundleSource
 	RequestTimeout time.Duration
 }
 type Endpoint struct { URL string }
-type TLSConfig struct { ServerName string; TrustBundleRef string }
+type TLSConfig struct { ServerName string; TrustBundleRef TrustBundleRef }
+type TrustBundleRef string
+type TrustBundle struct { Version string; PEMRoots []byte }
+type TrustBundleSource interface { ResolveTrustBundle(context.Context, TrustBundleRef) (TrustBundle, error) }
+type StaticTrustBundleSource struct { /* immutable implementation-private state */ }
+func NewStaticTrustBundleSource(map[TrustBundleRef]TrustBundle) (*StaticTrustBundleSource, error) {
+	panic("sandbox API reference stub")
+}
 type CredentialSource interface { Apply(context.Context, CredentialSink) error }
 type CredentialSink interface {
 	SetAuthorization(scheme string, value string) error
@@ -846,7 +859,7 @@ Principal; a foreign/missing ID is `NotFoundOrDenied`.
 
 | API field or method family | Zero/validation and wire | Concurrency, cancellation and outcome |
 | --- | --- | --- |
-| `NewClient`, `ClientConfig`, endpoint/TLS/credential source | `NewClient` requires one HTTPS endpoint, non-empty TLS server name, declared trust-bundle reference, bounded positive request timeout and non-nil concurrent-safe credential source. Construction applies one credential for the authenticated bind handshake; every later attempt gets a fresh revocable sink and must authenticate to the same opaque pinned authority/tenant/subject. Binding, source, sinks and values have no public/canonical wire form and are never logged, persisted in sandbox state, returned, marshalled or reused by a Sandbox. | construction has the single install-vs-cancel linearization in section 4 and owns the resulting transport, not the caller-owned source. All `Client` calls are concurrent-safe; refresh/retry/redirect/reconnect/renewal cannot change identity. Apply/header clearing and `Close` follow section 4's exact lifecycle. Construction never falls back to ambient environment, endpoint, identity, credentials, insecure TLS or backend. |
+| `NewClient`, `ClientConfig`, endpoint/TLS/trust/credential source | `NewClient` requires one HTTPS origin, non-empty TLS server name, declared trust-bundle reference, non-nil trust-bundle source, bounded positive request timeout and non-nil concurrent-safe credential source. Trust resolution returns one bounded versioned cloned public-PEM snapshot and construction parses a private root pool; missing/invalid roots fail with no ambient system-root or host-path fallback. Construction applies one credential for the authenticated bind handshake; every later attempt gets a fresh revocable sink and must authenticate to the same opaque pinned authority/tenant/subject. Binding, sources, sinks and values have no canonical wire form and are never logged, persisted in sandbox state, returned, marshalled or reused by a Sandbox. | construction has the single install-vs-cancel linearization in section 4 and owns the resulting transport, not the caller-owned sources. All `Client` calls are concurrent-safe; refresh/retry/redirect/reconnect/renewal cannot change identity. Trust resolution, Apply/header clearing and `Close` follow section 4's exact lifecycle. Construction never falls back to ambient environment, endpoint, identity, credentials, TLS roots/settings or backend. |
 | `OperationRequest.ID`, `Kind`, tagged bodies | ID and Kind are required; exactly one matching body is required; all targets are Principal-authorized. | same ID plus same canonical body returns the accepted operation; different body is `OperationConflict`; cancelled `Submit` before acceptance has no effect, after uncertain acknowledgement caller uses `GetOperation`. |
 | `SandboxSpec`, `SandboxOverrides`, image, labels, resources, mounts/tmpfs, volume attachments, capability requirements | no usable production zero Spec; image digest/declared policies required; every zero resource resolves once to finite persisted policy default; override only narrows. | copied/frozen before authorization; create/restore failures have no host effect; unsupported profile/capability is a safe failure, never downgrade. |
 | `Command`, identity, `Grant`, network rules and signals | executable/argv/workdir/identity valid and bounded; no PATH/inherited descriptors; Grant zero is explicit deny-all/none. `Grant.Network` uses only `NetworkGrantSelection`/`NetworkRule`; `Names` is never interpreted as network authority. | one successful exec starts one Process; Wait cancellation abandons observation only; signal/kill are separate durable Operations; timeout/close/lease control lifetime. |
@@ -986,7 +999,7 @@ last column in addition to the baseline rules above.
 
 | Exact public fields | Semantics-table row |
 | --- | --- |
-| Every `*ID`, `Digest`, `*Cursor`, `Endpoint`, `TLSConfig`, `CredentialSource`, `CredentialSink`, `ClientConfig`, `OperationRef.ID`, `OperationRef.AcceptedAt`, `Page.Cursor`, `Page.Limit`, `VolumePage.Items`, `VolumePage.Next`, `SnapshotPage.Items`, `SnapshotPage.Next` | `NewClient`, `ClientConfig`, endpoint/TLS/credential source; streams/cursors/output events and `Page`. |
+| Every `*ID`, `Digest`, `*Cursor`, `Endpoint`, `TLSConfig`, `TrustBundleRef`, `TrustBundle`, `TrustBundleSource`, `StaticTrustBundleSource`, `CredentialSource`, `CredentialSink`, `ClientConfig`, `OperationRef.ID`, `OperationRef.AcceptedAt`, `Page.Cursor`, `Page.Limit`, `VolumePage.Items`, `VolumePage.Next`, `SnapshotPage.Items`, `SnapshotPage.Next` | `NewClient`, `ClientConfig`, endpoint/TLS/trust/credential source; streams/cursors/output events and `Page`. |
 | `OperationRequest.ID`, `OperationRequest.Kind`, and its sixteen tagged body pointers; every `Create*`, `Restore*`, process, copy, snapshot, close, reconcile, attach/detach/delete and approval request target/body field | `OperationRequest.ID`, `Kind`, tagged bodies; transfer/artifact/volume/snapshot request fields. |
 | `SandboxSpec.Image`, `Resources`, `Environment`, `SecretBindings`, `VolumeAttachments`, `Mounts`, `Tmpfs`, `Capabilities`, `Labels`; `SandboxOverrides`; every field of `ImageRef`, `ResourceLimits`, `SecretBinding`, `VolumeAttachment`, `MountRequest`, `TmpfsMount`, `CapabilityRequirements`, `CapabilityRequirement`, `CapabilityFeature`, `NumericIdentity`, `VolumeSpec` and `SnapshotRiskAttestation` | `SandboxSpec`, `SandboxOverrides`, image, labels, resources, mounts/tmpfs, volume attachments, capability requirements. `Environment` holds only ordinary non-secret values; secrets use `SecretBindings`. |
 | Every `Command` field; every `Grant`, `GrantSelection`, `NetworkGrantSelection`, `NetworkRule`, `NetworkProtocol`, `DomainPattern`, `PortRange`, `TransferOptions`, `ArtifactRef`, `AttachmentMode`, `MountMode`, `MountView`, `GrantMode`, `Signal`, `OverwriteMode` and `ApprovalDecision` enum/value | `Command`, identity, `Grant`, network rules and signals; network canonical grammar and matching; transfer/artifact/volume/snapshot request fields. |

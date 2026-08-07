@@ -21,12 +21,13 @@ func TestPublicAPISurfaceCompiles(t *testing.T) {
 		Endpoint:       sandbox.Endpoint{URL: "https://sandbox.example.test"},
 		TLS:            sandbox.TLSConfig{ServerName: "sandbox.example.test", TrustBundleRef: "trust/sandbox"},
 		Credentials:    credentialSource{},
+		TrustBundles:   trustBundleSource{},
 		RequestTimeout: time.Second,
 	}
 	_, err := sandbox.NewClient(context.Background(), config)
 	failure, ok := sandbox.AsFailure(err)
-	if !ok || failure.Code != sandbox.FailureUnavailable {
-		t.Fatalf("NewClient() failure = %#v, %v; want unavailable until a control transport is composed", failure, err)
+	if !ok || failure.Code != sandbox.FailureInvalidArgument {
+		t.Fatalf("NewClient() failure = %#v, %v; want invalid test trust bundle", failure, err)
 	}
 	if errors.Is(err, context.Canceled) {
 		t.Fatal("NewClient() must not report an unrelated context cancellation")
@@ -96,3 +97,9 @@ type credentialSink struct{}
 
 func (credentialSink) SetAuthorization(string, string) error { return nil }
 func (credentialSink) ClearAuthorization()                   {}
+
+type trustBundleSource struct{}
+
+func (trustBundleSource) ResolveTrustBundle(context.Context, sandbox.TrustBundleRef) (sandbox.TrustBundle, error) {
+	return sandbox.TrustBundle{Version: "example/v1", PEMRoots: []byte("example fixture has no certificate")}, nil
+}
