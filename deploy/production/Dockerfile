@@ -1,6 +1,9 @@
 # One production image carries the reviewed composition binaries. The Stack
 # selects a trust-scoped command; it never changes the image contents at runtime.
-FROM golang:1.26.0-alpine3.23@sha256:d4c4845f5d60c6a974c6000ce58ae079328d03ab7f721a0734277e69905473e5 AS build
+FROM --platform=$BUILDPLATFORM golang:1.26.0-alpine3.23@sha256:d4c4845f5d60c6a974c6000ce58ae079328d03ab7f721a0734277e69905473e5 AS build
+
+ARG TARGETOS
+ARG TARGETARCH
 
 WORKDIR /src
 COPY go.mod go.sum ./
@@ -9,8 +12,9 @@ COPY cmd/runtime ./cmd/runtime
 COPY cmd/egress-proxy ./cmd/egress-proxy
 COPY internal/roles ./internal/roles
 COPY internal/egressproxy ./internal/egressproxy
-RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags='-s -w' -o /out/runtime ./cmd/runtime
-RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags='-s -w' -o /out/egress-proxy ./cmd/egress-proxy
+RUN go mod verify
+RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -mod=readonly -trimpath -ldflags='-s -w' -o /out/runtime ./cmd/runtime
+RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -mod=readonly -trimpath -ldflags='-s -w' -o /out/egress-proxy ./cmd/egress-proxy
 
 FROM gcr.io/distroless/static-debian12:nonroot@sha256:f5b485ea962d9bd1186b2f6b3a061191539b905b82ec395de78cbfae51f20e35
 COPY --from=build /out/runtime /runtime

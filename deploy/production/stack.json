@@ -1330,10 +1330,8 @@
             "replicas": 1,
             "image": "minio/minio@sha256:a1ea29fa28355559ef137d71fc570e508a214ec84ff8083e39bc5428980b015e",
             "service_account": "blob-account",
-            "command": [
-              "server"
-            ],
             "arguments": [
+              "server",
               "/data"
             ],
             "environment": [],
@@ -3613,10 +3611,8 @@
             "replicas": 1,
             "image": "minio/minio@sha256:a1ea29fa28355559ef137d71fc570e508a214ec84ff8083e39bc5428980b015e",
             "service_account": "blob-account",
-            "command": [
-              "server"
-            ],
             "arguments": [
+              "server",
               "/data"
             ],
             "environment": [],
@@ -5896,10 +5892,8 @@
             "replicas": 1,
             "image": "minio/minio@sha256:a1ea29fa28355559ef137d71fc570e508a214ec84ff8083e39bc5428980b015e",
             "service_account": "blob-account",
-            "command": [
-              "server"
-            ],
             "arguments": [
+              "server",
               "/data"
             ],
             "environment": [],

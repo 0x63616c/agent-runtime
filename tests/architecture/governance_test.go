@@ -83,6 +83,7 @@ var _ = Describe("binding governance", func() {
 			"docker/build-push-action@263435318d21b8e681c14492fe198d362a7d2c83 # v6.18.0",
 			"actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3.0.0",
 			"file: deploy/production/Dockerfile",
+			"platforms: linux/amd64,linux/arm64",
 			"push: true",
 			"provenance: mode=max",
 			"sbom: true",
