@@ -274,6 +274,7 @@ echo "audited reconcile verified all providers with zero Kubernetes drift"
 
 go run "$root/cmd/stackctl" teardown "${operator_arguments[@]}" >/dev/null
 apply_complete=false
+bootstrap_complete=false
 if [[ -n "$(kubectl --kubeconfig "$kubeconfig" --context "$context" get namespace "$namespace" --ignore-not-found -o name)" ]]; then
   echo "audited teardown left the disposable Namespace present" >&2
   exit 1
