@@ -16,7 +16,7 @@ func (failure DeliveryFailure) Error() string { return "notifier delivery " + st
 
 // NewDeliveryFailure creates a validated classified notifier failure.
 func NewDeliveryFailure(code FailureCode) error {
-	if code != FailureUnavailable {
+	if code != FailureUnavailable && code != FailureRejected {
 		return errors.New("create notifier delivery failure: unsupported failure code")
 	}
 	return DeliveryFailure{code: code}
@@ -32,6 +32,10 @@ type EvidenceStore interface {
 	MarkFailed(context.Context, MilestoneID, FailureCode) (Record, error)
 	// MarkSent records successful delivery.
 	MarkSent(context.Context, MilestoneID) (Record, error)
+}
+
+type deliveryClaimStore interface {
+	claimDelivery(context.Context, MilestoneID) (func() error, error)
 }
 
 // Notification binds a report to the configured allowlisted topic.
@@ -82,12 +86,22 @@ func (service *Service) Publish(ctx context.Context, catalog Catalog, ledger Led
 
 // Retry retries delivery only for retained failed evidence.
 func (service *Service) Retry(ctx context.Context, milestone MilestoneID) (Record, error) {
+	if claims, ok := service.store.(deliveryClaimStore); ok {
+		release, err := claims.claimDelivery(ctx, milestone)
+		if err != nil {
+			return Record{}, errors.Wrap(err, "claim milestone delivery")
+		}
+		defer release()
+	}
 	record, err := service.store.Lookup(ctx, milestone)
 	if err != nil {
 		return Record{}, errors.Wrap(err, "lookup milestone evidence for retry")
 	}
-	if record.Delivery != DeliveryFailed {
+	if record.Delivery != DeliveryFailed && record.Delivery != DeliveryPending {
 		return Record{}, errors.New("retry milestone delivery: record is not retryable")
+	}
+	if record.Failure == FailureRejected {
+		return Record{}, errors.New("retry milestone delivery: record has a non-retryable failure")
 	}
 	return service.deliver(ctx, record)
 }
@@ -110,7 +124,7 @@ func (service *Service) deliver(ctx context.Context, record Record) (Record, err
 	}
 	sent, err := service.store.MarkSent(ctx, record.Report.Milestone)
 	if err != nil {
-		return Record{}, errors.Wrap(err, "retain milestone delivery success")
+		return record, errors.Wrap(err, "retain milestone delivery success")
 	}
 	return sent, nil
 }

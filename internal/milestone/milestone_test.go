@@ -3,7 +3,13 @@ package milestone_test
 import (
 	"context"
 	"encoding/json"
+	stderrors "errors"
+	"io"
+	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -40,7 +46,11 @@ func catalog() milestone.Catalog {
 		if id == "TST-009" {
 			weight = 25
 		}
-		requirements = append(requirements, milestone.CatalogRequirement{ID: milestone.RequirementID(id), Milestone: "M0", Weight: weight})
+		milestoneID := milestone.MilestoneID("Later")
+		if isM0Requirement(milestone.RequirementID(id)) {
+			milestoneID = "M0"
+		}
+		requirements = append(requirements, milestone.CatalogRequirement{ID: milestone.RequirementID(id), Milestone: milestoneID, Weight: weight})
 	}
 	return milestone.Catalog{Version: 1, Requirements: requirements}
 }
@@ -59,30 +69,68 @@ func fullLedger() milestone.Ledger {
 			requirements[index].Status = milestone.RequirementInProgress
 		case "TST-009":
 			requirements[index].Status = milestone.RequirementBlocked
+		default:
+			if isM0Requirement(requirements[index].ID) {
+				requirements[index].Status = milestone.RequirementCompleted
+				requirements[index].Evidence = []milestone.Proof{{Revision: "4439138", UTCTime: time.Date(2026, 8, 6, 20, 0, 0, 0, time.UTC), Level: milestone.ProofUnit, CommandID: "m0-foundation-check", ArtifactRef: "m0-foundation-proof", Result: "passed"}}
+			}
 		}
 	}
 	return milestone.Ledger{Version: 1, Requirements: requirements}
 }
 
 var _ = Describe("Milestone evidence", func() {
-	It("parses a weighted ledger deterministically and creates a safe estimate", func() {
+	It("reports a completed M0 from its terminal rows while retaining the full project estimate", func() {
 		ledger, err := milestone.ParseLedger(strings.NewReader(validLedger()))
 		Expect(err).NotTo(HaveOccurred())
 		Expect(ledger.Requirements).To(HaveLen(3))
 
 		record, err := milestone.BuildRecord(catalog(), fullLedger(), reportInput())
 		Expect(err).NotTo(HaveOccurred())
-		Expect(record.Report.EstimatedOverallPercent).To(Equal(14))
-		Expect(record.Report.Status).To(Equal(milestone.StatusBlocked))
-		Expect(record.Estimate.Completed).To(Equal([]milestone.RequirementID{"ENG-001"}))
+		Expect(record.Report.EstimatedOverallPercent).To(Equal(17))
+		Expect(record.Report.Status).To(Equal(milestone.StatusCompleted))
+		Expect(record.Estimate.Completed).To(ContainElements(
+			milestone.RequirementID("ENG-001"),
+			milestone.RequirementID("DOC-005"),
+			milestone.RequirementID("DOC-008"),
+			milestone.RequirementID("MON-004"),
+			milestone.RequirementID("MON-005"),
+			milestone.RequirementID("MON-006"),
+			milestone.RequirementID("MON-007"),
+			milestone.RequirementID("MON-008"),
+		))
 		Expect(record.Estimate.InProgress).To(ContainElement(milestone.RequirementID("OPS-STAT-001")))
 		Expect(record.Estimate.Blocked).To(Equal([]milestone.RequirementID{"TST-009"}))
-		Expect(record.Report.EvidenceSummary).To(ContainElements(
-			milestone.EvidenceReference{Kind: milestone.EvidenceCompleted, Reference: "ENG-001"},
-			milestone.EvidenceReference{Kind: milestone.EvidenceInProgress, Reference: "OPS-STAT-001"},
-			milestone.EvidenceReference{Kind: milestone.EvidenceBlocked, Reference: "TST-009"},
-			milestone.EvidenceReference{Kind: milestone.EvidenceUncertainty, Reference: "main-ci-pending"},
-		))
+		Expect(len(record.Estimate.Completed) + len(record.Estimate.InProgress) + len(record.Estimate.Blocked)).To(Equal(len(milestone.AcceptedRequirementIDs())))
+		Expect(record.Report.EvidenceSummary).To(Equal([]milestone.EvidenceReference{
+			{Kind: milestone.EvidenceCompleted, Reference: "DOC-005"},
+			{Kind: milestone.EvidenceCompleted, Reference: "DOC-008"},
+			{Kind: milestone.EvidenceCompleted, Reference: "MON-004"},
+			{Kind: milestone.EvidenceCompleted, Reference: "MON-005"},
+			{Kind: milestone.EvidenceCompleted, Reference: "MON-006"},
+			{Kind: milestone.EvidenceCompleted, Reference: "MON-007"},
+			{Kind: milestone.EvidenceCompleted, Reference: "MON-008"},
+		}))
+	})
+
+	It("requires explicit known unique terminal rows and reports their uncertainty honestly", func() {
+		input := reportInput()
+		input.Uncertainty = []milestone.EvidenceReference{{Kind: milestone.EvidenceUncertainty, Reference: "main-ci-pending"}}
+		record, err := milestone.BuildRecord(catalog(), fullLedger(), input)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(record.Report.Status).To(Equal(milestone.StatusInProgress))
+		Expect(record.Report.EvidenceSummary).To(HaveLen(8))
+		Expect(record.Report.EvidenceSummary).To(ContainElement(milestone.EvidenceReference{Kind: milestone.EvidenceUncertainty, Reference: "main-ci-pending"}))
+
+		input.TerminalRequirementIDs = nil
+		_, err = milestone.BuildRecord(catalog(), fullLedger(), input)
+		Expect(err).To(MatchError(ContainSubstring("terminal requirement list is required")))
+		input.TerminalRequirementIDs = []milestone.RequirementID{"DOC-005", "DOC-005"}
+		_, err = milestone.BuildRecord(catalog(), fullLedger(), input)
+		Expect(err).To(MatchError(ContainSubstring("duplicate terminal requirement")))
+		input.TerminalRequirementIDs = []milestone.RequirementID{"UNKNOWN-001"}
+		_, err = milestone.BuildRecord(catalog(), fullLedger(), input)
+		Expect(err).To(MatchError(ContainSubstring("unknown terminal requirement")))
 	})
 
 	It("serializes the exact transport schema and rejects unsafe evidence text", func() {
@@ -178,12 +226,7 @@ var _ = Describe("Milestone evidence", func() {
 		Expect(store.Events()).To(Equal([]string{"retained:M0 foundation", "failed:M0 foundation"}))
 		Expect(notifier.Deliveries()).To(HaveLen(1))
 		Expect(notifier.Deliveries()[0].Topic).To(Equal(runtimeconfig.NtfyTopic))
-		Expect(notifier.Deliveries()[0].Report.EvidenceSummary).To(ContainElements(
-			milestone.EvidenceReference{Kind: milestone.EvidenceCompleted, Reference: "ENG-001"},
-			milestone.EvidenceReference{Kind: milestone.EvidenceInProgress, Reference: "OPS-STAT-001"},
-			milestone.EvidenceReference{Kind: milestone.EvidenceBlocked, Reference: "TST-009"},
-			milestone.EvidenceReference{Kind: milestone.EvidenceUncertainty, Reference: "main-ci-pending"},
-		))
+		Expect(notifier.Deliveries()[0].Report.EvidenceSummary).To(HaveLen(7))
 		Expect(record.Failure).To(Equal(milestone.FailureUnavailable))
 
 		notifier.SetFailures()
@@ -215,13 +258,260 @@ var _ = Describe("Milestone evidence", func() {
 		failure := milestone.NewDeliveryFailure(milestone.FailureCode("provider-secret"))
 		Expect(failure).To(MatchError(ContainSubstring("unsupported failure code")))
 	})
+
+	It("posts the exact report through the fixed ntfy topic without exposing its authorization", func() {
+		client := &recordingHTTPClient{statusCode: http.StatusServiceUnavailable}
+		notifier, err := milestone.NewNtfyNotifier(client)
+		Expect(err).NotTo(HaveOccurred())
+		config, err := runtimeconfig.New(runtimeconfig.Input{Version: 1, Notifier: runtimeconfig.NotifierInput{AccessToken: "actual-secret"}})
+		Expect(err).NotTo(HaveOccurred())
+		config.Notifier.ApplyAuthorization(notifier)
+
+		record, err := milestone.BuildRecord(catalog(), fullLedger(), reportInput())
+		Expect(err).NotTo(HaveOccurred())
+		record.Report.UTCTime = time.Date(2026, 8, 6, 20, 0, 0, 0, time.UTC)
+		err = notifier.Deliver(context.Background(), milestone.Notification{Topic: runtimeconfig.NtfyTopic, Report: record.Report})
+		Expect(err).To(MatchError("notifier delivery unavailable"))
+		Expect(err.Error()).NotTo(ContainSubstring("actual-secret"))
+		Expect(client.requests).To(HaveLen(1))
+		Expect(client.requests[0].Method).To(Equal(http.MethodPost))
+		Expect(client.requests[0].URL.String()).To(Equal(runtimeconfig.NtfyTopic))
+		Expect(client.requests[0].URL.Path).To(Equal("/0x63616c-ai-agant"))
+		Expect(client.requests[0].Header.Get("Authorization")).To(Equal("Bearer actual-secret"))
+		Expect(client.requests[0].Header.Get("Content-Type")).To(Equal("text/plain"))
+		Expect(client.requests[0].Header.Get("X-Sequence-ID")).To(Equal("milestone-639bccdea2c38354866f1e600aee9588"))
+		const expected = `{"milestone":"M0 foundation","estimated_overall_percent":17,"evidence_summary":[{"kind":"completed","reference":"DOC-005"},{"kind":"completed","reference":"DOC-008"},{"kind":"completed","reference":"MON-004"},{"kind":"completed","reference":"MON-005"},{"kind":"completed","reference":"MON-006"},{"kind":"completed","reference":"MON-007"},{"kind":"completed","reference":"MON-008"}],"next_milestone":"M0 CI proof","commit_or_revision":"4439138","utc_time":"2026-08-06T20:00:00Z","status":"completed"}`
+		Expect(string(client.bodies[0])).To(Equal(expected))
+	})
+
+	It("persists a failed delivery on disk before a later retry succeeds", func() {
+		directory := GinkgoT().TempDir()
+		store, err := milestone.NewFileStore(directory)
+		Expect(err).NotTo(HaveOccurred())
+		config, err := runtimeconfig.New(runtimeconfig.Input{Version: 1})
+		Expect(err).NotTo(HaveOccurred())
+		fakeClock, err := clock.NewFake(time.Date(2026, 8, 6, 20, 0, 0, 0, time.UTC))
+		Expect(err).NotTo(HaveOccurred())
+		notifier := milestone.NewFakeNotifier(milestone.NewDeliveryFailure(milestone.FailureUnavailable))
+		service, err := milestone.NewService(config.Notifier, fakeClock, store, notifier)
+		Expect(err).NotTo(HaveOccurred())
+
+		failed, err := service.Publish(context.Background(), catalog(), fullLedger(), reportInput())
+		Expect(err).To(MatchError(ContainSubstring("deliver milestone status")))
+		Expect(failed.Delivery).To(Equal(milestone.DeliveryFailed))
+		entries, err := os.ReadDir(directory)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(entries).To(HaveLen(1))
+		encoded, err := os.ReadFile(filepath.Join(directory, entries[0].Name()))
+		Expect(err).NotTo(HaveOccurred())
+		var retained milestone.Record
+		Expect(json.Unmarshal(encoded, &retained)).To(Succeed())
+		Expect(retained.Delivery).To(Equal(milestone.DeliveryFailed))
+		Expect(retained.Failure).To(Equal(milestone.FailureUnavailable))
+
+		notifier.SetFailures()
+		sent, err := service.Retry(context.Background(), "M0 foundation")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(sent.Delivery).To(Equal(milestone.DeliverySent))
+	})
+
+	It("hardens an existing evidence directory and durably replaces private records", func() {
+		directory := GinkgoT().TempDir()
+		Expect(os.Chmod(directory, 0o755)).To(Succeed())
+		store, err := milestone.NewFileStore(directory)
+		Expect(err).NotTo(HaveOccurred())
+		directoryInfo, err := os.Stat(directory)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(directoryInfo.Mode().Perm()).To(Equal(os.FileMode(0o700)))
+
+		record, err := milestone.BuildRecord(catalog(), fullLedger(), reportInput())
+		Expect(err).NotTo(HaveOccurred())
+		Expect(store.Retain(context.Background(), record)).To(Succeed())
+		entries, err := os.ReadDir(directory)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(entries).To(HaveLen(1))
+		recordInfo, err := entries[0].Info()
+		Expect(err).NotTo(HaveOccurred())
+		Expect(recordInfo.Mode().Perm()).To(Equal(os.FileMode(0o600)))
+		_, err = store.MarkFailed(context.Background(), "M0 foundation", milestone.FailureUnavailable)
+		Expect(err).NotTo(HaveOccurred())
+		reopened, err := milestone.NewFileStore(directory)
+		Expect(err).NotTo(HaveOccurred())
+		retained, err := reopened.Lookup(context.Background(), "M0 foundation")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(retained.Delivery).To(Equal(milestone.DeliveryFailed))
+	})
+
+	It("allows a pending record to recover with the same report after sent-state retention fails", func() {
+		config, err := runtimeconfig.New(runtimeconfig.Input{Version: 1})
+		Expect(err).NotTo(HaveOccurred())
+		fakeClock, err := clock.NewFake(time.Date(2026, 8, 6, 20, 0, 0, 0, time.UTC))
+		Expect(err).NotTo(HaveOccurred())
+		backing := milestone.NewMemoryStore()
+		store := &failOnceMarkSentStore{EvidenceStore: backing}
+		notifier := milestone.NewFakeNotifier()
+		service, err := milestone.NewService(config.Notifier, fakeClock, store, notifier)
+		Expect(err).NotTo(HaveOccurred())
+
+		pending, err := service.Publish(context.Background(), catalog(), fullLedger(), reportInput())
+		Expect(err).To(MatchError(ContainSubstring("retain milestone delivery success")))
+		Expect(pending.Delivery).To(Equal(milestone.DeliveryPending))
+		retained, err := backing.Lookup(context.Background(), "M0 foundation")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(retained.Delivery).To(Equal(milestone.DeliveryPending))
+
+		sent, err := service.Retry(context.Background(), "M0 foundation")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(sent.Delivery).To(Equal(milestone.DeliverySent))
+		Expect(notifier.Deliveries()).To(HaveLen(2))
+	})
+
+	It("allows only one process to retry a retained delivery claim", func() {
+		directory := GinkgoT().TempDir()
+		firstStore, err := milestone.NewFileStore(directory)
+		Expect(err).NotTo(HaveOccurred())
+		secondStore, err := milestone.NewFileStore(directory)
+		Expect(err).NotTo(HaveOccurred())
+		record, err := milestone.BuildRecord(catalog(), fullLedger(), reportInput())
+		Expect(err).NotTo(HaveOccurred())
+		Expect(firstStore.Retain(context.Background(), record)).To(Succeed())
+		_, err = firstStore.MarkFailed(context.Background(), "M0 foundation", milestone.FailureUnavailable)
+		Expect(err).NotTo(HaveOccurred())
+		config, err := runtimeconfig.New(runtimeconfig.Input{Version: 1})
+		Expect(err).NotTo(HaveOccurred())
+		fakeClock, err := clock.NewFake(time.Date(2026, 8, 6, 20, 0, 0, 0, time.UTC))
+		Expect(err).NotTo(HaveOccurred())
+		notifier := newBlockingNotifier()
+		first, err := milestone.NewService(config.Notifier, fakeClock, firstStore, notifier)
+		Expect(err).NotTo(HaveOccurred())
+		second, err := milestone.NewService(config.Notifier, fakeClock, secondStore, notifier)
+		Expect(err).NotTo(HaveOccurred())
+
+		firstResult := make(chan error, 1)
+		go func() {
+			_, retryErr := first.Retry(context.Background(), "M0 foundation")
+			firstResult <- retryErr
+		}()
+		<-notifier.firstEntered
+		released := false
+		defer func() {
+			if !released {
+				close(notifier.releaseFirst)
+			}
+		}()
+
+		_, err = second.Retry(context.Background(), "M0 foundation")
+		Expect(err).To(MatchError(ContainSubstring("claim milestone delivery")))
+		Expect(notifier.Calls()).To(Equal(1))
+		close(notifier.releaseFirst)
+		released = true
+		Expect(<-firstResult).To(Succeed())
+	})
+
+	It("reuses one ntfy sequence when the first transport result is ambiguous", func() {
+		directory := GinkgoT().TempDir()
+		store, err := milestone.NewFileStore(directory)
+		Expect(err).NotTo(HaveOccurred())
+		config, err := runtimeconfig.New(runtimeconfig.Input{Version: 1})
+		Expect(err).NotTo(HaveOccurred())
+		fakeClock, err := clock.NewFake(time.Date(2026, 8, 6, 20, 0, 0, 0, time.UTC))
+		Expect(err).NotTo(HaveOccurred())
+		client := &recordingHTTPClient{statusCode: http.StatusOK, failures: []error{stderrors.New("connection result unknown")}}
+		notifier, err := milestone.NewNtfyNotifier(client)
+		Expect(err).NotTo(HaveOccurred())
+		service, err := milestone.NewService(config.Notifier, fakeClock, store, notifier)
+		Expect(err).NotTo(HaveOccurred())
+
+		_, err = service.Publish(context.Background(), catalog(), fullLedger(), reportInput())
+		Expect(err).To(MatchError("deliver milestone status: notifier delivery unavailable"))
+		_, err = service.Retry(context.Background(), "M0 foundation")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(client.requests).To(HaveLen(2))
+		Expect(client.requests[1].URL.String()).To(Equal(client.requests[0].URL.String()))
+		Expect(client.requests[1].Header.Get("X-Sequence-ID")).To(Equal(client.requests[0].Header.Get("X-Sequence-ID")))
+		Expect(client.bodies[1]).To(Equal(client.bodies[0]))
+	})
 })
 
 func reportInput() milestone.ReportInput {
 	return milestone.ReportInput{
-		Milestone:     "M0 foundation",
-		NextMilestone: "M0 CI proof",
-		Revision:      "4439138",
-		Uncertainty:   []milestone.EvidenceReference{{Kind: milestone.EvidenceUncertainty, Reference: "main-ci-pending"}},
+		Milestone:              "M0 foundation",
+		NextMilestone:          "M0 CI proof",
+		Revision:               "4439138",
+		TerminalRequirementIDs: []milestone.RequirementID{"DOC-005", "DOC-008", "MON-004", "MON-005", "MON-006", "MON-007", "MON-008"},
 	}
+}
+
+func isM0Requirement(id milestone.RequirementID) bool {
+	switch id {
+	case "DOC-005", "DOC-008", "MON-004", "MON-005", "MON-006", "MON-007", "MON-008":
+		return true
+	default:
+		return false
+	}
+}
+
+type recordingHTTPClient struct {
+	statusCode int
+	failures   []error
+	requests   []*http.Request
+	bodies     [][]byte
+}
+
+type failOnceMarkSentStore struct {
+	milestone.EvidenceStore
+	fail bool
+}
+
+func (store *failOnceMarkSentStore) MarkSent(ctx context.Context, milestoneID milestone.MilestoneID) (milestone.Record, error) {
+	if !store.fail {
+		store.fail = true
+		return milestone.Record{}, stderrors.New("simulated sent-state persistence failure")
+	}
+	return store.EvidenceStore.MarkSent(ctx, milestoneID)
+}
+
+type blockingNotifier struct {
+	mu           sync.Mutex
+	calls        int
+	firstEntered chan struct{}
+	releaseFirst chan struct{}
+}
+
+func newBlockingNotifier() *blockingNotifier {
+	return &blockingNotifier{firstEntered: make(chan struct{}), releaseFirst: make(chan struct{})}
+}
+
+func (notifier *blockingNotifier) Deliver(context.Context, milestone.Notification) error {
+	notifier.mu.Lock()
+	notifier.calls++
+	call := notifier.calls
+	notifier.mu.Unlock()
+	if call == 1 {
+		close(notifier.firstEntered)
+		<-notifier.releaseFirst
+		return nil
+	}
+	return stderrors.New("second notifier delivery must not occur")
+}
+
+func (notifier *blockingNotifier) Calls() int {
+	notifier.mu.Lock()
+	defer notifier.mu.Unlock()
+	return notifier.calls
+}
+
+func (client *recordingHTTPClient) Do(request *http.Request) (*http.Response, error) {
+	body, err := io.ReadAll(request.Body)
+	if err != nil {
+		return nil, err
+	}
+	client.requests = append(client.requests, request)
+	client.bodies = append(client.bodies, body)
+	if len(client.failures) > 0 {
+		failure := client.failures[0]
+		client.failures = client.failures[1:]
+		return nil, failure
+	}
+	return &http.Response{StatusCode: client.statusCode, Body: io.NopCloser(strings.NewReader("unavailable")), Header: make(http.Header)}, nil
 }

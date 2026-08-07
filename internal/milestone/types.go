@@ -157,6 +157,8 @@ type ReportInput struct {
 	NextMilestone MilestoneID
 	// Revision identifies the immutable source state when available.
 	Revision RevisionRef
+	// TerminalRequirementIDs names the bounded requirement rows that decide this milestone's status.
+	TerminalRequirementIDs []RequirementID
 	// Uncertainty names bounded missing proof or external conditions.
 	Uncertainty []EvidenceReference
 }
@@ -209,6 +211,8 @@ type FailureCode string
 const (
 	// FailureUnavailable means the notifier was temporarily unavailable.
 	FailureUnavailable FailureCode = "unavailable"
+	// FailureRejected means the notifier rejected a validly shaped delivery request.
+	FailureRejected FailureCode = "rejected"
 	// FailureUnclassified means an adapter returned an untyped failure.
 	FailureUnclassified FailureCode = "unclassified"
 )
