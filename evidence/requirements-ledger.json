@@ -1,0 +1,737 @@
+{
+  "version": 1,
+  "requirements": [
+    {
+      "id": "API-001",
+      "status": "not_started"
+    },
+    {
+      "id": "API-002",
+      "status": "not_started"
+    },
+    {
+      "id": "API-003",
+      "status": "not_started"
+    },
+    {
+      "id": "API-004",
+      "status": "not_started"
+    },
+    {
+      "id": "API-005",
+      "status": "not_started"
+    },
+    {
+      "id": "API-006",
+      "status": "not_started"
+    },
+    {
+      "id": "API-007",
+      "status": "not_started"
+    },
+    {
+      "id": "API-008",
+      "status": "not_started"
+    },
+    {
+      "id": "API-009",
+      "status": "not_started"
+    },
+    {
+      "id": "API-010",
+      "status": "not_started"
+    },
+    {
+      "id": "API-011",
+      "status": "not_started"
+    },
+    {
+      "id": "API-012",
+      "status": "not_started"
+    },
+    {
+      "id": "DAT-001",
+      "status": "not_started"
+    },
+    {
+      "id": "DAT-002",
+      "status": "not_started"
+    },
+    {
+      "id": "DAT-003",
+      "status": "not_started"
+    },
+    {
+      "id": "DAT-004",
+      "status": "not_started"
+    },
+    {
+      "id": "DAT-005",
+      "status": "not_started"
+    },
+    {
+      "id": "DAT-006",
+      "status": "not_started"
+    },
+    {
+      "id": "DAT-007",
+      "status": "not_started"
+    },
+    {
+      "id": "DAT-008",
+      "status": "not_started"
+    },
+    {
+      "id": "DAT-009",
+      "status": "not_started"
+    },
+    {
+      "id": "DAT-010",
+      "status": "not_started"
+    },
+    {
+      "id": "DAT-011",
+      "status": "not_started"
+    },
+    {
+      "id": "DAT-012",
+      "status": "not_started"
+    },
+    {
+      "id": "DAT-013",
+      "status": "not_started"
+    },
+    {
+      "id": "DEP-001",
+      "status": "not_started"
+    },
+    {
+      "id": "DEP-002",
+      "status": "not_started"
+    },
+    {
+      "id": "DEP-003",
+      "status": "not_started"
+    },
+    {
+      "id": "DEP-004",
+      "status": "not_started"
+    },
+    {
+      "id": "DEP-005",
+      "status": "not_started"
+    },
+    {
+      "id": "DEP-006",
+      "status": "not_started"
+    },
+    {
+      "id": "DEP-007",
+      "status": "not_started"
+    },
+    {
+      "id": "DEP-008",
+      "status": "not_started"
+    },
+    {
+      "id": "DEP-009",
+      "status": "not_started"
+    },
+    {
+      "id": "DOC-001",
+      "status": "not_started"
+    },
+    {
+      "id": "DOC-002",
+      "status": "not_started"
+    },
+    {
+      "id": "DOC-003",
+      "status": "not_started"
+    },
+    {
+      "id": "DOC-004",
+      "status": "not_started"
+    },
+    {
+      "id": "DOC-005",
+      "status": "not_started"
+    },
+    {
+      "id": "DOC-006",
+      "status": "not_started"
+    },
+    {
+      "id": "DOC-007",
+      "status": "not_started"
+    },
+    {
+      "id": "DOC-008",
+      "status": "not_started"
+    },
+    {
+      "id": "DOM-001",
+      "status": "not_started"
+    },
+    {
+      "id": "DOM-002",
+      "status": "not_started"
+    },
+    {
+      "id": "DOM-003",
+      "status": "not_started"
+    },
+    {
+      "id": "DOM-004",
+      "status": "not_started"
+    },
+    {
+      "id": "DOM-005",
+      "status": "not_started"
+    },
+    {
+      "id": "DOM-006",
+      "status": "not_started"
+    },
+    {
+      "id": "DOM-007",
+      "status": "not_started"
+    },
+    {
+      "id": "DOM-008",
+      "status": "not_started"
+    },
+    {
+      "id": "DOM-009",
+      "status": "not_started"
+    },
+    {
+      "id": "DOM-010",
+      "status": "not_started"
+    },
+    {
+      "id": "DOM-011",
+      "status": "not_started"
+    },
+    {
+      "id": "DOM-012",
+      "status": "not_started"
+    },
+    {
+      "id": "DOM-013",
+      "status": "not_started"
+    },
+    {
+      "id": "ENG-001",
+      "status": "in_progress"
+    },
+    {
+      "id": "ENG-002",
+      "status": "in_progress"
+    },
+    {
+      "id": "ENG-003",
+      "status": "in_progress"
+    },
+    {
+      "id": "ENG-004",
+      "status": "in_progress"
+    },
+    {
+      "id": "ENG-005",
+      "status": "in_progress"
+    },
+    {
+      "id": "ENG-006",
+      "status": "in_progress"
+    },
+    {
+      "id": "ENG-007",
+      "status": "in_progress"
+    },
+    {
+      "id": "ENG-008",
+      "status": "in_progress"
+    },
+    {
+      "id": "ENG-009",
+      "status": "in_progress"
+    },
+    {
+      "id": "ENG-010",
+      "status": "in_progress"
+    },
+    {
+      "id": "EX-001",
+      "status": "not_started"
+    },
+    {
+      "id": "EX-002",
+      "status": "not_started"
+    },
+    {
+      "id": "EX-003",
+      "status": "not_started"
+    },
+    {
+      "id": "EX-004",
+      "status": "not_started"
+    },
+    {
+      "id": "EX-005",
+      "status": "not_started"
+    },
+    {
+      "id": "EX-006",
+      "status": "not_started"
+    },
+    {
+      "id": "EX-007",
+      "status": "not_started"
+    },
+    {
+      "id": "HITL-001",
+      "status": "not_started"
+    },
+    {
+      "id": "HITL-002",
+      "status": "not_started"
+    },
+    {
+      "id": "HITL-003",
+      "status": "not_started"
+    },
+    {
+      "id": "HITL-004",
+      "status": "not_started"
+    },
+    {
+      "id": "HITL-005",
+      "status": "not_started"
+    },
+    {
+      "id": "HITL-006",
+      "status": "not_started"
+    },
+    {
+      "id": "INF-001",
+      "status": "not_started"
+    },
+    {
+      "id": "INF-002",
+      "status": "not_started"
+    },
+    {
+      "id": "INF-003",
+      "status": "not_started"
+    },
+    {
+      "id": "INF-004",
+      "status": "not_started"
+    },
+    {
+      "id": "INF-005",
+      "status": "not_started"
+    },
+    {
+      "id": "MOD-001",
+      "status": "not_started"
+    },
+    {
+      "id": "MOD-002",
+      "status": "not_started"
+    },
+    {
+      "id": "MOD-003",
+      "status": "not_started"
+    },
+    {
+      "id": "MOD-004",
+      "status": "not_started"
+    },
+    {
+      "id": "MOD-005",
+      "status": "not_started"
+    },
+    {
+      "id": "MON-001",
+      "status": "in_progress"
+    },
+    {
+      "id": "MON-002",
+      "status": "in_progress"
+    },
+    {
+      "id": "MON-003",
+      "status": "in_progress"
+    },
+    {
+      "id": "MON-004",
+      "status": "in_progress"
+    },
+    {
+      "id": "MON-005",
+      "status": "in_progress"
+    },
+    {
+      "id": "MON-006",
+      "status": "in_progress"
+    },
+    {
+      "id": "MON-007",
+      "status": "in_progress"
+    },
+    {
+      "id": "MON-008",
+      "status": "in_progress"
+    },
+    {
+      "id": "MON-009",
+      "status": "in_progress"
+    },
+    {
+      "id": "MON-010",
+      "status": "in_progress"
+    },
+    {
+      "id": "OBS-001",
+      "status": "not_started"
+    },
+    {
+      "id": "OBS-002",
+      "status": "not_started"
+    },
+    {
+      "id": "OBS-003",
+      "status": "not_started"
+    },
+    {
+      "id": "OBS-004",
+      "status": "not_started"
+    },
+    {
+      "id": "OBS-005",
+      "status": "not_started"
+    },
+    {
+      "id": "OPS-STAT-001",
+      "status": "in_progress"
+    },
+    {
+      "id": "OPS-STAT-002",
+      "status": "in_progress"
+    },
+    {
+      "id": "PAY-001",
+      "status": "not_started"
+    },
+    {
+      "id": "PAY-002",
+      "status": "not_started"
+    },
+    {
+      "id": "PAY-003",
+      "status": "not_started"
+    },
+    {
+      "id": "PAY-004",
+      "status": "not_started"
+    },
+    {
+      "id": "PAY-005",
+      "status": "not_started"
+    },
+    {
+      "id": "PAY-006",
+      "status": "not_started"
+    },
+    {
+      "id": "PAY-007",
+      "status": "not_started"
+    },
+    {
+      "id": "PAY-008",
+      "status": "not_started"
+    },
+    {
+      "id": "SBX-001",
+      "status": "not_started"
+    },
+    {
+      "id": "SBX-002",
+      "status": "not_started"
+    },
+    {
+      "id": "SBX-003",
+      "status": "not_started"
+    },
+    {
+      "id": "SBX-004",
+      "status": "not_started"
+    },
+    {
+      "id": "SBX-005",
+      "status": "not_started"
+    },
+    {
+      "id": "SBX-006",
+      "status": "not_started"
+    },
+    {
+      "id": "SBX-007",
+      "status": "not_started"
+    },
+    {
+      "id": "SBX-008",
+      "status": "not_started"
+    },
+    {
+      "id": "SBX-009",
+      "status": "not_started"
+    },
+    {
+      "id": "SBX-010",
+      "status": "not_started"
+    },
+    {
+      "id": "SBX-011",
+      "status": "not_started"
+    },
+    {
+      "id": "SBX-012",
+      "status": "not_started"
+    },
+    {
+      "id": "SBX-013",
+      "status": "not_started"
+    },
+    {
+      "id": "SBX-014",
+      "status": "not_started"
+    },
+    {
+      "id": "SBX-015",
+      "status": "not_started"
+    },
+    {
+      "id": "SBX-016",
+      "status": "not_started"
+    },
+    {
+      "id": "SBX-017",
+      "status": "not_started"
+    },
+    {
+      "id": "SBX-018",
+      "status": "not_started"
+    },
+    {
+      "id": "SBX-019",
+      "status": "not_started"
+    },
+    {
+      "id": "SBX-020",
+      "status": "not_started"
+    },
+    {
+      "id": "SBX-021",
+      "status": "not_started"
+    },
+    {
+      "id": "SBX-022",
+      "status": "not_started"
+    },
+    {
+      "id": "SBX-023",
+      "status": "not_started"
+    },
+    {
+      "id": "SBX-024",
+      "status": "not_started"
+    },
+    {
+      "id": "SBX-025",
+      "status": "not_started"
+    },
+    {
+      "id": "SBX-026",
+      "status": "not_started"
+    },
+    {
+      "id": "SBX-027",
+      "status": "not_started"
+    },
+    {
+      "id": "SBX-028",
+      "status": "not_started"
+    },
+    {
+      "id": "SBX-029",
+      "status": "not_started"
+    },
+    {
+      "id": "SBX-030",
+      "status": "not_started"
+    },
+    {
+      "id": "SBX-031",
+      "status": "not_started"
+    },
+    {
+      "id": "SBX-032",
+      "status": "not_started"
+    },
+    {
+      "id": "SBX-033",
+      "status": "not_started"
+    },
+    {
+      "id": "SBX-034",
+      "status": "not_started"
+    },
+    {
+      "id": "SBX-035",
+      "status": "not_started"
+    },
+    {
+      "id": "SBX-036",
+      "status": "not_started"
+    },
+    {
+      "id": "SBX-037",
+      "status": "not_started"
+    },
+    {
+      "id": "SBX-038",
+      "status": "not_started"
+    },
+    {
+      "id": "SBX-039",
+      "status": "not_started"
+    },
+    {
+      "id": "SBX-040",
+      "status": "not_started"
+    },
+    {
+      "id": "SBX-041",
+      "status": "not_started"
+    },
+    {
+      "id": "SBX-042",
+      "status": "not_started"
+    },
+    {
+      "id": "SBX-043",
+      "status": "not_started"
+    },
+    {
+      "id": "SBX-044",
+      "status": "not_started"
+    },
+    {
+      "id": "TMP-001",
+      "status": "not_started"
+    },
+    {
+      "id": "TMP-002",
+      "status": "not_started"
+    },
+    {
+      "id": "TMP-003",
+      "status": "not_started"
+    },
+    {
+      "id": "TMP-004",
+      "status": "not_started"
+    },
+    {
+      "id": "TMP-005",
+      "status": "not_started"
+    },
+    {
+      "id": "TMP-006",
+      "status": "not_started"
+    },
+    {
+      "id": "TMP-007",
+      "status": "not_started"
+    },
+    {
+      "id": "TMP-008",
+      "status": "not_started"
+    },
+    {
+      "id": "TMP-009",
+      "status": "not_started"
+    },
+    {
+      "id": "TMP-010",
+      "status": "not_started"
+    },
+    {
+      "id": "TOL-001",
+      "status": "not_started"
+    },
+    {
+      "id": "TOL-002",
+      "status": "not_started"
+    },
+    {
+      "id": "TOL-003",
+      "status": "not_started"
+    },
+    {
+      "id": "TOL-004",
+      "status": "not_started"
+    },
+    {
+      "id": "TOL-005",
+      "status": "not_started"
+    },
+    {
+      "id": "TOL-006",
+      "status": "not_started"
+    },
+    {
+      "id": "TST-001",
+      "status": "in_progress"
+    },
+    {
+      "id": "TST-002",
+      "status": "not_started"
+    },
+    {
+      "id": "TST-003",
+      "status": "not_started"
+    },
+    {
+      "id": "TST-004",
+      "status": "not_started"
+    },
+    {
+      "id": "TST-005",
+      "status": "not_started"
+    },
+    {
+      "id": "TST-006",
+      "status": "not_started"
+    },
+    {
+      "id": "TST-007",
+      "status": "in_progress"
+    },
+    {
+      "id": "TST-008",
+      "status": "not_started"
+    },
+    {
+      "id": "TST-009",
+      "status": "in_progress"
+    },
+    {
+      "id": "TST-010",
+      "status": "not_started"
+    }
+  ]
+}

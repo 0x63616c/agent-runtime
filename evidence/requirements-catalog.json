@@ -1,0 +1,920 @@
+{
+  "version": 1,
+  "requirements": [
+    {
+      "id": "API-001",
+      "milestone": "M5",
+      "weight": 1
+    },
+    {
+      "id": "API-002",
+      "milestone": "M5",
+      "weight": 1
+    },
+    {
+      "id": "API-003",
+      "milestone": "M5",
+      "weight": 1
+    },
+    {
+      "id": "API-004",
+      "milestone": "M5",
+      "weight": 1
+    },
+    {
+      "id": "API-005",
+      "milestone": "M5",
+      "weight": 1
+    },
+    {
+      "id": "API-006",
+      "milestone": "M5",
+      "weight": 1
+    },
+    {
+      "id": "API-007",
+      "milestone": "M5",
+      "weight": 1
+    },
+    {
+      "id": "API-008",
+      "milestone": "M5",
+      "weight": 1
+    },
+    {
+      "id": "API-009",
+      "milestone": "M5",
+      "weight": 1
+    },
+    {
+      "id": "API-010",
+      "milestone": "M5",
+      "weight": 1
+    },
+    {
+      "id": "API-011",
+      "milestone": "M5",
+      "weight": 1
+    },
+    {
+      "id": "API-012",
+      "milestone": "M5",
+      "weight": 1
+    },
+    {
+      "id": "DAT-001",
+      "milestone": "M5",
+      "weight": 1
+    },
+    {
+      "id": "DAT-002",
+      "milestone": "M5",
+      "weight": 1
+    },
+    {
+      "id": "DAT-003",
+      "milestone": "M5",
+      "weight": 1
+    },
+    {
+      "id": "DAT-004",
+      "milestone": "M5",
+      "weight": 1
+    },
+    {
+      "id": "DAT-005",
+      "milestone": "M5",
+      "weight": 1
+    },
+    {
+      "id": "DAT-006",
+      "milestone": "M5",
+      "weight": 1
+    },
+    {
+      "id": "DAT-007",
+      "milestone": "M5",
+      "weight": 1
+    },
+    {
+      "id": "DAT-008",
+      "milestone": "M5",
+      "weight": 1
+    },
+    {
+      "id": "DAT-009",
+      "milestone": "M5",
+      "weight": 1
+    },
+    {
+      "id": "DAT-010",
+      "milestone": "M5",
+      "weight": 1
+    },
+    {
+      "id": "DAT-011",
+      "milestone": "M5",
+      "weight": 1
+    },
+    {
+      "id": "DAT-012",
+      "milestone": "M5",
+      "weight": 1
+    },
+    {
+      "id": "DAT-013",
+      "milestone": "M5",
+      "weight": 1
+    },
+    {
+      "id": "DEP-001",
+      "milestone": "M1",
+      "weight": 1
+    },
+    {
+      "id": "DEP-002",
+      "milestone": "M1",
+      "weight": 1
+    },
+    {
+      "id": "DEP-003",
+      "milestone": "M1",
+      "weight": 1
+    },
+    {
+      "id": "DEP-004",
+      "milestone": "M1",
+      "weight": 1
+    },
+    {
+      "id": "DEP-005",
+      "milestone": "M1",
+      "weight": 1
+    },
+    {
+      "id": "DEP-006",
+      "milestone": "M1",
+      "weight": 1
+    },
+    {
+      "id": "DEP-007",
+      "milestone": "M4",
+      "weight": 1
+    },
+    {
+      "id": "DEP-008",
+      "milestone": "M1",
+      "weight": 1
+    },
+    {
+      "id": "DEP-009",
+      "milestone": "M1",
+      "weight": 1
+    },
+    {
+      "id": "DOC-001",
+      "milestone": "M10",
+      "weight": 1
+    },
+    {
+      "id": "DOC-002",
+      "milestone": "M10",
+      "weight": 1
+    },
+    {
+      "id": "DOC-003",
+      "milestone": "M10",
+      "weight": 1
+    },
+    {
+      "id": "DOC-004",
+      "milestone": "M10",
+      "weight": 1
+    },
+    {
+      "id": "DOC-005",
+      "milestone": "M0",
+      "weight": 1
+    },
+    {
+      "id": "DOC-006",
+      "milestone": "M10",
+      "weight": 1
+    },
+    {
+      "id": "DOC-007",
+      "milestone": "M10",
+      "weight": 1
+    },
+    {
+      "id": "DOC-008",
+      "milestone": "M0",
+      "weight": 1
+    },
+    {
+      "id": "DOM-001",
+      "milestone": "M5",
+      "weight": 1
+    },
+    {
+      "id": "DOM-002",
+      "milestone": "M5",
+      "weight": 1
+    },
+    {
+      "id": "DOM-003",
+      "milestone": "M5",
+      "weight": 1
+    },
+    {
+      "id": "DOM-004",
+      "milestone": "M5",
+      "weight": 1
+    },
+    {
+      "id": "DOM-005",
+      "milestone": "M5",
+      "weight": 1
+    },
+    {
+      "id": "DOM-006",
+      "milestone": "M5",
+      "weight": 1
+    },
+    {
+      "id": "DOM-007",
+      "milestone": "M5",
+      "weight": 1
+    },
+    {
+      "id": "DOM-008",
+      "milestone": "M5",
+      "weight": 1
+    },
+    {
+      "id": "DOM-009",
+      "milestone": "M5",
+      "weight": 1
+    },
+    {
+      "id": "DOM-010",
+      "milestone": "M5",
+      "weight": 1
+    },
+    {
+      "id": "DOM-011",
+      "milestone": "M5",
+      "weight": 1
+    },
+    {
+      "id": "DOM-012",
+      "milestone": "M5",
+      "weight": 1
+    },
+    {
+      "id": "DOM-013",
+      "milestone": "M5",
+      "weight": 1
+    },
+    {
+      "id": "ENG-001",
+      "milestone": "M9",
+      "weight": 1
+    },
+    {
+      "id": "ENG-002",
+      "milestone": "M9",
+      "weight": 1
+    },
+    {
+      "id": "ENG-003",
+      "milestone": "M9",
+      "weight": 1
+    },
+    {
+      "id": "ENG-004",
+      "milestone": "M9",
+      "weight": 1
+    },
+    {
+      "id": "ENG-005",
+      "milestone": "M9",
+      "weight": 1
+    },
+    {
+      "id": "ENG-006",
+      "milestone": "M9",
+      "weight": 1
+    },
+    {
+      "id": "ENG-007",
+      "milestone": "M9",
+      "weight": 1
+    },
+    {
+      "id": "ENG-008",
+      "milestone": "M10",
+      "weight": 1
+    },
+    {
+      "id": "ENG-009",
+      "milestone": "M10",
+      "weight": 1
+    },
+    {
+      "id": "ENG-010",
+      "milestone": "M9",
+      "weight": 1
+    },
+    {
+      "id": "EX-001",
+      "milestone": "M6",
+      "weight": 1
+    },
+    {
+      "id": "EX-002",
+      "milestone": "M7",
+      "weight": 1
+    },
+    {
+      "id": "EX-003",
+      "milestone": "M8",
+      "weight": 1
+    },
+    {
+      "id": "EX-004",
+      "milestone": "M9",
+      "weight": 1
+    },
+    {
+      "id": "EX-005",
+      "milestone": "M9",
+      "weight": 1
+    },
+    {
+      "id": "EX-006",
+      "milestone": "M9",
+      "weight": 1
+    },
+    {
+      "id": "EX-007",
+      "milestone": "M9",
+      "weight": 1
+    },
+    {
+      "id": "HITL-001",
+      "milestone": "M7",
+      "weight": 1
+    },
+    {
+      "id": "HITL-002",
+      "milestone": "M7",
+      "weight": 1
+    },
+    {
+      "id": "HITL-003",
+      "milestone": "M7",
+      "weight": 1
+    },
+    {
+      "id": "HITL-004",
+      "milestone": "M7",
+      "weight": 1
+    },
+    {
+      "id": "HITL-005",
+      "milestone": "M7",
+      "weight": 1
+    },
+    {
+      "id": "HITL-006",
+      "milestone": "M7",
+      "weight": 1
+    },
+    {
+      "id": "INF-001",
+      "milestone": "M1",
+      "weight": 1
+    },
+    {
+      "id": "INF-002",
+      "milestone": "M1",
+      "weight": 1
+    },
+    {
+      "id": "INF-003",
+      "milestone": "M1",
+      "weight": 1
+    },
+    {
+      "id": "INF-004",
+      "milestone": "M1",
+      "weight": 1
+    },
+    {
+      "id": "INF-005",
+      "milestone": "M1",
+      "weight": 1
+    },
+    {
+      "id": "MOD-001",
+      "milestone": "M6",
+      "weight": 1
+    },
+    {
+      "id": "MOD-002",
+      "milestone": "M6",
+      "weight": 1
+    },
+    {
+      "id": "MOD-003",
+      "milestone": "M6",
+      "weight": 1
+    },
+    {
+      "id": "MOD-004",
+      "milestone": "M6",
+      "weight": 1
+    },
+    {
+      "id": "MOD-005",
+      "milestone": "M6",
+      "weight": 1
+    },
+    {
+      "id": "MON-001",
+      "milestone": "M10",
+      "weight": 1
+    },
+    {
+      "id": "MON-002",
+      "milestone": "M10",
+      "weight": 1
+    },
+    {
+      "id": "MON-003",
+      "milestone": "M10",
+      "weight": 1
+    },
+    {
+      "id": "MON-004",
+      "milestone": "M0",
+      "weight": 1
+    },
+    {
+      "id": "MON-005",
+      "milestone": "M0",
+      "weight": 1
+    },
+    {
+      "id": "MON-006",
+      "milestone": "M0",
+      "weight": 1
+    },
+    {
+      "id": "MON-007",
+      "milestone": "M0",
+      "weight": 1
+    },
+    {
+      "id": "MON-008",
+      "milestone": "M0",
+      "weight": 1
+    },
+    {
+      "id": "MON-009",
+      "milestone": "M10",
+      "weight": 1
+    },
+    {
+      "id": "MON-010",
+      "milestone": "M10",
+      "weight": 1
+    },
+    {
+      "id": "OBS-001",
+      "milestone": "M9",
+      "weight": 1
+    },
+    {
+      "id": "OBS-002",
+      "milestone": "M9",
+      "weight": 1
+    },
+    {
+      "id": "OBS-003",
+      "milestone": "M9",
+      "weight": 1
+    },
+    {
+      "id": "OBS-004",
+      "milestone": "M9",
+      "weight": 1
+    },
+    {
+      "id": "OBS-005",
+      "milestone": "M9",
+      "weight": 1
+    },
+    {
+      "id": "OPS-STAT-001",
+      "milestone": "M10",
+      "weight": 1
+    },
+    {
+      "id": "OPS-STAT-002",
+      "milestone": "M10",
+      "weight": 1
+    },
+    {
+      "id": "PAY-001",
+      "milestone": "M2",
+      "weight": 1
+    },
+    {
+      "id": "PAY-002",
+      "milestone": "M2",
+      "weight": 1
+    },
+    {
+      "id": "PAY-003",
+      "milestone": "M2",
+      "weight": 1
+    },
+    {
+      "id": "PAY-004",
+      "milestone": "M2",
+      "weight": 1
+    },
+    {
+      "id": "PAY-005",
+      "milestone": "M2",
+      "weight": 1
+    },
+    {
+      "id": "PAY-006",
+      "milestone": "M2",
+      "weight": 1
+    },
+    {
+      "id": "PAY-007",
+      "milestone": "M2",
+      "weight": 1
+    },
+    {
+      "id": "PAY-008",
+      "milestone": "M2",
+      "weight": 1
+    },
+    {
+      "id": "SBX-001",
+      "milestone": "M3",
+      "weight": 1
+    },
+    {
+      "id": "SBX-002",
+      "milestone": "M3",
+      "weight": 1
+    },
+    {
+      "id": "SBX-003",
+      "milestone": "M3",
+      "weight": 1
+    },
+    {
+      "id": "SBX-004",
+      "milestone": "M3",
+      "weight": 1
+    },
+    {
+      "id": "SBX-005",
+      "milestone": "M3",
+      "weight": 1
+    },
+    {
+      "id": "SBX-006",
+      "milestone": "M3",
+      "weight": 1
+    },
+    {
+      "id": "SBX-007",
+      "milestone": "M3",
+      "weight": 1
+    },
+    {
+      "id": "SBX-008",
+      "milestone": "M3",
+      "weight": 1
+    },
+    {
+      "id": "SBX-009",
+      "milestone": "M3",
+      "weight": 1
+    },
+    {
+      "id": "SBX-010",
+      "milestone": "M3",
+      "weight": 1
+    },
+    {
+      "id": "SBX-011",
+      "milestone": "M3",
+      "weight": 1
+    },
+    {
+      "id": "SBX-012",
+      "milestone": "M3",
+      "weight": 1
+    },
+    {
+      "id": "SBX-013",
+      "milestone": "M3",
+      "weight": 1
+    },
+    {
+      "id": "SBX-014",
+      "milestone": "M3",
+      "weight": 1
+    },
+    {
+      "id": "SBX-015",
+      "milestone": "M3",
+      "weight": 1
+    },
+    {
+      "id": "SBX-016",
+      "milestone": "M3",
+      "weight": 1
+    },
+    {
+      "id": "SBX-017",
+      "milestone": "M3",
+      "weight": 1
+    },
+    {
+      "id": "SBX-018",
+      "milestone": "M3",
+      "weight": 1
+    },
+    {
+      "id": "SBX-019",
+      "milestone": "M3",
+      "weight": 1
+    },
+    {
+      "id": "SBX-020",
+      "milestone": "M3",
+      "weight": 1
+    },
+    {
+      "id": "SBX-021",
+      "milestone": "M4",
+      "weight": 1
+    },
+    {
+      "id": "SBX-022",
+      "milestone": "M4",
+      "weight": 1
+    },
+    {
+      "id": "SBX-023",
+      "milestone": "M4",
+      "weight": 1
+    },
+    {
+      "id": "SBX-024",
+      "milestone": "M4",
+      "weight": 1
+    },
+    {
+      "id": "SBX-025",
+      "milestone": "M4",
+      "weight": 1
+    },
+    {
+      "id": "SBX-026",
+      "milestone": "M4",
+      "weight": 1
+    },
+    {
+      "id": "SBX-027",
+      "milestone": "M4",
+      "weight": 1
+    },
+    {
+      "id": "SBX-028",
+      "milestone": "M4",
+      "weight": 1
+    },
+    {
+      "id": "SBX-029",
+      "milestone": "M4",
+      "weight": 1
+    },
+    {
+      "id": "SBX-030",
+      "milestone": "M4",
+      "weight": 1
+    },
+    {
+      "id": "SBX-031",
+      "milestone": "M4",
+      "weight": 1
+    },
+    {
+      "id": "SBX-032",
+      "milestone": "M4",
+      "weight": 1
+    },
+    {
+      "id": "SBX-033",
+      "milestone": "M4",
+      "weight": 1
+    },
+    {
+      "id": "SBX-034",
+      "milestone": "M4",
+      "weight": 1
+    },
+    {
+      "id": "SBX-035",
+      "milestone": "M4",
+      "weight": 1
+    },
+    {
+      "id": "SBX-036",
+      "milestone": "M4",
+      "weight": 1
+    },
+    {
+      "id": "SBX-037",
+      "milestone": "M4",
+      "weight": 1
+    },
+    {
+      "id": "SBX-038",
+      "milestone": "M4",
+      "weight": 1
+    },
+    {
+      "id": "SBX-039",
+      "milestone": "M4",
+      "weight": 1
+    },
+    {
+      "id": "SBX-040",
+      "milestone": "M3",
+      "weight": 1
+    },
+    {
+      "id": "SBX-041",
+      "milestone": "M3",
+      "weight": 1
+    },
+    {
+      "id": "SBX-042",
+      "milestone": "M3",
+      "weight": 1
+    },
+    {
+      "id": "SBX-043",
+      "milestone": "M3",
+      "weight": 1
+    },
+    {
+      "id": "SBX-044",
+      "milestone": "M3",
+      "weight": 1
+    },
+    {
+      "id": "TMP-001",
+      "milestone": "M1",
+      "weight": 1
+    },
+    {
+      "id": "TMP-002",
+      "milestone": "M5",
+      "weight": 1
+    },
+    {
+      "id": "TMP-003",
+      "milestone": "M5",
+      "weight": 1
+    },
+    {
+      "id": "TMP-004",
+      "milestone": "M5",
+      "weight": 1
+    },
+    {
+      "id": "TMP-005",
+      "milestone": "M2",
+      "weight": 1
+    },
+    {
+      "id": "TMP-006",
+      "milestone": "M2",
+      "weight": 1
+    },
+    {
+      "id": "TMP-007",
+      "milestone": "M1",
+      "weight": 1
+    },
+    {
+      "id": "TMP-008",
+      "milestone": "M1",
+      "weight": 1
+    },
+    {
+      "id": "TMP-009",
+      "milestone": "M5",
+      "weight": 1
+    },
+    {
+      "id": "TMP-010",
+      "milestone": "M5",
+      "weight": 1
+    },
+    {
+      "id": "TOL-001",
+      "milestone": "M7",
+      "weight": 1
+    },
+    {
+      "id": "TOL-002",
+      "milestone": "M7",
+      "weight": 1
+    },
+    {
+      "id": "TOL-003",
+      "milestone": "M7",
+      "weight": 1
+    },
+    {
+      "id": "TOL-004",
+      "milestone": "M7",
+      "weight": 1
+    },
+    {
+      "id": "TOL-005",
+      "milestone": "M7",
+      "weight": 1
+    },
+    {
+      "id": "TOL-006",
+      "milestone": "M7",
+      "weight": 1
+    },
+    {
+      "id": "TST-001",
+      "milestone": "M9",
+      "weight": 1
+    },
+    {
+      "id": "TST-002",
+      "milestone": "M9",
+      "weight": 1
+    },
+    {
+      "id": "TST-003",
+      "milestone": "M4",
+      "weight": 1
+    },
+    {
+      "id": "TST-004",
+      "milestone": "M4",
+      "weight": 1
+    },
+    {
+      "id": "TST-005",
+      "milestone": "M4",
+      "weight": 1
+    },
+    {
+      "id": "TST-006",
+      "milestone": "M9",
+      "weight": 1
+    },
+    {
+      "id": "TST-007",
+      "milestone": "M9",
+      "weight": 1
+    },
+    {
+      "id": "TST-008",
+      "milestone": "M9",
+      "weight": 1
+    },
+    {
+      "id": "TST-009",
+      "milestone": "M10",
+      "weight": 1
+    },
+    {
+      "id": "TST-010",
+      "milestone": "M10",
+      "weight": 1
+    }
+  ]
+}
