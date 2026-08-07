@@ -18,24 +18,24 @@ jobs:
     timeout-minutes: 20
     steps:
       - name: Check out immutable revision
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - name: Install pinned Go
-        uses: actions/setup-go@7a3fe6cf4cb3a834922a1244abfce67bcef6a0c5 # v6.2.0
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
           cache: true
       - name: Install pinned just
-        uses: extractions/setup-just@f8a3cce218d9f83db3a2ecd90e41ac3de6cdfd9b # v3
+        uses: extractions/setup-just@53165ef7e734c5c07cb06b3c8e7b647c5aa16db3 # v4
         with:
           just-version: 1.58.0
       - name: Check generated ownership drift
         run: go run ./cmd/generate-requirement-manifest --check
       - name: Run pinned lint policy
-        uses: golangci/golangci-lint-action@4afd733a84b1f43292c63897423277bb7f4313a9 # v8
+        uses: golangci/golangci-lint-action@d583c34f0599d37dbac4a198b9c83201be380893 # v9.3.0
         with:
-          version: v2.4.0
+          version: v2.12.2
           args: --timeout=5m
       - name: Run incremental direct-main gate
         id: check
@@ -63,7 +63,7 @@ jobs:
           > afk-main-ci.json
       - name: Upload bounded evidence
         if: always() && hashFiles('afk-main-ci.json') != ''
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: afk-main-ci-${{ github.sha }}
           path: afk-main-ci.json
