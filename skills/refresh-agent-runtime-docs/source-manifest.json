@@ -29,7 +29,7 @@
         "website/sidebars.ts"
       ],
       "artifactKind": "source-inventory",
-      "publicStatus": "M0 complete; M1/M2/M3 implementation active"
+      "publicStatus": "M0 and M2 complete; M1/M3 implementation active"
     }
   ],
   "curated": [

@@ -6,10 +6,10 @@ slug: /reference/temporal-payloads
 
 # Temporal payloads and blobs
 
-The M2 codec slice provides `temporalpayload`: a local Temporal data converter
-that chooses the smallest complete representation for each payload. It is not
-yet a deployed runtime service; role composition and production deployment are
-separate active work.
+The completed M2 codec milestone provides `temporalpayload`: a local Temporal
+data converter that chooses the smallest complete representation for each
+payload. It is not yet a deployed runtime service; role composition and
+production deployment are separate active work.
 
 The converter compares the actual serialized bytes of the normal payload, a
 zstd wrapper, and a compact immutable blob-reference wrapper. It only changes

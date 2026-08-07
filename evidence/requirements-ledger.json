@@ -681,35 +681,243 @@
     },
     {
       "id": "PAY-001",
-      "status": "in_progress"
+      "status": "completed",
+      "evidence": [
+        {
+          "revision": "676f69ecc8fd02260e247cb08e2cae3fa7814753",
+          "utc_time": "2026-08-07T06:41:00Z",
+          "proof_level": "integration",
+          "command_id": "issue13-terminal-acceptance",
+          "artifact_ref": "issue-13-payload-e2e",
+          "result": "passed"
+        },
+        {
+          "revision": "d834cc3105347a9cc5a62ff7567fb2d2b7a030b3",
+          "utc_time": "2026-08-07T06:38:29Z",
+          "proof_level": "independent_review",
+          "command_id": "m2-payload-final-review",
+          "artifact_ref": "m2-payload-final-review-d834cc3",
+          "result": "passed"
+        },
+        {
+          "revision": "d18f0a1d9263cd0c40b2fae5d8f99b8df318e1e2",
+          "utc_time": "2026-08-07T06:47:50Z",
+          "proof_level": "main_ci",
+          "command_id": "just-check-and-docs-check",
+          "artifact_ref": "gha-31155032954-main-ci",
+          "result": "passed"
+        }
+      ]
     },
     {
       "id": "PAY-002",
-      "status": "in_progress"
+      "status": "completed",
+      "evidence": [
+        {
+          "revision": "676f69ecc8fd02260e247cb08e2cae3fa7814753",
+          "utc_time": "2026-08-07T06:41:00Z",
+          "proof_level": "integration",
+          "command_id": "issue13-terminal-acceptance",
+          "artifact_ref": "issue-13-payload-e2e",
+          "result": "passed"
+        },
+        {
+          "revision": "d834cc3105347a9cc5a62ff7567fb2d2b7a030b3",
+          "utc_time": "2026-08-07T06:38:29Z",
+          "proof_level": "independent_review",
+          "command_id": "m2-payload-final-review",
+          "artifact_ref": "m2-payload-final-review-d834cc3",
+          "result": "passed"
+        },
+        {
+          "revision": "d18f0a1d9263cd0c40b2fae5d8f99b8df318e1e2",
+          "utc_time": "2026-08-07T06:47:50Z",
+          "proof_level": "main_ci",
+          "command_id": "just-check-and-docs-check",
+          "artifact_ref": "gha-31155032954-main-ci",
+          "result": "passed"
+        }
+      ]
     },
     {
       "id": "PAY-003",
-      "status": "in_progress"
+      "status": "completed",
+      "evidence": [
+        {
+          "revision": "676f69ecc8fd02260e247cb08e2cae3fa7814753",
+          "utc_time": "2026-08-07T06:41:00Z",
+          "proof_level": "integration",
+          "command_id": "issue13-terminal-acceptance",
+          "artifact_ref": "issue-13-payload-e2e",
+          "result": "passed"
+        },
+        {
+          "revision": "d834cc3105347a9cc5a62ff7567fb2d2b7a030b3",
+          "utc_time": "2026-08-07T06:38:29Z",
+          "proof_level": "independent_review",
+          "command_id": "m2-payload-final-review",
+          "artifact_ref": "m2-payload-final-review-d834cc3",
+          "result": "passed"
+        },
+        {
+          "revision": "d18f0a1d9263cd0c40b2fae5d8f99b8df318e1e2",
+          "utc_time": "2026-08-07T06:47:50Z",
+          "proof_level": "main_ci",
+          "command_id": "just-check-and-docs-check",
+          "artifact_ref": "gha-31155032954-main-ci",
+          "result": "passed"
+        }
+      ]
     },
     {
       "id": "PAY-004",
-      "status": "in_progress"
+      "status": "completed",
+      "evidence": [
+        {
+          "revision": "676f69ecc8fd02260e247cb08e2cae3fa7814753",
+          "utc_time": "2026-08-07T06:41:00Z",
+          "proof_level": "integration",
+          "command_id": "issue13-terminal-acceptance",
+          "artifact_ref": "issue-13-payload-e2e",
+          "result": "passed"
+        },
+        {
+          "revision": "d834cc3105347a9cc5a62ff7567fb2d2b7a030b3",
+          "utc_time": "2026-08-07T06:38:29Z",
+          "proof_level": "independent_review",
+          "command_id": "m2-payload-final-review",
+          "artifact_ref": "m2-payload-final-review-d834cc3",
+          "result": "passed"
+        },
+        {
+          "revision": "d18f0a1d9263cd0c40b2fae5d8f99b8df318e1e2",
+          "utc_time": "2026-08-07T06:47:50Z",
+          "proof_level": "main_ci",
+          "command_id": "just-check-and-docs-check",
+          "artifact_ref": "gha-31155032954-main-ci",
+          "result": "passed"
+        }
+      ]
     },
     {
       "id": "PAY-005",
-      "status": "in_progress"
+      "status": "completed",
+      "evidence": [
+        {
+          "revision": "676f69ecc8fd02260e247cb08e2cae3fa7814753",
+          "utc_time": "2026-08-07T06:41:00Z",
+          "proof_level": "integration",
+          "command_id": "issue13-terminal-acceptance",
+          "artifact_ref": "issue-13-payload-e2e",
+          "result": "passed"
+        },
+        {
+          "revision": "d834cc3105347a9cc5a62ff7567fb2d2b7a030b3",
+          "utc_time": "2026-08-07T06:38:29Z",
+          "proof_level": "independent_review",
+          "command_id": "m2-payload-final-review",
+          "artifact_ref": "m2-payload-final-review-d834cc3",
+          "result": "passed"
+        },
+        {
+          "revision": "d18f0a1d9263cd0c40b2fae5d8f99b8df318e1e2",
+          "utc_time": "2026-08-07T06:47:50Z",
+          "proof_level": "main_ci",
+          "command_id": "just-check-and-docs-check",
+          "artifact_ref": "gha-31155032954-main-ci",
+          "result": "passed"
+        }
+      ]
     },
     {
       "id": "PAY-006",
-      "status": "in_progress"
+      "status": "completed",
+      "evidence": [
+        {
+          "revision": "676f69ecc8fd02260e247cb08e2cae3fa7814753",
+          "utc_time": "2026-08-07T06:41:00Z",
+          "proof_level": "integration",
+          "command_id": "issue13-terminal-acceptance",
+          "artifact_ref": "issue-13-payload-e2e",
+          "result": "passed"
+        },
+        {
+          "revision": "d834cc3105347a9cc5a62ff7567fb2d2b7a030b3",
+          "utc_time": "2026-08-07T06:38:29Z",
+          "proof_level": "independent_review",
+          "command_id": "m2-payload-final-review",
+          "artifact_ref": "m2-payload-final-review-d834cc3",
+          "result": "passed"
+        },
+        {
+          "revision": "d18f0a1d9263cd0c40b2fae5d8f99b8df318e1e2",
+          "utc_time": "2026-08-07T06:47:50Z",
+          "proof_level": "main_ci",
+          "command_id": "just-check-and-docs-check",
+          "artifact_ref": "gha-31155032954-main-ci",
+          "result": "passed"
+        }
+      ]
     },
     {
       "id": "PAY-007",
-      "status": "in_progress"
+      "status": "completed",
+      "evidence": [
+        {
+          "revision": "676f69ecc8fd02260e247cb08e2cae3fa7814753",
+          "utc_time": "2026-08-07T06:41:00Z",
+          "proof_level": "integration",
+          "command_id": "issue13-terminal-acceptance",
+          "artifact_ref": "issue-13-payload-e2e",
+          "result": "passed"
+        },
+        {
+          "revision": "d834cc3105347a9cc5a62ff7567fb2d2b7a030b3",
+          "utc_time": "2026-08-07T06:38:29Z",
+          "proof_level": "independent_review",
+          "command_id": "m2-payload-final-review",
+          "artifact_ref": "m2-payload-final-review-d834cc3",
+          "result": "passed"
+        },
+        {
+          "revision": "d18f0a1d9263cd0c40b2fae5d8f99b8df318e1e2",
+          "utc_time": "2026-08-07T06:47:50Z",
+          "proof_level": "main_ci",
+          "command_id": "just-check-and-docs-check",
+          "artifact_ref": "gha-31155032954-main-ci",
+          "result": "passed"
+        }
+      ]
     },
     {
       "id": "PAY-008",
-      "status": "in_progress"
+      "status": "completed",
+      "evidence": [
+        {
+          "revision": "676f69ecc8fd02260e247cb08e2cae3fa7814753",
+          "utc_time": "2026-08-07T06:41:00Z",
+          "proof_level": "integration",
+          "command_id": "issue13-terminal-acceptance",
+          "artifact_ref": "issue-13-payload-e2e",
+          "result": "passed"
+        },
+        {
+          "revision": "d834cc3105347a9cc5a62ff7567fb2d2b7a030b3",
+          "utc_time": "2026-08-07T06:38:29Z",
+          "proof_level": "independent_review",
+          "command_id": "m2-payload-final-review",
+          "artifact_ref": "m2-payload-final-review-d834cc3",
+          "result": "passed"
+        },
+        {
+          "revision": "d18f0a1d9263cd0c40b2fae5d8f99b8df318e1e2",
+          "utc_time": "2026-08-07T06:47:50Z",
+          "proof_level": "main_ci",
+          "command_id": "just-check-and-docs-check",
+          "artifact_ref": "gha-31155032954-main-ci",
+          "result": "passed"
+        }
+      ]
     },
     {
       "id": "SBX-001",
@@ -905,11 +1113,63 @@
     },
     {
       "id": "TMP-005",
-      "status": "in_progress"
+      "status": "completed",
+      "evidence": [
+        {
+          "revision": "676f69ecc8fd02260e247cb08e2cae3fa7814753",
+          "utc_time": "2026-08-07T06:41:00Z",
+          "proof_level": "integration",
+          "command_id": "issue13-terminal-acceptance",
+          "artifact_ref": "issue-13-payload-e2e",
+          "result": "passed"
+        },
+        {
+          "revision": "d834cc3105347a9cc5a62ff7567fb2d2b7a030b3",
+          "utc_time": "2026-08-07T06:38:29Z",
+          "proof_level": "independent_review",
+          "command_id": "m2-payload-final-review",
+          "artifact_ref": "m2-payload-final-review-d834cc3",
+          "result": "passed"
+        },
+        {
+          "revision": "d18f0a1d9263cd0c40b2fae5d8f99b8df318e1e2",
+          "utc_time": "2026-08-07T06:47:50Z",
+          "proof_level": "main_ci",
+          "command_id": "just-check-and-docs-check",
+          "artifact_ref": "gha-31155032954-main-ci",
+          "result": "passed"
+        }
+      ]
     },
     {
       "id": "TMP-006",
-      "status": "in_progress"
+      "status": "completed",
+      "evidence": [
+        {
+          "revision": "676f69ecc8fd02260e247cb08e2cae3fa7814753",
+          "utc_time": "2026-08-07T06:41:00Z",
+          "proof_level": "integration",
+          "command_id": "issue13-terminal-acceptance",
+          "artifact_ref": "issue-13-payload-e2e",
+          "result": "passed"
+        },
+        {
+          "revision": "d834cc3105347a9cc5a62ff7567fb2d2b7a030b3",
+          "utc_time": "2026-08-07T06:38:29Z",
+          "proof_level": "independent_review",
+          "command_id": "m2-payload-final-review",
+          "artifact_ref": "m2-payload-final-review-d834cc3",
+          "result": "passed"
+        },
+        {
+          "revision": "d18f0a1d9263cd0c40b2fae5d8f99b8df318e1e2",
+          "utc_time": "2026-08-07T06:47:50Z",
+          "proof_level": "main_ci",
+          "command_id": "just-check-and-docs-check",
+          "artifact_ref": "gha-31155032954-main-ci",
+          "result": "passed"
+        }
+      ]
     },
     {
       "id": "TMP-007",

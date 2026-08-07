@@ -1,12 +1,16 @@
 # Issue #13 evidence — Temporal payload/blob pipeline (M2)
 
-Status: terminal local acceptance evidence for reviewed implementation revision
+Status: M2 acceptance complete for reviewed implementation revision
 `676f69ecc8fd02260e247cb08e2cae3fa7814753`. The bounded machine-readable
 artifact records a clean repository check, real Temporal all-representation
 exchange, disposable MinIO/S3 integration and cleanup, and documentation check.
 Independent review revision `d834cc3105347a9cc5a62ff7567fb2d2b7a030b3`
-records PASS with no P0/P1/P2 findings. This does not claim hosted CI or promote
-the ledger; every M2 row remains `in_progress` until separately authorized.
+records PASS with no P0/P1/P2 findings. Corrective hosted main CI revision
+`d18f0a1d9263cd0c40b2fae5d8f99b8df318e1e2` passed both repository and
+documentation checks in GitHub Actions run `31155032954`. Together these
+complementary proofs complete `PAY-001` through `PAY-008` and `TMP-005` through
+`TMP-006`. Issue #13 remains open and no completion notification is authorized
+until this ledger-promotion revision has immutable main-CI evidence.
 
 ## Implemented evidence
 

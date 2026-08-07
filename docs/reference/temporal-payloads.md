@@ -1,9 +1,9 @@
 # Temporal payload and blob codec
 
-Status: M2 implementation slice. The local codec, S3-compatible adapter, UI
-handler, focused conformance suite, and disposable MinIO integration harness
-exist. Runtime role composition, declarative production deployment, and ledger
-promotion remain separate work.
+Status: M2 complete. The local codec, S3-compatible adapter, UI handler,
+focused conformance suite, and disposable MinIO integration harness exist.
+Runtime role composition and declarative production deployment remain separate
+work.
 
 `temporalpayload` is a root-module public package. A runtime Temporal client
 and every worker created from it use the same local DataConverter; workers do
