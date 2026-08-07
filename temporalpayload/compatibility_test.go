@@ -1,11 +1,33 @@
 package temporalpayload
 
 import (
+	"context"
 	"encoding/hex"
+	stderrors "errors"
 	"testing"
+	"time"
 
 	commonpb "go.temporal.io/api/common/v1"
 )
+
+func TestCompatibilitySeedUsesTheConfiguredIOTimeout(t *testing.T) {
+	t.Parallel()
+
+	codec, err := NewCodec(blockingCompatibilityStore{}, WithBlobPrefix("test/payloads"), WithIOTimeout(10*time.Millisecond))
+	if err != nil {
+		t.Fatalf("NewCodec() error = %v", err)
+	}
+	result := make(chan error, 1)
+	go func() { result <- codec.CheckCompatibility(context.Background()) }()
+	select {
+	case err := <-result:
+		if !stderrors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("CheckCompatibility() error = %v, want deadline exceeded", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("CheckCompatibility() did not bound frozen remote-vector seed I/O")
+	}
+}
 
 func TestV1SelectionVectorsRemainFrozen(t *testing.T) {
 	t.Parallel()
@@ -26,4 +48,15 @@ func TestV1SelectionVectorsRemainFrozen(t *testing.T) {
 			}
 		})
 	}
+}
+
+type blockingCompatibilityStore struct{}
+
+func (blockingCompatibilityStore) Put(ctx context.Context, _ BlobKey, _ []byte) error {
+	<-ctx.Done()
+	return ctx.Err()
+}
+
+func (blockingCompatibilityStore) Get(context.Context, BlobKey, int) ([]byte, error) {
+	return nil, ErrBlobNotFound
 }

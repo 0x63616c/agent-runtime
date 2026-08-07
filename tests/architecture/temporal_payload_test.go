@@ -1,9 +1,13 @@
 package architecture_test
 
 import (
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -22,17 +26,32 @@ var _ = Describe("Temporal payload composition", func() {
 			}
 			contents, err := os.ReadFile(path)
 			Expect(err).NotTo(HaveOccurred(), relative)
+			constructors, err := rawTemporalConstructors(path)
+			Expect(err).NotTo(HaveOccurred(), relative)
+			Expect(constructors).To(BeEmpty(), relative)
 			for _, forbidden := range []string{
-				"client.Dial(",
-				"client.DialContext(",
-				"client.NewLazyClient(",
-				"worker.New(",
 				"NewRemotePayloadCodec(",
 				"NewRemoteDataConverter(",
 			} {
 				Expect(string(contents)).NotTo(ContainSubstring(forbidden), relative)
 			}
 		}
+	})
+
+	It("rejects every Temporal client constructor even when the package is aliased", func() {
+		fixture := filepath.Join("testdata", "temporal_client_constructors.go")
+		constructors, err := rawTemporalConstructors(fixture)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(constructors).To(ConsistOf(
+			"client.Dial",
+			"client.Dial",
+			"client.DialContext",
+			"client.NewClient",
+			"client.NewClientFromExisting",
+			"client.NewClientFromExistingWithContext",
+			"client.NewLazyClient",
+			"worker.New",
+		))
 	})
 
 	It("keeps application code from depending on payload representation details", func() {
@@ -104,7 +123,7 @@ func goSourceFiles(root string) []string {
 		if walkErr != nil {
 			return walkErr
 		}
-		if entry.IsDir() && (entry.Name() == ".git" || entry.Name() == "node_modules") {
+		if entry.IsDir() && (entry.Name() == ".git" || entry.Name() == "node_modules" || entry.Name() == "testdata") {
 			return filepath.SkipDir
 		}
 		if !entry.IsDir() && strings.HasSuffix(path, ".go") {
@@ -114,6 +133,61 @@ func goSourceFiles(root string) []string {
 	})
 	Expect(err).NotTo(HaveOccurred())
 	return paths
+}
+
+func rawTemporalConstructors(path string) ([]string, error) {
+	fileSet := token.NewFileSet()
+	file, err := parser.ParseFile(fileSet, path, nil, 0)
+	if err != nil {
+		return nil, err
+	}
+	imports := make(map[string]string)
+	for _, imported := range file.Imports {
+		pathValue := strings.Trim(imported.Path.Value, "\"")
+		name := filepath.Base(pathValue)
+		if imported.Name != nil {
+			name = imported.Name.Name
+		}
+		imports[name] = pathValue
+	}
+	clientConstructors := map[string]bool{
+		"Dial": true, "DialContext": true, "NewLazyClient": true, "NewClient": true,
+		"NewClientFromExisting": true, "NewClientFromExistingWithContext": true,
+	}
+	var constructors []string
+	ast.Inspect(file, func(node ast.Node) bool {
+		call, ok := node.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		switch function := call.Fun.(type) {
+		case *ast.SelectorExpr:
+			packageName, ok := function.X.(*ast.Ident)
+			if !ok {
+				return true
+			}
+			switch imports[packageName.Name] {
+			case "go.temporal.io/sdk/client":
+				if clientConstructors[function.Sel.Name] {
+					constructors = append(constructors, "client."+function.Sel.Name)
+				}
+			case "go.temporal.io/sdk/worker":
+				if function.Sel.Name == "New" {
+					constructors = append(constructors, "worker.New")
+				}
+			}
+		case *ast.Ident:
+			if imports["."] == "go.temporal.io/sdk/client" && clientConstructors[function.Name] {
+				constructors = append(constructors, "client."+function.Name)
+			}
+			if imports["."] == "go.temporal.io/sdk/worker" && function.Name == "New" {
+				constructors = append(constructors, "worker.New")
+			}
+		}
+		return true
+	})
+	sort.Strings(constructors)
+	return constructors, nil
 }
 
 func writeConsumerFile(directory, name, contents string) {

@@ -47,6 +47,8 @@ runtime-owned Temporal client is created, the factory decodes those retained
 vectors and separately verifies current emission against them. A version
 outside this window is rejected; changing the format needs retained-history,
 golden, UI, and two-consumer compatibility evidence.
+Seeding the frozen remote vector uses the codec's configured finite I/O timeout,
+the same bound used by ordinary remote encode/decode I/O.
 
 The codec does **not** encrypt payloads. It offers compression, integrity, and
 storage indirection only. No encryption configuration, key reference, or
@@ -69,12 +71,19 @@ image in `deploy/temporalpayload/minio/compose.yaml` and is deliberately
 disposable.
 
 Normal `Codec` encode/decode has no delete capability. Deletion is a separate
-`GarbageCollector` seam requiring a `RetentionStore` with conditional delete
-and a transactionally coordinated `DeleteEligibility` authority. It only
-deletes an object after its explicit UTC minimum age and a current authority
-decision; referenced and young content are retained. A cache, an eventually
+`GarbageCollector` seam requiring one durable `RetentionCoordinator` operation.
+That operation fences authoritative reference creation, proves the object has
+no authoritative reference, and conditions deletion on the listed object
+creation identity. It only deletes an object after its explicit UTC minimum
+age; referenced and young content are retained. A cache, an eventually
 consistent listing, or scanning Temporal history is not safe deletion
 authority.
+
+The reference ledger and object store are distinct systems, so this is not a
+claim of cross-store atomicity. If a coordinator cannot safely complete the
+external conditional delete while its durable fence/tombstone is current, it
+returns not-deleted and retains a durable reconciliation record rather than
+guessing. Reference creation and reaping must use that same durable protocol.
 
 ## Temporal UI handler
 

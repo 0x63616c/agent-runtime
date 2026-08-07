@@ -237,7 +237,7 @@ func (codec *Codec) encodeOne(payload *commonpb.Payload) (*commonpb.Payload, err
 		if len(winnerWire) > codec.maximumBlobBytes {
 			return nil, errors.Wrapf(ErrBlobTooLarge, "encoded content has %d bytes, configured limit is %d", len(winnerWire), codec.maximumBlobBytes)
 		}
-		ctx, cancel := context.WithTimeout(context.Background(), codec.ioTimeout)
+		ctx, cancel := codec.ioContext(context.Background())
 		defer cancel()
 		if err := codec.store.Put(ctx, reference.Key, winnerWire); err != nil {
 			return nil, blobStoreError("put", reference.Key, err)
@@ -283,7 +283,7 @@ func (codec *Codec) decodeOne(payload *commonpb.Payload, depth int) (*commonpb.P
 		if err := checkReadLimit(reference.Size, codec.maximumBlobBytes); err != nil {
 			return nil, err
 		}
-		ctx, cancel := context.WithTimeout(context.Background(), codec.ioTimeout)
+		ctx, cancel := codec.ioContext(context.Background())
 		defer cancel()
 		stored, err := codec.store.Get(ctx, reference.Key, codec.maximumBlobBytes)
 		if err != nil {
@@ -301,6 +301,10 @@ func (codec *Codec) decodeOne(payload *commonpb.Payload, depth int) (*commonpb.P
 	default:
 		return payload, nil
 	}
+}
+
+func (codec *Codec) ioContext(parent context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(parent, codec.ioTimeout)
 }
 
 func (codec *Codec) wrappedPayload(encoding string, data []byte) *commonpb.Payload {

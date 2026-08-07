@@ -26,7 +26,8 @@ size before decoding.
 Runtime-owned client creation first decodes frozen inline, zstd, and remote
 vectors (including the remote stored-inner bytes), then checks that current
 encoding still emits those complete wires. A worker can only be constructed
-from that successfully checked client.
+from that successfully checked client. Frozen remote-vector seeding uses the
+same configured finite I/O timeout as ordinary remote codec I/O.
 
 ## Local workers; UI-only HTTP
 
@@ -50,8 +51,11 @@ conditional create and validates an existing object byte-for-byte, preserving
 the immutable content-addressed contract.
 
 Codec operations cannot delete blobs. Retention is an explicit mark/sweep seam
-requiring a current authoritative eligibility decision, a finite age, and a
-conditional delete; it retains referenced and young content.
+requiring one durable coordinator operation that fences authoritative reference
+creation and conditions deletion on the object's creation identity. It retains
+referenced and young content. This is not cross-store atomicity: if a durable
+fence cannot safely complete external deletion, the coordinator records a
+tombstone/reconciliation outcome and returns not-deleted.
 
 The codec does not encrypt payloads and makes no confidentiality claim.
 

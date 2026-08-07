@@ -14,12 +14,12 @@ func TestGarbageCollectorNeverDeletesReferencedOrYoungContent(t *testing.T) {
 	oldReferenced := BlobKey("tenant/temporal-payload/v1/sha256/referenced")
 	oldEligible := BlobKey("tenant/temporal-payload/v1/sha256/eligible")
 	young := BlobKey("tenant/temporal-payload/v1/sha256/young")
-	store := &retentionStoreFake{objects: []BlobObject{
+	coordinator := &retentionCoordinatorFake{objects: []BlobObject{
 		{Key: oldReferenced, CreatedAt: now.Add(-48 * time.Hour)},
 		{Key: oldEligible, CreatedAt: now.Add(-48 * time.Hour)},
 		{Key: young, CreatedAt: now.Add(-time.Hour)},
-	}}
-	collector, err := NewGarbageCollector(store, retentionAuthorityFake{allowed: map[BlobKey]bool{oldEligible: true}}, "tenant", 24*time.Hour)
+	}, eligible: map[BlobKey]bool{oldEligible: true}}
+	collector, err := NewGarbageCollector(coordinator, "tenant", 24*time.Hour)
 	if err != nil {
 		t.Fatalf("NewGarbageCollector() error = %v", err)
 	}
@@ -30,18 +30,18 @@ func TestGarbageCollectorNeverDeletesReferencedOrYoungContent(t *testing.T) {
 	if len(deleted) != 1 || deleted[0] != oldEligible {
 		t.Fatalf("deleted = %v, want [%s]", deleted, oldEligible)
 	}
-	if len(store.deleted) != 1 || store.deleted[0] != oldEligible {
-		t.Fatalf("store deleted = %v, want only eligible old blob", store.deleted)
+	if len(coordinator.deleted) != 1 || coordinator.deleted[0] != oldEligible {
+		t.Fatalf("coordinator deleted = %v, want only eligible old blob", coordinator.deleted)
 	}
 }
 
-func TestGarbageCollectorTreatsConcurrentConditionalDeletionAsOneSafeOutcome(t *testing.T) {
+func TestGarbageCollectorTreatsConcurrentFenceAndDeleteAsOneSafeOutcome(t *testing.T) {
 	t.Parallel()
 
 	now := time.Date(2026, 8, 7, 12, 0, 0, 0, time.UTC)
 	key := BlobKey("tenant/temporal-payload/v1/sha256/eligible")
-	store := &concurrentRetentionStore{object: BlobObject{Key: key, CreatedAt: now.Add(-48 * time.Hour)}}
-	collector, err := NewGarbageCollector(store, retentionAuthorityFake{allowed: map[BlobKey]bool{key: true}}, "tenant", 24*time.Hour)
+	coordinator := &concurrentRetentionCoordinator{object: BlobObject{Key: key, CreatedAt: now.Add(-48 * time.Hour)}}
+	collector, err := NewGarbageCollector(coordinator, "tenant", 24*time.Hour)
 	if err != nil {
 		t.Fatalf("NewGarbageCollector() error = %v", err)
 	}
@@ -58,58 +58,127 @@ func TestGarbageCollectorTreatsConcurrentConditionalDeletionAsOneSafeOutcome(t *
 			t.Fatalf("Collect() error = %v", collectErr)
 		}
 	}
-	if got := store.deleteCount(); got != 1 {
+	if got := coordinator.deleteCount(); got != 1 {
 		t.Fatalf("successful deletions = %d, want 1", got)
 	}
 }
 
-type retentionStoreFake struct {
-	objects []BlobObject
-	deleted []BlobKey
+func TestGarbageCollectorDoesNotDeleteWhenAReferenceIsCreatedAfterListing(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 8, 7, 12, 0, 0, 0, time.UTC)
+	key := BlobKey("tenant/temporal-payload/v1/sha256/reference-race")
+	coordinator := &referenceRaceCoordinator{
+		object:       BlobObject{Key: key, CreatedAt: now.Add(-48 * time.Hour)},
+		listed:       make(chan struct{}),
+		continueList: make(chan struct{}),
+	}
+	collector, err := NewGarbageCollector(coordinator, "tenant", 24*time.Hour)
+	if err != nil {
+		t.Fatalf("NewGarbageCollector() error = %v", err)
+	}
+
+	result := make(chan error, 1)
+	go func() {
+		_, collectErr := collector.Collect(context.Background(), now)
+		result <- collectErr
+	}()
+	<-coordinator.listed
+	coordinator.CreateAuthoritativeReference(key)
+	close(coordinator.continueList)
+	if collectErr := <-result; collectErr != nil {
+		t.Fatalf("Collect() error = %v", collectErr)
+	}
+	if coordinator.wasDeleted() {
+		t.Fatal("collector deleted a blob after an authoritative reference was created")
+	}
 }
 
-func (store *retentionStoreFake) List(context.Context, string) ([]BlobObject, error) {
-	return append([]BlobObject(nil), store.objects...), nil
+type retentionCoordinatorFake struct {
+	objects  []BlobObject
+	eligible map[BlobKey]bool
+	deleted  []BlobKey
 }
 
-func (store *retentionStoreFake) DeleteIfUnchanged(_ context.Context, key BlobKey, _ time.Time) error {
-	store.deleted = append(store.deleted, key)
-	return nil
+func (coordinator *retentionCoordinatorFake) List(context.Context, string) ([]BlobObject, error) {
+	return append([]BlobObject(nil), coordinator.objects...), nil
 }
 
-type retentionAuthorityFake struct{ allowed map[BlobKey]bool }
-
-func (authority retentionAuthorityFake) CanDelete(_ context.Context, key BlobKey, _ time.Time) (bool, error) {
-	return authority.allowed[key], nil
+func (coordinator *retentionCoordinatorFake) FenceAndDeleteUnreferenced(_ context.Context, key BlobKey, _ time.Time, _ time.Time) (bool, error) {
+	if !coordinator.eligible[key] {
+		return false, nil
+	}
+	coordinator.deleted = append(coordinator.deleted, key)
+	return true, nil
 }
 
-type concurrentRetentionStore struct {
+type concurrentRetentionCoordinator struct {
 	mu      sync.Mutex
 	object  BlobObject
 	deleted bool
 }
 
-func (store *concurrentRetentionStore) List(context.Context, string) ([]BlobObject, error) {
-	store.mu.Lock()
-	defer store.mu.Unlock()
-	return []BlobObject{store.object}, nil
+func (coordinator *concurrentRetentionCoordinator) List(context.Context, string) ([]BlobObject, error) {
+	coordinator.mu.Lock()
+	defer coordinator.mu.Unlock()
+	return []BlobObject{coordinator.object}, nil
 }
 
-func (store *concurrentRetentionStore) DeleteIfUnchanged(_ context.Context, key BlobKey, createdAt time.Time) error {
-	store.mu.Lock()
-	defer store.mu.Unlock()
-	if store.deleted || key != store.object.Key || !createdAt.Equal(store.object.CreatedAt) {
-		return ErrBlobNotFound
+func (coordinator *concurrentRetentionCoordinator) FenceAndDeleteUnreferenced(_ context.Context, key BlobKey, createdAt time.Time, _ time.Time) (bool, error) {
+	coordinator.mu.Lock()
+	defer coordinator.mu.Unlock()
+	if coordinator.deleted || key != coordinator.object.Key || !createdAt.Equal(coordinator.object.CreatedAt) {
+		return false, nil
 	}
-	store.deleted = true
-	return nil
+	coordinator.deleted = true
+	return true, nil
 }
 
-func (store *concurrentRetentionStore) deleteCount() int {
-	store.mu.Lock()
-	defer store.mu.Unlock()
-	if store.deleted {
+func (coordinator *concurrentRetentionCoordinator) deleteCount() int {
+	coordinator.mu.Lock()
+	defer coordinator.mu.Unlock()
+	if coordinator.deleted {
 		return 1
 	}
 	return 0
+}
+
+type referenceRaceCoordinator struct {
+	mu           sync.Mutex
+	object       BlobObject
+	refs         map[BlobKey]bool
+	deleted      bool
+	listed       chan struct{}
+	continueList chan struct{}
+}
+
+func (coordinator *referenceRaceCoordinator) List(context.Context, string) ([]BlobObject, error) {
+	close(coordinator.listed)
+	<-coordinator.continueList
+	return []BlobObject{coordinator.object}, nil
+}
+
+func (coordinator *referenceRaceCoordinator) CreateAuthoritativeReference(key BlobKey) {
+	coordinator.mu.Lock()
+	defer coordinator.mu.Unlock()
+	if coordinator.refs == nil {
+		coordinator.refs = make(map[BlobKey]bool)
+	}
+	coordinator.refs[key] = true
+}
+
+func (coordinator *referenceRaceCoordinator) FenceAndDeleteUnreferenced(_ context.Context, key BlobKey, createdAt time.Time, _ time.Time) (bool, error) {
+	coordinator.mu.Lock()
+	defer coordinator.mu.Unlock()
+	if coordinator.refs[key] || key != coordinator.object.Key || !createdAt.Equal(coordinator.object.CreatedAt) {
+		return false, nil
+	}
+	coordinator.deleted = true
+	return true, nil
+}
+
+func (coordinator *referenceRaceCoordinator) wasDeleted() bool {
+	coordinator.mu.Lock()
+	defer coordinator.mu.Unlock()
+	return coordinator.deleted
 }

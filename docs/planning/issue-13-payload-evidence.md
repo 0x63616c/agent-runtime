@@ -12,11 +12,11 @@ the exact checked revision and the acceptance proof for each row.
 | PAY-001/PAY-002 | `temporalpayload.Codec` compares complete deterministic protobuf wires and selects normal, zstd, then remote only on strict size improvement. |
 | PAY-003 | The public bounded `BlobStore`, content-addressed key format, local converter, authenticated UI handler, bounded metrics observer, and MinIO/S3 adapter have focused conformance tests. |
 | PAY-004 | `NewUIHandler` requires a trusted-identity authorizer plus namespace/origin allowlists and reuses the exact local codec; the runtime-owned factory configures clients locally without an HTTP dependency. |
-| PAY-005 | Missing, corrupt, oversized, incompatible, and malformed content fail visibly; `GarbageCollector` requires conditional retention storage, finite UTC age, and current `DeleteEligibility`. |
+| PAY-005 | Missing, corrupt, oversized, incompatible, and malformed content fail visibly; `GarbageCollector` delegates deletion to one durable `RetentionCoordinator` operation that fences authoritative reference creation and conditions object identity. A reference-created-after-listing race returns not-deleted. This is not a cross-store atomicity claim: an incomplete external delete remains a durable tombstone/reconciliation outcome. |
 | PAY-006 | The architecture guard rejects raw Temporal client/worker construction and caller-owned payload-size branching outside the one runtime factory and codec package. |
 | PAY-007 | Source and documentation guards reject encryption configuration or claims; the codec promises compression, integrity, and indirection only. |
-| PAY-008 | Frozen inline/zstd/remote vectors, an independent in-repo consumer, and authenticated UI inspection prove representation exchange through the public codec seam. |
-| TMP-005/TMP-006 | The one runtime factory gates client creation on retained compatibility vectors and creates workers only from that checked client. |
+| PAY-008 | A runtime Factory-owned converter sends frozen-shape inline, zstd, and remote representations to an independent public-package consumer; the authorized UI handler inspects and returns the corresponding plain payload for each. |
+| TMP-005/TMP-006 | The one runtime factory gates client creation on retained compatibility vectors and creates workers only from that checked client; an AST guard rejects all current raw Temporal client constructors (including aliased imports) outside the factory. |
 
 ## Compatibility sources checked
 

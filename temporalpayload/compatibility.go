@@ -91,7 +91,10 @@ func (codec *Codec) CheckCompatibility(ctx context.Context) error {
 			if err != nil {
 				return errors.Wrapf(err, "decode retained temporal payload %q stored inner fixture", vector.name)
 			}
-			if err := codec.store.Put(ctx, reference.Key, stored); err != nil {
+			seedContext, cancel := codec.ioContext(ctx)
+			err = codec.store.Put(seedContext, reference.Key, stored)
+			cancel()
+			if err != nil {
 				return errors.Wrapf(err, "seed retained temporal payload %q blob", vector.name)
 			}
 		}
