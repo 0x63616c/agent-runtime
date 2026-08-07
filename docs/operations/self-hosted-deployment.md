@@ -70,6 +70,15 @@ role that receives Temporal endpoint/authentication configuration. The UI
 codec is only an inspection adapter: it uses the same payload pipeline, but it
 does not become a worker or gain Temporal client credentials.
 
+The pinned Temporal auto-setup image is explicitly configured with
+`BIND_ON_IP=0.0.0.0`; its entrypoint otherwise derives a pod address that may
+be IPv6-only on dual-stack clusters while operator and readiness commands use
+IPv4 loopback. The declared exec readiness probe must pass before namespace
+reconciliation. The operator verifies structured namespace state and enforces
+the declared 30-day history retention. Search attributes and schedules are
+currently declared as complete empty sets; non-empty declarations are rejected
+until their reconciliation path is implemented.
+
 Before a production rollout, the platform operator must define and test:
 
 - Temporal namespace history retention, archival/backup policy, frontend and

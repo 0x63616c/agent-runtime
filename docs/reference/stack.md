@@ -39,7 +39,7 @@ required.
 | Kind | Typed declaration |
 | --- | --- |
 | `kubernetes` | Allowlisted namespaced object, immutable workload image, explicit service account/ports/storage, finite compute, bounded RBAC, or default-deny network policy. |
-| `orchestration` | Namespace, finite retention, search attributes, and schedules. The private adapter maps this to Temporal. |
+| `orchestration` | Namespace, finite retention, task-queue prefix, and explicit search-attribute/schedule sets. The current private Temporal adapter reconciles namespace existence and retention; it rejects non-empty search-attribute or schedule sets until those provider mappings are implemented. |
 | `blob` | Bucket/prefix plus declared endpoint and credential-resource references. |
 | `database` | Database/schema, credential-resource reference, and ordered immutable upgrade/rollback migration digests. |
 | `secret_reference` | Provider-owned reference and version only. Literal secret material is not a schema field. |
@@ -103,6 +103,17 @@ probe, verifies the artifact digest, and invokes `psql` only through that
 target. Rollback runs only current migration versions absent from the previous
 reviewed Stack document, in descending order, before applying the previous
 Kubernetes manifests.
+
+For the implemented Temporal namespace declaration, apply first awaits the
+declared Temporal Deployment readiness probe, then reads bounded structured
+namespace state. It creates a missing namespace, updates drifted finite history
+retention, and accepts a concurrent-create race idempotently. Transport errors
+are retried a bounded number of times and are never treated as namespace
+absence. Safe CLI diagnostics are bounded and credential-shaped output is
+redacted. The production declaration currently has empty search-attribute and
+schedule sets; a non-empty set fails visibly rather than being silently
+ignored. Task-queue prefixes are consumed by the later worker composition and
+are not provider namespace state.
 
 `tilt up -- --stack=<name>` remains the planned canonical local application
 command until issue #12 checks in and proves it.

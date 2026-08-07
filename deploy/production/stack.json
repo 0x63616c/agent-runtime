@@ -1282,6 +1282,10 @@
               {
                 "name": "POSTGRES_USER",
                 "value": "postgres"
+              },
+              {
+                "name": "BIND_ON_IP",
+                "value": "0.0.0.0"
               }
             ],
             "secret_environment": [
@@ -1291,6 +1295,21 @@
                 "key": "POSTGRES_PASSWORD"
               }
             ],
+            "readiness": {
+              "command": [
+                "temporal",
+                "--address",
+                "127.0.0.1:7233",
+                "--command-timeout",
+                "5s",
+                "operator",
+                "cluster",
+                "health"
+              ],
+              "initial_delay_seconds": 1,
+              "period_seconds": 2,
+              "failure_threshold": 30
+            },
             "ports": [
               {
                 "name": "http",
@@ -3563,6 +3582,10 @@
               {
                 "name": "POSTGRES_USER",
                 "value": "postgres"
+              },
+              {
+                "name": "BIND_ON_IP",
+                "value": "0.0.0.0"
               }
             ],
             "secret_environment": [
@@ -3572,6 +3595,21 @@
                 "key": "POSTGRES_PASSWORD"
               }
             ],
+            "readiness": {
+              "command": [
+                "temporal",
+                "--address",
+                "127.0.0.1:7233",
+                "--command-timeout",
+                "5s",
+                "operator",
+                "cluster",
+                "health"
+              ],
+              "initial_delay_seconds": 1,
+              "period_seconds": 2,
+              "failure_threshold": 30
+            },
             "ports": [
               {
                 "name": "http",
@@ -5844,6 +5882,10 @@
               {
                 "name": "POSTGRES_USER",
                 "value": "postgres"
+              },
+              {
+                "name": "BIND_ON_IP",
+                "value": "0.0.0.0"
               }
             ],
             "secret_environment": [
@@ -5853,6 +5895,21 @@
                 "key": "POSTGRES_PASSWORD"
               }
             ],
+            "readiness": {
+              "command": [
+                "temporal",
+                "--address",
+                "127.0.0.1:7233",
+                "--command-timeout",
+                "5s",
+                "operator",
+                "cluster",
+                "health"
+              ],
+              "initial_delay_seconds": 1,
+              "period_seconds": 2,
+              "failure_threshold": 30
+            },
             "ports": [
               {
                 "name": "http",

@@ -1,19 +1,47 @@
 # Issue #14 deployment-role evidence
 
-Status: local composition, declarative-render, and immutable-image publication
-evidence. This record is not yet a claim that a production cluster was mutated.
+Status: local composition, declarative-render, immutable multi-architecture
+image publication, and disposable Kubernetes/Temporal/blob integration proof.
+This is local operator evidence, not a claim that a production cluster was
+mutated or that backup/restore and production perimeter policy are complete.
 
 ## Published image proof
 
-On 2026-08-07, GitHub Actions run `31151851398` built and published
-`ghcr.io/0x63616c/agent-runtime@sha256:ac867c17ee4474138778a2f22dec6b5128f9fa3931b69991197e910eaf321770`.
-The OCI revision label is `104fdc985787e46474f3c69e17d031104aff725d`, the
-same immutable source revision that triggered the publisher. The publisher
-completed its Buildx push, SBOM/provenance generation, GitHub signed
-attestation, and digest inspection successfully. A local
+On 2026-08-07, GitHub Actions run `31152555763` built and published the
+Linux AMD64/ARM64 index
+`ghcr.io/0x63616c/agent-runtime@sha256:7c60d4d6078da20db1f3c4e19cec03d033f9a37e4f7ec98fe5b1858f806ee1b3`
+from source revision `a372977`. The publisher completed its Buildx push,
+SBOM/provenance generation, GitHub signed attestation, and digest inspection
+successfully. A local
 `gh attestation verify` against the digest and `0x63616c/agent-runtime`
 succeeded. This proves the published artifact provenance, not Kubernetes
 runtime behavior.
+
+## Disposable Kubernetes integration proof
+
+On 2026-08-07, `deploy/production/run-kubernetes-smoke.sh` applied the
+production profile through the audited operator to the explicit OrbStack
+context. The retained audit digest was
+`sha256:4b9e22ecb07cabff81dc72aacf6e9c08362a1fe1a228697f5ca4e783be4085ab`
+and recorded `result: applied` with the complete bounded set of 50 declared
+Kubernetes resource IDs. All 14 rendered Deployments reached Ready (17 pods because
+`egress-proxy` has two replicas and `orchestration` has three). The operator
+verified the migration digest and applied schema
+version 1 through the declared Postgres workload. It awaited the declared
+Temporal health probe, created the `agent-runtime` namespace, and structured
+describe reported exactly `2592000s` (30 days) retention. The pinned MinIO
+client then created a disposable bucket, wrote and read the exact `smoke`
+content, removed the object and bucket, and the harness deleted the exact
+Kubernetes namespace. A following read confirmed the namespace no longer
+existed.
+
+The same run exposed and fixed a dual-stack portability error: the pinned
+Temporal entrypoint derived an IPv6 pod bind address while its probe and
+operator used IPv4 loopback. All profiles now explicitly declare
+`BIND_ON_IP=0.0.0.0`, and a production contract test locks the bind/probe
+alignment. The namespace adapter parses structured describe output, updates
+retention drift, distinguishes namespace absence from transport failure,
+handles concurrent creation idempotently, and bounds/redacts diagnostics.
 
 ## Retained local proof
 
@@ -66,9 +94,9 @@ profile of the Stack:
 
 ## Remaining acceptance evidence
 
-- The platform-owned live Kubernetes/Temporal/blob/backup/observability smoke
-  must be executed through the audited operator action with explicit operator
-  target and retained redacted results.
+- Backup/restore and observability-export recovery remain unproved; the live
+  proof covers Kubernetes apply/readiness, migration, Temporal namespace
+  retention, blob write/read/delete, audit, and containment-safe cleanup.
 - The final production egress perimeter and DNS/CA policy requires a real
   operator environment; Kubernetes NetworkPolicy alone is not cited as FQDN
   enforcement.

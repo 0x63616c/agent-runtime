@@ -13,8 +13,6 @@ on:
       - deploy/production/Dockerfile
       - .dockerignore
       - .github/workflows/publish-production-image.yml
-  workflow_dispatch:
-
 permissions:
   contents: read
   packages: write
