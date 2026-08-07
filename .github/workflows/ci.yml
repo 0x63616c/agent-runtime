@@ -38,14 +38,13 @@ jobs:
           version: v2.12.2
           args: --timeout=5m
       - name: Run incremental direct-main gate
-        id: check
-        continue-on-error: true
+        id: incremental
         run: just check
       - name: Retain bounded main-CI evidence
-        if: always() && steps.check.outcome != 'skipped'
+        if: always() && steps.incremental.outcome != 'skipped'
         env:
-          CHECK_EVENT: ${{ steps.check.outcome == 'success' && 'main_ci' || 'red_main_halt' }}
-          CHECK_RESULT: ${{ steps.check.outcome == 'success' && 'passed' || 'failed' }}
+          CHECK_EVENT: ${{ steps.incremental.outcome == 'success' && 'main_ci' || 'red_main_halt' }}
+          CHECK_RESULT: ${{ steps.incremental.outcome == 'success' && 'passed' || 'failed' }}
         run: >-
           go run ./cmd/afk-evidence -mode record
           -event "$CHECK_EVENT"
@@ -69,6 +68,3 @@ jobs:
           path: afk-main-ci.json
           if-no-files-found: error
           retention-days: 90
-      - name: Halt on red main
-        if: steps.check.outcome != 'success'
-        run: exit 1

@@ -59,13 +59,14 @@ var _ = Describe("binding governance", func() {
 		}
 	})
 
-	It("retains main-CI evidence before enforcing a red-main halt", func() {
+	It("retains main-CI evidence while preserving the incremental gate outcome", func() {
 		workflow := read(".github/workflows/ci.yml")
-		Expect(workflow).To(ContainSubstring("continue-on-error: true"))
-		Expect(workflow).To(ContainSubstring("if: always() && steps.check.outcome != 'skipped'"))
+		Expect(workflow).To(ContainSubstring("id: incremental"))
+		Expect(workflow).To(ContainSubstring("if: always() && steps.incremental.outcome != 'skipped'"))
 		Expect(workflow).To(ContainSubstring("-proof-level main_ci"))
 		Expect(workflow).To(ContainSubstring("retention-days: 90"))
-		Expect(workflow).To(MatchRegexp(`(?s)Upload bounded evidence.*Halt on red main`))
+		Expect(workflow).NotTo(ContainSubstring("continue-on-error: true"))
+		Expect(workflow).NotTo(ContainSubstring("Halt on red main"))
 		Expect(workflow).NotTo(ContainSubstring("pull_request:"))
 	})
 })
