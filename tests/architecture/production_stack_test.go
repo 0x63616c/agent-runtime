@@ -1,8 +1,11 @@
 package architecture_test
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"os"
+	"os/exec"
 	"strings"
 
 	"github.com/0x63616c/agent-runtime/internal/roles"
@@ -12,6 +15,31 @@ import (
 )
 
 var _ = Describe("Self-hosted production Stack", func() {
+	It("derives disposable profiles from production with only identity, lifecycle, and test-secret differences", func() {
+		file, err := os.Open("../../deploy/production/stack.json")
+		Expect(err).NotTo(HaveOccurred())
+		spec, err := stack.Parse(file)
+		Expect(file.Close()).To(Succeed())
+		Expect(err).NotTo(HaveOccurred())
+
+		production, err := stack.Render(spec, stack.ProfileProduction)
+		Expect(err).NotTo(HaveOccurred())
+		local, err := stack.Render(spec, stack.ProfileLocal)
+		Expect(err).NotTo(HaveOccurred())
+		ci, err := stack.Render(spec, stack.ProfileCI)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(normalizedProfile(local.Resources(), "ar-agent-runtime")).To(Equal(normalizedProfile(production.Resources(), "agent-runtime")))
+		Expect(normalizedProfile(ci.Resources(), "ar-ci-agent-runtime")).To(Equal(normalizedProfile(production.Resources(), "agent-runtime")))
+
+		command := exec.Command("jq", "-f", "deploy/production/derive-profiles.jq", "deploy/production/stack.json")
+		command.Dir = "../.."
+		derived, err := command.Output()
+		Expect(err).NotTo(HaveOccurred())
+		checkedIn, err := os.ReadFile("../../deploy/production/stack.json")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(derived).To(Equal(checkedIn), "derive-profiles.jq must be an idempotent checked-in generator")
+	})
+
 	It("renders explicit trust-scoped roles, secrets, defaults, ingress, and operator dependencies", func() {
 		file, err := os.Open("../../deploy/production/stack.json")
 		Expect(err).NotTo(HaveOccurred())
@@ -83,6 +111,65 @@ func findResource(resources []stack.Resource, id stack.ResourceID) stack.Resourc
 	}
 	Fail("expected declared resource " + string(id))
 	return stack.Resource{}
+}
+
+func normalizedProfile(resources []stack.Resource, namespace string) []byte {
+	normalized := make([]stack.Resource, len(resources))
+	copy(normalized, resources)
+	for index := range normalized {
+		resource := &normalized[index]
+		resource.Retention = stack.Retention{}
+		resource.BackupRestoreOwner = ""
+		resource.DeleteBehavior = ""
+		if resource.SecretReference != nil {
+			resource.SecretReference.Provider = "<profile-secret-provider>"
+			resource.SecretReference.Reference = "<profile-secret-reference>"
+		}
+		if resource.Orchestration != nil {
+			resource.Orchestration.Namespace = "<namespace>"
+			resource.Orchestration.TaskQueuePrefix = "<namespace>-"
+		}
+		if resource.Blob != nil {
+			resource.Blob.Bucket = "<namespace>"
+			resource.Blob.Prefix = "<namespace>/payloads"
+		}
+		if resource.Kubernetes != nil {
+			for environmentIndex := range resource.Kubernetes.Environment {
+				environment := &resource.Kubernetes.Environment[environmentIndex]
+				if environment.Name != "RUNTIME_ROLE_CONFIG" {
+					continue
+				}
+				var document any
+				Expect(json.Unmarshal([]byte(environment.Value), &document)).To(Succeed())
+				document = normalizeNamespaceStrings(document, namespace)
+				encoded, err := json.Marshal(document)
+				Expect(err).NotTo(HaveOccurred())
+				environment.Value = string(encoded)
+			}
+		}
+	}
+	encoded, err := json.Marshal(normalized)
+	Expect(err).NotTo(HaveOccurred())
+	return bytes.TrimSpace(encoded)
+}
+
+func normalizeNamespaceStrings(value any, namespace string) any {
+	switch typed := value.(type) {
+	case string:
+		return strings.ReplaceAll(typed, namespace, "<namespace>")
+	case []any:
+		for index := range typed {
+			typed[index] = normalizeNamespaceStrings(typed[index], namespace)
+		}
+		return typed
+	case map[string]any:
+		for key := range typed {
+			typed[key] = normalizeNamespaceStrings(typed[key], namespace)
+		}
+		return typed
+	default:
+		return value
+	}
 }
 
 type architectureFixtureSecrets struct{}
