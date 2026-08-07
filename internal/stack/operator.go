@@ -374,17 +374,26 @@ func (operator KubernetesOperator) Reconcile(ctx context.Context, request Operat
 
 // Rollback applies a separately rendered previous Stack state through the same explicit operator boundary.
 func (operator KubernetesOperator) Rollback(ctx context.Context, request OperatorRequest, current, previous Rendered) (KubernetesObservation, error) {
+	_, currentDocument, err := operator.prepare(ctx, request, current)
+	if err != nil {
+		return KubernetesObservation{}, err
+	}
+	if err := validateBootstrapAuthority(request.BootstrapAuthority, currentDocument); err != nil {
+		return KubernetesObservation{}, operator.recordFailure(ctx, request, currentDocument, OperatorActionRollback, err)
+	}
 	manifests, document, err := operator.prepare(ctx, request, previous)
 	if err != nil {
 		return KubernetesObservation{}, err
 	}
-	if err := validateBootstrapAuthority(request.BootstrapAuthority, document); err != nil {
-		return KubernetesObservation{}, operator.recordFailure(ctx, request, document, OperatorActionRollback, err)
+	if currentDocument.Stack != document.Stack || currentDocument.Profile != document.Profile || currentDocument.Namespace != document.Namespace {
+		return KubernetesObservation{}, operator.recordFailure(ctx, request, currentDocument, OperatorActionRollback, errors.New("rollback rendered Stack identity must match current rendering"))
 	}
 	if migrationErr := operator.rollbackMigrations(ctx, request.Target, current, previous, document, request.BootstrapAuthority); migrationErr != nil {
 		return KubernetesObservation{}, operator.recordFailure(ctx, request, document, OperatorActionRollback, migrationErr)
 	}
-	observation, rollbackErr := operator.adapter.Apply(ctx, request.Target, manifests, request.BootstrapAuthority)
+	previousAuthority := request.BootstrapAuthority
+	previousAuthority.RenderDigest = previous.Digest()
+	observation, rollbackErr := operator.adapter.Apply(ctx, request.Target, manifests, previousAuthority)
 	if rollbackErr != nil {
 		return KubernetesObservation{}, operator.recordFailure(ctx, request, document, OperatorActionRollback, rollbackErr)
 	}

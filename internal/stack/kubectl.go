@@ -6,10 +6,12 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"sort"
+	"strings"
 
 	"github.com/cockroachdb/errors"
 )
@@ -181,7 +183,7 @@ func (adapter KubectlAdapter) Teardown(ctx context.Context, target OperatorTarge
 		if current.UID() != action.UID || current.labels() != state.Labels {
 			return errors.Newf("teardown rendered Kubernetes manifests: resource %s changed identity before deletion", action.Resource)
 		}
-		if err := adapter.runSuccess(ctx, target, deleteArguments(object), nil); err != nil {
+		if err := adapter.deleteObserved(ctx, target, object, current); err != nil {
 			return errors.Wrapf(err, "teardown rendered Kubernetes manifest %s", action.Resource)
 		}
 	}
@@ -198,8 +200,11 @@ func (adapter KubectlAdapter) Teardown(ctx context.Context, target OperatorTarge
 	if err := adapter.verifyNamespaceEmpty(ctx, target, manifests.namespace.Metadata.Name); err != nil {
 		return err
 	}
-	if err := adapter.runSuccess(ctx, target, deleteArguments(manifests.namespace), nil); err != nil {
+	if err := adapter.deleteObserved(ctx, target, manifests.namespace, currentNamespace); err != nil {
 		return errors.Wrap(err, "teardown rendered Kubernetes Namespace")
+	}
+	if err := adapter.runSuccess(ctx, target, []string{"wait", "--for=delete", "Namespace/" + manifests.namespace.Metadata.Name, "--timeout=120s"}, nil); err != nil {
+		return errors.Wrap(err, "wait for rendered Kubernetes Namespace deletion")
 	}
 	return nil
 }
@@ -273,7 +278,7 @@ func (adapter KubectlAdapter) Upgrade(ctx context.Context, target OperatorTarget
 		if resource.Kind != ResourceDatabase {
 			continue
 		}
-		if err := adapter.runMigrations(ctx, target, document.Namespace, resource, resources, false, nil); err != nil {
+		if err := adapter.runMigrations(ctx, target, rendered, authority, document.Namespace, resource, resources, false, nil); err != nil {
 			return err
 		}
 	}
@@ -315,14 +320,14 @@ func (adapter KubectlAdapter) Rollback(ctx context.Context, target OperatorTarge
 		if !exists {
 			previousDatabase = DatabaseResource{}
 		}
-		if err := adapter.runMigrations(ctx, target, currentDocument.Namespace, resource, resources, true, &previousDatabase); err != nil {
+		if err := adapter.runMigrations(ctx, target, current, authority, currentDocument.Namespace, resource, resources, true, &previousDatabase); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func (adapter KubectlAdapter) runMigrations(ctx context.Context, target OperatorTarget, namespace string, resource Resource, resources map[ResourceID]Resource, rollback bool, previous *DatabaseResource) error {
+func (adapter KubectlAdapter) runMigrations(ctx context.Context, target OperatorTarget, authorityRendered Rendered, authority BootstrapAuthority, namespace string, resource Resource, resources map[ResourceID]Resource, rollback bool, previous *DatabaseResource) error {
 	database := resource.Database
 	targetResource, exists := resources[database.MigrationTarget]
 	if !exists || !isKubernetesWorkload(targetResource) {
@@ -356,6 +361,13 @@ func (adapter KubectlAdapter) runMigrations(ctx context.Context, target Operator
 			return errors.Wrapf(err, "run database migration %s version %d", resource.ID, migration.Version)
 		}
 		arguments := []string{"exec", targetResource.Kubernetes.Kind + "/" + targetResource.Kubernetes.Name, "--namespace", namespace, "-i", "--", "psql", "-v", "ON_ERROR_STOP=1", "-U", user, "-d", database.Database, "-f", "-"}
+		manifests, manifestErr := RenderKubernetes(authorityRendered)
+		if manifestErr != nil {
+			return manifestErr
+		}
+		if verifyErr := adapter.verifyBootstrapAuthority(ctx, target, manifests, authority); verifyErr != nil {
+			return verifyErr
+		}
 		if err := adapter.runSuccess(ctx, target, arguments, sql); err != nil {
 			return errors.Wrapf(err, "execute declared database migration %s version %d", resource.ID, migration.Version)
 		}
@@ -477,9 +489,10 @@ func (adapter KubectlAdapter) observeManifest(ctx context.Context, target Operat
 
 type observedObject struct {
 	Metadata struct {
-		UID         ObservedUID       `json:"uid"`
-		Labels      map[string]string `json:"labels"`
-		Annotations map[string]string `json:"annotations"`
+		UID             ObservedUID       `json:"uid"`
+		ResourceVersion string            `json:"resourceVersion"`
+		Labels          map[string]string `json:"labels"`
+		Annotations     map[string]string `json:"annotations"`
 	} `json:"metadata"`
 }
 
@@ -513,12 +526,31 @@ func (adapter KubectlAdapter) runSuccess(ctx context.Context, target OperatorTar
 	return nil
 }
 
-func deleteArguments(manifest KubernetesManifest) []string {
-	arguments := []string{"delete", manifest.Kind + "/" + manifest.Metadata.Name, "--ignore-not-found=false"}
-	if manifest.Kind != "Namespace" {
-		arguments = append(arguments, "--namespace", manifest.Metadata.Namespace)
+func (adapter KubectlAdapter) deleteObserved(ctx context.Context, target OperatorTarget, manifest KubernetesManifest, observed observedObject) error {
+	if observed.UID() == "" || observed.Metadata.ResourceVersion == "" {
+		return errors.New("delete observed Kubernetes object: UID and resource version are required")
 	}
-	return arguments
+	path := "/api/" + manifest.APIVersion + "/"
+	if strings.Contains(manifest.APIVersion, "/") {
+		parts := strings.Split(manifest.APIVersion, "/")
+		path = "/apis/" + parts[0] + "/" + parts[1] + "/"
+	}
+	if manifest.Kind != "Namespace" {
+		path += "namespaces/" + url.PathEscape(manifest.Metadata.Namespace) + "/"
+	}
+	resource, ok := kubernetesResourcePath(manifest.Kind)
+	if !ok {
+		return errors.Newf("delete observed Kubernetes object: unsupported kind %s", manifest.Kind)
+	}
+	path += resource + "/" + url.PathEscape(manifest.Metadata.Name)
+	payload := fmt.Sprintf(`{"apiVersion":"v1","kind":"DeleteOptions","preconditions":{"uid":%q,"resourceVersion":%q}}`, observed.UID(), observed.Metadata.ResourceVersion)
+	return adapter.runSuccess(ctx, target, []string{"delete", "--raw", path, "-f", "-"}, []byte(payload+"\n"))
+}
+
+func kubernetesResourcePath(kind string) (string, bool) {
+	resources := map[string]string{"Namespace": "namespaces", "Deployment": "deployments", "StatefulSet": "statefulsets", "Job": "jobs", "Service": "services", "Ingress": "ingresses", "ServiceAccount": "serviceaccounts", "Role": "roles", "RoleBinding": "rolebindings", "NetworkPolicy": "networkpolicies", "PersistentVolumeClaim": "persistentvolumeclaims", "ConfigMap": "configmaps", "ResourceQuota": "resourcequotas", "Secret": "secrets"}
+	resource, ok := resources[kind]
+	return resource, ok
 }
 
 func kubectlExitError(action string, code int) error {

@@ -167,7 +167,7 @@ var _ = Describe("Declared provider reconciliation", func() {
 		Expect(err).To(MatchError(ContainSubstring("delete declared local-generated Secret with verified preconditions: exit status 1")))
 		persisted, err := stack.ReadBootstrapAuthority(capabilityPath)
 		Expect(err).NotTo(HaveOccurred())
-		Expect(persisted.DeletedSecrets).To(Equal(map[stack.ResourceID]stack.ObservedUID{"db-creds": "uid-db"}))
+		Expect(persisted.DeletedSecrets).To(Equal(map[stack.ResourceID]stack.ObservedUID{"db-creds": "uid-db", "blob-creds": "uid-blob"}))
 
 		ids, err := adapter.TeardownDeclared(context.Background(), stack.OperatorTarget{Kubeconfig: "/explicit/kubeconfig", Context: "smoke"}, rendered, persisted)
 		Expect(err).NotTo(HaveOccurred())

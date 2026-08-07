@@ -53,13 +53,16 @@ func (adapter TemporalCLIAdapter) ReconcileOrchestration(ctx context.Context, ta
 		}
 		if missing {
 			create := []string{"--kubeconfig", target.Kubeconfig, "--context", target.Context, "exec", "Deployment/temporal", "--namespace", doc.Namespace, "--", "temporal", "--address", "127.0.0.1:7233", "--command-timeout", "30s", "operator", "namespace", "create", "--namespace", r.Orchestration.Namespace, "--retention", fmt.Sprintf("%dh", int64(retention/time.Hour))}
+			if verifyErr := adapter.verifyBootstrapAuthority(ctx, target, rendered, authority); verifyErr != nil {
+				return nil, verifyErr
+			}
 			created, createErr := adapter.runner.Run(ctx, "kubectl", create, nil)
 			if createErr != nil {
 				return nil, errors.Wrap(createErr, "create declared Temporal namespace")
 			}
 			if created.ExitCode != 0 {
 				if temporalNamespaceAlreadyExists(created.Output) {
-					if updateErr := adapter.updateRetention(ctx, target, doc.Namespace, r.Orchestration.Namespace, retention); updateErr != nil {
+					if updateErr := adapter.updateRetention(ctx, target, rendered, authority, doc.Namespace, r.Orchestration.Namespace, retention); updateErr != nil {
 						return nil, updateErr
 					}
 					ids = append(ids, r.ID)
@@ -68,7 +71,7 @@ func (adapter TemporalCLIAdapter) ReconcileOrchestration(ctx context.Context, ta
 				return nil, errors.Newf("create declared Temporal namespace: exit status %d: %s", created.ExitCode, safeTemporalOutput(created.Output))
 			}
 		} else if description.Retention != retention {
-			if updateErr := adapter.updateRetention(ctx, target, doc.Namespace, r.Orchestration.Namespace, retention); updateErr != nil {
+			if updateErr := adapter.updateRetention(ctx, target, rendered, authority, doc.Namespace, r.Orchestration.Namespace, retention); updateErr != nil {
 				return nil, updateErr
 			}
 		}
@@ -103,6 +106,9 @@ func (adapter TemporalCLIAdapter) TeardownOrchestration(ctx context.Context, tar
 			return nil
 		}
 		arguments := []string{"--kubeconfig", target.Kubeconfig, "--context", target.Context, "exec", "Deployment/temporal", "--namespace", document.Namespace, "--", "temporal", "--address", "127.0.0.1:7233", "--command-timeout", "30s", "operator", "namespace", "delete", "--namespace", resource.Orchestration.Namespace, "--yes"}
+		if verifyErr := adapter.verifyBootstrapAuthority(ctx, target, rendered, authority); verifyErr != nil {
+			return verifyErr
+		}
 		result, runErr := adapter.runner.Run(ctx, "kubectl", arguments, nil)
 		if runErr != nil {
 			return errors.Wrap(runErr, "delete declared Temporal namespace")
@@ -120,7 +126,7 @@ func (adapter TemporalCLIAdapter) verifyBootstrapAuthority(ctx context.Context, 
 	if err != nil {
 		return err
 	}
-	return (KubectlAdapter{runner: adapter.runner}).verifyBootstrapAuthority(ctx, target, manifests, authority)
+	return KubectlAdapter(adapter).verifyBootstrapAuthority(ctx, target, manifests, authority)
 }
 
 type temporalNamespaceDescription struct {
@@ -188,8 +194,11 @@ func parseTemporalNamespaceDescription(output []byte) (temporalNamespaceDescript
 	return temporalNamespaceDescription{Retention: retention}, nil
 }
 
-func (adapter TemporalCLIAdapter) updateRetention(ctx context.Context, target OperatorTarget, deploymentNamespace, temporalNamespace string, retention time.Duration) error {
+func (adapter TemporalCLIAdapter) updateRetention(ctx context.Context, target OperatorTarget, rendered Rendered, authority BootstrapAuthority, deploymentNamespace, temporalNamespace string, retention time.Duration) error {
 	args := []string{"--kubeconfig", target.Kubeconfig, "--context", target.Context, "exec", "Deployment/temporal", "--namespace", deploymentNamespace, "--", "temporal", "--address", "127.0.0.1:7233", "--command-timeout", "30s", "operator", "namespace", "update", "--namespace", temporalNamespace, "--retention", fmt.Sprintf("%dh", int64(retention/time.Hour))}
+	if err := adapter.verifyBootstrapAuthority(ctx, target, rendered, authority); err != nil {
+		return err
+	}
 	result, err := adapter.runner.Run(ctx, "kubectl", args, nil)
 	if err != nil {
 		return errors.Wrap(err, "update declared Temporal namespace retention")

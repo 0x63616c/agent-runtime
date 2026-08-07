@@ -157,13 +157,13 @@ func runWithProbe(ctx context.Context, arguments []string, output io.Writer, pro
 			if authorityErr != nil {
 				return authorityErr
 			}
-			request.OperatorRequest.BootstrapAuthority = authority
+			request.BootstrapAuthority = authority
 		} else if requiresBootstrapAuthority(arguments[0]) {
 			authority, authorityErr := stack.ReadBootstrapAuthority(request.CapabilityFile)
 			if authorityErr != nil {
 				return authorityErr
 			}
-			request.OperatorRequest.BootstrapAuthority = authority
+			request.BootstrapAuthority = authority
 		}
 		adapter, err := stack.NewKubectlAdapter(stack.SystemKubectlRunner{})
 		if err != nil {
@@ -183,8 +183,8 @@ func runWithProbe(ctx context.Context, arguments []string, output io.Writer, pro
 			if bootstrapErr != nil {
 				return bootstrapErr
 			}
-			request.OperatorRequest.BootstrapAuthority.NamespaceUID = observation.UID
-			if authorityErr := stack.WriteBootstrapAuthority(request.CapabilityFile, request.OperatorRequest.BootstrapAuthority); authorityErr != nil {
+			request.BootstrapAuthority.NamespaceUID = observation.UID
+			if authorityErr := stack.WriteBootstrapAuthority(request.CapabilityFile, request.BootstrapAuthority); authorityErr != nil {
 				return authorityErr
 			}
 			return encodeOperatorResult(output, observation)

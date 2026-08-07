@@ -38,6 +38,7 @@ var _ = Describe("Kubectl migrations", func() {
 				{},
 				{ExitCode: 2},
 				{},
+				{Output: []byte(namespace)},
 				{},
 			}}
 			adapter, err := stack.NewKubectlAdapter(runner)
@@ -46,12 +47,13 @@ var _ = Describe("Kubectl migrations", func() {
 			err = adapter.Upgrade(context.Background(), stack.OperatorTarget{Kubeconfig: "/explicit/kubeconfig", Context: "disposable", MigrationRoot: root}, rendered, authority)
 
 			Expect(err).NotTo(HaveOccurred())
-			Expect(runner.commands).To(HaveLen(5))
+			Expect(runner.commands).To(HaveLen(6))
 			probe := "psql -At -v ON_ERROR_STOP=1 -U " + targetUser + " -d agent_runtime -c SELECT 1"
 			Expect(strings.Join(runner.commands[2].arguments, " ")).To(ContainSubstring(probe))
 			Expect(strings.Join(runner.commands[3].arguments, " ")).To(ContainSubstring(probe))
-			Expect(strings.Join(runner.commands[4].arguments, " ")).To(ContainSubstring("psql -v ON_ERROR_STOP=1 -U " + targetUser + " -d agent_runtime -f -"))
-			Expect(runner.commands[4].input).To(Equal(upgrade))
+			Expect(runner.commands[4].arguments).To(ContainElements("get", "Namespace/ar-feature-a"))
+			Expect(strings.Join(runner.commands[5].arguments, " ")).To(ContainSubstring("psql -v ON_ERROR_STOP=1 -U " + targetUser + " -d agent_runtime -f -"))
+			Expect(runner.commands[5].input).To(Equal(upgrade))
 		}
 	})
 })

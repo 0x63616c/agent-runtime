@@ -109,10 +109,8 @@ func (adapter KubectlDeclaredProviderAdapter) TeardownDeclared(ctx context.Conte
 		if resource.Kind != ResourceSecretReference || resource.DeleteBehavior != DeleteOwned || resource.SecretReference.Provider != "local-generated" {
 			continue
 		}
-		if _, alreadyDeleted, err := adapter.preflightLocalGeneratedSecretDelete(ctx, target, document, resource, capability); err != nil {
+		if _, _, err := adapter.preflightLocalGeneratedSecretDelete(ctx, target, document, resource, capability); err != nil {
 			return nil, errors.Wrapf(err, "preflight declared provider resource %s", resource.ID)
-		} else if alreadyDeleted {
-			continue
 		}
 	}
 	ids := make([]ResourceID, 0)
@@ -151,15 +149,15 @@ func (adapter KubectlDeclaredProviderAdapter) TeardownDeclared(ctx context.Conte
 				if alreadyDeleted {
 					break
 				}
+				if progressErr := RecordDeletedSecret(&capability, resource.ID, identity.uid); progressErr != nil {
+					return nil, errors.Wrapf(progressErr, "record pending teardown declared provider resource %s", resource.ID)
+				}
 				result, deleteErr := adapter.deleteVerifiedSecret(ctx, target, document.Namespace, resource.SecretReference.Reference, identity)
 				if deleteErr != nil {
 					return nil, errors.Wrapf(deleteErr, "teardown declared provider resource %s", resource.ID)
 				}
 				if result.ExitCode != 0 {
 					return nil, errors.Wrapf(kubectlExitError("delete declared local-generated Secret", result.ExitCode), "teardown declared provider resource %s", resource.ID)
-				}
-				if progressErr := RecordDeletedSecret(&capability, resource.ID, identity.uid); progressErr != nil {
-					return nil, errors.Wrapf(progressErr, "record teardown declared provider resource %s", resource.ID)
 				}
 			}
 		}
@@ -181,7 +179,13 @@ func (adapter KubectlDeclaredProviderAdapter) preflightLocalGeneratedSecretDelet
 		return verifiedSecretIdentity{}, false, kubectlExitError("get declared Secret reference", result.ExitCode)
 	}
 	identity, err := adapter.verifySecretReference(ctx, target, document, resource)
-	return identity, false, err
+	if err != nil {
+		return verifiedSecretIdentity{}, false, err
+	}
+	if recorded := authority.DeletedSecrets[resource.ID]; recorded != "" && recorded != identity.uid {
+		return verifiedSecretIdentity{}, false, errors.New("verify declared Secret reference: pending deletion identity changed")
+	}
+	return identity, false, nil
 }
 
 func declaredProviderDocument(rendered Rendered) (renderedDocument, map[ResourceID]Resource, error) {
