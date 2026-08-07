@@ -281,17 +281,18 @@ func TestOutputLimitTerminatesWithoutReaderAndReplayHasFinal(t *testing.T) {
 }
 
 func TestOutputRetentionGapDoesNotLeakCrossChunkSecretAndFinalIsUnique(t *testing.T) {
-	spool, err := newOutputSpool(OutputStdout, 32, 4, []string{"secret"})
+	spool, err := newProcessOutputSpool(32, 4, []string{"secret"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := spool.Write([]byte("a sec")); err != nil {
+	if err := spool.Write(OutputStdout, []byte("a sec")); err != nil {
 		t.Fatal(err)
 	}
-	if err := spool.Write([]byte("ret z")); err != nil {
+	if err := spool.Write(OutputStdout, []byte("ret z")); err != nil {
 		t.Fatal(err)
 	}
-	events := spool.Close(ProcessResult{Reason: TerminationCancelled, Cleanup: TreeCleanupConfirmed})
+	spool.Close(ProcessResult{Reason: TerminationCancelled, Cleanup: TreeCleanupConfirmed})
+	events := spool.Events()
 	gap, final := 0, 0
 	for _, event := range events {
 		if event.Chunk != nil && string(event.Chunk.Bytes) == "secret" {
@@ -304,8 +305,8 @@ func TestOutputRetentionGapDoesNotLeakCrossChunkSecretAndFinalIsUnique(t *testin
 			final++
 		}
 	}
-	if gap != 1 || final != 1 {
-		t.Fatalf("events = %#v, want one retention gap and one final", events)
+	if gap != 1 || final != 2 {
+		t.Fatalf("events = %#v, want one retention gap and one final per stream", events)
 	}
 	if _, err := newSliceOutputStream(events, "999"); err == nil {
 		t.Fatal("expired replay cursor must return an explicit output gap")
@@ -338,7 +339,11 @@ func TestProcessOutputCursorsStayUnambiguousAcrossStreams(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer stream.Close()
+	t.Cleanup(func() {
+		if closeErr := stream.Close(); closeErr != nil {
+			t.Errorf("close output stream: %v", closeErr)
+		}
+	})
 	seen := map[OutputCursor]OutputKind{}
 	chunks := make([]string, 0, 2)
 	stdoutFinal, stderrChunk := -1, -1
@@ -404,7 +409,11 @@ func TestInterleavedOutputRetentionKeepsBoundedTailsAndExplicitGaps(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer stream.Close()
+	t.Cleanup(func() {
+		if closeErr := stream.Close(); closeErr != nil {
+			t.Errorf("close output stream: %v", closeErr)
+		}
+	})
 	var chunks []string
 	gaps := 0
 	for {
@@ -419,11 +428,45 @@ func TestInterleavedOutputRetentionKeepsBoundedTailsAndExplicitGaps(t *testing.T
 			gaps++
 		}
 	}
-	if got, want := strings.Join(chunks, ","), "new,ood"; got != want {
+	if got, want := strings.Join(chunks, ","), "ood"; got != want {
 		t.Fatalf("retained replay chunks = %q, want %q", got, want)
+	}
+	retainedBytes := 0
+	for _, chunk := range chunks {
+		retainedBytes += len(chunk)
+	}
+	if retainedBytes > 3 {
+		t.Fatalf("retained replay bytes = %d, want process-wide limit of 3", retainedBytes)
 	}
 	if gaps != 2 {
 		t.Fatalf("retention gaps = %d, want one per truncated stream", gaps)
+	}
+}
+
+func TestProducedOutputLimitIsSharedAcrossAlternatingStreams(t *testing.T) {
+	policy := testLimitPolicy()
+	policy.defaults.ProducedOutputBytes, policy.defaults.RetainedOutputBytes = 5, 5
+	policy.maximum.ProducedOutputBytes, policy.maximum.RetainedOutputBytes = 5, 5
+	client, err := newCoreClientWithPolicy("principal-a", time.Date(2026, 8, 6, 12, 0, 0, 0, time.UTC), policy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := OperationRequest{ID: "op_process_output_limit", Kind: OperationExecProcess, ExecProcess: &ExecProcessRequest{SandboxID: "sbx_01", Command: Command{Executable: "/bin/echo", Argv: []string{"echo"}, WorkDir: "/work"}}}
+	if _, err := client.Submit(context.Background(), request); err != nil {
+		t.Fatal(err)
+	}
+	processID := processIDFor(request.ID)
+	if err := client.appendProcessOutput(processID, OutputStdout, []byte("abc")); err != nil {
+		t.Fatal(err)
+	}
+	err = client.appendProcessOutput(processID, OutputStderr, []byte("def"))
+	failureCode(t, err, FailureResourceLimitExceeded)
+	info, err := client.GetProcess(context.Background(), processID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Result == nil || info.Result.Reason != TerminationOutputLimit {
+		t.Fatalf("output-limited process = %#v, want typed output limit", info)
 	}
 }
 

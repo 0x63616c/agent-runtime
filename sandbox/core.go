@@ -89,11 +89,7 @@ type effectiveSpec struct {
 type processRecord struct {
 	operationID OperationID
 	info        ProcessInfo
-	stdout      *outputSpool
-	stderr      *outputSpool
-	output      []outputReference
-	nextOutput  uint64
-	cursors     map[OutputCursor]OutputCursor
+	output      *processOutputSpool
 }
 
 func newCoreClient(principal string, now time.Time) *coreClient {
@@ -249,9 +245,8 @@ func (client *coreClient) reserveAcceptedResourcesLocked(ledger *principalLedger
 	case OperationExecProcess:
 		id := processIDFor(entry.value.Ref.ID)
 		limits := entry.effective.limits
-		stdout, _ := newOutputSpool(OutputStdout, limits.ProducedOutputBytes, limits.RetainedOutputBytes, nil)
-		stderr, _ := newOutputSpool(OutputStderr, limits.ProducedOutputBytes, limits.RetainedOutputBytes, nil)
-		ledger.processes[id] = &processRecord{operationID: entry.value.Ref.ID, info: ProcessInfo{ID: id, SandboxID: entry.request.ExecProcess.SandboxID, State: ProcessAccepted}, stdout: stdout, stderr: stderr, cursors: make(map[OutputCursor]OutputCursor)}
+		output, _ := newProcessOutputSpool(limits.ProducedOutputBytes, limits.RetainedOutputBytes, nil)
+		ledger.processes[id] = &processRecord{operationID: entry.value.Ref.ID, info: ProcessInfo{ID: id, SandboxID: entry.request.ExecProcess.SandboxID, State: ProcessAccepted}, output: output}
 	}
 }
 
@@ -454,7 +449,7 @@ func (client *coreClient) ReplayOutput(ctx context.Context, id ProcessID, from O
 		return nil, newFailure(FailureNotFoundOrDenied, "process was not found", RetryNever)
 	}
 	record := ledger.processes[id]
-	events := record.replayEvents()
+	events := record.output.Events()
 	client.ledger.mu.RUnlock()
 	return newSliceOutputStream(events, from)
 }
@@ -606,14 +601,9 @@ func (client *coreClient) startProcess(ctx context.Context, id ProcessID) error 
 func (client *coreClient) completeProcessLocked(ledger *principalLedger, record *processRecord, result ProcessResult) {
 	record.info.State = ProcessTerminal
 	record.info.Result = ptrProcessResult(copyProcessResult(result))
-	record.stdout.Close(result)
-	client.dropOutputLocked(record, record.stdout.takeEvicted())
-	client.captureOutputLocked(record, record.stdout)
-	record.stderr.Close(result)
-	client.dropOutputLocked(record, record.stderr.takeEvicted())
-	client.captureOutputLocked(record, record.stderr)
-	record.info.Stdout = record.stdout.Retention()
-	record.info.Stderr = record.stderr.Retention()
+	record.output.Close(result)
+	record.info.Stdout = record.output.Retention(OutputStdout)
+	record.info.Stderr = record.output.Retention(OutputStderr)
 	if entry := ledger.operations[record.operationID]; entry != nil && !isTerminalOperation(entry.value.State) {
 		entry.value.State = OperationSucceeded
 		entry.value.Result = &OperationResult{Kind: ResultProcess, Process: ptrProcessResult(copyProcessResult(result))}
@@ -628,16 +618,7 @@ func (client *coreClient) appendProcessOutput(id ProcessID, stream OutputKind, c
 	if ledger == nil || ledger.processes[id] == nil {
 		return newFailure(FailureNotFoundOrDenied, "process was not found", RetryNever)
 	}
-	var spool *outputSpool
-	switch stream {
-	case OutputStdout:
-		spool = ledger.processes[id].stdout
-	case OutputStderr:
-		spool = ledger.processes[id].stderr
-	default:
-		return newFailure(FailureInvalidArgument, "output stream is invalid", RetryNever)
-	}
-	if err := spool.Write(chunk); err != nil {
+	if err := ledger.processes[id].output.Write(stream, chunk); err != nil {
 		failure, _ := AsFailure(err)
 		if failure.Code == FailureResourceLimitExceeded && ledger.processes[id].info.State != ProcessTerminal {
 			result := ProcessResult{StartedAt: client.now, FinishedAt: client.now, Reason: TerminationOutputLimit, Cleanup: TreeCleanupConfirmed}
@@ -645,83 +626,7 @@ func (client *coreClient) appendProcessOutput(id ProcessID, stream OutputKind, c
 		}
 		return err
 	}
-	client.dropOutputLocked(ledger.processes[id], spool.takeEvicted())
-	client.captureOutputLocked(ledger.processes[id], spool)
 	return nil
-}
-
-// captureOutputLocked assigns one process-wide opaque cursor sequence after
-// each stream-specific spool transition. A replay therefore preserves the
-// control-plane observation order while each spool retains independent limits.
-func (client *coreClient) captureOutputLocked(record *processRecord, spool *outputSpool) {
-	for index := range spool.events {
-		event := spool.events[index]
-		if record.hasOutputCursor(event.Cursor) {
-			continue
-		}
-		oldCursor := event.Cursor
-		record.nextOutput++
-		event.Cursor = outputCursor("output", record.nextOutput)
-		record.cursors[oldCursor] = event.Cursor
-		if spool.firstCursor == oldCursor {
-			spool.firstCursor = event.Cursor
-		}
-		if event.Gap != nil {
-			if cursor, found := record.cursors[event.Gap.EarliestRetained]; found {
-				event.Gap.EarliestRetained = cursor
-			}
-		}
-		spool.events[index] = event
-		record.output = append(record.output, outputReference{cursor: event.Cursor, stream: event.Stream})
-	}
-}
-
-func (record *processRecord) hasOutputCursor(cursor OutputCursor) bool {
-	for _, reference := range record.output {
-		if reference.cursor == cursor {
-			return true
-		}
-	}
-	return false
-}
-
-func (client *coreClient) dropOutputLocked(record *processRecord, cursors []OutputCursor) {
-	if len(cursors) == 0 {
-		return
-	}
-	dropped := make(map[OutputCursor]struct{}, len(cursors))
-	for _, cursor := range cursors {
-		dropped[cursor] = struct{}{}
-	}
-	kept := record.output[:0]
-	for _, reference := range record.output {
-		if _, found := dropped[reference.cursor]; !found {
-			kept = append(kept, reference)
-		}
-	}
-	record.output = kept
-}
-
-type outputReference struct {
-	cursor OutputCursor
-	stream OutputKind
-}
-
-func (record *processRecord) replayEvents() []OutputEvent {
-	events := make([]OutputEvent, 0, len(record.output))
-	for _, reference := range record.output {
-		spool := record.stdout
-		if reference.stream == OutputStderr {
-			spool = record.stderr
-		}
-		for _, event := range spool.events {
-			if event.Cursor == reference.cursor {
-				events = append(events, copyOutputEvent(event))
-				break
-			}
-		}
-	}
-	return events
 }
 
 func (client *coreClient) acceptedOperation(id OperationID) accepted {
