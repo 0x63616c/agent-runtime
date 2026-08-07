@@ -35,6 +35,7 @@ def profile_resource($namespace; $profile):
     .dependencies |= unique |
     .blob.bucket = $namespace |
     .blob.prefix = ($namespace + "/payloads") |
+    .blob.endpoint_port_name = "http" |
     .blob.reconciler_reference = "blob-reconciler"
   elif .id == "state" then
     .dependencies += ["state-data"] |
@@ -121,7 +122,13 @@ def extras($namespace; $profile):
 def resources_for($base; $namespace; $profile):
   (($base | map(profile_resource($namespace; $profile))) + extras($namespace; $profile));
 
-(.profiles.production.resources) as $base |
+def generated_extra:
+  . == "temporal-db-secret" or . == "temporal-state-account" or . == "state-data" or
+  . == "temporal-state-data" or . == "blob-data" or . == "telemetry-data" or
+  . == "temporal-state" or . == "temporal-state-service" or . == "temporal-state-egress" or
+  . == "blob-reconciler" or . == "blob-reconciler-egress" or . == "temporal-persistence";
+
+(.profiles.production.resources | map(select((.id | generated_extra) | not))) as $base |
 .profiles.local.resources = resources_for($base; .profiles.local.namespace; "local") |
 .profiles.ci.resources = resources_for($base; .profiles.ci.namespace; "ci") |
 .profiles.production.resources = resources_for($base; .profiles.production.namespace; "production")

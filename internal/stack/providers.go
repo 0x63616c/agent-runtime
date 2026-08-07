@@ -180,7 +180,7 @@ func (adapter KubectlDeclaredProviderAdapter) runBlobScript(ctx context.Context,
 	if err := adapter.waitForWorkload(ctx, target, namespace, reconciler.Kubernetes); err != nil {
 		return err
 	}
-	port, err := servicePort(service, "http")
+	port, err := servicePort(service, declaration.EndpointPortName)
 	if err != nil {
 		return err
 	}

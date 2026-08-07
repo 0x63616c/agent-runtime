@@ -2332,7 +2332,8 @@
             "prefix": "ar-agent-runtime/payloads",
             "endpoint_reference": "blob-service",
             "credential_reference": "blob-storage-secret",
-            "reconciler_reference": "blob-reconciler"
+            "reconciler_reference": "blob-reconciler",
+            "endpoint_port_name": "http"
           }
         },
         {
@@ -5104,7 +5105,8 @@
             "prefix": "ar-ci-agent-runtime/payloads",
             "endpoint_reference": "blob-service",
             "credential_reference": "blob-storage-secret",
-            "reconciler_reference": "blob-reconciler"
+            "reconciler_reference": "blob-reconciler",
+            "endpoint_port_name": "http"
           }
         },
         {
@@ -7876,7 +7878,8 @@
             "prefix": "agent-runtime/payloads",
             "endpoint_reference": "blob-service",
             "credential_reference": "blob-storage-secret",
-            "reconciler_reference": "blob-reconciler"
+            "reconciler_reference": "blob-reconciler",
+            "endpoint_port_name": "http"
           }
         },
         {

@@ -307,6 +307,8 @@ type BlobResource struct {
 	Prefix string `json:"prefix"`
 	// EndpointReference names a declared service dependency rather than a storage URL.
 	EndpointReference ResourceID `json:"endpoint_reference"`
+	// EndpointPortName selects one declared Service port without inferring provider conventions.
+	EndpointPortName string `json:"endpoint_port_name"`
 	// CredentialReference names a SecretReference resource.
 	CredentialReference ResourceID `json:"credential_reference"`
 	// ReconcilerReference names the declared operator workload containing the pinned storage client.
@@ -632,7 +634,7 @@ func validateOrchestration(resource Resource) error {
 
 func validateBlob(resource Resource) error {
 	declaration := resource.Blob
-	if !blobBucketPattern.MatchString(declaration.Bucket) || !blobPrefixPattern.MatchString(declaration.Prefix) || declaration.EndpointReference == "" || declaration.CredentialReference == "" || declaration.ReconcilerReference == "" {
+	if !blobBucketPattern.MatchString(declaration.Bucket) || !blobPrefixPattern.MatchString(declaration.Prefix) || declaration.EndpointReference == "" || !resourceIDPattern.MatchString(declaration.EndpointPortName) || declaration.CredentialReference == "" || declaration.ReconcilerReference == "" {
 		return errors.Newf("resource %s blob declaration is incomplete", resource.ID)
 	}
 	return nil
