@@ -13,7 +13,7 @@ func TestParseStrictDeclarativeConfiguration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Parse() error = %v", err)
 	}
-	if config.listenAddress != "127.0.0.1:8443" || config.identity.Principal != "principal_01" || config.reconciliationInterval != time.Second || config.reconciliationPageSize != 100 {
+	if config.listenAddress != "127.0.0.1:8443" || config.identity.Principal != "principal_01" {
 		t.Fatalf("Parse() config = %#v", config)
 	}
 	if config.admission.Defaults.MilliCPU != 100 || config.admission.Defaults.Lifetime != 60*time.Second {
@@ -97,8 +97,6 @@ const validDocument = `{
   "binding_lifetime_seconds": 300,
   "retention_seconds": 86400,
   "wait_interval_millis": 25,
-  "reconciliation_interval_millis": 1000,
-  "reconciliation_page_size": 100,
   "admission": {
     "version": "policy-v1",
     "canonicalizer_version": "sandbox.control/v1",

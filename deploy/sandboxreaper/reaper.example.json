@@ -1,0 +1,6 @@
+{
+  "version": 1,
+  "database_dsn_environment": "SANDBOX_DATABASE_DSN",
+  "interval_millis": 1000,
+  "page_size": 100
+}
