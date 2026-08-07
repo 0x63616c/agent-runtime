@@ -1,0 +1,18 @@
+name: agent-runtime-temporalpayload
+
+services:
+  minio:
+    image: minio/minio@sha256:5045d7dbad98371ac49b6a6cd01e097e743f9c11fbd94e7991c1dda85bfcd275
+    command: ["server", "/data", "--console-address", ":9001"]
+    environment:
+      MINIO_ROOT_USER: ${AR_MINIO_ROOT_USER:?AR_MINIO_ROOT_USER is required}
+      MINIO_ROOT_PASSWORD: ${AR_MINIO_ROOT_PASSWORD:?AR_MINIO_ROOT_PASSWORD is required}
+    ports:
+      - "127.0.0.1::9000"
+    tmpfs:
+      - /data:rw,noexec,nosuid,size=256m
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
