@@ -94,6 +94,25 @@ func TestCanonicalRequestIncludesEveryTaggedOperationBody(t *testing.T) {
 	}
 }
 
+func TestCoreRejectsCrossTypeOpaqueIDsBeforeAcceptance(t *testing.T) {
+	requests := []OperationRequest{
+		{ID: "op_wrong_restore", Kind: OperationRestoreSandbox, RestoreSandbox: &RestoreSandboxRequest{SnapshotID: "sbx_01"}},
+		{ID: "op_wrong_exec", Kind: OperationExecProcess, ExecProcess: &ExecProcessRequest{SandboxID: "prc_01", Command: Command{Executable: "/bin/echo", Argv: []string{"echo"}, WorkDir: "/work"}}},
+		{ID: "op_wrong_kill", Kind: OperationKillProcess, KillProcess: &KillProcessRequest{ProcessID: "sbx_01"}},
+		{ID: "op_wrong_copy", Kind: OperationCopyIn, CopyIn: &CopyInRequest{SandboxID: "sbx_01", Source: ArtifactRef{ID: "vol_01", SizeBytes: 1}, Destination: "/work/in"}},
+		{ID: "op_wrong_attach", Kind: OperationAttachVolume, AttachVolume: &AttachVolumeRequest{SandboxID: "sbx_01", VolumeID: "snap_01", Target: "/work/volume"}},
+		{ID: "op_wrong_approval", Kind: OperationApproveSensitive, ApproveSensitive: &ApproveSensitiveOperationRequest{SensitiveOperationID: "sbx_01", Decision: ApprovalApproved, ExpiresAt: time.Date(2026, 8, 7, 0, 0, 0, 0, time.UTC)}},
+	}
+	client := newCoreClient("principal-a", time.Date(2026, 8, 6, 12, 0, 0, 0, time.UTC))
+	for _, request := range requests {
+		t.Run(string(request.Kind), func(t *testing.T) {
+			if _, err := client.Submit(context.Background(), request); err == nil {
+				t.Fatalf("Submit(%#v) error = nil, want cross-type ID rejection", request)
+			}
+		})
+	}
+}
+
 func TestCanonicalRequestIsStableForMapOrderAndDistinctForNilEmpty(t *testing.T) {
 	first := validCreateRequest("op_canonical")
 	first.CreateSandbox.Spec.Environment = map[string]string{"B": "two", "A": "one"}
@@ -698,6 +717,24 @@ func TestEveryTypedTerminationReasonRemainsDistinct(t *testing.T) {
 	code := 137
 	if err := validateProcessResult(ProcessResult{Reason: TerminationOutcomeUncertain, ExitCode: &code}); err == nil {
 		t.Fatal("uncertain result must not flatten to an exit code")
+	}
+	for _, reason := range []TerminationReason{
+		TerminationSignaled, TerminationTimedOut, TerminationOOMKilled, TerminationOutputLimit,
+		TerminationCancelled, TerminationKilledByCaller, TerminationSandboxClosed, TerminationSandboxLost,
+		TerminationStartupFailed, TerminationInfrastructureFailed,
+	} {
+		result := ProcessResult{Reason: reason, ExitCode: &code, Cleanup: TreeCleanupConfirmed}
+		if reason == TerminationSignaled {
+			signal := SignalKill
+			result.Signal = &signal
+		}
+		if err := validateProcessResult(result); err == nil {
+			t.Fatalf("%q result flattened to exit code 137", reason)
+		}
+	}
+	invalidSignal := Signal("backend-signal-9")
+	if err := validateProcessResult(ProcessResult{Reason: TerminationSignaled, Signal: &invalidSignal}); err == nil {
+		t.Fatal("backend-specific signal escaped the portable result contract")
 	}
 }
 

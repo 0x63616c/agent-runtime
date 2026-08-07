@@ -719,33 +719,33 @@ func normalizeRequest(request OperationRequest, limits limitPolicy) (OperationRe
 func validTaggedTarget(request OperationRequest) bool {
 	switch request.Kind {
 	case OperationRestoreSandbox:
-		return request.RestoreSandbox.SnapshotID != ""
+		return validSnapshotID(request.RestoreSandbox.SnapshotID)
 	case OperationSignalProcess:
-		return request.SignalProcess.ProcessID != "" && request.SignalProcess.Signal != ""
+		return validProcessID(request.SignalProcess.ProcessID) && portableSignal(request.SignalProcess.Signal)
 	case OperationKillProcess:
-		return request.KillProcess.ProcessID != ""
+		return validProcessID(request.KillProcess.ProcessID)
 	case OperationCopyIn:
-		return request.CopyIn.SandboxID != "" && request.CopyIn.Source.ID != "" && request.CopyIn.Source.SizeBytes > 0 && request.CopyIn.Destination != ""
+		return validSandboxID(request.CopyIn.SandboxID) && validArtifactID(request.CopyIn.Source.ID) && request.CopyIn.Source.SizeBytes > 0 && request.CopyIn.Destination != ""
 	case OperationCopyOut:
-		return request.CopyOut.SandboxID != "" && request.CopyOut.Source != ""
+		return validSandboxID(request.CopyOut.SandboxID) && request.CopyOut.Source != ""
 	case OperationSnapshotSandbox:
-		return request.SnapshotSandbox.SandboxID != ""
+		return validSandboxID(request.SnapshotSandbox.SandboxID)
 	case OperationCloseSandbox:
-		return request.CloseSandbox.SandboxID != ""
+		return validSandboxID(request.CloseSandbox.SandboxID)
 	case OperationReconcileSandbox:
-		return request.ReconcileSandbox.SandboxID != ""
+		return validSandboxID(request.ReconcileSandbox.SandboxID)
 	case OperationCreateVolume:
 		return request.CreateVolume.Spec.SizeBytes > 0 && request.CreateVolume.Spec.Inodes > 0
 	case OperationAttachVolume:
-		return request.AttachVolume.SandboxID != "" && request.AttachVolume.VolumeID != "" && request.AttachVolume.Target != ""
+		return validSandboxID(request.AttachVolume.SandboxID) && validVolumeID(request.AttachVolume.VolumeID) && request.AttachVolume.Target != ""
 	case OperationDetachVolume:
-		return request.DetachVolume.SandboxID != "" && request.DetachVolume.VolumeID != ""
+		return validSandboxID(request.DetachVolume.SandboxID) && validVolumeID(request.DetachVolume.VolumeID)
 	case OperationDeleteVolume:
-		return request.DeleteVolume.VolumeID != ""
+		return validVolumeID(request.DeleteVolume.VolumeID)
 	case OperationDeleteSnapshot:
-		return request.DeleteSnapshot.SnapshotID != ""
+		return validSnapshotID(request.DeleteSnapshot.SnapshotID)
 	case OperationApproveSensitive:
-		return request.ApproveSensitive.SensitiveOperationID != "" && request.ApproveSensitive.Decision != "" && !request.ApproveSensitive.ExpiresAt.IsZero()
+		return validOperationID(request.ApproveSensitive.SensitiveOperationID) && request.ApproveSensitive.Decision != "" && !request.ApproveSensitive.ExpiresAt.IsZero()
 	default:
 		return false
 	}
@@ -1111,7 +1111,22 @@ func validOperationID(id OperationID) bool {
 	return len(id) > 3 && len(id) <= 128 && strings.HasPrefix(string(id), "op_")
 }
 func validSandboxID(id SandboxID) bool {
-	return len(id) > 4 && len(id) <= 128 && strings.HasPrefix(string(id), "sbx_")
+	return validOpaqueID(string(id), "sbx_")
+}
+func validProcessID(id ProcessID) bool {
+	return validOpaqueID(string(id), "prc_")
+}
+func validVolumeID(id VolumeID) bool {
+	return validOpaqueID(string(id), "vol_")
+}
+func validSnapshotID(id SnapshotID) bool {
+	return validOpaqueID(string(id), "snap_")
+}
+func validArtifactID(id ArtifactID) bool {
+	return validOpaqueID(string(id), "art_")
+}
+func validOpaqueID(id, prefix string) bool {
+	return len(id) > len(prefix) && len(id) <= 128 && strings.HasPrefix(id, prefix)
 }
 func validDigest(digest Digest) bool {
 	if len(digest) != len("sha256:")+64 || !strings.HasPrefix(string(digest), "sha256:") {

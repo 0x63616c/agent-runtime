@@ -46,13 +46,30 @@ func validateProcessResult(result ProcessResult) error {
 	if result.Reason == TerminationOutcomeUncertain && (result.ExitCode != nil || result.Signal != nil) {
 		return newFailure(FailureInvalidArgument, "uncertain process outcome cannot invent exit status", RetryNever)
 	}
-	if result.Reason == TerminationExited && result.ExitCode == nil {
-		return newFailure(FailureInvalidArgument, "exited process result requires an exit code", RetryNever)
+	if result.Reason == TerminationExited {
+		if result.ExitCode == nil || result.Signal != nil {
+			return newFailure(FailureInvalidArgument, "exited process result requires only an exit code", RetryNever)
+		}
+	} else if result.ExitCode != nil {
+		return newFailure(FailureInvalidArgument, "non-exit termination cannot be flattened to an exit code", RetryNever)
 	}
-	if result.Reason == TerminationSignaled && result.Signal == nil {
-		return newFailure(FailureInvalidArgument, "signaled process result requires a signal", RetryNever)
+	if result.Reason == TerminationSignaled {
+		if result.Signal == nil || !portableSignal(*result.Signal) {
+			return newFailure(FailureInvalidArgument, "signaled process result requires a portable signal", RetryNever)
+		}
+	} else if result.Signal != nil {
+		return newFailure(FailureInvalidArgument, "non-signal termination cannot carry a signal", RetryNever)
 	}
 	return nil
+}
+
+func portableSignal(signal Signal) bool {
+	switch signal {
+	case SignalInterrupt, SignalTerminate, SignalKill, SignalHangup:
+		return true
+	default:
+		return false
+	}
 }
 
 func copyFailure(value *Failure) *Failure {
