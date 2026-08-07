@@ -31,10 +31,13 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("open configuration: %w", err)
 	}
-	defer file.Close()
 	config, err := sandboxcontrolprocess.Parse(file)
+	closeErr := file.Close()
 	if err != nil {
 		return err
+	}
+	if closeErr != nil {
+		return fmt.Errorf("close configuration: %w", closeErr)
 	}
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()

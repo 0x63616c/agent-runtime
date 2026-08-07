@@ -107,7 +107,11 @@ func TestControlHandlerRejectsChangedInputOtherPrincipalAndBindingMismatch(t *te
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer response.Body.Close()
+	defer func() {
+		if err := response.Body.Close(); err != nil {
+			t.Errorf("close response body: %v", err)
+		}
+	}()
 	if response.StatusCode != http.StatusForbidden {
 		t.Fatalf("mismatched credential/binding status = %d, want 403", response.StatusCode)
 	}
@@ -136,7 +140,9 @@ func TestControlHandlerBoundsBodiesAndHonorsCancelledWait(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	response.Body.Close()
+	if err := response.Body.Close(); err != nil {
+		t.Fatalf("close oversized response body: %v", err)
+	}
 	if response.StatusCode != http.StatusBadRequest && response.StatusCode != http.StatusRequestEntityTooLarge {
 		t.Fatalf("oversized request status = %d", response.StatusCode)
 	}
@@ -202,7 +208,11 @@ func bindAssertion(t *testing.T, server *httptest.Server, token string) string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer response.Body.Close()
+	defer func() {
+		if err := response.Body.Close(); err != nil {
+			t.Errorf("close bind response body: %v", err)
+		}
+	}()
 	var body bindResponse
 	if err := json.NewDecoder(response.Body).Decode(&body); err != nil {
 		t.Fatal(err)

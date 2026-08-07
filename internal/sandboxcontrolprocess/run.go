@@ -74,7 +74,7 @@ func Run(ctx context.Context, config Config, lookup SecretLookup) error {
 	if err != nil {
 		return errors.Wrap(err, "run sandbox-control process: listen")
 	}
-	defer listener.Close()
+	defer func() { _ = listener.Close() }()
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", ready)
 	mux.HandleFunc("GET /readyz", ready)

@@ -98,17 +98,6 @@ func decodeOperationResponseV1(data []byte) (Operation, error) {
 	return copyOperation(envelope.Operation), nil
 }
 
-func encodeOperationEventsV1(events []OperationEvent) ([]byte, error) {
-	copied := make([]OperationEvent, len(events))
-	for index, event := range events {
-		copied[index] = event
-		if event.Update != nil {
-			copied[index].Update = ptrOperation(copyOperation(*event.Update))
-		}
-	}
-	return encodeControlV1(operationEventsEnvelope{Version: controlV1, Kind: operationEventsKind, Events: copied})
-}
-
 func decodeOperationEventsV1(data []byte) ([]OperationEvent, error) {
 	var envelope operationEventsEnvelope
 	if err := decodeControlV1(data, operationEventsKind, &envelope); err != nil {
@@ -143,13 +132,6 @@ func decodeOperationEventsV1(data []byte) ([]OperationEvent, error) {
 		}
 	}
 	return envelope.Events, nil
-}
-
-func encodeFailureResponseV1(failure Failure) ([]byte, error) {
-	if !validWireFailure(failure) {
-		return nil, newFailure(FailureInvalidArgument, "failure response violates sandbox.control/v1", RetryNever)
-	}
-	return encodeControlV1(failureResponseEnvelope{Version: controlV1, Kind: failureResponseKind, Failure: failure})
 }
 
 func decodeFailureResponseV1(data []byte) (Failure, error) {
