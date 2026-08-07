@@ -1,0 +1,52 @@
+---
+title: Temporal payloads and blobs
+description: Local exact size-aware Temporal encoding with optional immutable object storage.
+slug: /reference/temporal-payloads
+---
+
+# Temporal payloads and blobs
+
+The M2 codec slice provides `temporalpayload`: a local Temporal data converter
+that chooses the smallest complete representation for each payload. It is not
+yet a deployed runtime service; role composition and production deployment are
+separate active work.
+
+The converter compares the actual serialized bytes of the normal payload, a
+zstd wrapper, and a compact immutable blob-reference wrapper. It only changes
+representation when the next complete form is strictly smaller. A remote blob
+therefore stores the smallest inner form—normal or compressed—not a second
+independent encoding path.
+
+`binary/zstd` and `binary/remote-payload` carry the versioned
+`agent-runtime-payload-v=1` metadata. A remote reference contains only a
+version, SHA-256 digest, and stored byte count. It does not expose a storage
+endpoint, credential, workflow ID, or payload body. Reads verify the digest and
+size before decoding.
+
+## Local workers; UI-only HTTP
+
+Workers and clients use the local `Codec.DataConverter()` through one
+runtime-owned factory. They never call an HTTP codec endpoint. The Temporal UI
+handler is a separate inspection adapter using the same codec, a required
+trusted-identity authorizer, and explicit namespace/origin allowlists.
+`X-Namespace`, browser origin, a NetworkPolicy, and source address are not
+authentication; the authorizer must verify identity (such as OIDC middleware
+or mTLS) and authorize it for the requested namespace. The handler does not
+retain or log credentials.
+
+## Storage and retention
+
+Bring your own `BlobStore`. The public `temporalpayload/s3` adapter accepts a
+configured MinIO/S3-compatible client plus one declared bucket. It requires a
+conditional create and validates an existing object byte-for-byte, preserving
+the immutable content-addressed contract.
+
+Codec operations cannot delete blobs. Retention is an explicit mark/sweep seam
+requiring a current authoritative eligibility decision, a finite age, and a
+conditional delete; it retains referenced and young content.
+
+The codec does not encrypt payloads and makes no confidentiality claim.
+
+See the repository [operator reference](https://github.com/0x63616c/agent-runtime/blob/main/docs/reference/temporal-payloads.md)
+for the wire format, compatibility window, MinIO integration command, and
+retention contract.

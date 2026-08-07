@@ -19,5 +19,12 @@ but reports unavailable until a control transport is composed. The deterministic
 in-memory fixture is unit/conformance evidence only; it does not claim process
 restart durability, Firecracker enforcement, or tenant isolation.
 
+M2 additionally provides the implementation-tested public
+[Temporal payload reference](./temporal-payloads.mdx). Its local converter
+compares complete wire representations before keeping normal, zstd, or
+immutable blob-reference payloads. The Temporal UI handler reuses that chain
+only for inspection; workers retain no remote-codec dependency. This is a
+library slice, not yet a deployed runtime role or production blob deployment.
+
 Generated files live only under `website/docs/reference/generated/`. Curated
 pages explain semantics and ownership without duplicating unverified schemas.

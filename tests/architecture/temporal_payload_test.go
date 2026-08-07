@@ -49,6 +49,23 @@ var _ = Describe("Temporal payload composition", func() {
 		}
 	})
 
+	It("keeps encryption configuration and claims outside the unencrypted codec contract", func() {
+		root := filepath.Join("..", "..")
+		for _, path := range goSourceFiles(filepath.Join(root, "temporalpayload")) {
+			if strings.HasSuffix(path, "_test.go") {
+				continue
+			}
+			contents, err := os.ReadFile(path)
+			Expect(err).NotTo(HaveOccurred(), path)
+			for _, forbidden := range []string{"WithEncryption", "EncryptionKey", "KMSKey", "CipherKey"} {
+				Expect(string(contents)).NotTo(ContainSubstring(forbidden), path)
+			}
+		}
+		reference, err := os.ReadFile(filepath.Join(root, "docs", "reference", "temporal-payloads.md"))
+		Expect(err).NotTo(HaveOccurred())
+		Expect(string(reference)).To(ContainSubstring("does **not** encrypt payloads"))
+	})
+
 	It("remains consumable from an independent Go module", func() {
 		root, err := filepath.Abs(filepath.Join("..", ".."))
 		Expect(err).NotTo(HaveOccurred())

@@ -1,9 +1,18 @@
 # Agent Runtime
 
 Agent Runtime is a Go monorepo for a durable, session-based agent platform.
-M0 is complete. M1 declarative infrastructure and M3 sandbox-contract work are
-active; the repository does not yet expose the public agent runtime service,
-working examples, isolated Tilt quickstart, or verified Firecracker isolation.
+M0 is complete. M1 declarative infrastructure, M2 payload infrastructure, and
+M3 sandbox-control work are active. The repository now exposes a runnable
+isolated Tilt infrastructure foundation and the reusable `temporalpayload`
+package, but it does not yet expose the public agent runtime service, working
+examples, production runtime image composition, or verified Firecracker
+isolation.
+
+The current Tilt foundation uses small health-only API/worker/codec images to
+prove isolated infrastructure, image builds, readiness, reset, and teardown.
+It is not yet the public Agent Runtime. See the
+[local Stack guide](website/docs/build-and-run/local-stack.mdx) for the exact
+boundary.
 
 ## Verification
 

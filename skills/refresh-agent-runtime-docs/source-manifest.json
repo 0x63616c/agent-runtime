@@ -10,14 +10,17 @@
         "CONTEXT.md",
         "README.md",
         "docs/reference/sandbox-control-v1.md",
+        "docs/reference/temporal-payloads.md",
         "sandbox/api.go",
         "sandbox/api_example_test.go",
         "skills/refresh-agent-runtime-docs/SKILL.md",
         "website/docs/build-and-run/local-foundation.mdx",
+        "website/docs/build-and-run/local-stack.mdx",
         "website/docs/concepts/runtime-language.mdx",
         "website/docs/examples/index.mdx",
         "website/docs/help/publication-operations.mdx",
         "website/docs/reference/overview.mdx",
+        "website/docs/reference/temporal-payloads.mdx",
         "website/docs/security/verified-boundaries.mdx",
         "website/docs/start-here/index.mdx",
         "website/docusaurus.config.ts",
@@ -26,15 +29,17 @@
         "website/sidebars.ts"
       ],
       "artifactKind": "source-inventory",
-      "publicStatus": "M0 complete; M1/M3 implementation active"
+      "publicStatus": "M0 complete; M1/M2/M3 implementation active"
     }
   ],
   "curated": [
     "website/docs/build-and-run/local-foundation.mdx",
+    "website/docs/build-and-run/local-stack.mdx",
     "website/docs/concepts/runtime-language.mdx",
     "website/docs/examples/index.mdx",
     "website/docs/help/publication-operations.mdx",
     "website/docs/reference/overview.mdx",
+    "website/docs/reference/temporal-payloads.mdx",
     "website/docs/security/verified-boundaries.mdx",
     "website/docs/start-here/index.mdx"
   ]
