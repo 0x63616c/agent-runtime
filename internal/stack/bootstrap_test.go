@@ -14,12 +14,12 @@ type bootstrapOperatorAdapter struct {
 	bootstraps  int
 }
 
-func (adapter *bootstrapOperatorAdapter) BootstrapNamespace(context.Context, stack.OperatorTarget, stack.KubernetesManifests) (stack.KubernetesNamespaceObservation, error) {
+func (adapter *bootstrapOperatorAdapter) BootstrapNamespace(context.Context, stack.OperatorTarget, stack.KubernetesManifests, string) (stack.KubernetesNamespaceObservation, error) {
 	adapter.bootstraps++
 	return adapter.observation, nil
 }
 
-func (*bootstrapOperatorAdapter) Apply(context.Context, stack.OperatorTarget, stack.KubernetesManifests) (stack.KubernetesObservation, error) {
+func (*bootstrapOperatorAdapter) Apply(context.Context, stack.OperatorTarget, stack.KubernetesManifests, stack.BootstrapAuthority) (stack.KubernetesObservation, error) {
 	return stack.KubernetesObservation{}, nil
 }
 func (*bootstrapOperatorAdapter) Observe(context.Context, stack.OperatorTarget, stack.KubernetesManifests) (stack.KubernetesObservation, error) {
@@ -28,7 +28,7 @@ func (*bootstrapOperatorAdapter) Observe(context.Context, stack.OperatorTarget, 
 func (*bootstrapOperatorAdapter) Diff(context.Context, stack.OperatorTarget, stack.KubernetesManifests) (stack.KubernetesDifference, error) {
 	return stack.KubernetesDifference{}, nil
 }
-func (*bootstrapOperatorAdapter) Teardown(context.Context, stack.OperatorTarget, stack.Rendered, stack.KubernetesManifests) error {
+func (*bootstrapOperatorAdapter) Teardown(context.Context, stack.OperatorTarget, stack.Rendered, stack.KubernetesManifests, stack.BootstrapAuthority) error {
 	return nil
 }
 
@@ -45,9 +45,11 @@ var _ = Describe("Audited namespace bootstrap", func() {
 		audit := &recordedAudit{}
 		operator, err := stack.NewKubernetesOperator(adapter, audit)
 		Expect(err).NotTo(HaveOccurred())
+		authority, err := stack.NewBootstrapAuthority(rendered, "")
+		Expect(err).NotTo(HaveOccurred())
 
 		observation, err := operator.Bootstrap(context.Background(), stack.OperatorRequest{
-			Actor: "smoke-bootstrap", Target: stack.OperatorTarget{Kubeconfig: "/explicit/kubeconfig", Context: "disposable", MigrationRoot: "/migrations"},
+			Actor: "smoke-bootstrap", Target: stack.OperatorTarget{Kubeconfig: "/explicit/kubeconfig", Context: "disposable", MigrationRoot: "/migrations"}, BootstrapAuthority: authority,
 		}, rendered)
 
 		Expect(err).NotTo(HaveOccurred())
@@ -70,8 +72,10 @@ var _ = Describe("Audited namespace bootstrap", func() {
 		}}
 		operator, err := stack.NewKubernetesOperator(adapter, &recordedAudit{})
 		Expect(err).NotTo(HaveOccurred())
+		authority, err := stack.NewBootstrapAuthority(rendered, "")
+		Expect(err).NotTo(HaveOccurred())
 
-		_, err = operator.Bootstrap(context.Background(), stack.OperatorRequest{Actor: "smoke-bootstrap", Target: stack.OperatorTarget{Kubeconfig: "/explicit/kubeconfig", Context: "disposable", MigrationRoot: "/migrations"}}, rendered)
+		_, err = operator.Bootstrap(context.Background(), stack.OperatorRequest{Actor: "smoke-bootstrap", Target: stack.OperatorTarget{Kubeconfig: "/explicit/kubeconfig", Context: "disposable", MigrationRoot: "/migrations"}, BootstrapAuthority: authority}, rendered)
 		Expect(err).To(MatchError(ContainSubstring("namespace observation does not match rendered desired state")))
 	})
 })

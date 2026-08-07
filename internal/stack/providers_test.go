@@ -3,6 +3,7 @@ package stack_test
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 	"strings"
 
 	"github.com/0x63616c/agent-runtime/internal/stack"
@@ -10,29 +11,38 @@ import (
 	. "github.com/onsi/gomega"
 )
 
-type providerCommand struct{ arguments []string }
+type providerCommand struct {
+	arguments []string
+	input     []byte
+}
 
 type fakeProviderRunner struct {
 	commands       []providerCommand
 	extraKey       bool
 	expectedDigest string
 	blobFailures   int
+	deleteExitCode int
+	deletedDB      bool
+	failBlobDelete bool
 }
 
-func (runner *fakeProviderRunner) Run(_ context.Context, _ string, arguments []string, _ []byte) (stack.KubectlCommandResult, error) {
-	runner.commands = append(runner.commands, providerCommand{arguments: append([]string(nil), arguments...)})
+func (runner *fakeProviderRunner) Run(_ context.Context, _ string, arguments []string, input []byte) (stack.KubectlCommandResult, error) {
+	runner.commands = append(runner.commands, providerCommand{arguments: append([]string(nil), arguments...), input: append([]byte(nil), input...)})
 	joined := strings.Join(arguments, " ")
 	switch {
 	case strings.Contains(joined, "get Namespace/ar-feature-a"):
-		return stack.KubectlCommandResult{Output: []byte(`{"metadata":{"uid":"uid-namespace","labels":{"app.kubernetes.io/part-of":"agent-runtime","agent-runtime.dev/stack":"feature-a","agent-runtime.dev/profile":"local"}}}`)}, nil
+		return stack.KubectlCommandResult{Output: []byte(`{"metadata":{"uid":"uid-namespace","labels":{"app.kubernetes.io/part-of":"agent-runtime","agent-runtime.dev/stack":"feature-a","agent-runtime.dev/profile":"local"},"annotations":{"agent-runtime.dev/bootstrap-nonce-sha256":"sha256:ed04c4e9ea6c49cf9ceb39098787c5b9842524f96b07ef45305476a11caec9b4"}}}`)}, nil
 	case strings.Contains(joined, "get Secret/blob-creds"):
-		data := fmt.Sprintf(`{"metadata":{"uid":"uid-blob","labels":{"app.kubernetes.io/part-of":"agent-runtime","agent-runtime.dev/stack":"feature-a","agent-runtime.dev/profile":"local","agent-runtime.dev/external-controller":"local-generated"},"annotations":{"agent-runtime.dev/bootstrap-uid":"uid-namespace","agent-runtime.dev/render-digest":%q}},"data":{"MINIO_ROOT_PASSWORD":"redacted","MINIO_ROOT_USER":"redacted"}}`, runner.expectedDigest)
+		data := fmt.Sprintf(`{"metadata":{"uid":"uid-blob","resourceVersion":"1","labels":{"app.kubernetes.io/part-of":"agent-runtime","agent-runtime.dev/stack":"feature-a","agent-runtime.dev/profile":"local","agent-runtime.dev/external-controller":"local-generated"},"annotations":{"agent-runtime.dev/bootstrap-uid":"uid-namespace","agent-runtime.dev/render-digest":%q}},"data":{"MINIO_ROOT_PASSWORD":"redacted","MINIO_ROOT_USER":"redacted"}}`, runner.expectedDigest)
 		if runner.extraKey {
-			data = fmt.Sprintf(`{"metadata":{"uid":"uid-blob","labels":{"app.kubernetes.io/part-of":"agent-runtime","agent-runtime.dev/stack":"feature-a","agent-runtime.dev/profile":"local","agent-runtime.dev/external-controller":"local-generated"},"annotations":{"agent-runtime.dev/bootstrap-uid":"uid-namespace","agent-runtime.dev/render-digest":%q}},"data":{"EXCESS_AUTHORITY":"redacted","MINIO_ROOT_PASSWORD":"redacted","MINIO_ROOT_USER":"redacted"}}`, runner.expectedDigest)
+			data = fmt.Sprintf(`{"metadata":{"uid":"uid-blob","resourceVersion":"1","labels":{"app.kubernetes.io/part-of":"agent-runtime","agent-runtime.dev/stack":"feature-a","agent-runtime.dev/profile":"local","agent-runtime.dev/external-controller":"local-generated"},"annotations":{"agent-runtime.dev/bootstrap-uid":"uid-namespace","agent-runtime.dev/render-digest":%q}},"data":{"EXCESS_AUTHORITY":"redacted","MINIO_ROOT_PASSWORD":"redacted","MINIO_ROOT_USER":"redacted"}}`, runner.expectedDigest)
 		}
 		return stack.KubectlCommandResult{Output: []byte(data)}, nil
 	case strings.Contains(joined, "get Secret/db-creds"):
-		return stack.KubectlCommandResult{Output: []byte(fmt.Sprintf(`{"metadata":{"uid":"uid-db","labels":{"app.kubernetes.io/part-of":"agent-runtime","agent-runtime.dev/stack":"feature-a","agent-runtime.dev/profile":"local","agent-runtime.dev/external-controller":"local-generated"},"annotations":{"agent-runtime.dev/bootstrap-uid":"uid-namespace","agent-runtime.dev/render-digest":%q}},"data":{"POSTGRES_PASSWORD":"redacted"}}`, runner.expectedDigest))}, nil
+		if runner.deletedDB {
+			return stack.KubectlCommandResult{ExitCode: 1, Output: []byte("Error from server (NotFound): secrets \\\"db-creds\\\" not found")}, nil
+		}
+		return stack.KubectlCommandResult{Output: []byte(fmt.Sprintf(`{"metadata":{"uid":"uid-db","resourceVersion":"1","labels":{"app.kubernetes.io/part-of":"agent-runtime","agent-runtime.dev/stack":"feature-a","agent-runtime.dev/profile":"local","agent-runtime.dev/external-controller":"local-generated"},"annotations":{"agent-runtime.dev/bootstrap-uid":"uid-namespace","agent-runtime.dev/render-digest":%q}},"data":{"POSTGRES_PASSWORD":"redacted"}}`, runner.expectedDigest))}, nil
 	case strings.Contains(joined, "psql"):
 		return stack.KubectlCommandResult{Output: []byte("1\n")}, nil
 	case strings.Contains(joined, "exec Deployment/blob-reconciler"):
@@ -43,6 +53,15 @@ func (runner *fakeProviderRunner) Run(_ context.Context, _ string, arguments []s
 		return stack.KubectlCommandResult{}, nil
 	case strings.Contains(joined, "get EndpointSlice --namespace ar-feature-a --selector kubernetes.io/service-name=telemetry"):
 		return stack.KubectlCommandResult{Output: []byte(`{"items":[{"endpoints":[{"addresses":["10.0.0.1"],"conditions":{"ready":true}}],"ports":[{"name":"otlp"}]}]}`)}, nil
+	case strings.Contains(joined, "delete --raw /api/v1/namespaces/ar-feature-a/secrets/"):
+		if strings.Contains(joined, "/secrets/db-creds") {
+			runner.deletedDB = true
+		}
+		if strings.Contains(joined, "/secrets/blob-creds") && runner.failBlobDelete {
+			runner.failBlobDelete = false
+			return stack.KubectlCommandResult{ExitCode: 1}, nil
+		}
+		return stack.KubectlCommandResult{ExitCode: runner.deleteExitCode}, nil
 	default:
 		return stack.KubectlCommandResult{}, nil
 	}
@@ -55,7 +74,7 @@ var _ = Describe("Declared provider reconciliation", func() {
 		adapter, err := stack.NewKubectlDeclaredProviderAdapter(runner)
 		Expect(err).NotTo(HaveOccurred())
 
-		ids, err := adapter.ReconcileDeclared(context.Background(), stack.OperatorTarget{Kubeconfig: "/explicit/kubeconfig", Context: "smoke"}, rendered)
+		ids, err := adapter.ReconcileDeclared(context.Background(), stack.OperatorTarget{Kubeconfig: "/explicit/kubeconfig", Context: "smoke"}, rendered, providerAuthority(rendered))
 		Expect(err).NotTo(HaveOccurred())
 		Expect(ids).To(Equal([]stack.ResourceID{"blob-creds", "blob-prefix", "db-creds", "runtime-database", "telemetry-pipeline"}))
 		Expect(joinedProviderCommands(runner.commands)).To(ContainSubstring("provider-blob smoke-bucket smoke/payloads http://blob:9000"))
@@ -70,7 +89,7 @@ var _ = Describe("Declared provider reconciliation", func() {
 		adapter, err := stack.NewKubectlDeclaredProviderAdapter(runner)
 		Expect(err).NotTo(HaveOccurred())
 
-		_, err = adapter.ReconcileDeclared(context.Background(), stack.OperatorTarget{Kubeconfig: "/explicit/kubeconfig", Context: "smoke"}, rendered)
+		_, err = adapter.ReconcileDeclared(context.Background(), stack.OperatorTarget{Kubeconfig: "/explicit/kubeconfig", Context: "smoke"}, rendered, providerAuthority(rendered))
 		Expect(err).To(MatchError(ContainSubstring("key inventory differs")))
 	})
 
@@ -80,7 +99,7 @@ var _ = Describe("Declared provider reconciliation", func() {
 		adapter, err := stack.NewKubectlDeclaredProviderAdapter(runner)
 		Expect(err).NotTo(HaveOccurred())
 
-		_, err = adapter.ReconcileDeclared(context.Background(), stack.OperatorTarget{Kubeconfig: "/explicit/kubeconfig", Context: "smoke"}, rendered)
+		_, err = adapter.ReconcileDeclared(context.Background(), stack.OperatorTarget{Kubeconfig: "/explicit/kubeconfig", Context: "smoke"}, rendered, providerAuthority(rendered))
 		Expect(err).To(MatchError(ContainSubstring("identity binding differs")))
 	})
 
@@ -90,7 +109,7 @@ var _ = Describe("Declared provider reconciliation", func() {
 		adapter, err := stack.NewKubectlDeclaredProviderAdapter(runner)
 		Expect(err).NotTo(HaveOccurred())
 
-		_, err = adapter.ReconcileDeclared(context.Background(), stack.OperatorTarget{Kubeconfig: "/explicit/kubeconfig", Context: "smoke"}, rendered)
+		_, err = adapter.ReconcileDeclared(context.Background(), stack.OperatorTarget{Kubeconfig: "/explicit/kubeconfig", Context: "smoke"}, rendered, providerAuthority(rendered))
 		Expect(err).NotTo(HaveOccurred())
 		attempts := 0
 		for _, command := range runner.commands {
@@ -107,17 +126,86 @@ var _ = Describe("Declared provider reconciliation", func() {
 		adapter, err := stack.NewKubectlDeclaredProviderAdapter(runner)
 		Expect(err).NotTo(HaveOccurred())
 
-		ids, err := adapter.TeardownDeclared(context.Background(), stack.OperatorTarget{Kubeconfig: "/explicit/kubeconfig", Context: "smoke"}, rendered)
+		ids, err := adapter.TeardownDeclared(context.Background(), stack.OperatorTarget{Kubeconfig: "/explicit/kubeconfig", Context: "smoke"}, rendered, providerAuthority(rendered))
 		Expect(err).NotTo(HaveOccurred())
 		Expect(ids).To(Equal([]stack.ResourceID{"blob-creds", "blob-prefix", "db-creds", "runtime-database", "telemetry-pipeline"}))
 		commands := joinedProviderCommands(runner.commands)
 		Expect(commands).To(ContainSubstring("provider-blob smoke-bucket smoke/payloads http://blob:9000"))
 		Expect(commands).To(ContainSubstring("mc rb \"declared/$1\""))
 		Expect(commands).NotTo(ContainSubstring("mc rb --force"))
-		Expect(commands).To(ContainSubstring("delete Secret/blob-creds --namespace ar-feature-a --ignore-not-found=false"))
-		Expect(commands).To(ContainSubstring("delete Secret/db-creds --namespace ar-feature-a --ignore-not-found=false"))
+		Expect(commands).To(ContainSubstring("delete --raw /api/v1/namespaces/ar-feature-a/secrets/blob-creds -f -"))
+		Expect(commands).To(ContainSubstring("delete --raw /api/v1/namespaces/ar-feature-a/secrets/db-creds -f -"))
+		Expect(secretDeleteInput(runner.commands, "db-creds")).To(Equal([]byte("{\"apiVersion\":\"v1\",\"kind\":\"DeleteOptions\",\"preconditions\":{\"uid\":\"uid-db\",\"resourceVersion\":\"1\"}}\n")))
+		Expect(secretDeleteInput(runner.commands, "blob-creds")).To(Equal([]byte("{\"apiVersion\":\"v1\",\"kind\":\"DeleteOptions\",\"preconditions\":{\"uid\":\"uid-blob\",\"resourceVersion\":\"1\"}}\n")))
+	})
+
+	It("refuses a local-generated Secret replacement race through Kubernetes delete preconditions", func() {
+		rendered := renderProviderStack("delete")
+		runner := &fakeProviderRunner{expectedDigest: rendered.Digest(), deleteExitCode: 1}
+		adapter, err := stack.NewKubectlDeclaredProviderAdapter(runner)
+		Expect(err).NotTo(HaveOccurred())
+
+		_, err = adapter.TeardownDeclared(context.Background(), stack.OperatorTarget{Kubeconfig: "/explicit/kubeconfig", Context: "smoke"}, rendered, providerAuthority(rendered))
+
+		Expect(err).To(MatchError(ContainSubstring("delete declared local-generated Secret with verified preconditions: exit status 1")))
+		Expect(secretDeleteInput(runner.commands, "db-creds")).To(Equal([]byte("{\"apiVersion\":\"v1\",\"kind\":\"DeleteOptions\",\"preconditions\":{\"uid\":\"uid-db\",\"resourceVersion\":\"1\"}}\n")))
+		Expect(secretDeleteInput(runner.commands, "blob-creds")).To(BeNil())
+	})
+
+	It("resumes after a later Secret deletion fails using only durable exact-UID progress", func() {
+		rendered := renderProviderStack("delete")
+		runner := &fakeProviderRunner{expectedDigest: rendered.Digest(), failBlobDelete: true}
+		adapter, err := stack.NewKubectlDeclaredProviderAdapter(runner)
+		Expect(err).NotTo(HaveOccurred())
+		capabilityPath := filepath.Join(GinkgoT().TempDir(), "bootstrap-capability.json")
+		initial := stack.BootstrapAuthority{Stack: "feature-a", Profile: stack.ProfileLocal, Namespace: "ar-feature-a", NamespaceUID: "uid-namespace", RenderDigest: rendered.Digest(), Nonce: "test-nonce"}
+		Expect(stack.WriteBootstrapAuthority(capabilityPath, initial)).To(Succeed())
+		capability, err := stack.ReadBootstrapAuthority(capabilityPath)
+		Expect(err).NotTo(HaveOccurred())
+
+		_, err = adapter.TeardownDeclared(context.Background(), stack.OperatorTarget{Kubeconfig: "/explicit/kubeconfig", Context: "smoke"}, rendered, capability)
+		Expect(err).To(MatchError(ContainSubstring("delete declared local-generated Secret with verified preconditions: exit status 1")))
+		persisted, err := stack.ReadBootstrapAuthority(capabilityPath)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(persisted.DeletedSecrets).To(Equal(map[stack.ResourceID]stack.ObservedUID{"db-creds": "uid-db"}))
+
+		ids, err := adapter.TeardownDeclared(context.Background(), stack.OperatorTarget{Kubeconfig: "/explicit/kubeconfig", Context: "smoke"}, rendered, persisted)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(ids).To(ContainElement(stack.ResourceID("db-creds")))
+		Expect(countSecretDeletes(runner.commands, "db-creds")).To(Equal(1))
+		Expect(countSecretDeletes(runner.commands, "blob-creds")).To(Equal(2))
 	})
 })
+
+func providerAuthority(rendered stack.Rendered) stack.BootstrapAuthority {
+	authority := stack.BootstrapAuthority{Stack: "feature-a", Profile: stack.ProfileLocal, Namespace: "ar-feature-a", NamespaceUID: "uid-namespace", RenderDigest: rendered.Digest(), Nonce: "test-nonce"}
+	path := filepath.Join(GinkgoT().TempDir(), "bootstrap-capability.json")
+	ExpectWithOffset(1, stack.WriteBootstrapAuthority(path, authority)).To(Succeed())
+	loaded, err := stack.ReadBootstrapAuthority(path)
+	ExpectWithOffset(1, err).NotTo(HaveOccurred())
+	return loaded
+}
+
+func secretDeleteInput(commands []providerCommand, name string) []byte {
+	needle := "delete --raw /api/v1/namespaces/ar-feature-a/secrets/" + name + " -f -"
+	for _, command := range commands {
+		if strings.Contains(strings.Join(command.arguments, " "), needle) {
+			return command.input
+		}
+	}
+	return nil
+}
+
+func countSecretDeletes(commands []providerCommand, name string) int {
+	needle := "delete --raw /api/v1/namespaces/ar-feature-a/secrets/" + name + " -f -"
+	count := 0
+	for _, command := range commands {
+		if strings.Contains(strings.Join(command.arguments, " "), needle) {
+			count++
+		}
+	}
+	return count
+}
 
 func joinedProviderCommands(commands []providerCommand) string {
 	var parts []string

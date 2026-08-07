@@ -26,6 +26,9 @@ func (runner *fakeTemporalRunner) Run(ctx context.Context, program string, argum
 		return stack.KubectlCommandResult{}, err
 	}
 	Expect(program).To(Equal("kubectl"))
+	if containsArguments(arguments, "get", "Namespace/agent-runtime") {
+		return stack.KubectlCommandResult{Output: []byte(`{"metadata":{"uid":"uid-bootstrap","labels":{"app.kubernetes.io/part-of":"agent-runtime","agent-runtime.dev/stack":"agent-runtime","agent-runtime.dev/profile":"production"},"annotations":{"agent-runtime.dev/bootstrap-nonce-sha256":"sha256:ed04c4e9ea6c49cf9ceb39098787c5b9842524f96b07ef45305476a11caec9b4"}}}`)}, nil
+	}
 	runner.arguments = append(runner.arguments, append([]string(nil), arguments...))
 	if containsArguments(arguments, "rollout", "status") {
 		return stack.KubectlCommandResult{ExitCode: 0}, nil
@@ -67,6 +70,10 @@ func productionRenderedStack() stack.Rendered {
 	return rendered
 }
 
+func orchestrationAuthority(rendered stack.Rendered) stack.BootstrapAuthority {
+	return stack.BootstrapAuthority{Stack: "agent-runtime", Profile: stack.ProfileProduction, Namespace: "agent-runtime", NamespaceUID: "uid-bootstrap", RenderDigest: rendered.Digest(), Nonce: "test-nonce"}
+}
+
 var _ = Describe("Temporal orchestration adapter", func() {
 	target := stack.OperatorTarget{Kubeconfig: "/explicit/kubeconfig", Context: "disposable"}
 
@@ -75,7 +82,7 @@ var _ = Describe("Temporal orchestration adapter", func() {
 		adapter, err := stack.NewTemporalCLIAdapter(runner)
 		Expect(err).NotTo(HaveOccurred())
 
-		ids, err := adapter.ReconcileOrchestration(context.Background(), target, productionRenderedStack())
+		ids, err := adapter.ReconcileOrchestration(context.Background(), target, productionRenderedStack(), orchestrationAuthority(productionRenderedStack()))
 		Expect(err).NotTo(HaveOccurred())
 		Expect(ids).To(Equal([]stack.ResourceID{"temporal-namespace"}))
 		Expect(runner.arguments).To(HaveLen(2))
@@ -91,7 +98,7 @@ var _ = Describe("Temporal orchestration adapter", func() {
 		adapter, err := stack.NewTemporalCLIAdapter(runner)
 		Expect(err).NotTo(HaveOccurred())
 
-		_, err = adapter.ReconcileOrchestration(context.Background(), target, productionRenderedStack())
+		_, err = adapter.ReconcileOrchestration(context.Background(), target, productionRenderedStack(), orchestrationAuthority(productionRenderedStack()))
 		Expect(err).NotTo(HaveOccurred())
 		Expect(runner.arguments).To(HaveLen(3))
 		Expect(runner.arguments[2]).To(ContainElements("create", "--retention", "720h"))
@@ -106,7 +113,7 @@ var _ = Describe("Temporal orchestration adapter", func() {
 		adapter, err := stack.NewTemporalCLIAdapter(runner)
 		Expect(err).NotTo(HaveOccurred())
 
-		_, err = adapter.ReconcileOrchestration(context.Background(), target, productionRenderedStack())
+		_, err = adapter.ReconcileOrchestration(context.Background(), target, productionRenderedStack(), orchestrationAuthority(productionRenderedStack()))
 		Expect(err).To(MatchError(ContainSubstring("after 3 attempts: service unavailable")))
 		Expect(runner.arguments).To(HaveLen(4))
 		for _, arguments := range runner.arguments[1:] {
@@ -123,7 +130,7 @@ var _ = Describe("Temporal orchestration adapter", func() {
 		adapter, err := stack.NewTemporalCLIAdapter(runner)
 		Expect(err).NotTo(HaveOccurred())
 
-		_, err = adapter.ReconcileOrchestration(context.Background(), target, productionRenderedStack())
+		_, err = adapter.ReconcileOrchestration(context.Background(), target, productionRenderedStack(), orchestrationAuthority(productionRenderedStack()))
 		Expect(err).To(MatchError(ContainSubstring("output redacted")))
 		Expect(err.Error()).NotTo(ContainSubstring("fixture-password"))
 	})
@@ -135,7 +142,7 @@ var _ = Describe("Temporal orchestration adapter", func() {
 		ctx, cancel := context.WithCancel(context.Background())
 		cancel()
 
-		_, err = adapter.ReconcileOrchestration(ctx, target, productionRenderedStack())
+		_, err = adapter.ReconcileOrchestration(ctx, target, productionRenderedStack(), orchestrationAuthority(productionRenderedStack()))
 		Expect(errors.Is(err, context.Canceled)).To(BeTrue())
 		Expect(runner.arguments).To(BeEmpty())
 	})
@@ -149,7 +156,7 @@ var _ = Describe("Temporal orchestration adapter", func() {
 		adapter, err := stack.NewTemporalCLIAdapter(runner)
 		Expect(err).NotTo(HaveOccurred())
 
-		ids, err := adapter.ReconcileOrchestration(context.Background(), target, productionRenderedStack())
+		ids, err := adapter.ReconcileOrchestration(context.Background(), target, productionRenderedStack(), orchestrationAuthority(productionRenderedStack()))
 		Expect(err).NotTo(HaveOccurred())
 		Expect(ids).To(Equal([]stack.ResourceID{"temporal-namespace"}))
 		Expect(runner.arguments[3]).To(ContainElements("update", "--retention", "720h"))
@@ -163,7 +170,7 @@ var _ = Describe("Temporal orchestration adapter", func() {
 		adapter, err := stack.NewTemporalCLIAdapter(runner)
 		Expect(err).NotTo(HaveOccurred())
 
-		_, err = adapter.ReconcileOrchestration(context.Background(), target, productionRenderedStack())
+		_, err = adapter.ReconcileOrchestration(context.Background(), target, productionRenderedStack(), orchestrationAuthority(productionRenderedStack()))
 		Expect(err).NotTo(HaveOccurred())
 		Expect(runner.arguments).To(HaveLen(3))
 		Expect(runner.arguments[2]).To(ContainElements("update", "--retention", "720h"))
@@ -174,7 +181,7 @@ var _ = Describe("Temporal orchestration adapter", func() {
 		adapter, err := stack.NewTemporalCLIAdapter(runner)
 		Expect(err).NotTo(HaveOccurred())
 
-		_, err = adapter.ReconcileOrchestration(context.Background(), target, productionRenderedStack())
+		_, err = adapter.ReconcileOrchestration(context.Background(), target, productionRenderedStack(), orchestrationAuthority(productionRenderedStack()))
 		Expect(err).To(MatchError(ContainSubstring("decode declared Temporal namespace description")))
 	})
 
@@ -187,7 +194,7 @@ var _ = Describe("Temporal orchestration adapter", func() {
 		adapter, err := stack.NewTemporalCLIAdapter(runner)
 		Expect(err).NotTo(HaveOccurred())
 
-		_, err = adapter.ReconcileOrchestration(context.Background(), target, productionRenderedStack())
+		_, err = adapter.ReconcileOrchestration(context.Background(), target, productionRenderedStack(), orchestrationAuthority(productionRenderedStack()))
 		Expect(err).To(HaveOccurred())
 		Expect(strings.ToLower(err.Error())).To(ContainSubstring("deployment temporal not found"))
 		Expect(runner.arguments).To(HaveLen(4))

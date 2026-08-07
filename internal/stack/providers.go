@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"sort"
 	"strings"
 
@@ -18,6 +19,13 @@ test "$(mc cat "declared/$1/$2/.agent-runtime-prefix")" = "$2"`
 
 const teardownBlobScript = `set -eu
 mc alias set declared "$3" "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD" >/dev/null
+bucket_listing="$(mc ls "declared/$1" 2>&1)" || {
+  status=$?
+  case "$bucket_listing" in
+    *"does not exist."*) exit 0 ;;
+    *) printf '%s\n' "$bucket_listing" >&2; exit "$status" ;;
+  esac
+}
 mc rm --recursive --force "declared/$1/$2" >/dev/null
 mc rb "declared/$1" >/dev/null`
 
@@ -47,9 +55,12 @@ func NewKubectlDeclaredProviderAdapter(runner KubectlCommandRunner) (KubectlDecl
 }
 
 // ReconcileDeclared reconciles or verifies every non-Kubernetes resource.
-func (adapter KubectlDeclaredProviderAdapter) ReconcileDeclared(ctx context.Context, target OperatorTarget, rendered Rendered) ([]ResourceID, error) {
+func (adapter KubectlDeclaredProviderAdapter) ReconcileDeclared(ctx context.Context, target OperatorTarget, rendered Rendered, authority BootstrapAuthority) ([]ResourceID, error) {
 	document, resources, err := declaredProviderDocument(rendered)
 	if err != nil {
+		return nil, err
+	}
+	if err := adapter.verifyBootstrapAuthority(ctx, target, rendered, authority); err != nil {
 		return nil, err
 	}
 	ids := make([]ResourceID, 0)
@@ -57,14 +68,17 @@ func (adapter KubectlDeclaredProviderAdapter) ReconcileDeclared(ctx context.Cont
 		if resource.Kind == ResourceKubernetes {
 			continue
 		}
+		if err := adapter.verifyBootstrapAuthority(ctx, target, rendered, authority); err != nil {
+			return nil, err
+		}
 		var reconcileErr error
 		switch resource.Kind {
 		case ResourceSecretReference:
-			reconcileErr = adapter.verifySecretReference(ctx, target, document, resource)
+			_, reconcileErr = adapter.verifySecretReference(ctx, target, document, resource)
 		case ResourceDatabase:
 			reconcileErr = adapter.verifyDatabase(ctx, target, document.Namespace, resource, resources)
 		case ResourceOrchestration:
-			_, reconcileErr = adapter.orchestration.ReconcileOrchestration(ctx, target, rendered)
+			_, reconcileErr = adapter.orchestration.ReconcileOrchestration(ctx, target, rendered, authority)
 		case ResourceBlob:
 			reconcileErr = adapter.reconcileBlob(ctx, target, document.Namespace, resource, resources)
 		case ResourceTelemetry:
@@ -82,16 +96,31 @@ func (adapter KubectlDeclaredProviderAdapter) ReconcileDeclared(ctx context.Cont
 }
 
 // TeardownDeclared applies explicit provider delete behavior before Kubernetes dependencies disappear.
-func (adapter KubectlDeclaredProviderAdapter) TeardownDeclared(ctx context.Context, target OperatorTarget, rendered Rendered) ([]ResourceID, error) {
+func (adapter KubectlDeclaredProviderAdapter) TeardownDeclared(ctx context.Context, target OperatorTarget, rendered Rendered, authority BootstrapAuthority) ([]ResourceID, error) {
 	document, resources, err := declaredProviderDocument(rendered)
 	if err != nil {
 		return nil, err
+	}
+	if err := adapter.verifyBootstrapAuthority(ctx, target, rendered, authority); err != nil {
+		return nil, err
+	}
+	capability := authority
+	for _, resource := range document.Resources {
+		if resource.Kind != ResourceSecretReference || resource.DeleteBehavior != DeleteOwned || resource.SecretReference.Provider != "local-generated" {
+			continue
+		}
+		if _, _, err := adapter.preflightLocalGeneratedSecretDelete(ctx, target, document, resource, capability); err != nil {
+			return nil, errors.Wrapf(err, "preflight declared provider resource %s", resource.ID)
+		}
 	}
 	ids := make([]ResourceID, 0)
 	for index := len(document.Resources) - 1; index >= 0; index-- {
 		resource := document.Resources[index]
 		if resource.Kind == ResourceKubernetes {
 			continue
+		}
+		if err := adapter.verifyBootstrapAuthority(ctx, target, rendered, authority); err != nil {
+			return nil, err
 		}
 		if resource.DeleteBehavior == DeleteTombstone {
 			return nil, errors.Newf("teardown declared provider resource %s: tombstone adapter is required", resource.ID)
@@ -103,7 +132,7 @@ func (adapter KubectlDeclaredProviderAdapter) TeardownDeclared(ctx context.Conte
 					return nil, errors.Wrapf(err, "teardown declared provider resource %s", resource.ID)
 				}
 			case ResourceOrchestration:
-				if err := adapter.orchestration.TeardownOrchestration(ctx, target, rendered, resource.ID); err != nil {
+				if err := adapter.orchestration.TeardownOrchestration(ctx, target, rendered, resource.ID, authority); err != nil {
 					return nil, errors.Wrapf(err, "teardown declared provider resource %s", resource.ID)
 				}
 			case ResourceDatabase, ResourceTelemetry:
@@ -113,15 +142,22 @@ func (adapter KubectlDeclaredProviderAdapter) TeardownDeclared(ctx context.Conte
 				if resource.SecretReference.Provider != "local-generated" {
 					return nil, errors.Newf("teardown declared provider resource %s: only local-generated secret references can be deleted", resource.ID)
 				}
-				if err := adapter.verifySecretReference(ctx, target, document, resource); err != nil {
-					return nil, errors.Wrapf(err, "teardown declared provider resource %s", resource.ID)
+				identity, alreadyDeleted, verifyErr := adapter.preflightLocalGeneratedSecretDelete(ctx, target, document, resource, capability)
+				if verifyErr != nil {
+					return nil, errors.Wrapf(verifyErr, "teardown declared provider resource %s", resource.ID)
 				}
-				result, err := adapter.run(ctx, target, []string{"delete", "Secret/" + resource.SecretReference.Reference, "--namespace", document.Namespace, "--ignore-not-found=false"}, nil)
-				if err != nil {
-					return nil, errors.Wrapf(err, "teardown declared provider resource %s", resource.ID)
+				if alreadyDeleted {
+					break
+				}
+				result, deleteErr := adapter.deleteVerifiedSecret(ctx, target, document.Namespace, resource.SecretReference.Reference, identity)
+				if deleteErr != nil {
+					return nil, errors.Wrapf(deleteErr, "teardown declared provider resource %s", resource.ID)
 				}
 				if result.ExitCode != 0 {
 					return nil, errors.Wrapf(kubectlExitError("delete declared local-generated Secret", result.ExitCode), "teardown declared provider resource %s", resource.ID)
+				}
+				if progressErr := RecordDeletedSecret(&capability, resource.ID, identity.uid); progressErr != nil {
+					return nil, errors.Wrapf(progressErr, "record teardown declared provider resource %s", resource.ID)
 				}
 			}
 		}
@@ -129,6 +165,21 @@ func (adapter KubectlDeclaredProviderAdapter) TeardownDeclared(ctx context.Conte
 	}
 	sort.Slice(ids, func(left, right int) bool { return ids[left] < ids[right] })
 	return ids, nil
+}
+
+func (adapter KubectlDeclaredProviderAdapter) preflightLocalGeneratedSecretDelete(ctx context.Context, target OperatorTarget, document renderedDocument, resource Resource, authority BootstrapAuthority) (verifiedSecretIdentity, bool, error) {
+	result, err := adapter.run(ctx, target, []string{"get", "Secret/" + resource.SecretReference.Reference, "--namespace", document.Namespace, "-o", "json"}, nil)
+	if err != nil {
+		return verifiedSecretIdentity{}, false, err
+	}
+	if result.ExitCode != 0 {
+		if strings.Contains(string(result.Output), "NotFound") && authority.DeletedSecrets[resource.ID] != "" {
+			return verifiedSecretIdentity{uid: authority.DeletedSecrets[resource.ID]}, true, nil
+		}
+		return verifiedSecretIdentity{}, false, kubectlExitError("get declared Secret reference", result.ExitCode)
+	}
+	identity, err := adapter.verifySecretReference(ctx, target, document, resource)
+	return identity, false, err
 }
 
 func declaredProviderDocument(rendered Rendered) (renderedDocument, map[ResourceID]Resource, error) {
@@ -139,24 +190,30 @@ func declaredProviderDocument(rendered Rendered) (renderedDocument, map[Resource
 	return document, resourcesByID(document.Resources), nil
 }
 
-func (adapter KubectlDeclaredProviderAdapter) verifySecretReference(ctx context.Context, target OperatorTarget, document renderedDocument, resource Resource) error {
+type verifiedSecretIdentity struct {
+	uid             ObservedUID
+	resourceVersion string
+}
+
+func (adapter KubectlDeclaredProviderAdapter) verifySecretReference(ctx context.Context, target OperatorTarget, document renderedDocument, resource Resource) (verifiedSecretIdentity, error) {
 	result, err := adapter.run(ctx, target, []string{"get", "Secret/" + resource.SecretReference.Reference, "--namespace", document.Namespace, "-o", "json"}, nil)
 	if err != nil {
-		return err
+		return verifiedSecretIdentity{}, err
 	}
 	if result.ExitCode != 0 {
-		return kubectlExitError("get declared Secret reference", result.ExitCode)
+		return verifiedSecretIdentity{}, kubectlExitError("get declared Secret reference", result.ExitCode)
 	}
 	var secret struct {
 		Metadata struct {
-			UID         string            `json:"uid"`
-			Labels      map[string]string `json:"labels"`
-			Annotations map[string]string `json:"annotations"`
+			UID             ObservedUID       `json:"uid"`
+			ResourceVersion string            `json:"resourceVersion"`
+			Labels          map[string]string `json:"labels"`
+			Annotations     map[string]string `json:"annotations"`
 		} `json:"metadata"`
 		Data map[string]string `json:"data"`
 	}
 	if err := json.Unmarshal(result.Output, &secret); err != nil {
-		return errors.Wrap(err, "decode declared Secret reference")
+		return verifiedSecretIdentity{}, errors.Wrap(err, "decode declared Secret reference")
 	}
 	actual := make([]string, 0, len(secret.Data))
 	for key := range secret.Data {
@@ -166,17 +223,17 @@ func (adapter KubectlDeclaredProviderAdapter) verifySecretReference(ctx context.
 	sort.Strings(actual)
 	sort.Strings(expected)
 	if strings.Join(actual, "\x00") != strings.Join(expected, "\x00") {
-		return errors.New("verify declared Secret reference: key inventory differs from desired state")
+		return verifiedSecretIdentity{}, errors.New("verify declared Secret reference: key inventory differs from desired state")
 	}
 	if resource.SecretReference.Provider != "local-generated" {
-		return nil
+		return verifiedSecretIdentity{}, nil
 	}
 	namespaceResult, err := adapter.run(ctx, target, []string{"get", "Namespace/" + document.Namespace, "-o", "json"}, nil)
 	if err != nil {
-		return err
+		return verifiedSecretIdentity{}, err
 	}
 	if namespaceResult.ExitCode != 0 {
-		return kubectlExitError("get Namespace for local-generated Secret proof", namespaceResult.ExitCode)
+		return verifiedSecretIdentity{}, kubectlExitError("get Namespace for local-generated Secret proof", namespaceResult.ExitCode)
 	}
 	var namespace struct {
 		Metadata struct {
@@ -185,18 +242,56 @@ func (adapter KubectlDeclaredProviderAdapter) verifySecretReference(ctx context.
 		} `json:"metadata"`
 	}
 	if err := json.Unmarshal(namespaceResult.Output, &namespace); err != nil {
-		return errors.Wrap(err, "decode Namespace for local-generated Secret proof")
+		return verifiedSecretIdentity{}, errors.Wrap(err, "decode Namespace for local-generated Secret proof")
 	}
 	expectedNamespaceLabels := map[string]string{partOfLabel: document.Labels.PartOf, stackLabel: document.Stack, profileLabel: string(document.Profile)}
 	if namespace.Metadata.UID == "" || !containsStringMap(namespace.Metadata.Labels, expectedNamespaceLabels) || !onlyExpectedNamespaceLabels(namespace.Metadata.Labels, document.Namespace) {
-		return errors.New("verify local-generated Secret reference: Namespace identity or labels differ from desired state")
+		return verifiedSecretIdentity{}, errors.New("verify local-generated Secret reference: Namespace identity or labels differ from desired state")
 	}
 	expectedSecretLabels := map[string]string{partOfLabel: document.Labels.PartOf, stackLabel: document.Stack, profileLabel: string(document.Profile), externalControllerLabel: "local-generated"}
 	expectedAnnotations := map[string]string{bootstrapUIDAnnotation: namespace.Metadata.UID, renderDigestAnnotation: document.Digest}
-	if secret.Metadata.UID == "" || !equalStringMap(secret.Metadata.Labels, expectedSecretLabels) || !equalStringMap(secret.Metadata.Annotations, expectedAnnotations) {
-		return errors.New("verify local-generated Secret reference: identity binding differs from desired state")
+	if secret.Metadata.UID == "" || secret.Metadata.ResourceVersion == "" || !equalStringMap(secret.Metadata.Labels, expectedSecretLabels) || !equalStringMap(secret.Metadata.Annotations, expectedAnnotations) {
+		return verifiedSecretIdentity{}, errors.New("verify local-generated Secret reference: identity binding differs from desired state")
 	}
-	return nil
+	return verifiedSecretIdentity{uid: secret.Metadata.UID, resourceVersion: secret.Metadata.ResourceVersion}, nil
+}
+
+func (adapter KubectlDeclaredProviderAdapter) verifyBootstrapAuthority(ctx context.Context, target OperatorTarget, rendered Rendered, authority BootstrapAuthority) error {
+	manifests, err := RenderKubernetes(rendered)
+	if err != nil {
+		return err
+	}
+	kubernetes := KubectlAdapter{runner: adapter.runner}
+	return kubernetes.verifyBootstrapAuthority(ctx, target, manifests, authority)
+}
+
+func (adapter KubectlDeclaredProviderAdapter) deleteVerifiedSecret(ctx context.Context, target OperatorTarget, namespace, name string, identity verifiedSecretIdentity) (KubectlCommandResult, error) {
+	if identity.uid == "" || identity.resourceVersion == "" {
+		return KubectlCommandResult{}, errors.New("delete declared local-generated Secret: verified UID and resource version are required")
+	}
+	deleteOptions := struct {
+		APIVersion    string `json:"apiVersion"`
+		Kind          string `json:"kind"`
+		Preconditions struct {
+			UID             ObservedUID `json:"uid"`
+			ResourceVersion string      `json:"resourceVersion"`
+		} `json:"preconditions"`
+	}{APIVersion: "v1", Kind: "DeleteOptions"}
+	deleteOptions.Preconditions.UID = identity.uid
+	deleteOptions.Preconditions.ResourceVersion = identity.resourceVersion
+	input, err := json.Marshal(deleteOptions)
+	if err != nil {
+		return KubectlCommandResult{}, errors.Wrap(err, "encode declared local-generated Secret delete preconditions")
+	}
+	path := "/api/v1/namespaces/" + url.PathEscape(namespace) + "/secrets/" + url.PathEscape(name)
+	result, err := adapter.run(ctx, target, []string{"delete", "--raw", path, "-f", "-"}, append(input, '\n'))
+	if err != nil {
+		return KubectlCommandResult{}, err
+	}
+	if result.ExitCode != 0 {
+		return KubectlCommandResult{}, kubectlExitError("delete declared local-generated Secret with verified preconditions", result.ExitCode)
+	}
+	return result, nil
 }
 
 func equalStringMap(actual, expected map[string]string) bool {

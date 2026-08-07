@@ -32,6 +32,17 @@ generated Secrets exactly once rather than adopting or applying over existing
 objects, and strips generator line endings before their values reach the
 provider.
 
+Bootstrap creates an exclusive mode-0600 private capability file. It contains
+the Namespace UID and a high-entropy nonce bound to the reviewed Stack,
+profile, Namespace, and rendered digest; only the nonce digest is recorded on
+the Namespace. Every `apply`, `reconcile`, `rollback`, and `teardown` receives
+the file path as `--bootstrap-capability-file`. The adapter re-reads the
+Namespace immediately before each Kubernetes or declared-provider mutation and
+refuses an absent, replaced, unowned, or different-rendered Namespace, or a
+Namespace without that nonce-digest binding. A cached state file cannot
+substitute for this private capability and live containment check. Successful
+teardown removes the unchanged capability file.
+
 ## Reconcile and rollback procedure
 
 1. Run `stackctl preflight` with the absolute kubeconfig and explicit context
@@ -41,7 +52,9 @@ provider.
    operator target. `diff-live` uses the same server-side field manager as
    apply, so it does not manufacture a conflict with the operator itself.
 4. Review the bounded resource changes and immutable migration pairs.
-5. Run audited `stackctl apply` or `stackctl reconcile`; reconcile applies only
+5. Run audited `stackctl apply` or `stackctl reconcile` with the absolute
+   `--bootstrap-capability-file` created by the preceding successful bootstrap;
+   reconcile applies only
    Kubernetes manifests when the bounded live diff is non-empty, and always
    reconciles or verifies every declared provider resource.
 6. Re-observe and retain the JSONL audit outcome.
@@ -76,14 +89,22 @@ and compares labels and UID immediately before every deletion, refuses a
 tombstone without a registered containment adapter, and leaves the Namespace
 in place when a Kubernetes object is retained. Local/CI `local-generated`
 Secrets are ephemeral/delete resources: their provider verifies exact keys,
-UID, containment/controller labels, bootstrap Namespace UID, and render digest
-before explicit deletion. Production external-provider Secret references stay
-retained. Blob teardown deletes only the declared prefix and refuses to remove
-a non-empty bucket. Immediately before Namespace deletion, the adapter permits
+UID, resource version, containment/controller labels, bootstrap Namespace UID,
+and render digest before deletion. It sends those exact UID and resource-version
+preconditions in the Kubernetes `DeleteOptions` request, so a replacement or
+update race is refused rather than deleting by name. Production
+external-provider Secret references stay retained. Blob teardown deletes only
+the declared prefix and refuses to remove a non-empty bucket. Immediately before Namespace deletion, the adapter permits
 only Kubernetes' automatic `default` ServiceAccount and
 `kube-root-ca.crt` ConfigMap; any other namespaced object fails closed. A cached
 state file is only a locator; it is never teardown authority. A mismatch stops the operation without
 deleting a sibling Stack, `default`, or cluster-scoped state.
+
+If a later teardown step fails after a local-generated Secret was deleted, the
+capability file records that exact Secret UID only after its preconditioned
+delete succeeds. A retry treats that specific missing Secret as completed and
+re-verifies every remaining Secret; it cannot convert a replacement into a
+deletion by name.
 
 The disposable smoke harness never performs raw Namespace deletion. It invokes
 teardown only after full apply returned the exact declared Kubernetes resource

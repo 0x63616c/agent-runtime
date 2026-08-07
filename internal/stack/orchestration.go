@@ -24,7 +24,10 @@ func NewTemporalCLIAdapter(runner KubectlCommandRunner) (TemporalCLIAdapter, err
 }
 
 // ReconcileOrchestration describes then creates each declared namespace idempotently.
-func (adapter TemporalCLIAdapter) ReconcileOrchestration(ctx context.Context, target OperatorTarget, rendered Rendered) ([]ResourceID, error) {
+func (adapter TemporalCLIAdapter) ReconcileOrchestration(ctx context.Context, target OperatorTarget, rendered Rendered, authority BootstrapAuthority) ([]ResourceID, error) {
+	if err := adapter.verifyBootstrapAuthority(ctx, target, rendered, authority); err != nil {
+		return nil, err
+	}
 	doc, err := parseRenderedBytes(rendered.JSON())
 	if err != nil {
 		return nil, errors.Wrap(err, "reconcile orchestration declarations")
@@ -76,7 +79,10 @@ func (adapter TemporalCLIAdapter) ReconcileOrchestration(ctx context.Context, ta
 
 // TeardownOrchestration deletes one explicitly owned namespace only when its
 // rendered resource identity and lifecycle authorize deletion.
-func (adapter TemporalCLIAdapter) TeardownOrchestration(ctx context.Context, target OperatorTarget, rendered Rendered, resourceID ResourceID) error {
+func (adapter TemporalCLIAdapter) TeardownOrchestration(ctx context.Context, target OperatorTarget, rendered Rendered, resourceID ResourceID, authority BootstrapAuthority) error {
+	if err := adapter.verifyBootstrapAuthority(ctx, target, rendered, authority); err != nil {
+		return err
+	}
 	document, err := parseRenderedBytes(rendered.JSON())
 	if err != nil {
 		return errors.Wrap(err, "teardown orchestration declaration")
@@ -107,6 +113,14 @@ func (adapter TemporalCLIAdapter) TeardownOrchestration(ctx context.Context, tar
 		return nil
 	}
 	return errors.New("teardown orchestration declaration: resource is not declared")
+}
+
+func (adapter TemporalCLIAdapter) verifyBootstrapAuthority(ctx context.Context, target OperatorTarget, rendered Rendered, authority BootstrapAuthority) error {
+	manifests, err := RenderKubernetes(rendered)
+	if err != nil {
+		return err
+	}
+	return KubectlAdapter(adapter).verifyBootstrapAuthority(ctx, target, manifests, authority)
 }
 
 type temporalNamespaceDescription struct {

@@ -58,12 +58,12 @@ var _ = Describe("render and check", func() {
 
 	It("requires the full explicit audited target for namespace bootstrap", func() {
 		_, _, _, _, _, err := parseOperatorArguments("bootstrap", []string{"--stack-file", "/stack.json", "--stack", "agent-runtime", "--profile", "local"})
-		Expect(err).To(MatchError(ContainSubstring("--kubeconfig, --context, --actor, --audit-file, and --migration-root are required")))
+		Expect(err).To(MatchError(ContainSubstring("absolute --bootstrap-capability-file are required")))
 
 		request, stackPath, profile, rollbackPath, auditPath, err := parseOperatorArguments("bootstrap", []string{
 			"--stack-file", "/stack.json", "--stack", "agent-runtime", "--profile", "local",
 			"--kubeconfig", "/kubeconfig", "--context", "disposable", "--actor", "smoke-bootstrap",
-			"--audit-file", "/audit.jsonl", "--migration-root", "/migrations",
+			"--audit-file", "/audit.jsonl", "--migration-root", "/migrations", "--bootstrap-capability-file", "/bootstrap-capability.json",
 		})
 		Expect(err).NotTo(HaveOccurred())
 		Expect(stackPath).To(Equal("/stack.json"))
@@ -71,6 +71,22 @@ var _ = Describe("render and check", func() {
 		Expect(rollbackPath).To(BeEmpty())
 		Expect(auditPath).To(Equal("/audit.jsonl"))
 		Expect(request.Target).To(Equal(stack.OperatorTarget{Kubeconfig: "/kubeconfig", Context: "disposable", MigrationRoot: "/migrations"}))
+	})
+
+	It("requires one absolute bootstrap capability file for every operator command", func() {
+		base := []string{
+			"--stack-file", "/stack.json", "--stack", "agent-runtime", "--profile", "local",
+			"--kubeconfig", "/kubeconfig", "--context", "disposable", "--actor", "smoke-bootstrap",
+			"--audit-file", "/audit.jsonl", "--migration-root", "/migrations",
+		}
+		for _, command := range []string{"bootstrap", "apply", "reconcile", "teardown"} {
+			_, _, _, _, _, err := parseOperatorArguments(command, base)
+			Expect(err).To(MatchError(ContainSubstring("absolute --bootstrap-capability-file are required")))
+		}
+
+		request, _, _, _, _, err := parseOperatorArguments("apply", append(base, "--bootstrap-capability-file", "/bootstrap-capability.json"))
+		Expect(err).NotTo(HaveOccurred())
+		Expect(request.CapabilityFile).To(Equal("/bootstrap-capability.json"))
 	})
 
 	It("emits canonical role configurations from Stack desired state without a second file source", func() {
