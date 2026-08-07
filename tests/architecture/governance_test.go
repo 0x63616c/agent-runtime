@@ -69,6 +69,35 @@ var _ = Describe("binding governance", func() {
 		Expect(workflow).NotTo(ContainSubstring("Halt on red main"))
 		Expect(workflow).NotTo(ContainSubstring("pull_request:"))
 	})
+
+	It("publishes the minimal production image from a sealed source context", func() {
+		workflow := read(".github/workflows/publish-production-image.yml")
+		required := []string{
+			"branches: [main]",
+			"contents: read",
+			"packages: write",
+			"attestations: write",
+			"id-token: write",
+			"docker/setup-buildx-action@e468171a9de216ec08956ac3ada2f0791b6bd435 # v3.11.1",
+			"docker/login-action@74a5d142397b4f367a81961eba4e8cd7edddf772 # v3.4.0",
+			"docker/build-push-action@263435318d21b8e681c14492fe198d362a7d2c83 # v6.18.0",
+			"actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3.0.0",
+			"file: deploy/production/Dockerfile",
+			"push: true",
+			"provenance: mode=max",
+			"sbom: true",
+			"subject-digest: ${{ steps.build.outputs.digest }}",
+		}
+		for _, required := range required {
+			Expect(workflow).To(ContainSubstring(required))
+		}
+		Expect(workflow).NotTo(ContainSubstring("pull_request:"))
+
+		contextIgnore := read(".dockerignore")
+		for _, excluded := range []string{"deploy/", "docs/", "website/", "evidence/"} {
+			Expect(contextIgnore).To(ContainSubstring(excluded))
+		}
+	})
 })
 
 func read(path string) string {

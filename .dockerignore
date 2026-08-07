@@ -1,0 +1,26 @@
+# Production images compile only reviewed runtime source. Deployment state,
+# documentation, evidence, and generated local state cannot alter image bytes.
+**
+!go.mod
+!go.sum
+!cmd/
+!cmd/runtime/
+!cmd/runtime/**
+!cmd/egress-proxy/
+!cmd/egress-proxy/**
+!internal/
+!internal/roles/
+!internal/roles/**
+!internal/egressproxy/
+!internal/egressproxy/**
+!deploy/
+!deploy/production/
+!deploy/production/Dockerfile
+
+# Deliberately excluded from the production image build context.
+deploy/*
+!deploy/production/Dockerfile
+docs/
+website/
+evidence/
+.runtime/
