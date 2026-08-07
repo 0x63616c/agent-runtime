@@ -16,6 +16,7 @@ type fakeProviderRunner struct {
 	commands       []providerCommand
 	extraKey       bool
 	expectedDigest string
+	blobFailures   int
 }
 
 func (runner *fakeProviderRunner) Run(_ context.Context, _ string, arguments []string, _ []byte) (stack.KubectlCommandResult, error) {
@@ -34,6 +35,12 @@ func (runner *fakeProviderRunner) Run(_ context.Context, _ string, arguments []s
 		return stack.KubectlCommandResult{Output: []byte(fmt.Sprintf(`{"metadata":{"uid":"uid-db","labels":{"app.kubernetes.io/part-of":"agent-runtime","agent-runtime.dev/stack":"feature-a","agent-runtime.dev/profile":"local","agent-runtime.dev/external-controller":"local-generated"},"annotations":{"agent-runtime.dev/bootstrap-uid":"uid-namespace","agent-runtime.dev/render-digest":%q}},"data":{"POSTGRES_PASSWORD":"redacted"}}`, runner.expectedDigest))}, nil
 	case strings.Contains(joined, "psql"):
 		return stack.KubectlCommandResult{Output: []byte("1\n")}, nil
+	case strings.Contains(joined, "exec Deployment/blob-reconciler"):
+		if runner.blobFailures > 0 {
+			runner.blobFailures--
+			return stack.KubectlCommandResult{ExitCode: 137}, nil
+		}
+		return stack.KubectlCommandResult{}, nil
 	case strings.Contains(joined, "get EndpointSlice --namespace ar-feature-a --selector kubernetes.io/service-name=telemetry"):
 		return stack.KubectlCommandResult{Output: []byte(`{"items":[{"endpoints":[{"addresses":["10.0.0.1"],"conditions":{"ready":true}}],"ports":[{"name":"otlp"}]}]}`)}, nil
 	default:
@@ -75,6 +82,23 @@ var _ = Describe("Declared provider reconciliation", func() {
 
 		_, err = adapter.ReconcileDeclared(context.Background(), stack.OperatorTarget{Kubeconfig: "/explicit/kubeconfig", Context: "smoke"}, rendered)
 		Expect(err).To(MatchError(ContainSubstring("identity binding differs")))
+	})
+
+	It("retries an idempotent blob reconciliation a bounded number of times", func() {
+		rendered := renderProviderStack("delete")
+		runner := &fakeProviderRunner{expectedDigest: rendered.Digest(), blobFailures: 1}
+		adapter, err := stack.NewKubectlDeclaredProviderAdapter(runner)
+		Expect(err).NotTo(HaveOccurred())
+
+		_, err = adapter.ReconcileDeclared(context.Background(), stack.OperatorTarget{Kubeconfig: "/explicit/kubeconfig", Context: "smoke"}, rendered)
+		Expect(err).NotTo(HaveOccurred())
+		attempts := 0
+		for _, command := range runner.commands {
+			if strings.Contains(strings.Join(command.arguments, " "), "exec Deployment/blob-reconciler") {
+				attempts++
+			}
+		}
+		Expect(attempts).To(Equal(2))
 	})
 
 	It("removes only the declared blob prefix before its Kubernetes reconciler", func() {

@@ -260,7 +260,18 @@ func (adapter KubectlDeclaredProviderAdapter) verifyDatabase(ctx context.Context
 }
 
 func (adapter KubectlDeclaredProviderAdapter) reconcileBlob(ctx context.Context, target OperatorTarget, namespace string, resource Resource, resources map[ResourceID]Resource) error {
-	return adapter.runBlobScript(ctx, target, namespace, resource, resources, reconcileBlobScript)
+	var lastErr error
+	for attempt := 0; attempt < 3; attempt++ {
+		if err := adapter.runBlobScript(ctx, target, namespace, resource, resources, reconcileBlobScript); err == nil {
+			return nil
+		} else {
+			lastErr = err
+		}
+		if err := ctx.Err(); err != nil {
+			return errors.Wrap(err, "reconcile declared blob")
+		}
+	}
+	return errors.Wrap(lastErr, "reconcile declared blob after 3 bounded attempts")
 }
 
 func (adapter KubectlDeclaredProviderAdapter) teardownBlob(ctx context.Context, target OperatorTarget, namespace string, resource Resource, resources map[ResourceID]Resource) error {
