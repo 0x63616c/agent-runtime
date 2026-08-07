@@ -518,6 +518,24 @@ func TestClientCloseRejectsNewObservationWithoutClosingDurableOperation(t *testi
 	}
 }
 
+func TestClientCloseClosesActiveOperationObservation(t *testing.T) {
+	client := newCoreClient("principal-a", time.Date(2026, 8, 6, 12, 0, 0, 0, time.UTC))
+	request := validCreateRequest("op_close_stream")
+	if _, err := client.Submit(context.Background(), request); err != nil {
+		t.Fatal(err)
+	}
+	stream, err := client.WatchOperation(context.Background(), request.ID, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := client.Close(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := stream.Next(context.Background()); err == nil {
+		t.Fatal("Next() after Client.Close() error = nil, want local observation cancellation")
+	}
+}
+
 func TestEveryTypedTerminationReasonRemainsDistinct(t *testing.T) {
 	for _, reason := range []TerminationReason{
 		TerminationExited, TerminationSignaled, TerminationTimedOut, TerminationOOMKilled, TerminationOutputLimit,

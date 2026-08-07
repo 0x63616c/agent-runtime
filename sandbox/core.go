@@ -25,6 +25,7 @@ type coreClient struct {
 	now       time.Time
 	closed    bool
 	watches   uint32
+	streams   map[*sliceOperationStream]struct{}
 	limits    limitPolicy
 	ledger    *coreLedger
 }
@@ -112,7 +113,7 @@ func newCoreClientWithLedger(principal string, now time.Time, limits limitPolicy
 	if principal == "" || now.IsZero() || ledger == nil || !validLimitPolicy(limits) {
 		return nil, newFailure(FailureInvalidArgument, "sandbox core requires finite limit policy", RetryNever)
 	}
-	return &coreClient{principal: principal, now: now.UTC(), limits: limits, ledger: ledger}, nil
+	return &coreClient{principal: principal, now: now.UTC(), limits: limits, ledger: ledger, streams: make(map[*sliceOperationStream]struct{})}, nil
 }
 
 func newCoreLedger() *coreLedger {
@@ -386,16 +387,20 @@ func (client *coreClient) WatchOperation(ctx context.Context, id OperationID, fr
 		return nil, newFailure(FailureControlQuotaExceeded, "operation watch admission quota is exhausted", RetryCallerControlled)
 	}
 	client.watches++
+	stream := &sliceOperationStream{events: []OperationEvent{event}}
+	stream.onClose = func() { client.releaseWatch(stream) }
+	client.streams[stream] = struct{}{}
 	client.ledger.mu.Unlock()
-	return &sliceOperationStream{events: []OperationEvent{event}, onClose: client.releaseWatch}, nil
+	return stream, nil
 }
 
-func (client *coreClient) releaseWatch() {
+func (client *coreClient) releaseWatch(stream *sliceOperationStream) {
 	client.ledger.mu.Lock()
 	defer client.ledger.mu.Unlock()
 	if client.watches > 0 {
 		client.watches--
 	}
+	delete(client.streams, stream)
 }
 
 func (client *coreClient) GetSandbox(ctx context.Context, id SandboxID) (SandboxInfo, error) {
@@ -537,8 +542,17 @@ func (client *coreClient) Close(ctx context.Context) error {
 		return err
 	}
 	client.ledger.mu.Lock()
-	defer client.ledger.mu.Unlock()
 	client.closed = true
+	streams := make([]*sliceOperationStream, 0, len(client.streams))
+	for stream := range client.streams {
+		streams = append(streams, stream)
+	}
+	client.ledger.mu.Unlock()
+	for _, stream := range streams {
+		if err := stream.Close(); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
