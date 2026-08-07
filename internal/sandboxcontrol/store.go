@@ -3,13 +3,16 @@ package sandboxcontrol
 
 import (
 	"context"
-	"errors"
 	"sync"
 	"time"
+
+	"github.com/cockroachdb/errors"
 )
 
+// ErrConflict reports a principal-scoped operation ID reused with different immutable input.
 var ErrConflict = errors.New("sandbox control operation conflict")
 
+// AcceptedOperation is the durable acceptance record before dispatch.
 type AcceptedOperation struct {
 	Principal  string
 	ID         string
@@ -17,15 +20,22 @@ type AcceptedOperation struct {
 	AcceptedAt time.Time
 	State      string
 }
+
+// Store persists principal-scoped accepted operations.
 type Store interface {
 	Accept(context.Context, AcceptedOperation) (AcceptedOperation, bool, error)
 }
+
+// MemoryStore is a deterministic Store used only for hermetic control tests.
 type MemoryStore struct {
 	mu         sync.Mutex
 	operations map[string]AcceptedOperation
 }
 
+// NewMemoryStore constructs an empty deterministic Store.
 func NewMemoryStore() *MemoryStore { return &MemoryStore{operations: map[string]AcceptedOperation{}} }
+
+// Accept atomically accepts an operation or returns its prior matching record.
 func (store *MemoryStore) Accept(ctx context.Context, operation AcceptedOperation) (AcceptedOperation, bool, error) {
 	if err := ctx.Err(); err != nil {
 		return AcceptedOperation{}, false, err
