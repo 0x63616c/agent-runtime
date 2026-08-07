@@ -1,4 +1,4 @@
-set shell := ["zsh", "-ceu"]
+set shell := ["bash", "-ceu"]
 
 # Runs the passing deterministic gate for an incremental main change. Requires just 1.58.0.
 check:
