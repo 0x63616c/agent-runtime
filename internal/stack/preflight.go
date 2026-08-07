@@ -39,7 +39,7 @@ type HostProbe interface {
 	// Executable reports whether a named command is available.
 	Executable(context.Context, string) (bool, error)
 	// KubernetesContext returns the selected context without changing it.
-	KubernetesContext(context.Context) (string, error)
+	KubernetesContext(context.Context, OperatorTarget) (string, error)
 	// Architecture returns the relevant host/runtime architecture.
 	Architecture(context.Context) (string, error)
 	// FreeDiskBytes returns currently available disk bytes.
@@ -73,12 +73,22 @@ func (report PreflightReport) Passed() bool {
 }
 
 // Preflight checks declared prerequisites without applying any repair or host mutation.
-func Preflight(ctx context.Context, spec Spec, profile Profile, probe HostProbe) (PreflightReport, error) {
+func Preflight(ctx context.Context, spec Spec, profile Profile, target OperatorTarget, probe HostProbe) (PreflightReport, error) {
 	if err := ctx.Err(); err != nil {
 		return PreflightReport{}, errors.Wrap(err, "check stack prerequisites")
 	}
 	if probe == nil {
 		return PreflightReport{}, errors.New("check stack prerequisites: host probe is required")
+	}
+	if err := validateOperatorTarget(target); err != nil {
+		return PreflightReport{}, errors.Wrap(err, "check stack prerequisites")
+	}
+	selectedContext, err := probe.KubernetesContext(ctx, target)
+	if err != nil {
+		return PreflightReport{}, errors.Wrap(err, "check stack prerequisites: validate explicit Kubernetes target")
+	}
+	if selectedContext != target.Context {
+		return PreflightReport{}, errors.New("check stack prerequisites: selected context does not match explicit target")
 	}
 	selected, ok := spec.profile(profile)
 	if !ok {
@@ -86,7 +96,7 @@ func Preflight(ctx context.Context, spec Spec, profile Profile, probe HostProbe)
 	}
 	report := PreflightReport{Results: make([]PrerequisiteResult, 0, len(selected.Prerequisites))}
 	for _, prerequisite := range selected.Prerequisites {
-		passed, err := checkPrerequisite(ctx, probe, prerequisite)
+		passed, err := checkPrerequisite(ctx, target, selectedContext, probe, prerequisite)
 		if err != nil {
 			return PreflightReport{}, errors.Wrapf(err, "check stack prerequisite %s", prerequisite.Name)
 		}
@@ -99,13 +109,12 @@ func Preflight(ctx context.Context, spec Spec, profile Profile, probe HostProbe)
 	return report, nil
 }
 
-func checkPrerequisite(ctx context.Context, probe HostProbe, prerequisite Prerequisite) (bool, error) {
+func checkPrerequisite(ctx context.Context, target OperatorTarget, selectedContext string, probe HostProbe, prerequisite Prerequisite) (bool, error) {
 	switch prerequisite.Kind {
 	case PrerequisiteExecutable:
 		return probe.Executable(ctx, prerequisite.Name)
 	case PrerequisiteKubernetesContext:
-		value, err := probe.KubernetesContext(ctx)
-		return value == prerequisite.Expected, err
+		return target.Context == prerequisite.Expected && selectedContext == target.Context, nil
 	case PrerequisiteArchitecture:
 		value, err := probe.Architecture(ctx)
 		return value == prerequisite.Expected, err

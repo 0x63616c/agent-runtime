@@ -54,12 +54,12 @@
             "policy": "external",
             "days": 0
           },
-          "backup_restore_owner": "platform-operator",
+          "backup_restore_owner": "none",
           "delete_behavior": "retain",
           "external_controller": true,
           "secret_reference": {
-            "provider": "external-secrets",
-            "reference": "agent-runtime-state-db-secret",
+            "provider": "local-generated",
+            "reference": "ar-agent-runtime-state-db-secret",
             "version": "v1",
             "keys": [
               "POSTGRES_PASSWORD",
@@ -77,12 +77,12 @@
             "policy": "external",
             "days": 0
           },
-          "backup_restore_owner": "platform-operator",
+          "backup_restore_owner": "none",
           "delete_behavior": "retain",
           "external_controller": true,
           "secret_reference": {
-            "provider": "external-secrets",
-            "reference": "agent-runtime-temporal-auth-secret",
+            "provider": "local-generated",
+            "reference": "ar-agent-runtime-temporal-auth-secret",
             "version": "v1",
             "keys": [
               "TEMPORAL_AUTH_TOKEN"
@@ -99,12 +99,12 @@
             "policy": "external",
             "days": 0
           },
-          "backup_restore_owner": "platform-operator",
+          "backup_restore_owner": "none",
           "delete_behavior": "retain",
           "external_controller": true,
           "secret_reference": {
-            "provider": "external-secrets",
-            "reference": "agent-runtime-conversation-secret",
+            "provider": "local-generated",
+            "reference": "ar-agent-runtime-conversation-secret",
             "version": "v1",
             "keys": [
               "CONVERSATION_ACCESS_TOKEN"
@@ -121,12 +121,12 @@
             "policy": "external",
             "days": 0
           },
-          "backup_restore_owner": "platform-operator",
+          "backup_restore_owner": "none",
           "delete_behavior": "retain",
           "external_controller": true,
           "secret_reference": {
-            "provider": "external-secrets",
-            "reference": "agent-runtime-model-secret",
+            "provider": "local-generated",
+            "reference": "ar-agent-runtime-model-secret",
             "version": "v1",
             "keys": [
               "MODEL_API_KEY"
@@ -143,12 +143,12 @@
             "policy": "external",
             "days": 0
           },
-          "backup_restore_owner": "platform-operator",
+          "backup_restore_owner": "none",
           "delete_behavior": "retain",
           "external_controller": true,
           "secret_reference": {
-            "provider": "external-secrets",
-            "reference": "agent-runtime-tool-broker-secret",
+            "provider": "local-generated",
+            "reference": "ar-agent-runtime-tool-broker-secret",
             "version": "v1",
             "keys": [
               "TOOL_BROKER_TOKEN"
@@ -165,12 +165,12 @@
             "policy": "external",
             "days": 0
           },
-          "backup_restore_owner": "platform-operator",
+          "backup_restore_owner": "none",
           "delete_behavior": "retain",
           "external_controller": true,
           "secret_reference": {
-            "provider": "external-secrets",
-            "reference": "agent-runtime-sandbox-control-secret",
+            "provider": "local-generated",
+            "reference": "ar-agent-runtime-sandbox-control-secret",
             "version": "v1",
             "keys": [
               "SANDBOX_CONTROL_TOKEN"
@@ -187,12 +187,12 @@
             "policy": "external",
             "days": 0
           },
-          "backup_restore_owner": "platform-operator",
+          "backup_restore_owner": "none",
           "delete_behavior": "retain",
           "external_controller": true,
           "secret_reference": {
-            "provider": "external-secrets",
-            "reference": "agent-runtime-blob-storage-secret",
+            "provider": "local-generated",
+            "reference": "ar-agent-runtime-blob-storage-secret",
             "version": "v1",
             "keys": [
               "BLOB_STORAGE_CREDENTIAL",
@@ -211,12 +211,12 @@
             "policy": "external",
             "days": 0
           },
-          "backup_restore_owner": "platform-operator",
+          "backup_restore_owner": "none",
           "delete_behavior": "retain",
           "external_controller": true,
           "secret_reference": {
-            "provider": "external-secrets",
-            "reference": "agent-runtime-codec-blob-secret",
+            "provider": "local-generated",
+            "reference": "ar-agent-runtime-codec-blob-secret",
             "version": "v1",
             "keys": [
               "CODEC_BLOB_CREDENTIAL"
@@ -233,12 +233,12 @@
             "policy": "external",
             "days": 0
           },
-          "backup_restore_owner": "platform-operator",
+          "backup_restore_owner": "none",
           "delete_behavior": "retain",
           "external_controller": true,
           "secret_reference": {
-            "provider": "external-secrets",
-            "reference": "agent-runtime-sandbox-host-ca-secret",
+            "provider": "local-generated",
+            "reference": "ar-agent-runtime-sandbox-host-ca-secret",
             "version": "v1",
             "keys": [
               "SANDBOX_HOST_CA"
@@ -255,12 +255,12 @@
             "policy": "external",
             "days": 0
           },
-          "backup_restore_owner": "platform-operator",
+          "backup_restore_owner": "none",
           "delete_behavior": "retain",
           "external_controller": true,
           "secret_reference": {
-            "provider": "external-secrets",
-            "reference": "agent-runtime-sandbox-state-secret",
+            "provider": "local-generated",
+            "reference": "ar-agent-runtime-sandbox-state-secret",
             "version": "v1",
             "keys": [
               "SANDBOX_STATE_DSN"
@@ -277,12 +277,12 @@
             "policy": "external",
             "days": 0
           },
-          "backup_restore_owner": "platform-operator",
+          "backup_restore_owner": "none",
           "delete_behavior": "retain",
           "external_controller": true,
           "secret_reference": {
-            "provider": "external-secrets",
-            "reference": "agent-runtime-sandbox-host-identity-secret",
+            "provider": "local-generated",
+            "reference": "ar-agent-runtime-sandbox-host-identity-secret",
             "version": "v1",
             "keys": [
               "SANDBOX_HOST_IDENTITY"
@@ -296,16 +296,17 @@
           "scope": "namespace",
           "dependencies": [],
           "retention": {
-            "policy": "persistent",
-            "days": 30
+            "policy": "ephemeral",
+            "days": 0
           },
-          "backup_restore_owner": "platform-operator",
-          "delete_behavior": "retain",
+          "backup_restore_owner": "none",
+          "delete_behavior": "delete",
           "external_controller": false,
           "kubernetes": {
             "api_version": "v1",
             "kind": "ServiceAccount",
-            "name": "state-account"
+            "name": "state-account",
+            "environment": []
           }
         },
         {
@@ -315,16 +316,17 @@
           "scope": "namespace",
           "dependencies": [],
           "retention": {
-            "policy": "persistent",
-            "days": 30
+            "policy": "ephemeral",
+            "days": 0
           },
-          "backup_restore_owner": "platform-operator",
-          "delete_behavior": "retain",
+          "backup_restore_owner": "none",
+          "delete_behavior": "delete",
           "external_controller": false,
           "kubernetes": {
             "api_version": "v1",
             "kind": "ServiceAccount",
-            "name": "temporal-account"
+            "name": "temporal-account",
+            "environment": []
           }
         },
         {
@@ -334,16 +336,17 @@
           "scope": "namespace",
           "dependencies": [],
           "retention": {
-            "policy": "persistent",
-            "days": 30
+            "policy": "ephemeral",
+            "days": 0
           },
-          "backup_restore_owner": "platform-operator",
-          "delete_behavior": "retain",
+          "backup_restore_owner": "none",
+          "delete_behavior": "delete",
           "external_controller": false,
           "kubernetes": {
             "api_version": "v1",
             "kind": "ServiceAccount",
-            "name": "blob-account"
+            "name": "blob-account",
+            "environment": []
           }
         },
         {
@@ -353,16 +356,17 @@
           "scope": "namespace",
           "dependencies": [],
           "retention": {
-            "policy": "persistent",
-            "days": 30
+            "policy": "ephemeral",
+            "days": 0
           },
-          "backup_restore_owner": "platform-operator",
-          "delete_behavior": "retain",
+          "backup_restore_owner": "none",
+          "delete_behavior": "delete",
           "external_controller": false,
           "kubernetes": {
             "api_version": "v1",
             "kind": "ServiceAccount",
-            "name": "telemetry-account"
+            "name": "telemetry-account",
+            "environment": []
           }
         },
         {
@@ -372,16 +376,17 @@
           "scope": "namespace",
           "dependencies": [],
           "retention": {
-            "policy": "persistent",
-            "days": 30
+            "policy": "ephemeral",
+            "days": 0
           },
-          "backup_restore_owner": "platform-operator",
-          "delete_behavior": "retain",
+          "backup_restore_owner": "none",
+          "delete_behavior": "delete",
           "external_controller": false,
           "kubernetes": {
             "api_version": "v1",
             "kind": "ServiceAccount",
-            "name": "egress-proxy-account"
+            "name": "egress-proxy-account",
+            "environment": []
           }
         },
         {
@@ -391,16 +396,17 @@
           "scope": "namespace",
           "dependencies": [],
           "retention": {
-            "policy": "persistent",
-            "days": 30
+            "policy": "ephemeral",
+            "days": 0
           },
-          "backup_restore_owner": "platform-operator",
-          "delete_behavior": "retain",
+          "backup_restore_owner": "none",
+          "delete_behavior": "delete",
           "external_controller": false,
           "kubernetes": {
             "api_version": "v1",
             "kind": "ServiceAccount",
-            "name": "migration-runner-account"
+            "name": "migration-runner-account",
+            "environment": []
           }
         },
         {
@@ -410,16 +416,17 @@
           "scope": "namespace",
           "dependencies": [],
           "retention": {
-            "policy": "persistent",
-            "days": 30
+            "policy": "ephemeral",
+            "days": 0
           },
-          "backup_restore_owner": "platform-operator",
-          "delete_behavior": "retain",
+          "backup_restore_owner": "none",
+          "delete_behavior": "delete",
           "external_controller": false,
           "kubernetes": {
             "api_version": "v1",
             "kind": "ServiceAccount",
-            "name": "api-account"
+            "name": "api-account",
+            "environment": []
           }
         },
         {
@@ -429,16 +436,17 @@
           "scope": "namespace",
           "dependencies": [],
           "retention": {
-            "policy": "persistent",
-            "days": 30
+            "policy": "ephemeral",
+            "days": 0
           },
-          "backup_restore_owner": "platform-operator",
-          "delete_behavior": "retain",
+          "backup_restore_owner": "none",
+          "delete_behavior": "delete",
           "external_controller": false,
           "kubernetes": {
             "api_version": "v1",
             "kind": "ServiceAccount",
-            "name": "orchestration-account"
+            "name": "orchestration-account",
+            "environment": []
           }
         },
         {
@@ -448,16 +456,17 @@
           "scope": "namespace",
           "dependencies": [],
           "retention": {
-            "policy": "persistent",
-            "days": 30
+            "policy": "ephemeral",
+            "days": 0
           },
-          "backup_restore_owner": "platform-operator",
-          "delete_behavior": "retain",
+          "backup_restore_owner": "none",
+          "delete_behavior": "delete",
           "external_controller": false,
           "kubernetes": {
             "api_version": "v1",
             "kind": "ServiceAccount",
-            "name": "model-account"
+            "name": "model-account",
+            "environment": []
           }
         },
         {
@@ -467,16 +476,17 @@
           "scope": "namespace",
           "dependencies": [],
           "retention": {
-            "policy": "persistent",
-            "days": 30
+            "policy": "ephemeral",
+            "days": 0
           },
-          "backup_restore_owner": "platform-operator",
-          "delete_behavior": "retain",
+          "backup_restore_owner": "none",
+          "delete_behavior": "delete",
           "external_controller": false,
           "kubernetes": {
             "api_version": "v1",
             "kind": "ServiceAccount",
-            "name": "tool-account"
+            "name": "tool-account",
+            "environment": []
           }
         },
         {
@@ -486,16 +496,17 @@
           "scope": "namespace",
           "dependencies": [],
           "retention": {
-            "policy": "persistent",
-            "days": 30
+            "policy": "ephemeral",
+            "days": 0
           },
-          "backup_restore_owner": "platform-operator",
-          "delete_behavior": "retain",
+          "backup_restore_owner": "none",
+          "delete_behavior": "delete",
           "external_controller": false,
           "kubernetes": {
             "api_version": "v1",
             "kind": "ServiceAccount",
-            "name": "blob-role-account"
+            "name": "blob-role-account",
+            "environment": []
           }
         },
         {
@@ -505,16 +516,17 @@
           "scope": "namespace",
           "dependencies": [],
           "retention": {
-            "policy": "persistent",
-            "days": 30
+            "policy": "ephemeral",
+            "days": 0
           },
-          "backup_restore_owner": "platform-operator",
-          "delete_behavior": "retain",
+          "backup_restore_owner": "none",
+          "delete_behavior": "delete",
           "external_controller": false,
           "kubernetes": {
             "api_version": "v1",
             "kind": "ServiceAccount",
-            "name": "codec-account"
+            "name": "codec-account",
+            "environment": []
           }
         },
         {
@@ -524,16 +536,17 @@
           "scope": "namespace",
           "dependencies": [],
           "retention": {
-            "policy": "persistent",
-            "days": 30
+            "policy": "ephemeral",
+            "days": 0
           },
-          "backup_restore_owner": "platform-operator",
-          "delete_behavior": "retain",
+          "backup_restore_owner": "none",
+          "delete_behavior": "delete",
           "external_controller": false,
           "kubernetes": {
             "api_version": "v1",
             "kind": "ServiceAccount",
-            "name": "sandbox-control-account"
+            "name": "sandbox-control-account",
+            "environment": []
           }
         },
         {
@@ -543,16 +556,17 @@
           "scope": "namespace",
           "dependencies": [],
           "retention": {
-            "policy": "persistent",
-            "days": 30
+            "policy": "ephemeral",
+            "days": 0
           },
-          "backup_restore_owner": "platform-operator",
-          "delete_behavior": "retain",
+          "backup_restore_owner": "none",
+          "delete_behavior": "delete",
           "external_controller": false,
           "kubernetes": {
             "api_version": "v1",
             "kind": "ServiceAccount",
-            "name": "sandbox-host-account"
+            "name": "sandbox-host-account",
+            "environment": []
           }
         },
         {
@@ -564,11 +578,11 @@
             "api-account"
           ],
           "retention": {
-            "policy": "persistent",
-            "days": 30
+            "policy": "ephemeral",
+            "days": 0
           },
-          "backup_restore_owner": "platform-operator",
-          "delete_behavior": "retain",
+          "backup_restore_owner": "none",
+          "delete_behavior": "delete",
           "external_controller": false,
           "kubernetes": {
             "api_version": "apps/v1",
@@ -589,7 +603,7 @@
             "environment": [
               {
                 "name": "RUNTIME_ROLE_CONFIG",
-                "value": "{\"version\":1,\"role\":\"api\",\"namespace\":\"agent-runtime\",\"listen_address\":\"0.0.0.0:8080\",\"dependencies\":[{\"name\":\"state\",\"endpoint\":\"http://state.agent-runtime.svc:8080\"},{\"name\":\"telemetry\",\"endpoint\":\"http://telemetry.agent-runtime.svc:4318\"}]}"
+                "value": "{\"version\":1,\"role\":\"api\",\"namespace\":\"ar-agent-runtime\",\"listen_address\":\"0.0.0.0:8080\",\"dependencies\":[{\"name\":\"state\",\"endpoint\":\"http://state.ar-agent-runtime.svc:8080\"},{\"name\":\"telemetry\",\"endpoint\":\"http://telemetry.ar-agent-runtime.svc:4318\"}]}"
               }
             ],
             "secret_environment": [],
@@ -633,11 +647,11 @@
             "temporal-auth-secret"
           ],
           "retention": {
-            "policy": "persistent",
-            "days": 30
+            "policy": "ephemeral",
+            "days": 0
           },
-          "backup_restore_owner": "platform-operator",
-          "delete_behavior": "retain",
+          "backup_restore_owner": "none",
+          "delete_behavior": "delete",
           "external_controller": false,
           "kubernetes": {
             "api_version": "apps/v1",
@@ -658,7 +672,7 @@
             "environment": [
               {
                 "name": "RUNTIME_ROLE_CONFIG",
-                "value": "{\"version\":1,\"role\":\"orchestration\",\"namespace\":\"agent-runtime\",\"listen_address\":\"0.0.0.0:8081\",\"dependencies\":[{\"name\":\"state\",\"endpoint\":\"postgres://state.agent-runtime.svc:5432/agent_runtime\",\"secret_environment\":\"STATE_DATABASE_DSN\"},{\"name\":\"telemetry\",\"endpoint\":\"http://telemetry.agent-runtime.svc:4318\"},{\"name\":\"temporal\",\"endpoint\":\"temporal.agent-runtime.svc:7233\",\"secret_environment\":\"TEMPORAL_AUTH_TOKEN\"}]}"
+                "value": "{\"version\":1,\"role\":\"orchestration\",\"namespace\":\"ar-agent-runtime\",\"listen_address\":\"0.0.0.0:8081\",\"dependencies\":[{\"name\":\"state\",\"endpoint\":\"postgres://state.ar-agent-runtime.svc:5432/agent_runtime\",\"secret_environment\":\"STATE_DATABASE_DSN\"},{\"name\":\"telemetry\",\"endpoint\":\"http://telemetry.ar-agent-runtime.svc:4318\"},{\"name\":\"temporal\",\"endpoint\":\"temporal.ar-agent-runtime.svc:7233\",\"secret_environment\":\"TEMPORAL_AUTH_TOKEN\"}]}"
               }
             ],
             "secret_environment": [
@@ -713,11 +727,11 @@
             "model-secret"
           ],
           "retention": {
-            "policy": "persistent",
-            "days": 30
+            "policy": "ephemeral",
+            "days": 0
           },
-          "backup_restore_owner": "platform-operator",
-          "delete_behavior": "retain",
+          "backup_restore_owner": "none",
+          "delete_behavior": "delete",
           "external_controller": false,
           "kubernetes": {
             "api_version": "apps/v1",
@@ -738,7 +752,7 @@
             "environment": [
               {
                 "name": "RUNTIME_ROLE_CONFIG",
-                "value": "{\"version\":1,\"role\":\"model\",\"namespace\":\"agent-runtime\",\"listen_address\":\"0.0.0.0:8082\",\"dependencies\":[{\"name\":\"conversation\",\"endpoint\":\"http://api.agent-runtime.svc:8080\",\"secret_environment\":\"CONVERSATION_ACCESS_TOKEN\"},{\"name\":\"egress-proxy\",\"endpoint\":\"http://egress-proxy.agent-runtime.svc:8088\"},{\"name\":\"model\",\"endpoint\":\"https://model-provider.example.invalid\",\"secret_environment\":\"MODEL_API_KEY\"},{\"name\":\"telemetry\",\"endpoint\":\"http://telemetry.agent-runtime.svc:4318\"}]}"
+                "value": "{\"version\":1,\"role\":\"model\",\"namespace\":\"ar-agent-runtime\",\"listen_address\":\"0.0.0.0:8082\",\"dependencies\":[{\"name\":\"conversation\",\"endpoint\":\"http://api.ar-agent-runtime.svc:8080\",\"secret_environment\":\"CONVERSATION_ACCESS_TOKEN\"},{\"name\":\"egress-proxy\",\"endpoint\":\"http://egress-proxy.ar-agent-runtime.svc:8088\"},{\"name\":\"model\",\"endpoint\":\"https://model-provider.example.invalid\",\"secret_environment\":\"MODEL_API_KEY\"},{\"name\":\"telemetry\",\"endpoint\":\"http://telemetry.ar-agent-runtime.svc:4318\"}]}"
               }
             ],
             "secret_environment": [
@@ -793,11 +807,11 @@
             "tool-broker-secret"
           ],
           "retention": {
-            "policy": "persistent",
-            "days": 30
+            "policy": "ephemeral",
+            "days": 0
           },
-          "backup_restore_owner": "platform-operator",
-          "delete_behavior": "retain",
+          "backup_restore_owner": "none",
+          "delete_behavior": "delete",
           "external_controller": false,
           "kubernetes": {
             "api_version": "apps/v1",
@@ -818,7 +832,7 @@
             "environment": [
               {
                 "name": "RUNTIME_ROLE_CONFIG",
-                "value": "{\"version\":1,\"role\":\"tool\",\"namespace\":\"agent-runtime\",\"listen_address\":\"0.0.0.0:8083\",\"dependencies\":[{\"name\":\"sandbox-control\",\"endpoint\":\"https://sandbox-control.agent-runtime.svc:8443\",\"secret_environment\":\"SANDBOX_CONTROL_TOKEN\"},{\"name\":\"telemetry\",\"endpoint\":\"http://telemetry.agent-runtime.svc:4318\"},{\"name\":\"tool-broker\",\"endpoint\":\"http://api.agent-runtime.svc:8080\",\"secret_environment\":\"TOOL_BROKER_TOKEN\"}]}"
+                "value": "{\"version\":1,\"role\":\"tool\",\"namespace\":\"ar-agent-runtime\",\"listen_address\":\"0.0.0.0:8083\",\"dependencies\":[{\"name\":\"sandbox-control\",\"endpoint\":\"https://sandbox-control.ar-agent-runtime.svc:8443\",\"secret_environment\":\"SANDBOX_CONTROL_TOKEN\"},{\"name\":\"telemetry\",\"endpoint\":\"http://telemetry.ar-agent-runtime.svc:4318\"},{\"name\":\"tool-broker\",\"endpoint\":\"http://api.ar-agent-runtime.svc:8080\",\"secret_environment\":\"TOOL_BROKER_TOKEN\"}]}"
               }
             ],
             "secret_environment": [
@@ -872,11 +886,11 @@
             "blob-storage-secret"
           ],
           "retention": {
-            "policy": "persistent",
-            "days": 30
+            "policy": "ephemeral",
+            "days": 0
           },
-          "backup_restore_owner": "platform-operator",
-          "delete_behavior": "retain",
+          "backup_restore_owner": "none",
+          "delete_behavior": "delete",
           "external_controller": false,
           "kubernetes": {
             "api_version": "apps/v1",
@@ -897,7 +911,7 @@
             "environment": [
               {
                 "name": "RUNTIME_ROLE_CONFIG",
-                "value": "{\"version\":1,\"role\":\"blob\",\"namespace\":\"agent-runtime\",\"listen_address\":\"0.0.0.0:8084\",\"dependencies\":[{\"name\":\"storage\",\"endpoint\":\"http://blob.agent-runtime.svc:9000\",\"secret_environment\":\"BLOB_STORAGE_CREDENTIAL\"},{\"name\":\"telemetry\",\"endpoint\":\"http://telemetry.agent-runtime.svc:4318\"}]}"
+                "value": "{\"version\":1,\"role\":\"blob\",\"namespace\":\"ar-agent-runtime\",\"listen_address\":\"0.0.0.0:8084\",\"dependencies\":[{\"name\":\"storage\",\"endpoint\":\"http://blob.ar-agent-runtime.svc:9000\",\"secret_environment\":\"BLOB_STORAGE_CREDENTIAL\"},{\"name\":\"telemetry\",\"endpoint\":\"http://telemetry.ar-agent-runtime.svc:4318\"}]}"
               }
             ],
             "secret_environment": [
@@ -946,11 +960,11 @@
             "codec-blob-secret"
           ],
           "retention": {
-            "policy": "persistent",
-            "days": 30
+            "policy": "ephemeral",
+            "days": 0
           },
-          "backup_restore_owner": "platform-operator",
-          "delete_behavior": "retain",
+          "backup_restore_owner": "none",
+          "delete_behavior": "delete",
           "external_controller": false,
           "kubernetes": {
             "api_version": "apps/v1",
@@ -971,7 +985,7 @@
             "environment": [
               {
                 "name": "RUNTIME_ROLE_CONFIG",
-                "value": "{\"version\":1,\"role\":\"codec\",\"namespace\":\"agent-runtime\",\"listen_address\":\"0.0.0.0:8085\",\"dependencies\":[{\"name\":\"blob\",\"endpoint\":\"http://blob.agent-runtime.svc:9000\",\"secret_environment\":\"CODEC_BLOB_CREDENTIAL\"},{\"name\":\"telemetry\",\"endpoint\":\"http://telemetry.agent-runtime.svc:4318\"}]}"
+                "value": "{\"version\":1,\"role\":\"codec\",\"namespace\":\"ar-agent-runtime\",\"listen_address\":\"0.0.0.0:8085\",\"dependencies\":[{\"name\":\"blob\",\"endpoint\":\"http://blob.ar-agent-runtime.svc:9000\",\"secret_environment\":\"CODEC_BLOB_CREDENTIAL\"},{\"name\":\"telemetry\",\"endpoint\":\"http://telemetry.ar-agent-runtime.svc:4318\"}]}"
               },
               {
                 "name": "CODEC_ALLOWED_ORIGINS",
@@ -1025,11 +1039,11 @@
             "sandbox-state-secret"
           ],
           "retention": {
-            "policy": "persistent",
-            "days": 30
+            "policy": "ephemeral",
+            "days": 0
           },
-          "backup_restore_owner": "platform-operator",
-          "delete_behavior": "retain",
+          "backup_restore_owner": "none",
+          "delete_behavior": "delete",
           "external_controller": false,
           "kubernetes": {
             "api_version": "apps/v1",
@@ -1050,7 +1064,7 @@
             "environment": [
               {
                 "name": "RUNTIME_ROLE_CONFIG",
-                "value": "{\"version\":1,\"role\":\"sandbox-control\",\"namespace\":\"agent-runtime\",\"listen_address\":\"0.0.0.0:8086\",\"dependencies\":[{\"name\":\"host-ca\",\"endpoint\":\"https://host-ca.example.invalid\",\"secret_environment\":\"SANDBOX_HOST_CA\"},{\"name\":\"sandbox-state\",\"endpoint\":\"postgres://state.agent-runtime.svc:5432/sandbox\",\"secret_environment\":\"SANDBOX_STATE_DSN\"},{\"name\":\"telemetry\",\"endpoint\":\"http://telemetry.agent-runtime.svc:4318\"}]}"
+                "value": "{\"version\":1,\"role\":\"sandbox-control\",\"namespace\":\"ar-agent-runtime\",\"listen_address\":\"0.0.0.0:8086\",\"dependencies\":[{\"name\":\"host-ca\",\"endpoint\":\"https://host-ca.example.invalid\",\"secret_environment\":\"SANDBOX_HOST_CA\"},{\"name\":\"sandbox-state\",\"endpoint\":\"postgres://state.ar-agent-runtime.svc:5432/sandbox\",\"secret_environment\":\"SANDBOX_STATE_DSN\"},{\"name\":\"telemetry\",\"endpoint\":\"http://telemetry.ar-agent-runtime.svc:4318\"}]}"
               }
             ],
             "secret_environment": [
@@ -1105,11 +1119,11 @@
             "sandbox-control-secret"
           ],
           "retention": {
-            "policy": "persistent",
-            "days": 30
+            "policy": "ephemeral",
+            "days": 0
           },
-          "backup_restore_owner": "platform-operator",
-          "delete_behavior": "retain",
+          "backup_restore_owner": "none",
+          "delete_behavior": "delete",
           "external_controller": false,
           "kubernetes": {
             "api_version": "apps/v1",
@@ -1130,7 +1144,7 @@
             "environment": [
               {
                 "name": "RUNTIME_ROLE_CONFIG",
-                "value": "{\"version\":1,\"role\":\"sandbox-host\",\"namespace\":\"agent-runtime\",\"listen_address\":\"0.0.0.0:8087\",\"dependencies\":[{\"name\":\"host-identity\",\"endpoint\":\"https://host-identity.example.invalid\",\"secret_environment\":\"SANDBOX_HOST_IDENTITY\"},{\"name\":\"sandbox-control\",\"endpoint\":\"https://sandbox-control.agent-runtime.svc:8443\",\"secret_environment\":\"SANDBOX_CONTROL_TOKEN\"},{\"name\":\"telemetry\",\"endpoint\":\"http://telemetry.agent-runtime.svc:4318\"}]}"
+                "value": "{\"version\":1,\"role\":\"sandbox-host\",\"namespace\":\"ar-agent-runtime\",\"listen_address\":\"0.0.0.0:8087\",\"dependencies\":[{\"name\":\"host-identity\",\"endpoint\":\"https://host-identity.example.invalid\",\"secret_environment\":\"SANDBOX_HOST_IDENTITY\"},{\"name\":\"sandbox-control\",\"endpoint\":\"https://sandbox-control.ar-agent-runtime.svc:8443\",\"secret_environment\":\"SANDBOX_CONTROL_TOKEN\"},{\"name\":\"telemetry\",\"endpoint\":\"http://telemetry.ar-agent-runtime.svc:4318\"}]}"
               }
             ],
             "secret_environment": [
@@ -1181,14 +1195,15 @@
           "scope": "namespace",
           "dependencies": [
             "state-account",
+            "state-data",
             "state-db-secret"
           ],
           "retention": {
-            "policy": "persistent",
-            "days": 30
+            "policy": "ephemeral",
+            "days": 0
           },
-          "backup_restore_owner": "platform-operator",
-          "delete_behavior": "retain",
+          "backup_restore_owner": "none",
+          "delete_behavior": "delete",
           "external_controller": false,
           "kubernetes": {
             "api_version": "apps/v1",
@@ -1239,7 +1254,14 @@
               "request_memory_bytes": 134217728,
               "limit_memory_bytes": 536870912
             },
-            "storage": []
+            "storage": [],
+            "volume_mounts": [
+              {
+                "claim": "state-data",
+                "path": "/var/lib/postgresql/data",
+                "read_only": false
+              }
+            ]
           }
         },
         {
@@ -1249,15 +1271,16 @@
           "scope": "namespace",
           "dependencies": [
             "temporal-account",
-            "state-db-secret",
-            "temporal-auth-secret"
+            "temporal-auth-secret",
+            "temporal-db-secret",
+            "temporal-state-service"
           ],
           "retention": {
-            "policy": "persistent",
-            "days": 30
+            "policy": "ephemeral",
+            "days": 0
           },
-          "backup_restore_owner": "platform-operator",
-          "delete_behavior": "retain",
+          "backup_restore_owner": "none",
+          "delete_behavior": "delete",
           "external_controller": false,
           "kubernetes": {
             "api_version": "apps/v1",
@@ -1277,11 +1300,11 @@
               },
               {
                 "name": "POSTGRES_SEEDS",
-                "value": "state"
+                "value": "temporal-state"
               },
               {
                 "name": "POSTGRES_USER",
-                "value": "postgres"
+                "value": "temporal"
               },
               {
                 "name": "BIND_ON_IP",
@@ -1291,7 +1314,7 @@
             "secret_environment": [
               {
                 "name": "POSTGRES_PWD",
-                "secret": "state-db-secret",
+                "secret": "temporal-db-secret",
                 "key": "POSTGRES_PASSWORD"
               }
             ],
@@ -1333,14 +1356,15 @@
           "scope": "namespace",
           "dependencies": [
             "blob-account",
+            "blob-data",
             "blob-storage-secret"
           ],
           "retention": {
-            "policy": "persistent",
-            "days": 30
+            "policy": "ephemeral",
+            "days": 0
           },
-          "backup_restore_owner": "platform-operator",
-          "delete_behavior": "retain",
+          "backup_restore_owner": "none",
+          "delete_behavior": "delete",
           "external_controller": false,
           "kubernetes": {
             "api_version": "apps/v1",
@@ -1379,7 +1403,14 @@
               "request_memory_bytes": 134217728,
               "limit_memory_bytes": 536870912
             },
-            "storage": []
+            "storage": [],
+            "volume_mounts": [
+              {
+                "claim": "blob-data",
+                "path": "/data",
+                "read_only": false
+              }
+            ]
           }
         },
         {
@@ -1388,14 +1419,15 @@
           "owner": "runtime-operator",
           "scope": "namespace",
           "dependencies": [
-            "telemetry-account"
+            "telemetry-account",
+            "telemetry-data"
           ],
           "retention": {
-            "policy": "persistent",
-            "days": 30
+            "policy": "ephemeral",
+            "days": 0
           },
-          "backup_restore_owner": "platform-operator",
-          "delete_behavior": "retain",
+          "backup_restore_owner": "none",
+          "delete_behavior": "delete",
           "external_controller": false,
           "kubernetes": {
             "api_version": "apps/v1",
@@ -1404,7 +1436,28 @@
             "replicas": 1,
             "image": "jaegertracing/all-in-one@sha256:12fa17a231abded2c3b5b715bd252a043678495c588cbe772173991fbdcdf7c8",
             "service_account": "telemetry-account",
-            "environment": [],
+            "environment": [
+              {
+                "name": "SPAN_STORAGE_TYPE",
+                "value": "badger"
+              },
+              {
+                "name": "BADGER_EPHEMERAL",
+                "value": "false"
+              },
+              {
+                "name": "BADGER_DIRECTORY_VALUE",
+                "value": "/badger/data"
+              },
+              {
+                "name": "BADGER_SPAN_STORE_TTL",
+                "value": "720h"
+              },
+              {
+                "name": "COLLECTOR_OTLP_ENABLED",
+                "value": "true"
+              }
+            ],
             "secret_environment": [],
             "ports": [
               {
@@ -1419,7 +1472,17 @@
               "request_memory_bytes": 134217728,
               "limit_memory_bytes": 536870912
             },
-            "storage": []
+            "storage": [],
+            "arguments": [
+              "--badger.directory-key=/badger/key"
+            ],
+            "volume_mounts": [
+              {
+                "claim": "telemetry-data",
+                "path": "/badger",
+                "read_only": false
+              }
+            ]
           }
         },
         {
@@ -1431,11 +1494,11 @@
             "egress-proxy-account"
           ],
           "retention": {
-            "policy": "persistent",
-            "days": 30
+            "policy": "ephemeral",
+            "days": 0
           },
-          "backup_restore_owner": "platform-operator",
-          "delete_behavior": "retain",
+          "backup_restore_owner": "none",
+          "delete_behavior": "delete",
           "external_controller": false,
           "kubernetes": {
             "api_version": "apps/v1",
@@ -1479,7 +1542,8 @@
               "request_memory_bytes": 134217728,
               "limit_memory_bytes": 536870912
             },
-            "storage": []
+            "storage": [],
+            "environment": []
           }
         },
         {
@@ -1492,11 +1556,11 @@
             "state-db-secret"
           ],
           "retention": {
-            "policy": "persistent",
-            "days": 30
+            "policy": "ephemeral",
+            "days": 0
           },
-          "backup_restore_owner": "platform-operator",
-          "delete_behavior": "retain",
+          "backup_restore_owner": "none",
+          "delete_behavior": "delete",
           "external_controller": false,
           "kubernetes": {
             "api_version": "apps/v1",
@@ -1558,11 +1622,11 @@
             "api"
           ],
           "retention": {
-            "policy": "persistent",
-            "days": 30
+            "policy": "ephemeral",
+            "days": 0
           },
-          "backup_restore_owner": "platform-operator",
-          "delete_behavior": "retain",
+          "backup_restore_owner": "none",
+          "delete_behavior": "delete",
           "external_controller": false,
           "kubernetes": {
             "api_version": "v1",
@@ -1575,7 +1639,8 @@
                 "number": 8080,
                 "protocol": "TCP"
               }
-            ]
+            ],
+            "environment": []
           }
         },
         {
@@ -1587,11 +1652,11 @@
             "temporal"
           ],
           "retention": {
-            "policy": "persistent",
-            "days": 30
+            "policy": "ephemeral",
+            "days": 0
           },
-          "backup_restore_owner": "platform-operator",
-          "delete_behavior": "retain",
+          "backup_restore_owner": "none",
+          "delete_behavior": "delete",
           "external_controller": false,
           "kubernetes": {
             "api_version": "v1",
@@ -1604,7 +1669,8 @@
                 "number": 7233,
                 "protocol": "TCP"
               }
-            ]
+            ],
+            "environment": []
           }
         },
         {
@@ -1616,11 +1682,11 @@
             "blob"
           ],
           "retention": {
-            "policy": "persistent",
-            "days": 30
+            "policy": "ephemeral",
+            "days": 0
           },
-          "backup_restore_owner": "platform-operator",
-          "delete_behavior": "retain",
+          "backup_restore_owner": "none",
+          "delete_behavior": "delete",
           "external_controller": false,
           "kubernetes": {
             "api_version": "v1",
@@ -1633,7 +1699,8 @@
                 "number": 9000,
                 "protocol": "TCP"
               }
-            ]
+            ],
+            "environment": []
           }
         },
         {
@@ -1645,11 +1712,11 @@
             "telemetry"
           ],
           "retention": {
-            "policy": "persistent",
-            "days": 30
+            "policy": "ephemeral",
+            "days": 0
           },
-          "backup_restore_owner": "platform-operator",
-          "delete_behavior": "retain",
+          "backup_restore_owner": "none",
+          "delete_behavior": "delete",
           "external_controller": false,
           "kubernetes": {
             "api_version": "v1",
@@ -1662,7 +1729,8 @@
                 "number": 4318,
                 "protocol": "TCP"
               }
-            ]
+            ],
+            "environment": []
           }
         },
         {
@@ -1674,11 +1742,11 @@
             "egress-proxy"
           ],
           "retention": {
-            "policy": "persistent",
-            "days": 30
+            "policy": "ephemeral",
+            "days": 0
           },
-          "backup_restore_owner": "platform-operator",
-          "delete_behavior": "retain",
+          "backup_restore_owner": "none",
+          "delete_behavior": "delete",
           "external_controller": false,
           "kubernetes": {
             "api_version": "v1",
@@ -1691,7 +1759,8 @@
                 "number": 8088,
                 "protocol": "TCP"
               }
-            ]
+            ],
+            "environment": []
           }
         },
         {
@@ -1703,11 +1772,11 @@
             "sandbox-control"
           ],
           "retention": {
-            "policy": "persistent",
-            "days": 30
+            "policy": "ephemeral",
+            "days": 0
           },
-          "backup_restore_owner": "platform-operator",
-          "delete_behavior": "retain",
+          "backup_restore_owner": "none",
+          "delete_behavior": "delete",
           "external_controller": false,
           "kubernetes": {
             "api_version": "v1",
@@ -1720,7 +1789,8 @@
                 "number": 8086,
                 "protocol": "TCP"
               }
-            ]
+            ],
+            "environment": []
           }
         },
         {
@@ -1732,11 +1802,11 @@
             "codec"
           ],
           "retention": {
-            "policy": "persistent",
-            "days": 30
+            "policy": "ephemeral",
+            "days": 0
           },
-          "backup_restore_owner": "platform-operator",
-          "delete_behavior": "retain",
+          "backup_restore_owner": "none",
+          "delete_behavior": "delete",
           "external_controller": false,
           "kubernetes": {
             "api_version": "v1",
@@ -1749,7 +1819,8 @@
                 "number": 8085,
                 "protocol": "TCP"
               }
-            ]
+            ],
+            "environment": []
           }
         },
         {
@@ -1761,11 +1832,11 @@
             "state"
           ],
           "retention": {
-            "policy": "persistent",
-            "days": 30
+            "policy": "ephemeral",
+            "days": 0
           },
-          "backup_restore_owner": "platform-operator",
-          "delete_behavior": "retain",
+          "backup_restore_owner": "none",
+          "delete_behavior": "delete",
           "external_controller": false,
           "kubernetes": {
             "api_version": "v1",
@@ -1778,7 +1849,8 @@
                 "number": 5432,
                 "protocol": "TCP"
               }
-            ]
+            ],
+            "environment": []
           }
         },
         {
@@ -1792,11 +1864,11 @@
             "telemetry"
           ],
           "retention": {
-            "policy": "persistent",
-            "days": 30
+            "policy": "ephemeral",
+            "days": 0
           },
-          "backup_restore_owner": "platform-operator",
-          "delete_behavior": "retain",
+          "backup_restore_owner": "none",
+          "delete_behavior": "delete",
           "external_controller": false,
           "kubernetes": {
             "api_version": "networking.k8s.io/v1",
@@ -1809,7 +1881,8 @@
                 "state",
                 "telemetry"
               ]
-            }
+            },
+            "environment": []
           }
         },
         {
@@ -1824,11 +1897,11 @@
             "temporal"
           ],
           "retention": {
-            "policy": "persistent",
-            "days": 30
+            "policy": "ephemeral",
+            "days": 0
           },
-          "backup_restore_owner": "platform-operator",
-          "delete_behavior": "retain",
+          "backup_restore_owner": "none",
+          "delete_behavior": "delete",
           "external_controller": false,
           "kubernetes": {
             "api_version": "networking.k8s.io/v1",
@@ -1842,7 +1915,8 @@
                 "telemetry",
                 "temporal"
               ]
-            }
+            },
+            "environment": []
           }
         },
         {
@@ -1857,11 +1931,11 @@
             "telemetry"
           ],
           "retention": {
-            "policy": "persistent",
-            "days": 30
+            "policy": "ephemeral",
+            "days": 0
           },
-          "backup_restore_owner": "platform-operator",
-          "delete_behavior": "retain",
+          "backup_restore_owner": "none",
+          "delete_behavior": "delete",
           "external_controller": false,
           "kubernetes": {
             "api_version": "networking.k8s.io/v1",
@@ -1875,7 +1949,8 @@
                 "egress-proxy",
                 "telemetry"
               ]
-            }
+            },
+            "environment": []
           }
         },
         {
@@ -1890,11 +1965,11 @@
             "telemetry"
           ],
           "retention": {
-            "policy": "persistent",
-            "days": 30
+            "policy": "ephemeral",
+            "days": 0
           },
-          "backup_restore_owner": "platform-operator",
-          "delete_behavior": "retain",
+          "backup_restore_owner": "none",
+          "delete_behavior": "delete",
           "external_controller": false,
           "kubernetes": {
             "api_version": "networking.k8s.io/v1",
@@ -1908,7 +1983,8 @@
                 "sandbox-control",
                 "telemetry"
               ]
-            }
+            },
+            "environment": []
           }
         },
         {
@@ -1922,11 +1998,11 @@
             "telemetry"
           ],
           "retention": {
-            "policy": "persistent",
-            "days": 30
+            "policy": "ephemeral",
+            "days": 0
           },
-          "backup_restore_owner": "platform-operator",
-          "delete_behavior": "retain",
+          "backup_restore_owner": "none",
+          "delete_behavior": "delete",
           "external_controller": false,
           "kubernetes": {
             "api_version": "networking.k8s.io/v1",
@@ -1939,7 +2015,8 @@
                 "blob",
                 "telemetry"
               ]
-            }
+            },
+            "environment": []
           }
         },
         {
@@ -1953,11 +2030,11 @@
             "telemetry"
           ],
           "retention": {
-            "policy": "persistent",
-            "days": 30
+            "policy": "ephemeral",
+            "days": 0
           },
-          "backup_restore_owner": "platform-operator",
-          "delete_behavior": "retain",
+          "backup_restore_owner": "none",
+          "delete_behavior": "delete",
           "external_controller": false,
           "kubernetes": {
             "api_version": "networking.k8s.io/v1",
@@ -1970,7 +2047,8 @@
                 "blob",
                 "telemetry"
               ]
-            }
+            },
+            "environment": []
           }
         },
         {
@@ -1984,11 +2062,11 @@
             "telemetry"
           ],
           "retention": {
-            "policy": "persistent",
-            "days": 30
+            "policy": "ephemeral",
+            "days": 0
           },
-          "backup_restore_owner": "platform-operator",
-          "delete_behavior": "retain",
+          "backup_restore_owner": "none",
+          "delete_behavior": "delete",
           "external_controller": false,
           "kubernetes": {
             "api_version": "networking.k8s.io/v1",
@@ -2001,7 +2079,8 @@
                 "state",
                 "telemetry"
               ]
-            }
+            },
+            "environment": []
           }
         },
         {
@@ -2015,11 +2094,11 @@
             "telemetry"
           ],
           "retention": {
-            "policy": "persistent",
-            "days": 30
+            "policy": "ephemeral",
+            "days": 0
           },
-          "backup_restore_owner": "platform-operator",
-          "delete_behavior": "retain",
+          "backup_restore_owner": "none",
+          "delete_behavior": "delete",
           "external_controller": false,
           "kubernetes": {
             "api_version": "networking.k8s.io/v1",
@@ -2032,7 +2111,8 @@
                 "sandbox-control",
                 "telemetry"
               ]
-            }
+            },
+            "environment": []
           }
         },
         {
@@ -2044,11 +2124,11 @@
             "state"
           ],
           "retention": {
-            "policy": "persistent",
-            "days": 30
+            "policy": "ephemeral",
+            "days": 0
           },
-          "backup_restore_owner": "platform-operator",
-          "delete_behavior": "retain",
+          "backup_restore_owner": "none",
+          "delete_behavior": "delete",
           "external_controller": false,
           "kubernetes": {
             "api_version": "networking.k8s.io/v1",
@@ -2058,7 +2138,8 @@
               "default_deny": true,
               "subject": "state",
               "allowed_egress": []
-            }
+            },
+            "environment": []
           }
         },
         {
@@ -2068,14 +2149,14 @@
           "scope": "namespace",
           "dependencies": [
             "temporal",
-            "state"
+            "temporal-state"
           ],
           "retention": {
-            "policy": "persistent",
-            "days": 30
+            "policy": "ephemeral",
+            "days": 0
           },
-          "backup_restore_owner": "platform-operator",
-          "delete_behavior": "retain",
+          "backup_restore_owner": "none",
+          "delete_behavior": "delete",
           "external_controller": false,
           "kubernetes": {
             "api_version": "networking.k8s.io/v1",
@@ -2085,9 +2166,10 @@
               "default_deny": true,
               "subject": "temporal",
               "allowed_egress": [
-                "state"
+                "temporal-state"
               ]
-            }
+            },
+            "environment": []
           }
         },
         {
@@ -2099,11 +2181,11 @@
             "blob"
           ],
           "retention": {
-            "policy": "persistent",
-            "days": 30
+            "policy": "ephemeral",
+            "days": 0
           },
-          "backup_restore_owner": "platform-operator",
-          "delete_behavior": "retain",
+          "backup_restore_owner": "none",
+          "delete_behavior": "delete",
           "external_controller": false,
           "kubernetes": {
             "api_version": "networking.k8s.io/v1",
@@ -2113,7 +2195,8 @@
               "default_deny": true,
               "subject": "blob",
               "allowed_egress": []
-            }
+            },
+            "environment": []
           }
         },
         {
@@ -2125,11 +2208,11 @@
             "telemetry"
           ],
           "retention": {
-            "policy": "persistent",
-            "days": 30
+            "policy": "ephemeral",
+            "days": 0
           },
-          "backup_restore_owner": "platform-operator",
-          "delete_behavior": "retain",
+          "backup_restore_owner": "none",
+          "delete_behavior": "delete",
           "external_controller": false,
           "kubernetes": {
             "api_version": "networking.k8s.io/v1",
@@ -2139,7 +2222,8 @@
               "default_deny": true,
               "subject": "telemetry",
               "allowed_egress": []
-            }
+            },
+            "environment": []
           }
         },
         {
@@ -2152,11 +2236,11 @@
             "state"
           ],
           "retention": {
-            "policy": "persistent",
-            "days": 30
+            "policy": "ephemeral",
+            "days": 0
           },
-          "backup_restore_owner": "platform-operator",
-          "delete_behavior": "retain",
+          "backup_restore_owner": "none",
+          "delete_behavior": "delete",
           "external_controller": false,
           "kubernetes": {
             "api_version": "networking.k8s.io/v1",
@@ -2168,7 +2252,8 @@
               "allowed_egress": [
                 "state"
               ]
-            }
+            },
+            "environment": []
           }
         },
         {
@@ -2180,11 +2265,11 @@
             "codec-service"
           ],
           "retention": {
-            "policy": "persistent",
-            "days": 30
+            "policy": "ephemeral",
+            "days": 0
           },
-          "backup_restore_owner": "platform-operator",
-          "delete_behavior": "retain",
+          "backup_restore_owner": "none",
+          "delete_behavior": "delete",
           "external_controller": false,
           "kubernetes": {
             "api_version": "networking.k8s.io/v1",
@@ -2198,7 +2283,8 @@
                 "service": "codec-service",
                 "service_port": "http"
               }
-            ]
+            ],
+            "environment": []
           }
         },
         {
@@ -2210,15 +2296,15 @@
             "temporal"
           ],
           "retention": {
-            "policy": "persistent",
-            "days": 30
+            "policy": "ephemeral",
+            "days": 0
           },
-          "backup_restore_owner": "platform-operator",
-          "delete_behavior": "retain",
+          "backup_restore_owner": "none",
+          "delete_behavior": "delete",
           "external_controller": false,
           "orchestration": {
-            "namespace": "agent-runtime",
-            "task_queue_prefix": "agent-runtime-",
+            "namespace": "ar-agent-runtime",
+            "task_queue_prefix": "ar-agent-runtime-",
             "retention_days": 30,
             "search_attributes": [],
             "schedules": []
@@ -2230,21 +2316,23 @@
           "owner": "blob-operator",
           "scope": "namespace",
           "dependencies": [
+            "blob-reconciler",
             "blob-service",
             "blob-storage-secret"
           ],
           "retention": {
-            "policy": "persistent",
-            "days": 30
+            "policy": "ephemeral",
+            "days": 0
           },
-          "backup_restore_owner": "platform-operator",
-          "delete_behavior": "retain",
+          "backup_restore_owner": "none",
+          "delete_behavior": "delete",
           "external_controller": false,
           "blob": {
-            "bucket": "agent-runtime",
-            "prefix": "agent-runtime/payloads",
+            "bucket": "ar-agent-runtime",
+            "prefix": "ar-agent-runtime/payloads",
             "endpoint_reference": "blob-service",
-            "credential_reference": "blob-storage-secret"
+            "credential_reference": "blob-storage-secret",
+            "reconciler_reference": "blob-reconciler"
           }
         },
         {
@@ -2257,11 +2345,11 @@
             "state"
           ],
           "retention": {
-            "policy": "persistent",
-            "days": 30
+            "policy": "ephemeral",
+            "days": 0
           },
-          "backup_restore_owner": "platform-operator",
-          "delete_behavior": "retain",
+          "backup_restore_owner": "none",
+          "delete_behavior": "delete",
           "external_controller": false,
           "database": {
             "database": "agent_runtime",
@@ -2288,16 +2376,400 @@
             "telemetry-service"
           ],
           "retention": {
-            "policy": "persistent",
-            "days": 30
+            "policy": "ephemeral",
+            "days": 0
           },
-          "backup_restore_owner": "platform-operator",
-          "delete_behavior": "retain",
+          "backup_restore_owner": "none",
+          "delete_behavior": "delete",
           "external_controller": false,
           "telemetry": {
             "collector_service": "telemetry-service",
             "port_name": "http",
             "retention_days": 30
+          }
+        },
+        {
+          "id": "temporal-db-secret",
+          "kind": "secret_reference",
+          "owner": "security-operator",
+          "scope": "namespace",
+          "dependencies": [],
+          "retention": {
+            "policy": "external",
+            "days": 0
+          },
+          "backup_restore_owner": "none",
+          "delete_behavior": "retain",
+          "external_controller": true,
+          "secret_reference": {
+            "provider": "local-generated",
+            "reference": "ar-agent-runtime-temporal-db-secret",
+            "version": "v1",
+            "keys": [
+              "POSTGRES_PASSWORD"
+            ]
+          }
+        },
+        {
+          "id": "temporal-state-account",
+          "kind": "kubernetes",
+          "owner": "platform-operator",
+          "scope": "namespace",
+          "dependencies": [],
+          "retention": {
+            "policy": "ephemeral",
+            "days": 0
+          },
+          "backup_restore_owner": "none",
+          "delete_behavior": "delete",
+          "external_controller": false,
+          "kubernetes": {
+            "api_version": "v1",
+            "kind": "ServiceAccount",
+            "name": "temporal-state-account"
+          }
+        },
+        {
+          "id": "state-data",
+          "kind": "kubernetes",
+          "owner": "database-operator",
+          "scope": "namespace",
+          "dependencies": [],
+          "retention": {
+            "policy": "ephemeral",
+            "days": 0
+          },
+          "backup_restore_owner": "none",
+          "delete_behavior": "delete",
+          "external_controller": false,
+          "kubernetes": {
+            "api_version": "v1",
+            "kind": "PersistentVolumeClaim",
+            "name": "state-data",
+            "storage": [
+              {
+                "name": "data",
+                "size_bytes": 1073741824,
+                "class": "local-path"
+              }
+            ]
+          }
+        },
+        {
+          "id": "temporal-state-data",
+          "kind": "kubernetes",
+          "owner": "database-operator",
+          "scope": "namespace",
+          "dependencies": [],
+          "retention": {
+            "policy": "ephemeral",
+            "days": 0
+          },
+          "backup_restore_owner": "none",
+          "delete_behavior": "delete",
+          "external_controller": false,
+          "kubernetes": {
+            "api_version": "v1",
+            "kind": "PersistentVolumeClaim",
+            "name": "temporal-state-data",
+            "storage": [
+              {
+                "name": "data",
+                "size_bytes": 1073741824,
+                "class": "local-path"
+              }
+            ]
+          }
+        },
+        {
+          "id": "blob-data",
+          "kind": "kubernetes",
+          "owner": "blob-operator",
+          "scope": "namespace",
+          "dependencies": [],
+          "retention": {
+            "policy": "ephemeral",
+            "days": 0
+          },
+          "backup_restore_owner": "none",
+          "delete_behavior": "delete",
+          "external_controller": false,
+          "kubernetes": {
+            "api_version": "v1",
+            "kind": "PersistentVolumeClaim",
+            "name": "blob-data",
+            "storage": [
+              {
+                "name": "data",
+                "size_bytes": 1073741824,
+                "class": "local-path"
+              }
+            ]
+          }
+        },
+        {
+          "id": "telemetry-data",
+          "kind": "kubernetes",
+          "owner": "telemetry-operator",
+          "scope": "namespace",
+          "dependencies": [],
+          "retention": {
+            "policy": "ephemeral",
+            "days": 0
+          },
+          "backup_restore_owner": "none",
+          "delete_behavior": "delete",
+          "external_controller": false,
+          "kubernetes": {
+            "api_version": "v1",
+            "kind": "PersistentVolumeClaim",
+            "name": "telemetry-data",
+            "storage": [
+              {
+                "name": "data",
+                "size_bytes": 1073741824,
+                "class": "local-path"
+              }
+            ]
+          }
+        },
+        {
+          "id": "temporal-state",
+          "kind": "kubernetes",
+          "owner": "database-operator",
+          "scope": "namespace",
+          "dependencies": [
+            "temporal-state-account",
+            "temporal-state-data",
+            "temporal-db-secret"
+          ],
+          "retention": {
+            "policy": "ephemeral",
+            "days": 0
+          },
+          "backup_restore_owner": "none",
+          "delete_behavior": "delete",
+          "external_controller": false,
+          "kubernetes": {
+            "api_version": "apps/v1",
+            "kind": "Deployment",
+            "name": "temporal-state",
+            "replicas": 1,
+            "image": "postgres@sha256:e5507c984377515b8c9922b0eb19f55aba2063fdc7bccf268cefd53133f97054",
+            "service_account": "temporal-state-account",
+            "environment": [
+              {
+                "name": "POSTGRES_DB",
+                "value": "temporal"
+              },
+              {
+                "name": "POSTGRES_USER",
+                "value": "temporal"
+              }
+            ],
+            "secret_environment": [
+              {
+                "name": "POSTGRES_PASSWORD",
+                "secret": "temporal-db-secret",
+                "key": "POSTGRES_PASSWORD"
+              }
+            ],
+            "volume_mounts": [
+              {
+                "claim": "temporal-state-data",
+                "path": "/var/lib/postgresql/data",
+                "read_only": false
+              }
+            ],
+            "readiness": {
+              "command": [
+                "pg_isready",
+                "-U",
+                "temporal",
+                "-d",
+                "temporal"
+              ],
+              "initial_delay_seconds": 1,
+              "period_seconds": 5,
+              "failure_threshold": 12
+            },
+            "ports": [
+              {
+                "name": "http",
+                "number": 5432,
+                "protocol": "TCP"
+              }
+            ],
+            "compute": {
+              "request_milli_cpu": 100,
+              "limit_milli_cpu": 500,
+              "request_memory_bytes": 134217728,
+              "limit_memory_bytes": 536870912
+            },
+            "storage": []
+          }
+        },
+        {
+          "id": "temporal-state-service",
+          "kind": "kubernetes",
+          "owner": "platform-operator",
+          "scope": "namespace",
+          "dependencies": [
+            "temporal-state"
+          ],
+          "retention": {
+            "policy": "ephemeral",
+            "days": 0
+          },
+          "backup_restore_owner": "none",
+          "delete_behavior": "delete",
+          "external_controller": false,
+          "kubernetes": {
+            "api_version": "v1",
+            "kind": "Service",
+            "name": "temporal-state",
+            "selector": "temporal-state",
+            "ports": [
+              {
+                "name": "http",
+                "number": 5432,
+                "protocol": "TCP"
+              }
+            ]
+          }
+        },
+        {
+          "id": "temporal-state-egress",
+          "kind": "kubernetes",
+          "owner": "security-operator",
+          "scope": "namespace",
+          "dependencies": [
+            "temporal-state"
+          ],
+          "retention": {
+            "policy": "ephemeral",
+            "days": 0
+          },
+          "backup_restore_owner": "none",
+          "delete_behavior": "delete",
+          "external_controller": false,
+          "kubernetes": {
+            "api_version": "networking.k8s.io/v1",
+            "kind": "NetworkPolicy",
+            "name": "temporal-state-egress",
+            "network": {
+              "default_deny": true,
+              "subject": "temporal-state",
+              "allowed_egress": []
+            }
+          }
+        },
+        {
+          "id": "blob-reconciler",
+          "kind": "kubernetes",
+          "owner": "blob-operator",
+          "scope": "namespace",
+          "dependencies": [
+            "blob-account",
+            "blob-storage-secret",
+            "blob-service"
+          ],
+          "retention": {
+            "policy": "ephemeral",
+            "days": 0
+          },
+          "backup_restore_owner": "none",
+          "delete_behavior": "delete",
+          "external_controller": false,
+          "kubernetes": {
+            "api_version": "apps/v1",
+            "kind": "Deployment",
+            "name": "blob-reconciler",
+            "replicas": 1,
+            "image": "minio/mc@sha256:aead63c77f9db9107f1696fb08ecb0faeda23729cde94b0f663edf4fe09728e3",
+            "service_account": "blob-account",
+            "command": [
+              "/bin/sh"
+            ],
+            "arguments": [
+              "-c",
+              "trap : TERM INT; sleep infinity & wait"
+            ],
+            "environment": [],
+            "secret_environment": [
+              {
+                "name": "MINIO_ROOT_USER",
+                "secret": "blob-storage-secret",
+                "key": "MINIO_ROOT_USER"
+              },
+              {
+                "name": "MINIO_ROOT_PASSWORD",
+                "secret": "blob-storage-secret",
+                "key": "MINIO_ROOT_PASSWORD"
+              }
+            ],
+            "ports": [],
+            "compute": {
+              "request_milli_cpu": 25,
+              "limit_milli_cpu": 100,
+              "request_memory_bytes": 33554432,
+              "limit_memory_bytes": 134217728
+            },
+            "storage": []
+          }
+        },
+        {
+          "id": "blob-reconciler-egress",
+          "kind": "kubernetes",
+          "owner": "security-operator",
+          "scope": "namespace",
+          "dependencies": [
+            "blob-reconciler",
+            "blob"
+          ],
+          "retention": {
+            "policy": "ephemeral",
+            "days": 0
+          },
+          "backup_restore_owner": "none",
+          "delete_behavior": "delete",
+          "external_controller": false,
+          "kubernetes": {
+            "api_version": "networking.k8s.io/v1",
+            "kind": "NetworkPolicy",
+            "name": "blob-reconciler-egress",
+            "network": {
+              "default_deny": true,
+              "subject": "blob-reconciler",
+              "allowed_egress": [
+                "blob"
+              ]
+            }
+          }
+        },
+        {
+          "id": "temporal-persistence",
+          "kind": "database",
+          "owner": "database-operator",
+          "scope": "namespace",
+          "dependencies": [
+            "temporal",
+            "temporal-db-secret",
+            "temporal-state"
+          ],
+          "retention": {
+            "policy": "ephemeral",
+            "days": 0
+          },
+          "backup_restore_owner": "none",
+          "delete_behavior": "delete",
+          "external_controller": true,
+          "database": {
+            "database": "temporal",
+            "schema": "public",
+            "connection_reference": "temporal-db-secret",
+            "migration_target": "temporal-state",
+            "migrations": []
           }
         }
       ]
@@ -2354,12 +2826,12 @@
             "policy": "external",
             "days": 0
           },
-          "backup_restore_owner": "platform-operator",
+          "backup_restore_owner": "none",
           "delete_behavior": "retain",
           "external_controller": true,
           "secret_reference": {
-            "provider": "external-secrets",
-            "reference": "agent-runtime-state-db-secret",
+            "provider": "local-generated",
+            "reference": "ar-ci-agent-runtime-state-db-secret",
             "version": "v1",
             "keys": [
               "POSTGRES_PASSWORD",
@@ -2377,12 +2849,12 @@
             "policy": "external",
             "days": 0
           },
-          "backup_restore_owner": "platform-operator",
+          "backup_restore_owner": "none",
           "delete_behavior": "retain",
           "external_controller": true,
           "secret_reference": {
-            "provider": "external-secrets",
-            "reference": "agent-runtime-temporal-auth-secret",
+            "provider": "local-generated",
+            "reference": "ar-ci-agent-runtime-temporal-auth-secret",
             "version": "v1",
             "keys": [
               "TEMPORAL_AUTH_TOKEN"
@@ -2399,12 +2871,12 @@
             "policy": "external",
             "days": 0
           },
-          "backup_restore_owner": "platform-operator",
+          "backup_restore_owner": "none",
           "delete_behavior": "retain",
           "external_controller": true,
           "secret_reference": {
-            "provider": "external-secrets",
-            "reference": "agent-runtime-conversation-secret",
+            "provider": "local-generated",
+            "reference": "ar-ci-agent-runtime-conversation-secret",
             "version": "v1",
             "keys": [
               "CONVERSATION_ACCESS_TOKEN"
@@ -2421,12 +2893,12 @@
             "policy": "external",
             "days": 0
           },
-          "backup_restore_owner": "platform-operator",
+          "backup_restore_owner": "none",
           "delete_behavior": "retain",
           "external_controller": true,
           "secret_reference": {
-            "provider": "external-secrets",
-            "reference": "agent-runtime-model-secret",
+            "provider": "local-generated",
+            "reference": "ar-ci-agent-runtime-model-secret",
             "version": "v1",
             "keys": [
               "MODEL_API_KEY"
@@ -2443,12 +2915,12 @@
             "policy": "external",
             "days": 0
           },
-          "backup_restore_owner": "platform-operator",
+          "backup_restore_owner": "none",
           "delete_behavior": "retain",
           "external_controller": true,
           "secret_reference": {
-            "provider": "external-secrets",
-            "reference": "agent-runtime-tool-broker-secret",
+            "provider": "local-generated",
+            "reference": "ar-ci-agent-runtime-tool-broker-secret",
             "version": "v1",
             "keys": [
               "TOOL_BROKER_TOKEN"
@@ -2465,12 +2937,12 @@
             "policy": "external",
             "days": 0
           },
-          "backup_restore_owner": "platform-operator",
+          "backup_restore_owner": "none",
           "delete_behavior": "retain",
           "external_controller": true,
           "secret_reference": {
-            "provider": "external-secrets",
-            "reference": "agent-runtime-sandbox-control-secret",
+            "provider": "local-generated",
+            "reference": "ar-ci-agent-runtime-sandbox-control-secret",
             "version": "v1",
             "keys": [
               "SANDBOX_CONTROL_TOKEN"
@@ -2487,12 +2959,12 @@
             "policy": "external",
             "days": 0
           },
-          "backup_restore_owner": "platform-operator",
+          "backup_restore_owner": "none",
           "delete_behavior": "retain",
           "external_controller": true,
           "secret_reference": {
-            "provider": "external-secrets",
-            "reference": "agent-runtime-blob-storage-secret",
+            "provider": "local-generated",
+            "reference": "ar-ci-agent-runtime-blob-storage-secret",
             "version": "v1",
             "keys": [
               "BLOB_STORAGE_CREDENTIAL",
@@ -2511,12 +2983,12 @@
             "policy": "external",
             "days": 0
           },
-          "backup_restore_owner": "platform-operator",
+          "backup_restore_owner": "none",
           "delete_behavior": "retain",
           "external_controller": true,
           "secret_reference": {
-            "provider": "external-secrets",
-            "reference": "agent-runtime-codec-blob-secret",
+            "provider": "local-generated",
+            "reference": "ar-ci-agent-runtime-codec-blob-secret",
             "version": "v1",
             "keys": [
               "CODEC_BLOB_CREDENTIAL"
@@ -2533,12 +3005,12 @@
             "policy": "external",
             "days": 0
           },
-          "backup_restore_owner": "platform-operator",
+          "backup_restore_owner": "none",
           "delete_behavior": "retain",
           "external_controller": true,
           "secret_reference": {
-            "provider": "external-secrets",
-            "reference": "agent-runtime-sandbox-host-ca-secret",
+            "provider": "local-generated",
+            "reference": "ar-ci-agent-runtime-sandbox-host-ca-secret",
             "version": "v1",
             "keys": [
               "SANDBOX_HOST_CA"
@@ -2555,12 +3027,12 @@
             "policy": "external",
             "days": 0
           },
-          "backup_restore_owner": "platform-operator",
+          "backup_restore_owner": "none",
           "delete_behavior": "retain",
           "external_controller": true,
           "secret_reference": {
-            "provider": "external-secrets",
-            "reference": "agent-runtime-sandbox-state-secret",
+            "provider": "local-generated",
+            "reference": "ar-ci-agent-runtime-sandbox-state-secret",
             "version": "v1",
             "keys": [
               "SANDBOX_STATE_DSN"
@@ -2577,12 +3049,12 @@
             "policy": "external",
             "days": 0
           },
-          "backup_restore_owner": "platform-operator",
+          "backup_restore_owner": "none",
           "delete_behavior": "retain",
           "external_controller": true,
           "secret_reference": {
-            "provider": "external-secrets",
-            "reference": "agent-runtime-sandbox-host-identity-secret",
+            "provider": "local-generated",
+            "reference": "ar-ci-agent-runtime-sandbox-host-identity-secret",
             "version": "v1",
             "keys": [
               "SANDBOX_HOST_IDENTITY"
@@ -2596,16 +3068,17 @@
           "scope": "namespace",
           "dependencies": [],
           "retention": {
-            "policy": "persistent",
-            "days": 30
+            "policy": "ephemeral",
+            "days": 0
           },
-          "backup_restore_owner": "platform-operator",
-          "delete_behavior": "retain",
+          "backup_restore_owner": "none",
+          "delete_behavior": "delete",
           "external_controller": false,
           "kubernetes": {
             "api_version": "v1",
             "kind": "ServiceAccount",
-            "name": "state-account"
+            "name": "state-account",
+            "environment": []
           }
         },
         {
@@ -2615,16 +3088,17 @@
           "scope": "namespace",
           "dependencies": [],
           "retention": {
-            "policy": "persistent",
-            "days": 30
+            "policy": "ephemeral",
+            "days": 0
           },
-          "backup_restore_owner": "platform-operator",
-          "delete_behavior": "retain",
+          "backup_restore_owner": "none",
+          "delete_behavior": "delete",
           "external_controller": false,
           "kubernetes": {
             "api_version": "v1",
             "kind": "ServiceAccount",
-            "name": "temporal-account"
+            "name": "temporal-account",
+            "environment": []
           }
         },
         {
@@ -2634,16 +3108,17 @@
           "scope": "namespace",
           "dependencies": [],
           "retention": {
-            "policy": "persistent",
-            "days": 30
+            "policy": "ephemeral",
+            "days": 0
           },
-          "backup_restore_owner": "platform-operator",
-          "delete_behavior": "retain",
+          "backup_restore_owner": "none",
+          "delete_behavior": "delete",
           "external_controller": false,
           "kubernetes": {
             "api_version": "v1",
             "kind": "ServiceAccount",
-            "name": "blob-account"
+            "name": "blob-account",
+            "environment": []
           }
         },
         {
@@ -2653,16 +3128,17 @@
           "scope": "namespace",
           "dependencies": [],
           "retention": {
-            "policy": "persistent",
-            "days": 30
+            "policy": "ephemeral",
+            "days": 0
           },
-          "backup_restore_owner": "platform-operator",
-          "delete_behavior": "retain",
+          "backup_restore_owner": "none",
+          "delete_behavior": "delete",
           "external_controller": false,
           "kubernetes": {
             "api_version": "v1",
             "kind": "ServiceAccount",
-            "name": "telemetry-account"
+            "name": "telemetry-account",
+            "environment": []
           }
         },
         {
@@ -2672,16 +3148,17 @@
           "scope": "namespace",
           "dependencies": [],
           "retention": {
-            "policy": "persistent",
-            "days": 30
+            "policy": "ephemeral",
+            "days": 0
           },
-          "backup_restore_owner": "platform-operator",
-          "delete_behavior": "retain",
+          "backup_restore_owner": "none",
+          "delete_behavior": "delete",
           "external_controller": false,
           "kubernetes": {
             "api_version": "v1",
             "kind": "ServiceAccount",
-            "name": "egress-proxy-account"
+            "name": "egress-proxy-account",
+            "environment": []
           }
         },
         {
@@ -2691,16 +3168,17 @@
           "scope": "namespace",
           "dependencies": [],
           "retention": {
-            "policy": "persistent",
-            "days": 30
+            "policy": "ephemeral",
+            "days": 0
           },
-          "backup_restore_owner": "platform-operator",
-          "delete_behavior": "retain",
+          "backup_restore_owner": "none",
+          "delete_behavior": "delete",
           "external_controller": false,
           "kubernetes": {
             "api_version": "v1",
             "kind": "ServiceAccount",
-            "name": "migration-runner-account"
+            "name": "migration-runner-account",
+            "environment": []
           }
         },
         {
@@ -2710,16 +3188,17 @@
           "scope": "namespace",
           "dependencies": [],
           "retention": {
-            "policy": "persistent",
-            "days": 30
+            "policy": "ephemeral",
+            "days": 0
           },
-          "backup_restore_owner": "platform-operator",
-          "delete_behavior": "retain",
+          "backup_restore_owner": "none",
+          "delete_behavior": "delete",
           "external_controller": false,
           "kubernetes": {
             "api_version": "v1",
             "kind": "ServiceAccount",
-            "name": "api-account"
+            "name": "api-account",
+            "environment": []
           }
         },
         {
@@ -2729,16 +3208,17 @@
           "scope": "namespace",
           "dependencies": [],
           "retention": {
-            "policy": "persistent",
-            "days": 30
+            "policy": "ephemeral",
+            "days": 0
           },
-          "backup_restore_owner": "platform-operator",
-          "delete_behavior": "retain",
+          "backup_restore_owner": "none",
+          "delete_behavior": "delete",
           "external_controller": false,
           "kubernetes": {
             "api_version": "v1",
             "kind": "ServiceAccount",
-            "name": "orchestration-account"
+            "name": "orchestration-account",
+            "environment": []
           }
         },
         {
@@ -2748,16 +3228,17 @@
           "scope": "namespace",
           "dependencies": [],
           "retention": {
-            "policy": "persistent",
-            "days": 30
+            "policy": "ephemeral",
+            "days": 0
           },
-          "backup_restore_owner": "platform-operator",
-          "delete_behavior": "retain",
+          "backup_restore_owner": "none",
+          "delete_behavior": "delete",
           "external_controller": false,
           "kubernetes": {
             "api_version": "v1",
             "kind": "ServiceAccount",
-            "name": "model-account"
+            "name": "model-account",
+            "environment": []
           }
         },
         {
@@ -2767,16 +3248,17 @@
           "scope": "namespace",
           "dependencies": [],
           "retention": {
-            "policy": "persistent",
-            "days": 30
+            "policy": "ephemeral",
+            "days": 0
           },
-          "backup_restore_owner": "platform-operator",
-          "delete_behavior": "retain",
+          "backup_restore_owner": "none",
+          "delete_behavior": "delete",
           "external_controller": false,
           "kubernetes": {
             "api_version": "v1",
             "kind": "ServiceAccount",
-            "name": "tool-account"
+            "name": "tool-account",
+            "environment": []
           }
         },
         {
@@ -2786,16 +3268,17 @@
           "scope": "namespace",
           "dependencies": [],
           "retention": {
-            "policy": "persistent",
-            "days": 30
+            "policy": "ephemeral",
+            "days": 0
           },
-          "backup_restore_owner": "platform-operator",
-          "delete_behavior": "retain",
+          "backup_restore_owner": "none",
+          "delete_behavior": "delete",
           "external_controller": false,
           "kubernetes": {
             "api_version": "v1",
             "kind": "ServiceAccount",
-            "name": "blob-role-account"
+            "name": "blob-role-account",
+            "environment": []
           }
         },
         {
@@ -2805,16 +3288,17 @@
           "scope": "namespace",
           "dependencies": [],
           "retention": {
-            "policy": "persistent",
-            "days": 30
+            "policy": "ephemeral",
+            "days": 0
           },
-          "backup_restore_owner": "platform-operator",
-          "delete_behavior": "retain",
+          "backup_restore_owner": "none",
+          "delete_behavior": "delete",
           "external_controller": false,
           "kubernetes": {
             "api_version": "v1",
             "kind": "ServiceAccount",
-            "name": "codec-account"
+            "name": "codec-account",
+            "environment": []
           }
         },
         {
@@ -2824,16 +3308,17 @@
           "scope": "namespace",
           "dependencies": [],
           "retention": {
-            "policy": "persistent",
-            "days": 30
+            "policy": "ephemeral",
+            "days": 0
           },
-          "backup_restore_owner": "platform-operator",
-          "delete_behavior": "retain",
+          "backup_restore_owner": "none",
+          "delete_behavior": "delete",
           "external_controller": false,
           "kubernetes": {
             "api_version": "v1",
             "kind": "ServiceAccount",
-            "name": "sandbox-control-account"
+            "name": "sandbox-control-account",
+            "environment": []
           }
         },
         {
@@ -2843,16 +3328,17 @@
           "scope": "namespace",
           "dependencies": [],
           "retention": {
-            "policy": "persistent",
-            "days": 30
+            "policy": "ephemeral",
+            "days": 0
           },
-          "backup_restore_owner": "platform-operator",
-          "delete_behavior": "retain",
+          "backup_restore_owner": "none",
+          "delete_behavior": "delete",
           "external_controller": false,
           "kubernetes": {
             "api_version": "v1",
             "kind": "ServiceAccount",
-            "name": "sandbox-host-account"
+            "name": "sandbox-host-account",
+            "environment": []
           }
         },
         {
@@ -2864,11 +3350,11 @@
             "api-account"
           ],
           "retention": {
-            "policy": "persistent",
-            "days": 30
+            "policy": "ephemeral",
+            "days": 0
           },
-          "backup_restore_owner": "platform-operator",
-          "delete_behavior": "retain",
+          "backup_restore_owner": "none",
+          "delete_behavior": "delete",
           "external_controller": false,
           "kubernetes": {
             "api_version": "apps/v1",
@@ -2889,7 +3375,7 @@
             "environment": [
               {
                 "name": "RUNTIME_ROLE_CONFIG",
-                "value": "{\"version\":1,\"role\":\"api\",\"namespace\":\"agent-runtime\",\"listen_address\":\"0.0.0.0:8080\",\"dependencies\":[{\"name\":\"state\",\"endpoint\":\"http://state.agent-runtime.svc:8080\"},{\"name\":\"telemetry\",\"endpoint\":\"http://telemetry.agent-runtime.svc:4318\"}]}"
+                "value": "{\"version\":1,\"role\":\"api\",\"namespace\":\"ar-ci-agent-runtime\",\"listen_address\":\"0.0.0.0:8080\",\"dependencies\":[{\"name\":\"state\",\"endpoint\":\"http://state.ar-ci-agent-runtime.svc:8080\"},{\"name\":\"telemetry\",\"endpoint\":\"http://telemetry.ar-ci-agent-runtime.svc:4318\"}]}"
               }
             ],
             "secret_environment": [],
@@ -2933,11 +3419,11 @@
             "temporal-auth-secret"
           ],
           "retention": {
-            "policy": "persistent",
-            "days": 30
+            "policy": "ephemeral",
+            "days": 0
           },
-          "backup_restore_owner": "platform-operator",
-          "delete_behavior": "retain",
+          "backup_restore_owner": "none",
+          "delete_behavior": "delete",
           "external_controller": false,
           "kubernetes": {
             "api_version": "apps/v1",
@@ -2958,7 +3444,7 @@
             "environment": [
               {
                 "name": "RUNTIME_ROLE_CONFIG",
-                "value": "{\"version\":1,\"role\":\"orchestration\",\"namespace\":\"agent-runtime\",\"listen_address\":\"0.0.0.0:8081\",\"dependencies\":[{\"name\":\"state\",\"endpoint\":\"postgres://state.agent-runtime.svc:5432/agent_runtime\",\"secret_environment\":\"STATE_DATABASE_DSN\"},{\"name\":\"telemetry\",\"endpoint\":\"http://telemetry.agent-runtime.svc:4318\"},{\"name\":\"temporal\",\"endpoint\":\"temporal.agent-runtime.svc:7233\",\"secret_environment\":\"TEMPORAL_AUTH_TOKEN\"}]}"
+                "value": "{\"version\":1,\"role\":\"orchestration\",\"namespace\":\"ar-ci-agent-runtime\",\"listen_address\":\"0.0.0.0:8081\",\"dependencies\":[{\"name\":\"state\",\"endpoint\":\"postgres://state.ar-ci-agent-runtime.svc:5432/agent_runtime\",\"secret_environment\":\"STATE_DATABASE_DSN\"},{\"name\":\"telemetry\",\"endpoint\":\"http://telemetry.ar-ci-agent-runtime.svc:4318\"},{\"name\":\"temporal\",\"endpoint\":\"temporal.ar-ci-agent-runtime.svc:7233\",\"secret_environment\":\"TEMPORAL_AUTH_TOKEN\"}]}"
               }
             ],
             "secret_environment": [
@@ -3013,11 +3499,11 @@
             "model-secret"
           ],
           "retention": {
-            "policy": "persistent",
-            "days": 30
+            "policy": "ephemeral",
+            "days": 0
           },
-          "backup_restore_owner": "platform-operator",
-          "delete_behavior": "retain",
+          "backup_restore_owner": "none",
+          "delete_behavior": "delete",
           "external_controller": false,
           "kubernetes": {
             "api_version": "apps/v1",
@@ -3038,7 +3524,7 @@
             "environment": [
               {
                 "name": "RUNTIME_ROLE_CONFIG",
-                "value": "{\"version\":1,\"role\":\"model\",\"namespace\":\"agent-runtime\",\"listen_address\":\"0.0.0.0:8082\",\"dependencies\":[{\"name\":\"conversation\",\"endpoint\":\"http://api.agent-runtime.svc:8080\",\"secret_environment\":\"CONVERSATION_ACCESS_TOKEN\"},{\"name\":\"egress-proxy\",\"endpoint\":\"http://egress-proxy.agent-runtime.svc:8088\"},{\"name\":\"model\",\"endpoint\":\"https://model-provider.example.invalid\",\"secret_environment\":\"MODEL_API_KEY\"},{\"name\":\"telemetry\",\"endpoint\":\"http://telemetry.agent-runtime.svc:4318\"}]}"
+                "value": "{\"version\":1,\"role\":\"model\",\"namespace\":\"ar-ci-agent-runtime\",\"listen_address\":\"0.0.0.0:8082\",\"dependencies\":[{\"name\":\"conversation\",\"endpoint\":\"http://api.ar-ci-agent-runtime.svc:8080\",\"secret_environment\":\"CONVERSATION_ACCESS_TOKEN\"},{\"name\":\"egress-proxy\",\"endpoint\":\"http://egress-proxy.ar-ci-agent-runtime.svc:8088\"},{\"name\":\"model\",\"endpoint\":\"https://model-provider.example.invalid\",\"secret_environment\":\"MODEL_API_KEY\"},{\"name\":\"telemetry\",\"endpoint\":\"http://telemetry.ar-ci-agent-runtime.svc:4318\"}]}"
               }
             ],
             "secret_environment": [
@@ -3093,11 +3579,11 @@
             "tool-broker-secret"
           ],
           "retention": {
-            "policy": "persistent",
-            "days": 30
+            "policy": "ephemeral",
+            "days": 0
           },
-          "backup_restore_owner": "platform-operator",
-          "delete_behavior": "retain",
+          "backup_restore_owner": "none",
+          "delete_behavior": "delete",
           "external_controller": false,
           "kubernetes": {
             "api_version": "apps/v1",
@@ -3118,7 +3604,7 @@
             "environment": [
               {
                 "name": "RUNTIME_ROLE_CONFIG",
-                "value": "{\"version\":1,\"role\":\"tool\",\"namespace\":\"agent-runtime\",\"listen_address\":\"0.0.0.0:8083\",\"dependencies\":[{\"name\":\"sandbox-control\",\"endpoint\":\"https://sandbox-control.agent-runtime.svc:8443\",\"secret_environment\":\"SANDBOX_CONTROL_TOKEN\"},{\"name\":\"telemetry\",\"endpoint\":\"http://telemetry.agent-runtime.svc:4318\"},{\"name\":\"tool-broker\",\"endpoint\":\"http://api.agent-runtime.svc:8080\",\"secret_environment\":\"TOOL_BROKER_TOKEN\"}]}"
+                "value": "{\"version\":1,\"role\":\"tool\",\"namespace\":\"ar-ci-agent-runtime\",\"listen_address\":\"0.0.0.0:8083\",\"dependencies\":[{\"name\":\"sandbox-control\",\"endpoint\":\"https://sandbox-control.ar-ci-agent-runtime.svc:8443\",\"secret_environment\":\"SANDBOX_CONTROL_TOKEN\"},{\"name\":\"telemetry\",\"endpoint\":\"http://telemetry.ar-ci-agent-runtime.svc:4318\"},{\"name\":\"tool-broker\",\"endpoint\":\"http://api.ar-ci-agent-runtime.svc:8080\",\"secret_environment\":\"TOOL_BROKER_TOKEN\"}]}"
               }
             ],
             "secret_environment": [
@@ -3172,11 +3658,11 @@
             "blob-storage-secret"
           ],
           "retention": {
-            "policy": "persistent",
-            "days": 30
+            "policy": "ephemeral",
+            "days": 0
           },
-          "backup_restore_owner": "platform-operator",
-          "delete_behavior": "retain",
+          "backup_restore_owner": "none",
+          "delete_behavior": "delete",
           "external_controller": false,
           "kubernetes": {
             "api_version": "apps/v1",
@@ -3197,7 +3683,7 @@
             "environment": [
               {
                 "name": "RUNTIME_ROLE_CONFIG",
-                "value": "{\"version\":1,\"role\":\"blob\",\"namespace\":\"agent-runtime\",\"listen_address\":\"0.0.0.0:8084\",\"dependencies\":[{\"name\":\"storage\",\"endpoint\":\"http://blob.agent-runtime.svc:9000\",\"secret_environment\":\"BLOB_STORAGE_CREDENTIAL\"},{\"name\":\"telemetry\",\"endpoint\":\"http://telemetry.agent-runtime.svc:4318\"}]}"
+                "value": "{\"version\":1,\"role\":\"blob\",\"namespace\":\"ar-ci-agent-runtime\",\"listen_address\":\"0.0.0.0:8084\",\"dependencies\":[{\"name\":\"storage\",\"endpoint\":\"http://blob.ar-ci-agent-runtime.svc:9000\",\"secret_environment\":\"BLOB_STORAGE_CREDENTIAL\"},{\"name\":\"telemetry\",\"endpoint\":\"http://telemetry.ar-ci-agent-runtime.svc:4318\"}]}"
               }
             ],
             "secret_environment": [
@@ -3246,11 +3732,11 @@
             "codec-blob-secret"
           ],
           "retention": {
-            "policy": "persistent",
-            "days": 30
+            "policy": "ephemeral",
+            "days": 0
           },
-          "backup_restore_owner": "platform-operator",
-          "delete_behavior": "retain",
+          "backup_restore_owner": "none",
+          "delete_behavior": "delete",
           "external_controller": false,
           "kubernetes": {
             "api_version": "apps/v1",
@@ -3271,7 +3757,7 @@
             "environment": [
               {
                 "name": "RUNTIME_ROLE_CONFIG",
-                "value": "{\"version\":1,\"role\":\"codec\",\"namespace\":\"agent-runtime\",\"listen_address\":\"0.0.0.0:8085\",\"dependencies\":[{\"name\":\"blob\",\"endpoint\":\"http://blob.agent-runtime.svc:9000\",\"secret_environment\":\"CODEC_BLOB_CREDENTIAL\"},{\"name\":\"telemetry\",\"endpoint\":\"http://telemetry.agent-runtime.svc:4318\"}]}"
+                "value": "{\"version\":1,\"role\":\"codec\",\"namespace\":\"ar-ci-agent-runtime\",\"listen_address\":\"0.0.0.0:8085\",\"dependencies\":[{\"name\":\"blob\",\"endpoint\":\"http://blob.ar-ci-agent-runtime.svc:9000\",\"secret_environment\":\"CODEC_BLOB_CREDENTIAL\"},{\"name\":\"telemetry\",\"endpoint\":\"http://telemetry.ar-ci-agent-runtime.svc:4318\"}]}"
               },
               {
                 "name": "CODEC_ALLOWED_ORIGINS",
@@ -3325,11 +3811,11 @@
             "sandbox-state-secret"
           ],
           "retention": {
-            "policy": "persistent",
-            "days": 30
+            "policy": "ephemeral",
+            "days": 0
           },
-          "backup_restore_owner": "platform-operator",
-          "delete_behavior": "retain",
+          "backup_restore_owner": "none",
+          "delete_behavior": "delete",
           "external_controller": false,
           "kubernetes": {
             "api_version": "apps/v1",
@@ -3350,7 +3836,7 @@
             "environment": [
               {
                 "name": "RUNTIME_ROLE_CONFIG",
-                "value": "{\"version\":1,\"role\":\"sandbox-control\",\"namespace\":\"agent-runtime\",\"listen_address\":\"0.0.0.0:8086\",\"dependencies\":[{\"name\":\"host-ca\",\"endpoint\":\"https://host-ca.example.invalid\",\"secret_environment\":\"SANDBOX_HOST_CA\"},{\"name\":\"sandbox-state\",\"endpoint\":\"postgres://state.agent-runtime.svc:5432/sandbox\",\"secret_environment\":\"SANDBOX_STATE_DSN\"},{\"name\":\"telemetry\",\"endpoint\":\"http://telemetry.agent-runtime.svc:4318\"}]}"
+                "value": "{\"version\":1,\"role\":\"sandbox-control\",\"namespace\":\"ar-ci-agent-runtime\",\"listen_address\":\"0.0.0.0:8086\",\"dependencies\":[{\"name\":\"host-ca\",\"endpoint\":\"https://host-ca.example.invalid\",\"secret_environment\":\"SANDBOX_HOST_CA\"},{\"name\":\"sandbox-state\",\"endpoint\":\"postgres://state.ar-ci-agent-runtime.svc:5432/sandbox\",\"secret_environment\":\"SANDBOX_STATE_DSN\"},{\"name\":\"telemetry\",\"endpoint\":\"http://telemetry.ar-ci-agent-runtime.svc:4318\"}]}"
               }
             ],
             "secret_environment": [
@@ -3405,11 +3891,11 @@
             "sandbox-control-secret"
           ],
           "retention": {
-            "policy": "persistent",
-            "days": 30
+            "policy": "ephemeral",
+            "days": 0
           },
-          "backup_restore_owner": "platform-operator",
-          "delete_behavior": "retain",
+          "backup_restore_owner": "none",
+          "delete_behavior": "delete",
           "external_controller": false,
           "kubernetes": {
             "api_version": "apps/v1",
@@ -3430,7 +3916,7 @@
             "environment": [
               {
                 "name": "RUNTIME_ROLE_CONFIG",
-                "value": "{\"version\":1,\"role\":\"sandbox-host\",\"namespace\":\"agent-runtime\",\"listen_address\":\"0.0.0.0:8087\",\"dependencies\":[{\"name\":\"host-identity\",\"endpoint\":\"https://host-identity.example.invalid\",\"secret_environment\":\"SANDBOX_HOST_IDENTITY\"},{\"name\":\"sandbox-control\",\"endpoint\":\"https://sandbox-control.agent-runtime.svc:8443\",\"secret_environment\":\"SANDBOX_CONTROL_TOKEN\"},{\"name\":\"telemetry\",\"endpoint\":\"http://telemetry.agent-runtime.svc:4318\"}]}"
+                "value": "{\"version\":1,\"role\":\"sandbox-host\",\"namespace\":\"ar-ci-agent-runtime\",\"listen_address\":\"0.0.0.0:8087\",\"dependencies\":[{\"name\":\"host-identity\",\"endpoint\":\"https://host-identity.example.invalid\",\"secret_environment\":\"SANDBOX_HOST_IDENTITY\"},{\"name\":\"sandbox-control\",\"endpoint\":\"https://sandbox-control.ar-ci-agent-runtime.svc:8443\",\"secret_environment\":\"SANDBOX_CONTROL_TOKEN\"},{\"name\":\"telemetry\",\"endpoint\":\"http://telemetry.ar-ci-agent-runtime.svc:4318\"}]}"
               }
             ],
             "secret_environment": [
@@ -3481,14 +3967,15 @@
           "scope": "namespace",
           "dependencies": [
             "state-account",
+            "state-data",
             "state-db-secret"
           ],
           "retention": {
-            "policy": "persistent",
-            "days": 30
+            "policy": "ephemeral",
+            "days": 0
           },
-          "backup_restore_owner": "platform-operator",
-          "delete_behavior": "retain",
+          "backup_restore_owner": "none",
+          "delete_behavior": "delete",
           "external_controller": false,
           "kubernetes": {
             "api_version": "apps/v1",
@@ -3539,7 +4026,14 @@
               "request_memory_bytes": 134217728,
               "limit_memory_bytes": 536870912
             },
-            "storage": []
+            "storage": [],
+            "volume_mounts": [
+              {
+                "claim": "state-data",
+                "path": "/var/lib/postgresql/data",
+                "read_only": false
+              }
+            ]
           }
         },
         {
@@ -3549,15 +4043,16 @@
           "scope": "namespace",
           "dependencies": [
             "temporal-account",
-            "state-db-secret",
-            "temporal-auth-secret"
+            "temporal-auth-secret",
+            "temporal-db-secret",
+            "temporal-state-service"
           ],
           "retention": {
-            "policy": "persistent",
-            "days": 30
+            "policy": "ephemeral",
+            "days": 0
           },
-          "backup_restore_owner": "platform-operator",
-          "delete_behavior": "retain",
+          "backup_restore_owner": "none",
+          "delete_behavior": "delete",
           "external_controller": false,
           "kubernetes": {
             "api_version": "apps/v1",
@@ -3577,11 +4072,11 @@
               },
               {
                 "name": "POSTGRES_SEEDS",
-                "value": "state"
+                "value": "temporal-state"
               },
               {
                 "name": "POSTGRES_USER",
-                "value": "postgres"
+                "value": "temporal"
               },
               {
                 "name": "BIND_ON_IP",
@@ -3591,7 +4086,7 @@
             "secret_environment": [
               {
                 "name": "POSTGRES_PWD",
-                "secret": "state-db-secret",
+                "secret": "temporal-db-secret",
                 "key": "POSTGRES_PASSWORD"
               }
             ],
@@ -3633,14 +4128,15 @@
           "scope": "namespace",
           "dependencies": [
             "blob-account",
+            "blob-data",
             "blob-storage-secret"
           ],
           "retention": {
-            "policy": "persistent",
-            "days": 30
+            "policy": "ephemeral",
+            "days": 0
           },
-          "backup_restore_owner": "platform-operator",
-          "delete_behavior": "retain",
+          "backup_restore_owner": "none",
+          "delete_behavior": "delete",
           "external_controller": false,
           "kubernetes": {
             "api_version": "apps/v1",
@@ -3679,7 +4175,14 @@
               "request_memory_bytes": 134217728,
               "limit_memory_bytes": 536870912
             },
-            "storage": []
+            "storage": [],
+            "volume_mounts": [
+              {
+                "claim": "blob-data",
+                "path": "/data",
+                "read_only": false
+              }
+            ]
           }
         },
         {
@@ -3688,14 +4191,15 @@
           "owner": "runtime-operator",
           "scope": "namespace",
           "dependencies": [
-            "telemetry-account"
+            "telemetry-account",
+            "telemetry-data"
           ],
           "retention": {
-            "policy": "persistent",
-            "days": 30
+            "policy": "ephemeral",
+            "days": 0
           },
-          "backup_restore_owner": "platform-operator",
-          "delete_behavior": "retain",
+          "backup_restore_owner": "none",
+          "delete_behavior": "delete",
           "external_controller": false,
           "kubernetes": {
             "api_version": "apps/v1",
@@ -3704,7 +4208,28 @@
             "replicas": 1,
             "image": "jaegertracing/all-in-one@sha256:12fa17a231abded2c3b5b715bd252a043678495c588cbe772173991fbdcdf7c8",
             "service_account": "telemetry-account",
-            "environment": [],
+            "environment": [
+              {
+                "name": "SPAN_STORAGE_TYPE",
+                "value": "badger"
+              },
+              {
+                "name": "BADGER_EPHEMERAL",
+                "value": "false"
+              },
+              {
+                "name": "BADGER_DIRECTORY_VALUE",
+                "value": "/badger/data"
+              },
+              {
+                "name": "BADGER_SPAN_STORE_TTL",
+                "value": "720h"
+              },
+              {
+                "name": "COLLECTOR_OTLP_ENABLED",
+                "value": "true"
+              }
+            ],
             "secret_environment": [],
             "ports": [
               {
@@ -3719,7 +4244,17 @@
               "request_memory_bytes": 134217728,
               "limit_memory_bytes": 536870912
             },
-            "storage": []
+            "storage": [],
+            "arguments": [
+              "--badger.directory-key=/badger/key"
+            ],
+            "volume_mounts": [
+              {
+                "claim": "telemetry-data",
+                "path": "/badger",
+                "read_only": false
+              }
+            ]
           }
         },
         {
@@ -3731,11 +4266,11 @@
             "egress-proxy-account"
           ],
           "retention": {
-            "policy": "persistent",
-            "days": 30
+            "policy": "ephemeral",
+            "days": 0
           },
-          "backup_restore_owner": "platform-operator",
-          "delete_behavior": "retain",
+          "backup_restore_owner": "none",
+          "delete_behavior": "delete",
           "external_controller": false,
           "kubernetes": {
             "api_version": "apps/v1",
@@ -3779,7 +4314,8 @@
               "request_memory_bytes": 134217728,
               "limit_memory_bytes": 536870912
             },
-            "storage": []
+            "storage": [],
+            "environment": []
           }
         },
         {
@@ -3792,11 +4328,11 @@
             "state-db-secret"
           ],
           "retention": {
-            "policy": "persistent",
-            "days": 30
+            "policy": "ephemeral",
+            "days": 0
           },
-          "backup_restore_owner": "platform-operator",
-          "delete_behavior": "retain",
+          "backup_restore_owner": "none",
+          "delete_behavior": "delete",
           "external_controller": false,
           "kubernetes": {
             "api_version": "apps/v1",
@@ -3858,11 +4394,11 @@
             "api"
           ],
           "retention": {
-            "policy": "persistent",
-            "days": 30
+            "policy": "ephemeral",
+            "days": 0
           },
-          "backup_restore_owner": "platform-operator",
-          "delete_behavior": "retain",
+          "backup_restore_owner": "none",
+          "delete_behavior": "delete",
           "external_controller": false,
           "kubernetes": {
             "api_version": "v1",
@@ -3875,7 +4411,8 @@
                 "number": 8080,
                 "protocol": "TCP"
               }
-            ]
+            ],
+            "environment": []
           }
         },
         {
@@ -3887,11 +4424,11 @@
             "temporal"
           ],
           "retention": {
-            "policy": "persistent",
-            "days": 30
+            "policy": "ephemeral",
+            "days": 0
           },
-          "backup_restore_owner": "platform-operator",
-          "delete_behavior": "retain",
+          "backup_restore_owner": "none",
+          "delete_behavior": "delete",
           "external_controller": false,
           "kubernetes": {
             "api_version": "v1",
@@ -3904,7 +4441,8 @@
                 "number": 7233,
                 "protocol": "TCP"
               }
-            ]
+            ],
+            "environment": []
           }
         },
         {
@@ -3916,11 +4454,11 @@
             "blob"
           ],
           "retention": {
-            "policy": "persistent",
-            "days": 30
+            "policy": "ephemeral",
+            "days": 0
           },
-          "backup_restore_owner": "platform-operator",
-          "delete_behavior": "retain",
+          "backup_restore_owner": "none",
+          "delete_behavior": "delete",
           "external_controller": false,
           "kubernetes": {
             "api_version": "v1",
@@ -3933,7 +4471,8 @@
                 "number": 9000,
                 "protocol": "TCP"
               }
-            ]
+            ],
+            "environment": []
           }
         },
         {
@@ -3945,11 +4484,11 @@
             "telemetry"
           ],
           "retention": {
-            "policy": "persistent",
-            "days": 30
+            "policy": "ephemeral",
+            "days": 0
           },
-          "backup_restore_owner": "platform-operator",
-          "delete_behavior": "retain",
+          "backup_restore_owner": "none",
+          "delete_behavior": "delete",
           "external_controller": false,
           "kubernetes": {
             "api_version": "v1",
@@ -3962,7 +4501,8 @@
                 "number": 4318,
                 "protocol": "TCP"
               }
-            ]
+            ],
+            "environment": []
           }
         },
         {
@@ -3974,11 +4514,11 @@
             "egress-proxy"
           ],
           "retention": {
-            "policy": "persistent",
-            "days": 30
+            "policy": "ephemeral",
+            "days": 0
           },
-          "backup_restore_owner": "platform-operator",
-          "delete_behavior": "retain",
+          "backup_restore_owner": "none",
+          "delete_behavior": "delete",
           "external_controller": false,
           "kubernetes": {
             "api_version": "v1",
@@ -3991,7 +4531,8 @@
                 "number": 8088,
                 "protocol": "TCP"
               }
-            ]
+            ],
+            "environment": []
           }
         },
         {
@@ -4003,11 +4544,11 @@
             "sandbox-control"
           ],
           "retention": {
-            "policy": "persistent",
-            "days": 30
+            "policy": "ephemeral",
+            "days": 0
           },
-          "backup_restore_owner": "platform-operator",
-          "delete_behavior": "retain",
+          "backup_restore_owner": "none",
+          "delete_behavior": "delete",
           "external_controller": false,
           "kubernetes": {
             "api_version": "v1",
@@ -4020,7 +4561,8 @@
                 "number": 8086,
                 "protocol": "TCP"
               }
-            ]
+            ],
+            "environment": []
           }
         },
         {
@@ -4032,11 +4574,11 @@
             "codec"
           ],
           "retention": {
-            "policy": "persistent",
-            "days": 30
+            "policy": "ephemeral",
+            "days": 0
           },
-          "backup_restore_owner": "platform-operator",
-          "delete_behavior": "retain",
+          "backup_restore_owner": "none",
+          "delete_behavior": "delete",
           "external_controller": false,
           "kubernetes": {
             "api_version": "v1",
@@ -4049,7 +4591,8 @@
                 "number": 8085,
                 "protocol": "TCP"
               }
-            ]
+            ],
+            "environment": []
           }
         },
         {
@@ -4061,11 +4604,11 @@
             "state"
           ],
           "retention": {
-            "policy": "persistent",
-            "days": 30
+            "policy": "ephemeral",
+            "days": 0
           },
-          "backup_restore_owner": "platform-operator",
-          "delete_behavior": "retain",
+          "backup_restore_owner": "none",
+          "delete_behavior": "delete",
           "external_controller": false,
           "kubernetes": {
             "api_version": "v1",
@@ -4078,7 +4621,8 @@
                 "number": 5432,
                 "protocol": "TCP"
               }
-            ]
+            ],
+            "environment": []
           }
         },
         {
@@ -4092,11 +4636,11 @@
             "telemetry"
           ],
           "retention": {
-            "policy": "persistent",
-            "days": 30
+            "policy": "ephemeral",
+            "days": 0
           },
-          "backup_restore_owner": "platform-operator",
-          "delete_behavior": "retain",
+          "backup_restore_owner": "none",
+          "delete_behavior": "delete",
           "external_controller": false,
           "kubernetes": {
             "api_version": "networking.k8s.io/v1",
@@ -4109,7 +4653,8 @@
                 "state",
                 "telemetry"
               ]
-            }
+            },
+            "environment": []
           }
         },
         {
@@ -4124,11 +4669,11 @@
             "temporal"
           ],
           "retention": {
-            "policy": "persistent",
-            "days": 30
+            "policy": "ephemeral",
+            "days": 0
           },
-          "backup_restore_owner": "platform-operator",
-          "delete_behavior": "retain",
+          "backup_restore_owner": "none",
+          "delete_behavior": "delete",
           "external_controller": false,
           "kubernetes": {
             "api_version": "networking.k8s.io/v1",
@@ -4142,7 +4687,8 @@
                 "telemetry",
                 "temporal"
               ]
-            }
+            },
+            "environment": []
           }
         },
         {
@@ -4157,11 +4703,11 @@
             "telemetry"
           ],
           "retention": {
-            "policy": "persistent",
-            "days": 30
+            "policy": "ephemeral",
+            "days": 0
           },
-          "backup_restore_owner": "platform-operator",
-          "delete_behavior": "retain",
+          "backup_restore_owner": "none",
+          "delete_behavior": "delete",
           "external_controller": false,
           "kubernetes": {
             "api_version": "networking.k8s.io/v1",
@@ -4175,7 +4721,8 @@
                 "egress-proxy",
                 "telemetry"
               ]
-            }
+            },
+            "environment": []
           }
         },
         {
@@ -4190,11 +4737,11 @@
             "telemetry"
           ],
           "retention": {
-            "policy": "persistent",
-            "days": 30
+            "policy": "ephemeral",
+            "days": 0
           },
-          "backup_restore_owner": "platform-operator",
-          "delete_behavior": "retain",
+          "backup_restore_owner": "none",
+          "delete_behavior": "delete",
           "external_controller": false,
           "kubernetes": {
             "api_version": "networking.k8s.io/v1",
@@ -4208,7 +4755,8 @@
                 "sandbox-control",
                 "telemetry"
               ]
-            }
+            },
+            "environment": []
           }
         },
         {
@@ -4222,11 +4770,11 @@
             "telemetry"
           ],
           "retention": {
-            "policy": "persistent",
-            "days": 30
+            "policy": "ephemeral",
+            "days": 0
           },
-          "backup_restore_owner": "platform-operator",
-          "delete_behavior": "retain",
+          "backup_restore_owner": "none",
+          "delete_behavior": "delete",
           "external_controller": false,
           "kubernetes": {
             "api_version": "networking.k8s.io/v1",
@@ -4239,7 +4787,8 @@
                 "blob",
                 "telemetry"
               ]
-            }
+            },
+            "environment": []
           }
         },
         {
@@ -4253,11 +4802,11 @@
             "telemetry"
           ],
           "retention": {
-            "policy": "persistent",
-            "days": 30
+            "policy": "ephemeral",
+            "days": 0
           },
-          "backup_restore_owner": "platform-operator",
-          "delete_behavior": "retain",
+          "backup_restore_owner": "none",
+          "delete_behavior": "delete",
           "external_controller": false,
           "kubernetes": {
             "api_version": "networking.k8s.io/v1",
@@ -4270,7 +4819,8 @@
                 "blob",
                 "telemetry"
               ]
-            }
+            },
+            "environment": []
           }
         },
         {
@@ -4284,11 +4834,11 @@
             "telemetry"
           ],
           "retention": {
-            "policy": "persistent",
-            "days": 30
+            "policy": "ephemeral",
+            "days": 0
           },
-          "backup_restore_owner": "platform-operator",
-          "delete_behavior": "retain",
+          "backup_restore_owner": "none",
+          "delete_behavior": "delete",
           "external_controller": false,
           "kubernetes": {
             "api_version": "networking.k8s.io/v1",
@@ -4301,7 +4851,8 @@
                 "state",
                 "telemetry"
               ]
-            }
+            },
+            "environment": []
           }
         },
         {
@@ -4315,11 +4866,11 @@
             "telemetry"
           ],
           "retention": {
-            "policy": "persistent",
-            "days": 30
+            "policy": "ephemeral",
+            "days": 0
           },
-          "backup_restore_owner": "platform-operator",
-          "delete_behavior": "retain",
+          "backup_restore_owner": "none",
+          "delete_behavior": "delete",
           "external_controller": false,
           "kubernetes": {
             "api_version": "networking.k8s.io/v1",
@@ -4332,7 +4883,8 @@
                 "sandbox-control",
                 "telemetry"
               ]
-            }
+            },
+            "environment": []
           }
         },
         {
@@ -4344,11 +4896,11 @@
             "state"
           ],
           "retention": {
-            "policy": "persistent",
-            "days": 30
+            "policy": "ephemeral",
+            "days": 0
           },
-          "backup_restore_owner": "platform-operator",
-          "delete_behavior": "retain",
+          "backup_restore_owner": "none",
+          "delete_behavior": "delete",
           "external_controller": false,
           "kubernetes": {
             "api_version": "networking.k8s.io/v1",
@@ -4358,7 +4910,8 @@
               "default_deny": true,
               "subject": "state",
               "allowed_egress": []
-            }
+            },
+            "environment": []
           }
         },
         {
@@ -4368,14 +4921,14 @@
           "scope": "namespace",
           "dependencies": [
             "temporal",
-            "state"
+            "temporal-state"
           ],
           "retention": {
-            "policy": "persistent",
-            "days": 30
+            "policy": "ephemeral",
+            "days": 0
           },
-          "backup_restore_owner": "platform-operator",
-          "delete_behavior": "retain",
+          "backup_restore_owner": "none",
+          "delete_behavior": "delete",
           "external_controller": false,
           "kubernetes": {
             "api_version": "networking.k8s.io/v1",
@@ -4385,9 +4938,10 @@
               "default_deny": true,
               "subject": "temporal",
               "allowed_egress": [
-                "state"
+                "temporal-state"
               ]
-            }
+            },
+            "environment": []
           }
         },
         {
@@ -4399,11 +4953,11 @@
             "blob"
           ],
           "retention": {
-            "policy": "persistent",
-            "days": 30
+            "policy": "ephemeral",
+            "days": 0
           },
-          "backup_restore_owner": "platform-operator",
-          "delete_behavior": "retain",
+          "backup_restore_owner": "none",
+          "delete_behavior": "delete",
           "external_controller": false,
           "kubernetes": {
             "api_version": "networking.k8s.io/v1",
@@ -4413,7 +4967,8 @@
               "default_deny": true,
               "subject": "blob",
               "allowed_egress": []
-            }
+            },
+            "environment": []
           }
         },
         {
@@ -4425,11 +4980,11 @@
             "telemetry"
           ],
           "retention": {
-            "policy": "persistent",
-            "days": 30
+            "policy": "ephemeral",
+            "days": 0
           },
-          "backup_restore_owner": "platform-operator",
-          "delete_behavior": "retain",
+          "backup_restore_owner": "none",
+          "delete_behavior": "delete",
           "external_controller": false,
           "kubernetes": {
             "api_version": "networking.k8s.io/v1",
@@ -4439,7 +4994,8 @@
               "default_deny": true,
               "subject": "telemetry",
               "allowed_egress": []
-            }
+            },
+            "environment": []
           }
         },
         {
@@ -4452,11 +5008,11 @@
             "state"
           ],
           "retention": {
-            "policy": "persistent",
-            "days": 30
+            "policy": "ephemeral",
+            "days": 0
           },
-          "backup_restore_owner": "platform-operator",
-          "delete_behavior": "retain",
+          "backup_restore_owner": "none",
+          "delete_behavior": "delete",
           "external_controller": false,
           "kubernetes": {
             "api_version": "networking.k8s.io/v1",
@@ -4468,7 +5024,8 @@
               "allowed_egress": [
                 "state"
               ]
-            }
+            },
+            "environment": []
           }
         },
         {
@@ -4480,11 +5037,11 @@
             "codec-service"
           ],
           "retention": {
-            "policy": "persistent",
-            "days": 30
+            "policy": "ephemeral",
+            "days": 0
           },
-          "backup_restore_owner": "platform-operator",
-          "delete_behavior": "retain",
+          "backup_restore_owner": "none",
+          "delete_behavior": "delete",
           "external_controller": false,
           "kubernetes": {
             "api_version": "networking.k8s.io/v1",
@@ -4498,7 +5055,8 @@
                 "service": "codec-service",
                 "service_port": "http"
               }
-            ]
+            ],
+            "environment": []
           }
         },
         {
@@ -4510,15 +5068,15 @@
             "temporal"
           ],
           "retention": {
-            "policy": "persistent",
-            "days": 30
+            "policy": "ephemeral",
+            "days": 0
           },
-          "backup_restore_owner": "platform-operator",
-          "delete_behavior": "retain",
+          "backup_restore_owner": "none",
+          "delete_behavior": "delete",
           "external_controller": false,
           "orchestration": {
-            "namespace": "agent-runtime",
-            "task_queue_prefix": "agent-runtime-",
+            "namespace": "ar-ci-agent-runtime",
+            "task_queue_prefix": "ar-ci-agent-runtime-",
             "retention_days": 30,
             "search_attributes": [],
             "schedules": []
@@ -4530,21 +5088,23 @@
           "owner": "blob-operator",
           "scope": "namespace",
           "dependencies": [
+            "blob-reconciler",
             "blob-service",
             "blob-storage-secret"
           ],
           "retention": {
-            "policy": "persistent",
-            "days": 30
+            "policy": "ephemeral",
+            "days": 0
           },
-          "backup_restore_owner": "platform-operator",
-          "delete_behavior": "retain",
+          "backup_restore_owner": "none",
+          "delete_behavior": "delete",
           "external_controller": false,
           "blob": {
-            "bucket": "agent-runtime",
-            "prefix": "agent-runtime/payloads",
+            "bucket": "ar-ci-agent-runtime",
+            "prefix": "ar-ci-agent-runtime/payloads",
             "endpoint_reference": "blob-service",
-            "credential_reference": "blob-storage-secret"
+            "credential_reference": "blob-storage-secret",
+            "reconciler_reference": "blob-reconciler"
           }
         },
         {
@@ -4557,11 +5117,11 @@
             "state"
           ],
           "retention": {
-            "policy": "persistent",
-            "days": 30
+            "policy": "ephemeral",
+            "days": 0
           },
-          "backup_restore_owner": "platform-operator",
-          "delete_behavior": "retain",
+          "backup_restore_owner": "none",
+          "delete_behavior": "delete",
           "external_controller": false,
           "database": {
             "database": "agent_runtime",
@@ -4588,16 +5148,400 @@
             "telemetry-service"
           ],
           "retention": {
-            "policy": "persistent",
-            "days": 30
+            "policy": "ephemeral",
+            "days": 0
           },
-          "backup_restore_owner": "platform-operator",
-          "delete_behavior": "retain",
+          "backup_restore_owner": "none",
+          "delete_behavior": "delete",
           "external_controller": false,
           "telemetry": {
             "collector_service": "telemetry-service",
             "port_name": "http",
             "retention_days": 30
+          }
+        },
+        {
+          "id": "temporal-db-secret",
+          "kind": "secret_reference",
+          "owner": "security-operator",
+          "scope": "namespace",
+          "dependencies": [],
+          "retention": {
+            "policy": "external",
+            "days": 0
+          },
+          "backup_restore_owner": "none",
+          "delete_behavior": "retain",
+          "external_controller": true,
+          "secret_reference": {
+            "provider": "local-generated",
+            "reference": "ar-ci-agent-runtime-temporal-db-secret",
+            "version": "v1",
+            "keys": [
+              "POSTGRES_PASSWORD"
+            ]
+          }
+        },
+        {
+          "id": "temporal-state-account",
+          "kind": "kubernetes",
+          "owner": "platform-operator",
+          "scope": "namespace",
+          "dependencies": [],
+          "retention": {
+            "policy": "ephemeral",
+            "days": 0
+          },
+          "backup_restore_owner": "none",
+          "delete_behavior": "delete",
+          "external_controller": false,
+          "kubernetes": {
+            "api_version": "v1",
+            "kind": "ServiceAccount",
+            "name": "temporal-state-account"
+          }
+        },
+        {
+          "id": "state-data",
+          "kind": "kubernetes",
+          "owner": "database-operator",
+          "scope": "namespace",
+          "dependencies": [],
+          "retention": {
+            "policy": "ephemeral",
+            "days": 0
+          },
+          "backup_restore_owner": "none",
+          "delete_behavior": "delete",
+          "external_controller": false,
+          "kubernetes": {
+            "api_version": "v1",
+            "kind": "PersistentVolumeClaim",
+            "name": "state-data",
+            "storage": [
+              {
+                "name": "data",
+                "size_bytes": 1073741824,
+                "class": "local-path"
+              }
+            ]
+          }
+        },
+        {
+          "id": "temporal-state-data",
+          "kind": "kubernetes",
+          "owner": "database-operator",
+          "scope": "namespace",
+          "dependencies": [],
+          "retention": {
+            "policy": "ephemeral",
+            "days": 0
+          },
+          "backup_restore_owner": "none",
+          "delete_behavior": "delete",
+          "external_controller": false,
+          "kubernetes": {
+            "api_version": "v1",
+            "kind": "PersistentVolumeClaim",
+            "name": "temporal-state-data",
+            "storage": [
+              {
+                "name": "data",
+                "size_bytes": 1073741824,
+                "class": "local-path"
+              }
+            ]
+          }
+        },
+        {
+          "id": "blob-data",
+          "kind": "kubernetes",
+          "owner": "blob-operator",
+          "scope": "namespace",
+          "dependencies": [],
+          "retention": {
+            "policy": "ephemeral",
+            "days": 0
+          },
+          "backup_restore_owner": "none",
+          "delete_behavior": "delete",
+          "external_controller": false,
+          "kubernetes": {
+            "api_version": "v1",
+            "kind": "PersistentVolumeClaim",
+            "name": "blob-data",
+            "storage": [
+              {
+                "name": "data",
+                "size_bytes": 1073741824,
+                "class": "local-path"
+              }
+            ]
+          }
+        },
+        {
+          "id": "telemetry-data",
+          "kind": "kubernetes",
+          "owner": "telemetry-operator",
+          "scope": "namespace",
+          "dependencies": [],
+          "retention": {
+            "policy": "ephemeral",
+            "days": 0
+          },
+          "backup_restore_owner": "none",
+          "delete_behavior": "delete",
+          "external_controller": false,
+          "kubernetes": {
+            "api_version": "v1",
+            "kind": "PersistentVolumeClaim",
+            "name": "telemetry-data",
+            "storage": [
+              {
+                "name": "data",
+                "size_bytes": 1073741824,
+                "class": "local-path"
+              }
+            ]
+          }
+        },
+        {
+          "id": "temporal-state",
+          "kind": "kubernetes",
+          "owner": "database-operator",
+          "scope": "namespace",
+          "dependencies": [
+            "temporal-state-account",
+            "temporal-state-data",
+            "temporal-db-secret"
+          ],
+          "retention": {
+            "policy": "ephemeral",
+            "days": 0
+          },
+          "backup_restore_owner": "none",
+          "delete_behavior": "delete",
+          "external_controller": false,
+          "kubernetes": {
+            "api_version": "apps/v1",
+            "kind": "Deployment",
+            "name": "temporal-state",
+            "replicas": 1,
+            "image": "postgres@sha256:e5507c984377515b8c9922b0eb19f55aba2063fdc7bccf268cefd53133f97054",
+            "service_account": "temporal-state-account",
+            "environment": [
+              {
+                "name": "POSTGRES_DB",
+                "value": "temporal"
+              },
+              {
+                "name": "POSTGRES_USER",
+                "value": "temporal"
+              }
+            ],
+            "secret_environment": [
+              {
+                "name": "POSTGRES_PASSWORD",
+                "secret": "temporal-db-secret",
+                "key": "POSTGRES_PASSWORD"
+              }
+            ],
+            "volume_mounts": [
+              {
+                "claim": "temporal-state-data",
+                "path": "/var/lib/postgresql/data",
+                "read_only": false
+              }
+            ],
+            "readiness": {
+              "command": [
+                "pg_isready",
+                "-U",
+                "temporal",
+                "-d",
+                "temporal"
+              ],
+              "initial_delay_seconds": 1,
+              "period_seconds": 5,
+              "failure_threshold": 12
+            },
+            "ports": [
+              {
+                "name": "http",
+                "number": 5432,
+                "protocol": "TCP"
+              }
+            ],
+            "compute": {
+              "request_milli_cpu": 100,
+              "limit_milli_cpu": 500,
+              "request_memory_bytes": 134217728,
+              "limit_memory_bytes": 536870912
+            },
+            "storage": []
+          }
+        },
+        {
+          "id": "temporal-state-service",
+          "kind": "kubernetes",
+          "owner": "platform-operator",
+          "scope": "namespace",
+          "dependencies": [
+            "temporal-state"
+          ],
+          "retention": {
+            "policy": "ephemeral",
+            "days": 0
+          },
+          "backup_restore_owner": "none",
+          "delete_behavior": "delete",
+          "external_controller": false,
+          "kubernetes": {
+            "api_version": "v1",
+            "kind": "Service",
+            "name": "temporal-state",
+            "selector": "temporal-state",
+            "ports": [
+              {
+                "name": "http",
+                "number": 5432,
+                "protocol": "TCP"
+              }
+            ]
+          }
+        },
+        {
+          "id": "temporal-state-egress",
+          "kind": "kubernetes",
+          "owner": "security-operator",
+          "scope": "namespace",
+          "dependencies": [
+            "temporal-state"
+          ],
+          "retention": {
+            "policy": "ephemeral",
+            "days": 0
+          },
+          "backup_restore_owner": "none",
+          "delete_behavior": "delete",
+          "external_controller": false,
+          "kubernetes": {
+            "api_version": "networking.k8s.io/v1",
+            "kind": "NetworkPolicy",
+            "name": "temporal-state-egress",
+            "network": {
+              "default_deny": true,
+              "subject": "temporal-state",
+              "allowed_egress": []
+            }
+          }
+        },
+        {
+          "id": "blob-reconciler",
+          "kind": "kubernetes",
+          "owner": "blob-operator",
+          "scope": "namespace",
+          "dependencies": [
+            "blob-account",
+            "blob-storage-secret",
+            "blob-service"
+          ],
+          "retention": {
+            "policy": "ephemeral",
+            "days": 0
+          },
+          "backup_restore_owner": "none",
+          "delete_behavior": "delete",
+          "external_controller": false,
+          "kubernetes": {
+            "api_version": "apps/v1",
+            "kind": "Deployment",
+            "name": "blob-reconciler",
+            "replicas": 1,
+            "image": "minio/mc@sha256:aead63c77f9db9107f1696fb08ecb0faeda23729cde94b0f663edf4fe09728e3",
+            "service_account": "blob-account",
+            "command": [
+              "/bin/sh"
+            ],
+            "arguments": [
+              "-c",
+              "trap : TERM INT; sleep infinity & wait"
+            ],
+            "environment": [],
+            "secret_environment": [
+              {
+                "name": "MINIO_ROOT_USER",
+                "secret": "blob-storage-secret",
+                "key": "MINIO_ROOT_USER"
+              },
+              {
+                "name": "MINIO_ROOT_PASSWORD",
+                "secret": "blob-storage-secret",
+                "key": "MINIO_ROOT_PASSWORD"
+              }
+            ],
+            "ports": [],
+            "compute": {
+              "request_milli_cpu": 25,
+              "limit_milli_cpu": 100,
+              "request_memory_bytes": 33554432,
+              "limit_memory_bytes": 134217728
+            },
+            "storage": []
+          }
+        },
+        {
+          "id": "blob-reconciler-egress",
+          "kind": "kubernetes",
+          "owner": "security-operator",
+          "scope": "namespace",
+          "dependencies": [
+            "blob-reconciler",
+            "blob"
+          ],
+          "retention": {
+            "policy": "ephemeral",
+            "days": 0
+          },
+          "backup_restore_owner": "none",
+          "delete_behavior": "delete",
+          "external_controller": false,
+          "kubernetes": {
+            "api_version": "networking.k8s.io/v1",
+            "kind": "NetworkPolicy",
+            "name": "blob-reconciler-egress",
+            "network": {
+              "default_deny": true,
+              "subject": "blob-reconciler",
+              "allowed_egress": [
+                "blob"
+              ]
+            }
+          }
+        },
+        {
+          "id": "temporal-persistence",
+          "kind": "database",
+          "owner": "database-operator",
+          "scope": "namespace",
+          "dependencies": [
+            "temporal",
+            "temporal-db-secret",
+            "temporal-state"
+          ],
+          "retention": {
+            "policy": "ephemeral",
+            "days": 0
+          },
+          "backup_restore_owner": "none",
+          "delete_behavior": "delete",
+          "external_controller": true,
+          "database": {
+            "database": "temporal",
+            "schema": "public",
+            "connection_reference": "temporal-db-secret",
+            "migration_target": "temporal-state",
+            "migrations": []
           }
         }
       ]
@@ -4905,7 +5849,8 @@
           "kubernetes": {
             "api_version": "v1",
             "kind": "ServiceAccount",
-            "name": "state-account"
+            "name": "state-account",
+            "environment": []
           }
         },
         {
@@ -4924,7 +5869,8 @@
           "kubernetes": {
             "api_version": "v1",
             "kind": "ServiceAccount",
-            "name": "temporal-account"
+            "name": "temporal-account",
+            "environment": []
           }
         },
         {
@@ -4943,7 +5889,8 @@
           "kubernetes": {
             "api_version": "v1",
             "kind": "ServiceAccount",
-            "name": "blob-account"
+            "name": "blob-account",
+            "environment": []
           }
         },
         {
@@ -4962,7 +5909,8 @@
           "kubernetes": {
             "api_version": "v1",
             "kind": "ServiceAccount",
-            "name": "telemetry-account"
+            "name": "telemetry-account",
+            "environment": []
           }
         },
         {
@@ -4981,7 +5929,8 @@
           "kubernetes": {
             "api_version": "v1",
             "kind": "ServiceAccount",
-            "name": "egress-proxy-account"
+            "name": "egress-proxy-account",
+            "environment": []
           }
         },
         {
@@ -5000,7 +5949,8 @@
           "kubernetes": {
             "api_version": "v1",
             "kind": "ServiceAccount",
-            "name": "migration-runner-account"
+            "name": "migration-runner-account",
+            "environment": []
           }
         },
         {
@@ -5019,7 +5969,8 @@
           "kubernetes": {
             "api_version": "v1",
             "kind": "ServiceAccount",
-            "name": "api-account"
+            "name": "api-account",
+            "environment": []
           }
         },
         {
@@ -5038,7 +5989,8 @@
           "kubernetes": {
             "api_version": "v1",
             "kind": "ServiceAccount",
-            "name": "orchestration-account"
+            "name": "orchestration-account",
+            "environment": []
           }
         },
         {
@@ -5057,7 +6009,8 @@
           "kubernetes": {
             "api_version": "v1",
             "kind": "ServiceAccount",
-            "name": "model-account"
+            "name": "model-account",
+            "environment": []
           }
         },
         {
@@ -5076,7 +6029,8 @@
           "kubernetes": {
             "api_version": "v1",
             "kind": "ServiceAccount",
-            "name": "tool-account"
+            "name": "tool-account",
+            "environment": []
           }
         },
         {
@@ -5095,7 +6049,8 @@
           "kubernetes": {
             "api_version": "v1",
             "kind": "ServiceAccount",
-            "name": "blob-role-account"
+            "name": "blob-role-account",
+            "environment": []
           }
         },
         {
@@ -5114,7 +6069,8 @@
           "kubernetes": {
             "api_version": "v1",
             "kind": "ServiceAccount",
-            "name": "codec-account"
+            "name": "codec-account",
+            "environment": []
           }
         },
         {
@@ -5133,7 +6089,8 @@
           "kubernetes": {
             "api_version": "v1",
             "kind": "ServiceAccount",
-            "name": "sandbox-control-account"
+            "name": "sandbox-control-account",
+            "environment": []
           }
         },
         {
@@ -5152,7 +6109,8 @@
           "kubernetes": {
             "api_version": "v1",
             "kind": "ServiceAccount",
-            "name": "sandbox-host-account"
+            "name": "sandbox-host-account",
+            "environment": []
           }
         },
         {
@@ -5781,6 +6739,7 @@
           "scope": "namespace",
           "dependencies": [
             "state-account",
+            "state-data",
             "state-db-secret"
           ],
           "retention": {
@@ -5839,7 +6798,14 @@
               "request_memory_bytes": 134217728,
               "limit_memory_bytes": 536870912
             },
-            "storage": []
+            "storage": [],
+            "volume_mounts": [
+              {
+                "claim": "state-data",
+                "path": "/var/lib/postgresql/data",
+                "read_only": false
+              }
+            ]
           }
         },
         {
@@ -5849,8 +6815,9 @@
           "scope": "namespace",
           "dependencies": [
             "temporal-account",
-            "state-db-secret",
-            "temporal-auth-secret"
+            "temporal-auth-secret",
+            "temporal-db-secret",
+            "temporal-state-service"
           ],
           "retention": {
             "policy": "persistent",
@@ -5877,11 +6844,11 @@
               },
               {
                 "name": "POSTGRES_SEEDS",
-                "value": "state"
+                "value": "temporal-state"
               },
               {
                 "name": "POSTGRES_USER",
-                "value": "postgres"
+                "value": "temporal"
               },
               {
                 "name": "BIND_ON_IP",
@@ -5891,7 +6858,7 @@
             "secret_environment": [
               {
                 "name": "POSTGRES_PWD",
-                "secret": "state-db-secret",
+                "secret": "temporal-db-secret",
                 "key": "POSTGRES_PASSWORD"
               }
             ],
@@ -5933,6 +6900,7 @@
           "scope": "namespace",
           "dependencies": [
             "blob-account",
+            "blob-data",
             "blob-storage-secret"
           ],
           "retention": {
@@ -5979,7 +6947,14 @@
               "request_memory_bytes": 134217728,
               "limit_memory_bytes": 536870912
             },
-            "storage": []
+            "storage": [],
+            "volume_mounts": [
+              {
+                "claim": "blob-data",
+                "path": "/data",
+                "read_only": false
+              }
+            ]
           }
         },
         {
@@ -5988,7 +6963,8 @@
           "owner": "runtime-operator",
           "scope": "namespace",
           "dependencies": [
-            "telemetry-account"
+            "telemetry-account",
+            "telemetry-data"
           ],
           "retention": {
             "policy": "persistent",
@@ -6004,7 +6980,28 @@
             "replicas": 1,
             "image": "jaegertracing/all-in-one@sha256:12fa17a231abded2c3b5b715bd252a043678495c588cbe772173991fbdcdf7c8",
             "service_account": "telemetry-account",
-            "environment": [],
+            "environment": [
+              {
+                "name": "SPAN_STORAGE_TYPE",
+                "value": "badger"
+              },
+              {
+                "name": "BADGER_EPHEMERAL",
+                "value": "false"
+              },
+              {
+                "name": "BADGER_DIRECTORY_VALUE",
+                "value": "/badger/data"
+              },
+              {
+                "name": "BADGER_SPAN_STORE_TTL",
+                "value": "720h"
+              },
+              {
+                "name": "COLLECTOR_OTLP_ENABLED",
+                "value": "true"
+              }
+            ],
             "secret_environment": [],
             "ports": [
               {
@@ -6019,7 +7016,17 @@
               "request_memory_bytes": 134217728,
               "limit_memory_bytes": 536870912
             },
-            "storage": []
+            "storage": [],
+            "arguments": [
+              "--badger.directory-key=/badger/key"
+            ],
+            "volume_mounts": [
+              {
+                "claim": "telemetry-data",
+                "path": "/badger",
+                "read_only": false
+              }
+            ]
           }
         },
         {
@@ -6079,7 +7086,8 @@
               "request_memory_bytes": 134217728,
               "limit_memory_bytes": 536870912
             },
-            "storage": []
+            "storage": [],
+            "environment": []
           }
         },
         {
@@ -6175,7 +7183,8 @@
                 "number": 8080,
                 "protocol": "TCP"
               }
-            ]
+            ],
+            "environment": []
           }
         },
         {
@@ -6204,7 +7213,8 @@
                 "number": 7233,
                 "protocol": "TCP"
               }
-            ]
+            ],
+            "environment": []
           }
         },
         {
@@ -6233,7 +7243,8 @@
                 "number": 9000,
                 "protocol": "TCP"
               }
-            ]
+            ],
+            "environment": []
           }
         },
         {
@@ -6262,7 +7273,8 @@
                 "number": 4318,
                 "protocol": "TCP"
               }
-            ]
+            ],
+            "environment": []
           }
         },
         {
@@ -6291,7 +7303,8 @@
                 "number": 8088,
                 "protocol": "TCP"
               }
-            ]
+            ],
+            "environment": []
           }
         },
         {
@@ -6320,7 +7333,8 @@
                 "number": 8086,
                 "protocol": "TCP"
               }
-            ]
+            ],
+            "environment": []
           }
         },
         {
@@ -6349,7 +7363,8 @@
                 "number": 8085,
                 "protocol": "TCP"
               }
-            ]
+            ],
+            "environment": []
           }
         },
         {
@@ -6378,7 +7393,8 @@
                 "number": 5432,
                 "protocol": "TCP"
               }
-            ]
+            ],
+            "environment": []
           }
         },
         {
@@ -6409,7 +7425,8 @@
                 "state",
                 "telemetry"
               ]
-            }
+            },
+            "environment": []
           }
         },
         {
@@ -6442,7 +7459,8 @@
                 "telemetry",
                 "temporal"
               ]
-            }
+            },
+            "environment": []
           }
         },
         {
@@ -6475,7 +7493,8 @@
                 "egress-proxy",
                 "telemetry"
               ]
-            }
+            },
+            "environment": []
           }
         },
         {
@@ -6508,7 +7527,8 @@
                 "sandbox-control",
                 "telemetry"
               ]
-            }
+            },
+            "environment": []
           }
         },
         {
@@ -6539,7 +7559,8 @@
                 "blob",
                 "telemetry"
               ]
-            }
+            },
+            "environment": []
           }
         },
         {
@@ -6570,7 +7591,8 @@
                 "blob",
                 "telemetry"
               ]
-            }
+            },
+            "environment": []
           }
         },
         {
@@ -6601,7 +7623,8 @@
                 "state",
                 "telemetry"
               ]
-            }
+            },
+            "environment": []
           }
         },
         {
@@ -6632,7 +7655,8 @@
                 "sandbox-control",
                 "telemetry"
               ]
-            }
+            },
+            "environment": []
           }
         },
         {
@@ -6658,7 +7682,8 @@
               "default_deny": true,
               "subject": "state",
               "allowed_egress": []
-            }
+            },
+            "environment": []
           }
         },
         {
@@ -6668,7 +7693,7 @@
           "scope": "namespace",
           "dependencies": [
             "temporal",
-            "state"
+            "temporal-state"
           ],
           "retention": {
             "policy": "persistent",
@@ -6685,9 +7710,10 @@
               "default_deny": true,
               "subject": "temporal",
               "allowed_egress": [
-                "state"
+                "temporal-state"
               ]
-            }
+            },
+            "environment": []
           }
         },
         {
@@ -6713,7 +7739,8 @@
               "default_deny": true,
               "subject": "blob",
               "allowed_egress": []
-            }
+            },
+            "environment": []
           }
         },
         {
@@ -6739,7 +7766,8 @@
               "default_deny": true,
               "subject": "telemetry",
               "allowed_egress": []
-            }
+            },
+            "environment": []
           }
         },
         {
@@ -6768,7 +7796,8 @@
               "allowed_egress": [
                 "state"
               ]
-            }
+            },
+            "environment": []
           }
         },
         {
@@ -6798,7 +7827,8 @@
                 "service": "codec-service",
                 "service_port": "http"
               }
-            ]
+            ],
+            "environment": []
           }
         },
         {
@@ -6830,6 +7860,7 @@
           "owner": "blob-operator",
           "scope": "namespace",
           "dependencies": [
+            "blob-reconciler",
             "blob-service",
             "blob-storage-secret"
           ],
@@ -6844,7 +7875,8 @@
             "bucket": "agent-runtime",
             "prefix": "agent-runtime/payloads",
             "endpoint_reference": "blob-service",
-            "credential_reference": "blob-storage-secret"
+            "credential_reference": "blob-storage-secret",
+            "reconciler_reference": "blob-reconciler"
           }
         },
         {
@@ -6898,6 +7930,390 @@
             "collector_service": "telemetry-service",
             "port_name": "http",
             "retention_days": 30
+          }
+        },
+        {
+          "id": "temporal-db-secret",
+          "kind": "secret_reference",
+          "owner": "security-operator",
+          "scope": "namespace",
+          "dependencies": [],
+          "retention": {
+            "policy": "external",
+            "days": 0
+          },
+          "backup_restore_owner": "platform-operator",
+          "delete_behavior": "retain",
+          "external_controller": true,
+          "secret_reference": {
+            "provider": "external-secrets",
+            "reference": "agent-runtime-temporal-db-secret",
+            "version": "v1",
+            "keys": [
+              "POSTGRES_PASSWORD"
+            ]
+          }
+        },
+        {
+          "id": "temporal-state-account",
+          "kind": "kubernetes",
+          "owner": "platform-operator",
+          "scope": "namespace",
+          "dependencies": [],
+          "retention": {
+            "policy": "persistent",
+            "days": 30
+          },
+          "backup_restore_owner": "platform-operator",
+          "delete_behavior": "retain",
+          "external_controller": false,
+          "kubernetes": {
+            "api_version": "v1",
+            "kind": "ServiceAccount",
+            "name": "temporal-state-account"
+          }
+        },
+        {
+          "id": "state-data",
+          "kind": "kubernetes",
+          "owner": "database-operator",
+          "scope": "namespace",
+          "dependencies": [],
+          "retention": {
+            "policy": "persistent",
+            "days": 30
+          },
+          "backup_restore_owner": "platform-operator",
+          "delete_behavior": "retain",
+          "external_controller": false,
+          "kubernetes": {
+            "api_version": "v1",
+            "kind": "PersistentVolumeClaim",
+            "name": "state-data",
+            "storage": [
+              {
+                "name": "data",
+                "size_bytes": 1073741824,
+                "class": "local-path"
+              }
+            ]
+          }
+        },
+        {
+          "id": "temporal-state-data",
+          "kind": "kubernetes",
+          "owner": "database-operator",
+          "scope": "namespace",
+          "dependencies": [],
+          "retention": {
+            "policy": "persistent",
+            "days": 30
+          },
+          "backup_restore_owner": "platform-operator",
+          "delete_behavior": "retain",
+          "external_controller": false,
+          "kubernetes": {
+            "api_version": "v1",
+            "kind": "PersistentVolumeClaim",
+            "name": "temporal-state-data",
+            "storage": [
+              {
+                "name": "data",
+                "size_bytes": 1073741824,
+                "class": "local-path"
+              }
+            ]
+          }
+        },
+        {
+          "id": "blob-data",
+          "kind": "kubernetes",
+          "owner": "blob-operator",
+          "scope": "namespace",
+          "dependencies": [],
+          "retention": {
+            "policy": "persistent",
+            "days": 30
+          },
+          "backup_restore_owner": "platform-operator",
+          "delete_behavior": "retain",
+          "external_controller": false,
+          "kubernetes": {
+            "api_version": "v1",
+            "kind": "PersistentVolumeClaim",
+            "name": "blob-data",
+            "storage": [
+              {
+                "name": "data",
+                "size_bytes": 1073741824,
+                "class": "local-path"
+              }
+            ]
+          }
+        },
+        {
+          "id": "telemetry-data",
+          "kind": "kubernetes",
+          "owner": "telemetry-operator",
+          "scope": "namespace",
+          "dependencies": [],
+          "retention": {
+            "policy": "persistent",
+            "days": 30
+          },
+          "backup_restore_owner": "platform-operator",
+          "delete_behavior": "retain",
+          "external_controller": false,
+          "kubernetes": {
+            "api_version": "v1",
+            "kind": "PersistentVolumeClaim",
+            "name": "telemetry-data",
+            "storage": [
+              {
+                "name": "data",
+                "size_bytes": 1073741824,
+                "class": "local-path"
+              }
+            ]
+          }
+        },
+        {
+          "id": "temporal-state",
+          "kind": "kubernetes",
+          "owner": "database-operator",
+          "scope": "namespace",
+          "dependencies": [
+            "temporal-state-account",
+            "temporal-state-data",
+            "temporal-db-secret"
+          ],
+          "retention": {
+            "policy": "persistent",
+            "days": 30
+          },
+          "backup_restore_owner": "platform-operator",
+          "delete_behavior": "retain",
+          "external_controller": false,
+          "kubernetes": {
+            "api_version": "apps/v1",
+            "kind": "Deployment",
+            "name": "temporal-state",
+            "replicas": 1,
+            "image": "postgres@sha256:e5507c984377515b8c9922b0eb19f55aba2063fdc7bccf268cefd53133f97054",
+            "service_account": "temporal-state-account",
+            "environment": [
+              {
+                "name": "POSTGRES_DB",
+                "value": "temporal"
+              },
+              {
+                "name": "POSTGRES_USER",
+                "value": "temporal"
+              }
+            ],
+            "secret_environment": [
+              {
+                "name": "POSTGRES_PASSWORD",
+                "secret": "temporal-db-secret",
+                "key": "POSTGRES_PASSWORD"
+              }
+            ],
+            "volume_mounts": [
+              {
+                "claim": "temporal-state-data",
+                "path": "/var/lib/postgresql/data",
+                "read_only": false
+              }
+            ],
+            "readiness": {
+              "command": [
+                "pg_isready",
+                "-U",
+                "temporal",
+                "-d",
+                "temporal"
+              ],
+              "initial_delay_seconds": 1,
+              "period_seconds": 5,
+              "failure_threshold": 12
+            },
+            "ports": [
+              {
+                "name": "http",
+                "number": 5432,
+                "protocol": "TCP"
+              }
+            ],
+            "compute": {
+              "request_milli_cpu": 100,
+              "limit_milli_cpu": 500,
+              "request_memory_bytes": 134217728,
+              "limit_memory_bytes": 536870912
+            },
+            "storage": []
+          }
+        },
+        {
+          "id": "temporal-state-service",
+          "kind": "kubernetes",
+          "owner": "platform-operator",
+          "scope": "namespace",
+          "dependencies": [
+            "temporal-state"
+          ],
+          "retention": {
+            "policy": "persistent",
+            "days": 30
+          },
+          "backup_restore_owner": "platform-operator",
+          "delete_behavior": "retain",
+          "external_controller": false,
+          "kubernetes": {
+            "api_version": "v1",
+            "kind": "Service",
+            "name": "temporal-state",
+            "selector": "temporal-state",
+            "ports": [
+              {
+                "name": "http",
+                "number": 5432,
+                "protocol": "TCP"
+              }
+            ]
+          }
+        },
+        {
+          "id": "temporal-state-egress",
+          "kind": "kubernetes",
+          "owner": "security-operator",
+          "scope": "namespace",
+          "dependencies": [
+            "temporal-state"
+          ],
+          "retention": {
+            "policy": "persistent",
+            "days": 30
+          },
+          "backup_restore_owner": "platform-operator",
+          "delete_behavior": "retain",
+          "external_controller": false,
+          "kubernetes": {
+            "api_version": "networking.k8s.io/v1",
+            "kind": "NetworkPolicy",
+            "name": "temporal-state-egress",
+            "network": {
+              "default_deny": true,
+              "subject": "temporal-state",
+              "allowed_egress": []
+            }
+          }
+        },
+        {
+          "id": "blob-reconciler",
+          "kind": "kubernetes",
+          "owner": "blob-operator",
+          "scope": "namespace",
+          "dependencies": [
+            "blob-account",
+            "blob-storage-secret",
+            "blob-service"
+          ],
+          "retention": {
+            "policy": "persistent",
+            "days": 30
+          },
+          "backup_restore_owner": "platform-operator",
+          "delete_behavior": "retain",
+          "external_controller": false,
+          "kubernetes": {
+            "api_version": "apps/v1",
+            "kind": "Deployment",
+            "name": "blob-reconciler",
+            "replicas": 1,
+            "image": "minio/mc@sha256:aead63c77f9db9107f1696fb08ecb0faeda23729cde94b0f663edf4fe09728e3",
+            "service_account": "blob-account",
+            "command": [
+              "/bin/sh"
+            ],
+            "arguments": [
+              "-c",
+              "trap : TERM INT; sleep infinity & wait"
+            ],
+            "environment": [],
+            "secret_environment": [
+              {
+                "name": "MINIO_ROOT_USER",
+                "secret": "blob-storage-secret",
+                "key": "MINIO_ROOT_USER"
+              },
+              {
+                "name": "MINIO_ROOT_PASSWORD",
+                "secret": "blob-storage-secret",
+                "key": "MINIO_ROOT_PASSWORD"
+              }
+            ],
+            "ports": [],
+            "compute": {
+              "request_milli_cpu": 25,
+              "limit_milli_cpu": 100,
+              "request_memory_bytes": 33554432,
+              "limit_memory_bytes": 134217728
+            },
+            "storage": []
+          }
+        },
+        {
+          "id": "blob-reconciler-egress",
+          "kind": "kubernetes",
+          "owner": "security-operator",
+          "scope": "namespace",
+          "dependencies": [
+            "blob-reconciler",
+            "blob"
+          ],
+          "retention": {
+            "policy": "persistent",
+            "days": 30
+          },
+          "backup_restore_owner": "platform-operator",
+          "delete_behavior": "retain",
+          "external_controller": false,
+          "kubernetes": {
+            "api_version": "networking.k8s.io/v1",
+            "kind": "NetworkPolicy",
+            "name": "blob-reconciler-egress",
+            "network": {
+              "default_deny": true,
+              "subject": "blob-reconciler",
+              "allowed_egress": [
+                "blob"
+              ]
+            }
+          }
+        },
+        {
+          "id": "temporal-persistence",
+          "kind": "database",
+          "owner": "database-operator",
+          "scope": "namespace",
+          "dependencies": [
+            "temporal",
+            "temporal-db-secret",
+            "temporal-state"
+          ],
+          "retention": {
+            "policy": "persistent",
+            "days": 30
+          },
+          "backup_restore_owner": "platform-operator",
+          "delete_behavior": "retain",
+          "external_controller": true,
+          "database": {
+            "database": "temporal",
+            "schema": "public",
+            "connection_reference": "temporal-db-secret",
+            "migration_target": "temporal-state",
+            "migrations": []
           }
         }
       ]

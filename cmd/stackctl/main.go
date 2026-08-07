@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"syscall"
@@ -25,6 +26,10 @@ func main() {
 }
 
 func run(ctx context.Context, arguments []string, output io.Writer) error {
+	return runWithProbe(ctx, arguments, output, systemProbe{})
+}
+
+func runWithProbe(ctx context.Context, arguments []string, output io.Writer, probe stack.HostProbe) error {
 	if err := ctx.Err(); err != nil {
 		return errors.Wrap(err, "run stack operator command")
 	}
@@ -100,7 +105,7 @@ func run(ctx context.Context, arguments []string, output io.Writer) error {
 		}
 		return nil
 	case "preflight":
-		stackPath, profile, _, err := parseArguments("preflight", arguments[1:], false)
+		stackPath, profile, target, err := parsePreflightArguments(arguments[1:])
 		if err != nil {
 			return err
 		}
@@ -108,7 +113,7 @@ func run(ctx context.Context, arguments []string, output io.Writer) error {
 		if err != nil {
 			return err
 		}
-		report, err := stack.Preflight(ctx, spec, profile, systemProbe{})
+		report, err := stack.Preflight(ctx, spec, profile, target, probe)
 		if err != nil {
 			return err
 		}
@@ -132,11 +137,11 @@ func run(ctx context.Context, arguments []string, output io.Writer) error {
 		if err != nil {
 			return err
 		}
-		orchestration, err := stack.NewTemporalCLIAdapter(stack.SystemKubectlRunner{})
+		providers, err := stack.NewKubectlDeclaredProviderAdapter(stack.SystemKubectlRunner{})
 		if err != nil {
 			return err
 		}
-		operator, err := stack.NewKubernetesOperatorWithOrchestration(adapter, orchestration, stack.JSONLineAuditLog{Path: auditPath})
+		operator, err := stack.NewKubernetesOperatorWithProviders(adapter, providers, stack.JSONLineAuditLog{Path: auditPath})
 		if err != nil {
 			return err
 		}
@@ -185,6 +190,23 @@ func run(ctx context.Context, arguments []string, output io.Writer) error {
 	default:
 		return errors.Newf("run stack operator command: unknown command %q", arguments[0])
 	}
+}
+
+func parsePreflightArguments(arguments []string) (string, stack.Profile, stack.OperatorTarget, error) {
+	flags := flag.NewFlagSet("preflight", flag.ContinueOnError)
+	flags.SetOutput(io.Discard)
+	stackPath := flags.String("stack-file", "", "path to the sole Stack document")
+	profile := flags.String("profile", "", "local, ci, or production")
+	kubeconfig := flags.String("kubeconfig", "", "absolute explicit kubeconfig path")
+	contextName := flags.String("context", "", "explicit Kubernetes context")
+	if err := flags.Parse(arguments); err != nil {
+		return "", "", stack.OperatorTarget{}, errors.Wrap(err, "parse preflight arguments")
+	}
+	target := stack.OperatorTarget{Kubeconfig: *kubeconfig, Context: *contextName}
+	if flags.NArg() != 0 || *stackPath == "" || *profile == "" || *kubeconfig == "" || !filepath.IsAbs(*kubeconfig) || *contextName == "" || len(*contextName) > 253 {
+		return "", "", stack.OperatorTarget{}, errors.New("parse preflight arguments: --stack-file and --profile are required; explicit absolute kubeconfig and context are required")
+	}
+	return *stackPath, stack.Profile(*profile), target, nil
 }
 
 type operatorArguments struct {
@@ -277,8 +299,8 @@ func (systemProbe) Executable(_ context.Context, name string) (bool, error) {
 	return err == nil, nil
 }
 
-func (systemProbe) KubernetesContext(ctx context.Context) (string, error) {
-	output, err := exec.CommandContext(ctx, "kubectl", "config", "current-context").Output()
+func (systemProbe) KubernetesContext(ctx context.Context, target stack.OperatorTarget) (string, error) {
+	output, err := exec.CommandContext(ctx, "kubectl", "--kubeconfig", target.Kubeconfig, "--context", target.Context, "config", "get-contexts", target.Context, "--no-headers", "-o", "name").Output()
 	if err != nil {
 		return "", errors.Wrap(err, "read Kubernetes context")
 	}

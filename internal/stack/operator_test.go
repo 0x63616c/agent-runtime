@@ -23,6 +23,23 @@ type fakeKubernetesOperator struct {
 	teardowns int
 }
 
+type fakeDeclaredProvider struct {
+	reconciled []stack.ResourceID
+	tornDown   []stack.ResourceID
+	reconciles int
+	teardowns  int
+}
+
+func (provider *fakeDeclaredProvider) ReconcileDeclared(_ context.Context, _ stack.OperatorTarget, _ stack.Rendered) ([]stack.ResourceID, error) {
+	provider.reconciles++
+	return append([]stack.ResourceID(nil), provider.reconciled...), nil
+}
+
+func (provider *fakeDeclaredProvider) TeardownDeclared(_ context.Context, _ stack.OperatorTarget, _ stack.Rendered) ([]stack.ResourceID, error) {
+	provider.teardowns++
+	return append([]stack.ResourceID(nil), provider.tornDown...), nil
+}
+
 func (operator *fakeKubernetesOperator) Apply(_ context.Context, _ stack.OperatorTarget, _ stack.KubernetesManifests) (stack.KubernetesObservation, error) {
 	operator.applies++
 	return stack.KubernetesObservation{ObjectIDs: []stack.ResourceID{"api"}}, nil
@@ -43,6 +60,57 @@ func (operator *fakeKubernetesOperator) Teardown(_ context.Context, _ stack.Oper
 }
 
 var _ = Describe("Audited Kubernetes operator", func() {
+	It("reconciles and accounts for every declared non-Kubernetes resource", func() {
+		spec, err := stack.Parse(strings.NewReader(validIdentityStack))
+		Expect(err).NotTo(HaveOccurred())
+		rendered, err := stack.Render(spec, stack.ProfileLocal)
+		Expect(err).NotTo(HaveOccurred())
+		adapter := &fakeKubernetesOperator{}
+		provider := &fakeDeclaredProvider{reconciled: []stack.ResourceID{"notifier-secret"}}
+		audit := &recordedAudit{}
+		operator, err := stack.NewKubernetesOperatorWithProviders(adapter, provider, audit)
+		Expect(err).NotTo(HaveOccurred())
+
+		_, err = operator.Apply(context.Background(), stack.OperatorRequest{Actor: "platform-operator", Target: stack.OperatorTarget{Kubeconfig: "/explicit/kubeconfig", Context: "disposable-ci"}}, rendered)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(provider.reconciles).To(Equal(1))
+		Expect(audit.records).To(HaveLen(1))
+		Expect(audit.records[0].Resources).To(Equal([]stack.ResourceID{"api", "notifier-secret"}))
+	})
+
+	It("fails closed when a provider omits or invents a declared resource", func() {
+		spec, err := stack.Parse(strings.NewReader(validIdentityStack))
+		Expect(err).NotTo(HaveOccurred())
+		rendered, err := stack.Render(spec, stack.ProfileLocal)
+		Expect(err).NotTo(HaveOccurred())
+		request := stack.OperatorRequest{Actor: "platform-operator", Target: stack.OperatorTarget{Kubeconfig: "/explicit/kubeconfig", Context: "disposable-ci"}}
+
+		for _, returned := range [][]stack.ResourceID{nil, {"foreign"}} {
+			provider := &fakeDeclaredProvider{reconciled: returned}
+			operator, constructErr := stack.NewKubernetesOperatorWithProviders(&fakeKubernetesOperator{}, provider, &recordedAudit{})
+			Expect(constructErr).NotTo(HaveOccurred())
+			_, applyErr := operator.Apply(context.Background(), request, rendered)
+			Expect(applyErr).To(MatchError(ContainSubstring("declared provider resource set differs")))
+		}
+	})
+
+	It("tears provider resources down before Kubernetes dependencies", func() {
+		spec, err := stack.Parse(strings.NewReader(validIdentityStack))
+		Expect(err).NotTo(HaveOccurred())
+		rendered, err := stack.Render(spec, stack.ProfileLocal)
+		Expect(err).NotTo(HaveOccurred())
+		adapter := &fakeKubernetesOperator{}
+		provider := &fakeDeclaredProvider{tornDown: []stack.ResourceID{"notifier-secret"}}
+		audit := &recordedAudit{}
+		operator, err := stack.NewKubernetesOperatorWithProviders(adapter, provider, audit)
+		Expect(err).NotTo(HaveOccurred())
+
+		err = operator.Teardown(context.Background(), stack.OperatorRequest{Actor: "platform-operator", Target: stack.OperatorTarget{Kubeconfig: "/explicit/kubeconfig", Context: "disposable-ci"}}, rendered)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(provider.teardowns).To(Equal(1))
+		Expect(adapter.teardowns).To(Equal(1))
+		Expect(audit.records[0].Resources).To(Equal([]stack.ResourceID{"notifier-secret"}))
+	})
 	It("reconciles only declared drift and retains the actor, target, digest, and bounded affected resources", func() {
 		spec, err := stack.Parse(strings.NewReader(stackDocument(kubernetesManifestResources, kubernetesManifestResources, kubernetesManifestResources)))
 		Expect(err).NotTo(HaveOccurred())

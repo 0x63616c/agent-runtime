@@ -11,6 +11,9 @@ var resourceIDPattern = regexp.MustCompile(`^[a-z][a-z0-9-]{0,62}$`)
 var sha256Pattern = regexp.MustCompile(`^sha256:[a-f0-9]{64}$`)
 var imageDigestPattern = regexp.MustCompile(`^[^@[:space:]]+@sha256:[a-f0-9]{64}$`)
 var environmentNamePattern = regexp.MustCompile(`^[A-Z_][A-Z0-9_]{0,127}$`)
+var blobBucketPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$`)
+var blobPrefixPattern = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._/-]{0,510}[a-zA-Z0-9]$`)
+var databaseNamePattern = regexp.MustCompile(`^[a-z][a-z0-9_]{0,62}$`)
 
 // ResourceID is a stable stack-local desired-resource identity.
 type ResourceID string
@@ -306,6 +309,8 @@ type BlobResource struct {
 	EndpointReference ResourceID `json:"endpoint_reference"`
 	// CredentialReference names a SecretReference resource.
 	CredentialReference ResourceID `json:"credential_reference"`
+	// ReconcilerReference names the declared operator workload containing the pinned storage client.
+	ReconcilerReference ResourceID `json:"reconciler_reference"`
 }
 
 // DatabaseResource declares schema ownership and reversible migrations.
@@ -627,7 +632,7 @@ func validateOrchestration(resource Resource) error {
 
 func validateBlob(resource Resource) error {
 	declaration := resource.Blob
-	if declaration.Bucket == "" || declaration.Prefix == "" || declaration.EndpointReference == "" || declaration.CredentialReference == "" {
+	if !blobBucketPattern.MatchString(declaration.Bucket) || !blobPrefixPattern.MatchString(declaration.Prefix) || declaration.EndpointReference == "" || declaration.CredentialReference == "" || declaration.ReconcilerReference == "" {
 		return errors.Newf("resource %s blob declaration is incomplete", resource.ID)
 	}
 	return nil
@@ -635,7 +640,7 @@ func validateBlob(resource Resource) error {
 
 func validateDatabase(resource Resource) error {
 	declaration := resource.Database
-	if declaration.Database == "" || declaration.Schema == "" || declaration.ConnectionReference == "" || declaration.MigrationTarget == "" || len(declaration.Migrations) == 0 {
+	if !databaseNamePattern.MatchString(declaration.Database) || !databaseNamePattern.MatchString(declaration.Schema) || declaration.ConnectionReference == "" || declaration.MigrationTarget == "" || (len(declaration.Migrations) == 0 && !resource.ExternalController) {
 		return errors.Newf("resource %s database declaration is incomplete", resource.ID)
 	}
 	lastVersion := 0

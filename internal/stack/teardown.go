@@ -75,6 +75,16 @@ type TeardownPlan struct {
 
 // PlanTeardown refuses unproven ownership and returns no mutation capability.
 func PlanTeardown(rendered Rendered, observed ObservedState) (TeardownPlan, error) {
+	return planTeardown(rendered, observed, nil)
+}
+
+// PlanKubernetesTeardown proves containment for exactly the Kubernetes resources
+// observed by the Kubernetes adapter; provider resources require their own adapter proof.
+func PlanKubernetesTeardown(rendered Rendered, observed ObservedState) (TeardownPlan, error) {
+	return planTeardown(rendered, observed, func(resource Resource) bool { return resource.Kind == ResourceKubernetes })
+}
+
+func planTeardown(rendered Rendered, observed ObservedState, include func(Resource) bool) (TeardownPlan, error) {
 	document, err := parseRenderedBytes(rendered.JSON())
 	if err != nil {
 		return TeardownPlan{}, errors.Wrap(err, "plan stack teardown")
@@ -96,11 +106,17 @@ func PlanTeardown(rendered Rendered, observed ObservedState) (TeardownPlan, erro
 		}
 		observedByID[resource.ID] = resource
 	}
-	if len(observedByID) != len(document.Resources) {
+	selected := make([]Resource, 0, len(document.Resources))
+	for _, resource := range document.Resources {
+		if include == nil || include(resource) {
+			selected = append(selected, resource)
+		}
+	}
+	if len(observedByID) != len(selected) {
 		return TeardownPlan{}, errors.New("plan stack teardown: observed resource set differs from rendered desired state")
 	}
-	byID := make(map[ResourceID]Resource, len(document.Resources))
-	for _, resource := range document.Resources {
+	byID := make(map[ResourceID]Resource, len(selected))
+	for _, resource := range selected {
 		byID[resource.ID] = resource
 		if _, exists := observedByID[resource.ID]; !exists {
 			return TeardownPlan{}, errors.Newf("plan stack teardown: resource %s was not observed", resource.ID)
@@ -134,7 +150,9 @@ func reverseDependencyOrder(resources map[ResourceID]Resource) []ResourceID {
 		dependencies := append([]ResourceID(nil), resources[id].Dependencies...)
 		sort.Slice(dependencies, func(left, right int) bool { return dependencies[left] < dependencies[right] })
 		for _, dependency := range dependencies {
-			visit(dependency)
+			if _, selected := resources[dependency]; selected {
+				visit(dependency)
+			}
 		}
 		ordered = append(ordered, id)
 	}

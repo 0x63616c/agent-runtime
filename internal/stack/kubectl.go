@@ -107,20 +107,11 @@ func (adapter KubectlAdapter) Diff(ctx context.Context, target OperatorTarget, m
 
 // Teardown performs a complete identity preflight and rechecks each UID and label immediately before deletion.
 func (adapter KubectlAdapter) Teardown(ctx context.Context, target OperatorTarget, rendered Rendered, manifests KubernetesManifests) error {
-	document, err := parseRenderedBytes(rendered.JSON())
-	if err != nil {
-		return errors.Wrap(err, "teardown rendered Kubernetes manifests")
-	}
-	for _, resource := range document.Resources {
-		if resource.Kind != ResourceKubernetes {
-			return errors.Newf("teardown rendered Kubernetes manifests: resource %s requires a non-Kubernetes containment adapter", resource.ID)
-		}
-	}
 	state, err := adapter.observeState(ctx, target, manifests)
 	if err != nil {
 		return err
 	}
-	plan, err := PlanTeardown(rendered, state)
+	plan, err := PlanKubernetesTeardown(rendered, state)
 	if err != nil {
 		return err
 	}

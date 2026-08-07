@@ -74,6 +74,41 @@ func (adapter TemporalCLIAdapter) ReconcileOrchestration(ctx context.Context, ta
 	return ids, nil
 }
 
+// TeardownOrchestration deletes one explicitly owned namespace only when its
+// rendered resource identity and lifecycle authorize deletion.
+func (adapter TemporalCLIAdapter) TeardownOrchestration(ctx context.Context, target OperatorTarget, rendered Rendered, resourceID ResourceID) error {
+	document, err := parseRenderedBytes(rendered.JSON())
+	if err != nil {
+		return errors.Wrap(err, "teardown orchestration declaration")
+	}
+	for _, resource := range document.Resources {
+		if resource.ID != resourceID {
+			continue
+		}
+		if resource.Kind != ResourceOrchestration || resource.DeleteBehavior != DeleteOwned {
+			return errors.New("teardown orchestration declaration: resource is not an owned orchestration namespace")
+		}
+		description, missing, describeErr := adapter.describeNamespace(ctx, target, document.Namespace, resource.Orchestration.Namespace)
+		_ = description
+		if describeErr != nil {
+			return describeErr
+		}
+		if missing {
+			return nil
+		}
+		arguments := []string{"--kubeconfig", target.Kubeconfig, "--context", target.Context, "exec", "Deployment/temporal", "--namespace", document.Namespace, "--", "temporal", "--address", "127.0.0.1:7233", "--command-timeout", "30s", "operator", "namespace", "delete", "--namespace", resource.Orchestration.Namespace, "--yes"}
+		result, runErr := adapter.runner.Run(ctx, "kubectl", arguments, nil)
+		if runErr != nil {
+			return errors.Wrap(runErr, "delete declared Temporal namespace")
+		}
+		if result.ExitCode != 0 {
+			return errors.Newf("delete declared Temporal namespace: exit status %d: %s", result.ExitCode, safeTemporalOutput(result.Output))
+		}
+		return nil
+	}
+	return errors.New("teardown orchestration declaration: resource is not declared")
+}
+
 type temporalNamespaceDescription struct {
 	Retention time.Duration
 }

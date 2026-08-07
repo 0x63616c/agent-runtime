@@ -84,6 +84,15 @@ type OrchestrationAdapter interface {
 	ReconcileOrchestration(context.Context, OperatorTarget, Rendered) ([]ResourceID, error)
 }
 
+// DeclaredProviderAdapter reconciles every non-Kubernetes resource in one rendered Stack.
+// Returning the complete affected identity set makes omission and accidental provider authority observable.
+type DeclaredProviderAdapter interface {
+	// ReconcileDeclared reconciles all declared non-Kubernetes resources and returns their exact IDs.
+	ReconcileDeclared(context.Context, OperatorTarget, Rendered) ([]ResourceID, error)
+	// TeardownDeclared applies each declared non-Kubernetes delete behavior before Kubernetes dependencies disappear.
+	TeardownDeclared(context.Context, OperatorTarget, Rendered) ([]ResourceID, error)
+}
+
 // OperatorAuditRecord is a secret-safe retained record of a requested operator action.
 type OperatorAuditRecord struct {
 	// Action is the explicit operator operation.
@@ -115,7 +124,22 @@ type OperatorAuditSink interface {
 type KubernetesOperator struct {
 	adapter       KubernetesOperatorAdapter
 	orchestration OrchestrationAdapter
+	providers     DeclaredProviderAdapter
 	audit         OperatorAuditSink
+}
+
+// NewKubernetesOperatorWithProviders constructs an operator that owns the complete
+// Kubernetes and non-Kubernetes desired-state reconciliation boundary.
+func NewKubernetesOperatorWithProviders(adapter KubernetesOperatorAdapter, providers DeclaredProviderAdapter, audit OperatorAuditSink) (KubernetesOperator, error) {
+	operator, err := NewKubernetesOperator(adapter, audit)
+	if err != nil {
+		return KubernetesOperator{}, err
+	}
+	if providers == nil {
+		return KubernetesOperator{}, errors.New("construct Kubernetes operator: declared provider adapter is required")
+	}
+	operator.providers = providers
+	return operator, nil
 }
 
 // NewKubernetesOperatorWithOrchestration constructs an operator with an explicit orchestration control plane.
@@ -168,7 +192,18 @@ func (operator KubernetesOperator) Apply(ctx context.Context, request OperatorRe
 			return KubernetesObservation{}, operator.recordFailure(ctx, request, document, OperatorActionApply, orchestrationErr)
 		}
 	}
-	if err := operator.record(ctx, request, document, OperatorActionApply, "applied", observation.ObjectIDs); err != nil {
+	affected := append([]ResourceID(nil), observation.ObjectIDs...)
+	if operator.providers != nil {
+		providerIDs, providerErr := operator.providers.ReconcileDeclared(ctx, request.Target, rendered)
+		if providerErr != nil {
+			return KubernetesObservation{}, operator.recordFailure(ctx, request, document, OperatorActionApply, providerErr)
+		}
+		if providerErr := validateDeclaredProviderIDs(document.Resources, providerIDs); providerErr != nil {
+			return KubernetesObservation{}, operator.recordFailure(ctx, request, document, OperatorActionApply, providerErr)
+		}
+		affected = append(affected, providerIDs...)
+	}
+	if err := operator.record(ctx, request, document, OperatorActionApply, "applied", affected); err != nil {
 		return KubernetesObservation{}, err
 	}
 	return observation, nil
@@ -262,10 +297,43 @@ func (operator KubernetesOperator) Teardown(ctx context.Context, request Operato
 	if err != nil {
 		return err
 	}
+	affected := []ResourceID{}
+	if operator.providers != nil {
+		providerIDs, providerErr := operator.providers.TeardownDeclared(ctx, request.Target, rendered)
+		if providerErr != nil {
+			return operator.recordFailure(ctx, request, document, OperatorActionTeardown, providerErr)
+		}
+		if providerErr := validateDeclaredProviderIDs(document.Resources, providerIDs); providerErr != nil {
+			return operator.recordFailure(ctx, request, document, OperatorActionTeardown, providerErr)
+		}
+		affected = append(affected, providerIDs...)
+	}
 	if teardownErr := operator.adapter.Teardown(ctx, request.Target, rendered, manifests); teardownErr != nil {
 		return operator.recordFailure(ctx, request, document, OperatorActionTeardown, teardownErr)
 	}
-	return operator.record(ctx, request, document, OperatorActionTeardown, "torn_down", manifestResources(manifests))
+	affected = append(affected, manifestResources(manifests)...)
+	return operator.record(ctx, request, document, OperatorActionTeardown, "torn_down", affected)
+}
+
+func validateDeclaredProviderIDs(resources []Resource, actual []ResourceID) error {
+	expected := make([]ResourceID, 0, len(resources))
+	for _, resource := range resources {
+		if resource.Kind != ResourceKubernetes {
+			expected = append(expected, resource.ID)
+		}
+	}
+	actual = append([]ResourceID(nil), actual...)
+	sort.Slice(expected, func(left, right int) bool { return expected[left] < expected[right] })
+	sort.Slice(actual, func(left, right int) bool { return actual[left] < actual[right] })
+	if len(expected) != len(actual) {
+		return errors.New("validate declared provider reconciliation: declared provider resource set differs from desired state")
+	}
+	for index := range expected {
+		if expected[index] != actual[index] || (index > 0 && actual[index] == actual[index-1]) {
+			return errors.New("validate declared provider reconciliation: declared provider resource set differs from desired state")
+		}
+	}
+	return nil
 }
 
 func (operator KubernetesOperator) prepare(ctx context.Context, request OperatorRequest, rendered Rendered) (KubernetesManifests, renderedDocument, error) {
@@ -334,7 +402,11 @@ func validateOperatorRequest(request OperatorRequest) error {
 	if !operatorActorPattern.MatchString(request.Actor) {
 		return errors.New("validate Kubernetes operator request: bounded actor is required")
 	}
-	if request.Target.Kubeconfig == "" || !filepath.IsAbs(request.Target.Kubeconfig) || request.Target.Context == "" || len(request.Target.Context) > 253 {
+	return validateOperatorTarget(request.Target)
+}
+
+func validateOperatorTarget(target OperatorTarget) error {
+	if target.Kubeconfig == "" || !filepath.IsAbs(target.Kubeconfig) || target.Context == "" || len(target.Context) > 253 {
 		return errors.New("validate Kubernetes operator request: explicit absolute kubeconfig and context are required")
 	}
 	return nil

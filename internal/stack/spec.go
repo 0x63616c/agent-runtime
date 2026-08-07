@@ -241,6 +241,7 @@ func validateTypedReferences(resource Resource, resources map[ResourceID]Resourc
 	case ResourceBlob:
 		required[resource.Blob.EndpointReference] = ResourceKubernetes
 		required[resource.Blob.CredentialReference] = ResourceSecretReference
+		required[resource.Blob.ReconcilerReference] = ResourceKubernetes
 	case ResourceDatabase:
 		required[resource.Database.ConnectionReference] = ResourceSecretReference
 		required[resource.Database.MigrationTarget] = ResourceKubernetes
@@ -412,7 +413,7 @@ func profileResources(resources []Resource) map[ResourceID]Resource {
 }
 
 func sameResourceTopology(left, right Resource) bool {
-	if left.Kind != right.Kind || left.Owner != right.Owner || left.Scope != right.Scope || left.BackupRestoreOwner != right.BackupRestoreOwner || left.DeleteBehavior != right.DeleteBehavior || left.ExternalController != right.ExternalController {
+	if left.Kind != right.Kind || left.Owner != right.Owner || left.Scope != right.Scope || left.ExternalController != right.ExternalController {
 		return false
 	}
 	leftDependencies := append([]ResourceID(nil), left.Dependencies...)
