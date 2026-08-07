@@ -47,6 +47,29 @@ type OperatorRequest struct {
 	Actor string
 	// Target is the explicit credentials and Kubernetes context boundary.
 	Target OperatorTarget
+	// BootstrapAuthority is the explicit, identity-bound authority established by bootstrap.
+	// Every mutating lifecycle action must present it; it is re-observed at the provider.
+	BootstrapAuthority BootstrapAuthority
+}
+
+// BootstrapAuthority binds a mutating operator action to one Namespace that
+// bootstrap created for exactly one reviewed Stack rendering.
+type BootstrapAuthority struct {
+	// Stack is the reviewed Stack identity.
+	Stack string `json:"stack"`
+	// Profile is the reviewed Stack profile.
+	Profile Profile `json:"profile"`
+	// Namespace is the exact rendered Namespace.
+	Namespace string `json:"namespace"`
+	// NamespaceUID is the immutable provider identity returned by bootstrap.
+	NamespaceUID ObservedUID `json:"namespace_uid"`
+	// RenderDigest binds the authority to canonical desired state.
+	RenderDigest string `json:"render_digest"`
+	// Nonce is private capability material; only its digest is stored on the Namespace.
+	Nonce string `json:"nonce"`
+	// DeletedSecrets records only exact Secret UIDs already removed by this capability.
+	DeletedSecrets map[ResourceID]ObservedUID `json:"deleted_secrets,omitempty"`
+	capabilityFile string
 }
 
 // KubernetesObservation contains bounded Kubernetes object identities observed by an adapter.
@@ -76,37 +99,37 @@ type KubernetesDifference struct {
 // KubernetesOperatorAdapter performs provider effects only when explicitly called by KubernetesOperator.
 type KubernetesOperatorAdapter interface {
 	// BootstrapNamespace atomically creates only an absent rendered Namespace and re-observes its identity.
-	BootstrapNamespace(context.Context, OperatorTarget, KubernetesManifests) (KubernetesNamespaceObservation, error)
+	BootstrapNamespace(context.Context, OperatorTarget, KubernetesManifests, string) (KubernetesNamespaceObservation, error)
 	// Apply applies one canonical manifest set and returns its re-observed identities.
-	Apply(context.Context, OperatorTarget, KubernetesManifests) (KubernetesObservation, error)
+	Apply(context.Context, OperatorTarget, KubernetesManifests, BootstrapAuthority) (KubernetesObservation, error)
 	// Observe reads the concrete provider objects for one canonical manifest set.
 	Observe(context.Context, OperatorTarget, KubernetesManifests) (KubernetesObservation, error)
 	// Diff reads provider state and returns only bounded resource-level changes.
 	Diff(context.Context, OperatorTarget, KubernetesManifests) (KubernetesDifference, error)
 	// Teardown re-observes UID and labels before any containment-safe deletion.
-	Teardown(context.Context, OperatorTarget, Rendered, KubernetesManifests) error
+	Teardown(context.Context, OperatorTarget, Rendered, KubernetesManifests, BootstrapAuthority) error
 }
 
 // KubernetesMigrationAdapter executes only digest-verified, declared migration artifacts.
 type KubernetesMigrationAdapter interface {
 	// Upgrade applies every declared migration artifact for the rendered Stack profile.
-	Upgrade(context.Context, OperatorTarget, Rendered) error
+	Upgrade(context.Context, OperatorTarget, Rendered, BootstrapAuthority) error
 	// Rollback reverts only migrations present in current and absent from previous rendered state.
-	Rollback(context.Context, OperatorTarget, Rendered, Rendered) error
+	Rollback(context.Context, OperatorTarget, Rendered, Rendered, BootstrapAuthority) error
 }
 
 // OrchestrationAdapter reconciles only reviewed durable orchestration declarations.
 type OrchestrationAdapter interface {
-	ReconcileOrchestration(context.Context, OperatorTarget, Rendered) ([]ResourceID, error)
+	ReconcileOrchestration(context.Context, OperatorTarget, Rendered, BootstrapAuthority) ([]ResourceID, error)
 }
 
 // DeclaredProviderAdapter reconciles every non-Kubernetes resource in one rendered Stack.
 // Returning the complete affected identity set makes omission and accidental provider authority observable.
 type DeclaredProviderAdapter interface {
 	// ReconcileDeclared reconciles all declared non-Kubernetes resources and returns their exact IDs.
-	ReconcileDeclared(context.Context, OperatorTarget, Rendered) ([]ResourceID, error)
+	ReconcileDeclared(context.Context, OperatorTarget, Rendered, BootstrapAuthority) ([]ResourceID, error)
 	// TeardownDeclared applies each declared non-Kubernetes delete behavior before Kubernetes dependencies disappear.
-	TeardownDeclared(context.Context, OperatorTarget, Rendered) ([]ResourceID, error)
+	TeardownDeclared(context.Context, OperatorTarget, Rendered, BootstrapAuthority) ([]ResourceID, error)
 }
 
 // OperatorAuditRecord is a secret-safe retained record of a requested operator action.
@@ -201,7 +224,10 @@ func (operator KubernetesOperator) Bootstrap(ctx context.Context, request Operat
 	if err != nil {
 		return KubernetesNamespaceObservation{}, err
 	}
-	observation, bootstrapErr := operator.adapter.BootstrapNamespace(ctx, request.Target, manifests)
+	if err := validateBootstrapIntent(request.BootstrapAuthority, document); err != nil {
+		return KubernetesNamespaceObservation{}, operator.recordFailure(ctx, request, document, OperatorActionBootstrap, err)
+	}
+	observation, bootstrapErr := operator.adapter.BootstrapNamespace(ctx, request.Target, manifests, request.BootstrapAuthority.NonceDigest())
 	if bootstrapErr != nil {
 		return KubernetesNamespaceObservation{}, operator.recordFailure(ctx, request, document, OperatorActionBootstrap, bootstrapErr)
 	}
@@ -226,21 +252,24 @@ func (operator KubernetesOperator) Apply(ctx context.Context, request OperatorRe
 	if err != nil {
 		return KubernetesObservation{}, err
 	}
-	observation, applyErr := operator.adapter.Apply(ctx, request.Target, manifests)
+	if err := validateBootstrapAuthority(request.BootstrapAuthority, document); err != nil {
+		return KubernetesObservation{}, operator.recordFailure(ctx, request, document, OperatorActionApply, err)
+	}
+	observation, applyErr := operator.adapter.Apply(ctx, request.Target, manifests, request.BootstrapAuthority)
 	if applyErr != nil {
 		return KubernetesObservation{}, operator.recordFailure(ctx, request, document, OperatorActionApply, applyErr)
 	}
-	if migrationErr := operator.upgradeMigrations(ctx, request.Target, rendered, document); migrationErr != nil {
+	if migrationErr := operator.upgradeMigrations(ctx, request.Target, rendered, document, request.BootstrapAuthority); migrationErr != nil {
 		return KubernetesObservation{}, operator.recordFailure(ctx, request, document, OperatorActionApply, migrationErr)
 	}
 	if operator.orchestration != nil {
-		if _, orchestrationErr := operator.orchestration.ReconcileOrchestration(ctx, request.Target, rendered); orchestrationErr != nil {
+		if _, orchestrationErr := operator.orchestration.ReconcileOrchestration(ctx, request.Target, rendered, request.BootstrapAuthority); orchestrationErr != nil {
 			return KubernetesObservation{}, operator.recordFailure(ctx, request, document, OperatorActionApply, orchestrationErr)
 		}
 	}
 	affected := append([]ResourceID(nil), observation.ObjectIDs...)
 	if operator.providers != nil {
-		providerIDs, providerErr := operator.providers.ReconcileDeclared(ctx, request.Target, rendered)
+		providerIDs, providerErr := operator.providers.ReconcileDeclared(ctx, request.Target, rendered, request.BootstrapAuthority)
 		if providerErr != nil {
 			return KubernetesObservation{}, operator.recordFailure(ctx, request, document, OperatorActionApply, providerErr)
 		}
@@ -298,6 +327,9 @@ func (operator KubernetesOperator) Reconcile(ctx context.Context, request Operat
 	if err != nil {
 		return ReconcileResult{}, err
 	}
+	if err := validateBootstrapAuthority(request.BootstrapAuthority, document); err != nil {
+		return ReconcileResult{}, operator.recordFailure(ctx, request, document, OperatorActionReconcile, err)
+	}
 	difference, diffErr := operator.adapter.Diff(ctx, request.Target, manifests)
 	if diffErr != nil {
 		return ReconcileResult{}, operator.recordFailure(ctx, request, document, OperatorActionReconcile, diffErr)
@@ -307,14 +339,14 @@ func (operator KubernetesOperator) Reconcile(ctx context.Context, request Operat
 	auditResult := "unchanged"
 	affected := changeResources(difference.Changes)
 	if len(difference.Changes) > 0 {
-		if _, applyErr := operator.adapter.Apply(ctx, request.Target, manifests); applyErr != nil {
+		if _, applyErr := operator.adapter.Apply(ctx, request.Target, manifests, request.BootstrapAuthority); applyErr != nil {
 			return ReconcileResult{}, operator.recordFailure(ctx, request, document, OperatorActionReconcile, applyErr)
 		}
-		if migrationErr := operator.upgradeMigrations(ctx, request.Target, rendered, document); migrationErr != nil {
+		if migrationErr := operator.upgradeMigrations(ctx, request.Target, rendered, document, request.BootstrapAuthority); migrationErr != nil {
 			return ReconcileResult{}, operator.recordFailure(ctx, request, document, OperatorActionReconcile, migrationErr)
 		}
 		if operator.orchestration != nil {
-			if _, orchestrationErr := operator.orchestration.ReconcileOrchestration(ctx, request.Target, rendered); orchestrationErr != nil {
+			if _, orchestrationErr := operator.orchestration.ReconcileOrchestration(ctx, request.Target, rendered, request.BootstrapAuthority); orchestrationErr != nil {
 				return ReconcileResult{}, operator.recordFailure(ctx, request, document, OperatorActionReconcile, orchestrationErr)
 			}
 		}
@@ -322,7 +354,7 @@ func (operator KubernetesOperator) Reconcile(ctx context.Context, request Operat
 		auditResult = "applied"
 	}
 	if operator.providers != nil {
-		providerIDs, providerErr := operator.providers.ReconcileDeclared(ctx, request.Target, rendered)
+		providerIDs, providerErr := operator.providers.ReconcileDeclared(ctx, request.Target, rendered, request.BootstrapAuthority)
 		if providerErr != nil {
 			return ReconcileResult{}, operator.recordFailure(ctx, request, document, OperatorActionReconcile, providerErr)
 		}
@@ -346,10 +378,13 @@ func (operator KubernetesOperator) Rollback(ctx context.Context, request Operato
 	if err != nil {
 		return KubernetesObservation{}, err
 	}
-	if migrationErr := operator.rollbackMigrations(ctx, request.Target, current, previous, document); migrationErr != nil {
+	if err := validateBootstrapAuthority(request.BootstrapAuthority, document); err != nil {
+		return KubernetesObservation{}, operator.recordFailure(ctx, request, document, OperatorActionRollback, err)
+	}
+	if migrationErr := operator.rollbackMigrations(ctx, request.Target, current, previous, document, request.BootstrapAuthority); migrationErr != nil {
 		return KubernetesObservation{}, operator.recordFailure(ctx, request, document, OperatorActionRollback, migrationErr)
 	}
-	observation, rollbackErr := operator.adapter.Apply(ctx, request.Target, manifests)
+	observation, rollbackErr := operator.adapter.Apply(ctx, request.Target, manifests, request.BootstrapAuthority)
 	if rollbackErr != nil {
 		return KubernetesObservation{}, operator.recordFailure(ctx, request, document, OperatorActionRollback, rollbackErr)
 	}
@@ -365,9 +400,12 @@ func (operator KubernetesOperator) Teardown(ctx context.Context, request Operato
 	if err != nil {
 		return err
 	}
+	if err := validateBootstrapAuthority(request.BootstrapAuthority, document); err != nil {
+		return operator.recordFailure(ctx, request, document, OperatorActionTeardown, err)
+	}
 	affected := []ResourceID{}
 	if operator.providers != nil {
-		providerIDs, providerErr := operator.providers.TeardownDeclared(ctx, request.Target, rendered)
+		providerIDs, providerErr := operator.providers.TeardownDeclared(ctx, request.Target, rendered, request.BootstrapAuthority)
 		if providerErr != nil {
 			return operator.recordFailure(ctx, request, document, OperatorActionTeardown, providerErr)
 		}
@@ -376,7 +414,7 @@ func (operator KubernetesOperator) Teardown(ctx context.Context, request Operato
 		}
 		affected = append(affected, providerIDs...)
 	}
-	if teardownErr := operator.adapter.Teardown(ctx, request.Target, rendered, manifests); teardownErr != nil {
+	if teardownErr := operator.adapter.Teardown(ctx, request.Target, rendered, manifests, request.BootstrapAuthority); teardownErr != nil {
 		return operator.recordFailure(ctx, request, document, OperatorActionTeardown, teardownErr)
 	}
 	affected = append(affected, manifestResources(manifests)...)
@@ -425,7 +463,7 @@ func (operator KubernetesOperator) prepare(ctx context.Context, request Operator
 	return manifests, document, nil
 }
 
-func (operator KubernetesOperator) upgradeMigrations(ctx context.Context, target OperatorTarget, rendered Rendered, document renderedDocument) error {
+func (operator KubernetesOperator) upgradeMigrations(ctx context.Context, target OperatorTarget, rendered Rendered, document renderedDocument, authority BootstrapAuthority) error {
 	if !containsDatabaseResource(document.Resources) {
 		return nil
 	}
@@ -433,13 +471,13 @@ func (operator KubernetesOperator) upgradeMigrations(ctx context.Context, target
 	if !ok {
 		return errors.New("run Kubernetes operator migration: adapter does not implement declared migration execution")
 	}
-	if err := migrator.Upgrade(ctx, target, rendered); err != nil {
+	if err := migrator.Upgrade(ctx, target, rendered, authority); err != nil {
 		return errors.Wrap(err, "run Kubernetes operator migration upgrade")
 	}
 	return nil
 }
 
-func (operator KubernetesOperator) rollbackMigrations(ctx context.Context, target OperatorTarget, current, previous Rendered, previousDocument renderedDocument) error {
+func (operator KubernetesOperator) rollbackMigrations(ctx context.Context, target OperatorTarget, current, previous Rendered, previousDocument renderedDocument, authority BootstrapAuthority) error {
 	currentDocument, err := parseRenderedBytes(current.JSON())
 	if err != nil {
 		return errors.Wrap(err, "prepare Kubernetes operator rollback migration")
@@ -451,7 +489,7 @@ func (operator KubernetesOperator) rollbackMigrations(ctx context.Context, targe
 	if !ok {
 		return errors.New("run Kubernetes operator migration rollback: adapter does not implement declared migration execution")
 	}
-	if err := migrator.Rollback(ctx, target, current, previous); err != nil {
+	if err := migrator.Rollback(ctx, target, current, previous, authority); err != nil {
 		return errors.Wrap(err, "run Kubernetes operator migration rollback")
 	}
 	return nil
@@ -471,6 +509,23 @@ func validateOperatorRequest(request OperatorRequest) error {
 		return errors.New("validate Kubernetes operator request: bounded actor is required")
 	}
 	return validateOperatorTarget(request.Target)
+}
+
+func validateBootstrapAuthority(authority BootstrapAuthority, document renderedDocument) error {
+	if authority.NamespaceUID == "" || authority.Nonce == "" {
+		return errors.New("validate bootstrap authority: bootstrap authority is required")
+	}
+	if authority.Stack != document.Stack || authority.Profile != document.Profile || authority.Namespace != document.Namespace || authority.RenderDigest != document.Digest {
+		return errors.New("validate bootstrap authority: Stack identity does not match reviewed rendered state")
+	}
+	return nil
+}
+
+func validateBootstrapIntent(authority BootstrapAuthority, document renderedDocument) error {
+	if authority.NamespaceUID != "" || authority.Nonce == "" || authority.Stack != document.Stack || authority.Profile != document.Profile || authority.Namespace != document.Namespace || authority.RenderDigest != document.Digest {
+		return errors.New("validate bootstrap authority: a new capability bound to reviewed rendered state is required")
+	}
+	return nil
 }
 
 func validateOperatorTarget(target OperatorTarget) error {

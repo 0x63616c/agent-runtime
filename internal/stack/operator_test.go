@@ -23,7 +23,7 @@ type fakeKubernetesOperator struct {
 	teardowns int
 }
 
-func (*fakeKubernetesOperator) BootstrapNamespace(_ context.Context, _ stack.OperatorTarget, _ stack.KubernetesManifests) (stack.KubernetesNamespaceObservation, error) {
+func (*fakeKubernetesOperator) BootstrapNamespace(_ context.Context, _ stack.OperatorTarget, _ stack.KubernetesManifests, _ string) (stack.KubernetesNamespaceObservation, error) {
 	return stack.KubernetesNamespaceObservation{}, nil
 }
 
@@ -34,17 +34,17 @@ type fakeDeclaredProvider struct {
 	teardowns  int
 }
 
-func (provider *fakeDeclaredProvider) ReconcileDeclared(_ context.Context, _ stack.OperatorTarget, _ stack.Rendered) ([]stack.ResourceID, error) {
+func (provider *fakeDeclaredProvider) ReconcileDeclared(_ context.Context, _ stack.OperatorTarget, _ stack.Rendered, _ stack.BootstrapAuthority) ([]stack.ResourceID, error) {
 	provider.reconciles++
 	return append([]stack.ResourceID(nil), provider.reconciled...), nil
 }
 
-func (provider *fakeDeclaredProvider) TeardownDeclared(_ context.Context, _ stack.OperatorTarget, _ stack.Rendered) ([]stack.ResourceID, error) {
+func (provider *fakeDeclaredProvider) TeardownDeclared(_ context.Context, _ stack.OperatorTarget, _ stack.Rendered, _ stack.BootstrapAuthority) ([]stack.ResourceID, error) {
 	provider.teardowns++
 	return append([]stack.ResourceID(nil), provider.tornDown...), nil
 }
 
-func (operator *fakeKubernetesOperator) Apply(_ context.Context, _ stack.OperatorTarget, _ stack.KubernetesManifests) (stack.KubernetesObservation, error) {
+func (operator *fakeKubernetesOperator) Apply(_ context.Context, _ stack.OperatorTarget, _ stack.KubernetesManifests, _ stack.BootstrapAuthority) (stack.KubernetesObservation, error) {
 	operator.applies++
 	return stack.KubernetesObservation{ObjectIDs: []stack.ResourceID{"api"}}, nil
 }
@@ -58,12 +58,58 @@ func (operator *fakeKubernetesOperator) Diff(_ context.Context, _ stack.Operator
 	return stack.KubernetesDifference{Changes: operator.changes}, nil
 }
 
-func (operator *fakeKubernetesOperator) Teardown(_ context.Context, _ stack.OperatorTarget, _ stack.Rendered, _ stack.KubernetesManifests) error {
+func (operator *fakeKubernetesOperator) Teardown(_ context.Context, _ stack.OperatorTarget, _ stack.Rendered, _ stack.KubernetesManifests, _ stack.BootstrapAuthority) error {
 	operator.teardowns++
 	return nil
 }
 
+func operatorRequest(rendered stack.Rendered) stack.OperatorRequest {
+	authority, err := stack.NewBootstrapAuthority(rendered, "uid-bootstrap")
+	ExpectWithOffset(1, err).NotTo(HaveOccurred())
+	return stack.OperatorRequest{
+		Actor:              "platform-operator",
+		Target:             stack.OperatorTarget{Kubeconfig: "/explicit/kubeconfig", Context: "disposable-ci"},
+		BootstrapAuthority: authority,
+	}
+}
+
 var _ = Describe("Audited Kubernetes operator", func() {
+	It("refuses standalone apply before any adapter can mutate an unproven namespace", func() {
+		spec, err := stack.Parse(strings.NewReader(validIdentityStack))
+		Expect(err).NotTo(HaveOccurred())
+		rendered, err := stack.Render(spec, stack.ProfileLocal)
+		Expect(err).NotTo(HaveOccurred())
+		adapter := &fakeKubernetesOperator{}
+		operator, err := stack.NewKubernetesOperator(adapter, &recordedAudit{})
+		Expect(err).NotTo(HaveOccurred())
+
+		_, err = operator.Apply(context.Background(), stack.OperatorRequest{
+			Actor: "platform-operator", Target: stack.OperatorTarget{Kubeconfig: "/explicit/kubeconfig", Context: "disposable-ci"},
+		}, rendered)
+
+		Expect(err).To(MatchError(ContainSubstring("bootstrap authority is required")))
+		Expect(adapter.applies).To(Equal(0))
+	})
+
+	It("refuses standalone reconcile and teardown without bootstrap authority", func() {
+		spec, err := stack.Parse(strings.NewReader(validIdentityStack))
+		Expect(err).NotTo(HaveOccurred())
+		rendered, err := stack.Render(spec, stack.ProfileLocal)
+		Expect(err).NotTo(HaveOccurred())
+		adapter := &fakeKubernetesOperator{}
+		operator, err := stack.NewKubernetesOperator(adapter, &recordedAudit{})
+		Expect(err).NotTo(HaveOccurred())
+		request := stack.OperatorRequest{Actor: "platform-operator", Target: stack.OperatorTarget{Kubeconfig: "/explicit/kubeconfig", Context: "disposable-ci"}}
+
+		_, reconcileErr := operator.Reconcile(context.Background(), request, rendered)
+		teardownErr := operator.Teardown(context.Background(), request, rendered)
+
+		Expect(reconcileErr).To(MatchError(ContainSubstring("bootstrap authority is required")))
+		Expect(teardownErr).To(MatchError(ContainSubstring("bootstrap authority is required")))
+		Expect(adapter.applies).To(Equal(0))
+		Expect(adapter.teardowns).To(Equal(0))
+	})
+
 	It("reconciles and accounts for every declared non-Kubernetes resource", func() {
 		spec, err := stack.Parse(strings.NewReader(validIdentityStack))
 		Expect(err).NotTo(HaveOccurred())
@@ -75,7 +121,7 @@ var _ = Describe("Audited Kubernetes operator", func() {
 		operator, err := stack.NewKubernetesOperatorWithProviders(adapter, provider, audit)
 		Expect(err).NotTo(HaveOccurred())
 
-		_, err = operator.Apply(context.Background(), stack.OperatorRequest{Actor: "platform-operator", Target: stack.OperatorTarget{Kubeconfig: "/explicit/kubeconfig", Context: "disposable-ci"}}, rendered)
+		_, err = operator.Apply(context.Background(), operatorRequest(rendered), rendered)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(provider.reconciles).To(Equal(1))
 		Expect(audit.records).To(HaveLen(1))
@@ -87,7 +133,7 @@ var _ = Describe("Audited Kubernetes operator", func() {
 		Expect(err).NotTo(HaveOccurred())
 		rendered, err := stack.Render(spec, stack.ProfileLocal)
 		Expect(err).NotTo(HaveOccurred())
-		request := stack.OperatorRequest{Actor: "platform-operator", Target: stack.OperatorTarget{Kubeconfig: "/explicit/kubeconfig", Context: "disposable-ci"}}
+		request := operatorRequest(rendered)
 
 		for _, returned := range [][]stack.ResourceID{nil, {"foreign"}} {
 			provider := &fakeDeclaredProvider{reconciled: returned}
@@ -109,7 +155,7 @@ var _ = Describe("Audited Kubernetes operator", func() {
 		operator, err := stack.NewKubernetesOperatorWithProviders(adapter, provider, audit)
 		Expect(err).NotTo(HaveOccurred())
 
-		err = operator.Teardown(context.Background(), stack.OperatorRequest{Actor: "platform-operator", Target: stack.OperatorTarget{Kubeconfig: "/explicit/kubeconfig", Context: "disposable-ci"}}, rendered)
+		err = operator.Teardown(context.Background(), operatorRequest(rendered), rendered)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(provider.teardowns).To(Equal(1))
 		Expect(adapter.teardowns).To(Equal(1))
@@ -125,7 +171,7 @@ var _ = Describe("Audited Kubernetes operator", func() {
 		operator, err := stack.NewKubernetesOperator(adapter, audit)
 		Expect(err).NotTo(HaveOccurred())
 
-		result, err := operator.Reconcile(context.Background(), stack.OperatorRequest{Actor: "platform-operator", Target: stack.OperatorTarget{Kubeconfig: "/explicit/kubeconfig", Context: "disposable-ci"}}, rendered)
+		result, err := operator.Reconcile(context.Background(), operatorRequest(rendered), rendered)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(result.Applied).To(BeTrue())
 		Expect(adapter.applies).To(Equal(1))
@@ -149,7 +195,7 @@ var _ = Describe("Audited Kubernetes operator", func() {
 		operator, err := stack.NewKubernetesOperatorWithProviders(adapter, provider, audit)
 		Expect(err).NotTo(HaveOccurred())
 
-		result, err := operator.Reconcile(context.Background(), stack.OperatorRequest{Actor: "platform-operator", Target: stack.OperatorTarget{Kubeconfig: "/explicit/kubeconfig", Context: "disposable-ci"}}, rendered)
+		result, err := operator.Reconcile(context.Background(), operatorRequest(rendered), rendered)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(result.Applied).To(BeFalse())
 		Expect(provider.reconciles).To(Equal(1))
@@ -168,7 +214,7 @@ var _ = Describe("Audited Kubernetes operator", func() {
 		operator, err := stack.NewKubernetesOperator(adapter, audit)
 		Expect(err).NotTo(HaveOccurred())
 
-		result, err := operator.Reconcile(context.Background(), stack.OperatorRequest{Actor: "platform-operator", Target: stack.OperatorTarget{Kubeconfig: "/explicit/kubeconfig", Context: "disposable-ci"}}, rendered)
+		result, err := operator.Reconcile(context.Background(), operatorRequest(rendered), rendered)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(result.Applied).To(BeFalse())
 		Expect(adapter.applies).To(Equal(0))

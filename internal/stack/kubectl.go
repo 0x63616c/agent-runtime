@@ -33,6 +33,8 @@ type KubectlAdapter struct {
 	runner KubectlCommandRunner
 }
 
+const databaseReadinessAttempts = 120
+
 // NewKubectlAdapter constructs a Kubernetes provider adapter over an injected process seam.
 func NewKubectlAdapter(runner KubectlCommandRunner) (KubectlAdapter, error) {
 	if runner == nil {
@@ -62,7 +64,10 @@ func (SystemKubectlRunner) Run(ctx context.Context, program string, arguments []
 }
 
 // Apply applies canonical manifests then re-observes provider object identities.
-func (adapter KubectlAdapter) Apply(ctx context.Context, target OperatorTarget, manifests KubernetesManifests) (KubernetesObservation, error) {
+func (adapter KubectlAdapter) Apply(ctx context.Context, target OperatorTarget, manifests KubernetesManifests, authority BootstrapAuthority) (KubernetesObservation, error) {
+	if err := adapter.verifyBootstrapAuthority(ctx, target, manifests, authority); err != nil {
+		return KubernetesObservation{}, err
+	}
 	if err := adapter.runSuccess(ctx, target, []string{"apply", "--server-side", "--field-manager=agent-runtime-stackctl", "-f", "-"}, manifests.JSON()); err != nil {
 		return KubernetesObservation{}, errors.Wrap(err, "apply rendered Kubernetes manifests")
 	}
@@ -70,7 +75,10 @@ func (adapter KubectlAdapter) Apply(ctx context.Context, target OperatorTarget, 
 }
 
 // BootstrapNamespace atomically creates only an absent rendered Namespace and then re-observes its identity.
-func (adapter KubectlAdapter) BootstrapNamespace(ctx context.Context, target OperatorTarget, manifests KubernetesManifests) (KubernetesNamespaceObservation, error) {
+func (adapter KubectlAdapter) BootstrapNamespace(ctx context.Context, target OperatorTarget, manifests KubernetesManifests, nonceDigest string) (KubernetesNamespaceObservation, error) {
+	if nonceDigest == "" {
+		return KubernetesNamespaceObservation{}, errors.New("bootstrap rendered Kubernetes Namespace: nonce digest is required")
+	}
 	result, err := adapter.run(ctx, target, []string{"get", "Namespace/" + manifests.namespace.Metadata.Name, "--ignore-not-found=true", "-o", "json"}, nil)
 	if err != nil {
 		return KubernetesNamespaceObservation{}, err
@@ -81,7 +89,9 @@ func (adapter KubectlAdapter) BootstrapNamespace(ctx context.Context, target Ope
 	if len(bytes.TrimSpace(result.Output)) != 0 {
 		return KubernetesNamespaceObservation{}, errors.New("bootstrap rendered Kubernetes Namespace: refuse pre-existing Namespace")
 	}
-	encoded, err := json.Marshal(manifests.namespace)
+	namespace := manifests.namespace
+	namespace.Metadata.Annotations = map[string]string{bootstrapNonceDigestAnnotation: nonceDigest}
+	encoded, err := json.Marshal(namespace)
 	if err != nil {
 		return KubernetesNamespaceObservation{}, errors.Wrap(err, "encode rendered Kubernetes Namespace")
 	}
@@ -93,7 +103,7 @@ func (adapter KubectlAdapter) BootstrapNamespace(ctx context.Context, target Ope
 		return KubernetesNamespaceObservation{}, errors.Wrap(err, "observe bootstrapped Kubernetes Namespace")
 	}
 	expected := OwnershipLabels{PartOf: "agent-runtime", Stack: manifests.stack, Profile: manifests.profile}
-	if observed.UID() == "" || observed.labels() != expected {
+	if observed.UID() == "" || observed.labels() != expected || observed.Metadata.Annotations[bootstrapNonceDigestAnnotation] != nonceDigest {
 		return KubernetesNamespaceObservation{}, errors.New("observe bootstrapped Kubernetes Namespace: containment labels or UID do not match")
 	}
 	return KubernetesNamespaceObservation{Namespace: manifests.namespace.Metadata.Name, UID: observed.UID(), Labels: observed.labels(), RenderDigest: manifests.digest}, nil
@@ -136,7 +146,10 @@ func (adapter KubectlAdapter) Diff(ctx context.Context, target OperatorTarget, m
 }
 
 // Teardown performs a complete identity preflight and rechecks each UID and label immediately before deletion.
-func (adapter KubectlAdapter) Teardown(ctx context.Context, target OperatorTarget, rendered Rendered, manifests KubernetesManifests) error {
+func (adapter KubectlAdapter) Teardown(ctx context.Context, target OperatorTarget, rendered Rendered, manifests KubernetesManifests, authority BootstrapAuthority) error {
+	if err := adapter.verifyBootstrapAuthority(ctx, target, manifests, authority); err != nil {
+		return err
+	}
 	state, err := adapter.observeState(ctx, target, manifests)
 	if err != nil {
 		return err
@@ -191,6 +204,21 @@ func (adapter KubectlAdapter) Teardown(ctx context.Context, target OperatorTarge
 	return nil
 }
 
+func (adapter KubectlAdapter) verifyBootstrapAuthority(ctx context.Context, target OperatorTarget, manifests KubernetesManifests, authority BootstrapAuthority) error {
+	if authority.Stack != manifests.stack || authority.Profile != manifests.profile || authority.Namespace != manifests.namespace.Metadata.Name || authority.RenderDigest != manifests.digest || authority.NamespaceUID == "" {
+		return errors.New("verify bootstrap authority: authority does not match rendered Kubernetes manifests")
+	}
+	observed, err := adapter.observeManifest(ctx, target, manifests.namespace)
+	if err != nil {
+		return errors.Wrap(err, "verify bootstrap authority Namespace")
+	}
+	expected := OwnershipLabels{PartOf: "agent-runtime", Stack: manifests.stack, Profile: manifests.profile}
+	if observed.UID() != authority.NamespaceUID || observed.labels() != expected || observed.Metadata.Annotations[bootstrapNonceDigestAnnotation] != authority.NonceDigest() {
+		return errors.New("verify bootstrap authority: Namespace is absent, replaced, or not owned by the reviewed Stack")
+	}
+	return nil
+}
+
 func (adapter KubectlAdapter) verifyNamespaceEmpty(ctx context.Context, target OperatorTarget, namespace string) error {
 	resources := "deployments,statefulsets,jobs,services,ingresses,serviceaccounts,roles,rolebindings,networkpolicies,persistentvolumeclaims,configmaps,resourcequotas,secrets"
 	result, err := adapter.run(ctx, target, []string{"get", resources, "--namespace", namespace, "-o", "json"}, nil)
@@ -228,7 +256,14 @@ func verifyNamespaceEmptyForDeletion(encoded []byte) error {
 }
 
 // Upgrade executes digest-verified declared SQL artifacts through the declared database workload.
-func (adapter KubectlAdapter) Upgrade(ctx context.Context, target OperatorTarget, rendered Rendered) error {
+func (adapter KubectlAdapter) Upgrade(ctx context.Context, target OperatorTarget, rendered Rendered, authority BootstrapAuthority) error {
+	manifests, err := RenderKubernetes(rendered)
+	if err != nil {
+		return err
+	}
+	if err := adapter.verifyBootstrapAuthority(ctx, target, manifests, authority); err != nil {
+		return err
+	}
 	document, err := parseRenderedBytes(rendered.JSON())
 	if err != nil {
 		return errors.Wrap(err, "upgrade rendered database migrations")
@@ -246,7 +281,14 @@ func (adapter KubectlAdapter) Upgrade(ctx context.Context, target OperatorTarget
 }
 
 // Rollback executes only declared current migration artifacts newer than the previous rendered state.
-func (adapter KubectlAdapter) Rollback(ctx context.Context, target OperatorTarget, current Rendered, previous Rendered) error {
+func (adapter KubectlAdapter) Rollback(ctx context.Context, target OperatorTarget, current Rendered, previous Rendered, authority BootstrapAuthority) error {
+	manifests, err := RenderKubernetes(previous)
+	if err != nil {
+		return err
+	}
+	if err := adapter.verifyBootstrapAuthority(ctx, target, manifests, authority); err != nil {
+		return err
+	}
 	currentDocument, err := parseRenderedBytes(current.JSON())
 	if err != nil {
 		return errors.Wrap(err, "rollback current rendered database migrations")
@@ -289,6 +331,10 @@ func (adapter KubectlAdapter) runMigrations(ctx context.Context, target Operator
 	if err := adapter.waitForWorkload(ctx, target, namespace, targetResource.Kubernetes); err != nil {
 		return errors.Wrapf(err, "run database migrations for %s", resource.ID)
 	}
+	user := declaredPostgresUser(targetResource.Kubernetes)
+	if err := adapter.waitForDatabase(ctx, target, namespace, targetResource.Kubernetes, database.Database, user); err != nil {
+		return errors.Wrapf(err, "run database migrations for %s", resource.ID)
+	}
 	migrations := append([]Migration(nil), database.Migrations...)
 	if rollback {
 		sort.Slice(migrations, func(left, right int) bool { return migrations[left].Version > migrations[right].Version })
@@ -309,12 +355,39 @@ func (adapter KubectlAdapter) runMigrations(ctx context.Context, target Operator
 		if err != nil {
 			return errors.Wrapf(err, "run database migration %s version %d", resource.ID, migration.Version)
 		}
-		arguments := []string{"exec", targetResource.Kubernetes.Kind + "/" + targetResource.Kubernetes.Name, "--namespace", namespace, "-i", "--", "psql", "-v", "ON_ERROR_STOP=1", "-U", "postgres", "-d", database.Database, "-f", "-"}
+		arguments := []string{"exec", targetResource.Kubernetes.Kind + "/" + targetResource.Kubernetes.Name, "--namespace", namespace, "-i", "--", "psql", "-v", "ON_ERROR_STOP=1", "-U", user, "-d", database.Database, "-f", "-"}
 		if err := adapter.runSuccess(ctx, target, arguments, sql); err != nil {
 			return errors.Wrapf(err, "execute declared database migration %s version %d", resource.ID, migration.Version)
 		}
 	}
 	return nil
+}
+
+// waitForDatabase closes the brief initdb gap after a workload becomes ready.
+// It deliberately uses bounded command retries rather than a wall-clock sleep.
+func (adapter KubectlAdapter) waitForDatabase(ctx context.Context, target OperatorTarget, namespace string, workload *KubernetesResource, database, user string) error {
+	arguments := []string{"exec", workload.Kind + "/" + workload.Name, "--namespace", namespace, "--", "psql", "-At", "-v", "ON_ERROR_STOP=1", "-U", user, "-d", database, "-c", "SELECT 1"}
+	var lastErr error
+	for attempt := 0; attempt < databaseReadinessAttempts; attempt++ {
+		if err := adapter.runSuccess(ctx, target, arguments, nil); err == nil {
+			return nil
+		} else {
+			lastErr = err
+		}
+		if err := ctx.Err(); err != nil {
+			return errors.Wrap(err, "await database readiness")
+		}
+	}
+	return errors.Wrap(lastErr, "await database readiness after bounded attempts")
+}
+
+func declaredPostgresUser(workload *KubernetesResource) string {
+	for _, variable := range workload.Environment {
+		if variable.Name == "POSTGRES_USER" && variable.Value != "" {
+			return variable.Value
+		}
+	}
+	return "postgres"
 }
 
 func (adapter KubectlAdapter) waitForWorkload(ctx context.Context, target OperatorTarget, namespace string, workload *KubernetesResource) error {
@@ -404,8 +477,9 @@ func (adapter KubectlAdapter) observeManifest(ctx context.Context, target Operat
 
 type observedObject struct {
 	Metadata struct {
-		UID    ObservedUID       `json:"uid"`
-		Labels map[string]string `json:"labels"`
+		UID         ObservedUID       `json:"uid"`
+		Labels      map[string]string `json:"labels"`
+		Annotations map[string]string `json:"annotations"`
 	} `json:"metadata"`
 }
 

@@ -21,6 +21,8 @@ type KubernetesMetadata struct {
 	Namespace string `json:"namespace,omitempty"`
 	// Labels bind this object to exactly one rendered Stack and profile.
 	Labels map[string]string `json:"labels"`
+	// Annotations carry reviewed or operation-specific Kubernetes metadata.
+	Annotations map[string]string `json:"annotations,omitempty"`
 }
 
 // KubernetesManifest is one typed Kubernetes object rendered from a Stack resource.

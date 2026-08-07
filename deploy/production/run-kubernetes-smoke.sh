@@ -26,6 +26,7 @@ for executable in git jq kubectl openssl shasum; do
 done
 
 secret_dir="$(mktemp -d)"
+bootstrap_capability_file="${audit_file}.bootstrap-capability.json"
 bootstrap_complete=false
 apply_complete=false
 
@@ -51,7 +52,7 @@ cleanup() {
       echo "audited teardown refused cleanup; retained $namespace for inspection" >&2
     fi
   elif [[ "$bootstrap_complete" == true ]]; then
-    echo "full desired state was not observed; retained $namespace for inspection" >&2
+    echo "full desired state was not observed; retained $namespace and $bootstrap_capability_file for inspection" >&2
   fi
   rm -rf -- "$secret_dir"
   trap - EXIT
@@ -67,10 +68,11 @@ trap cleanup EXIT
 go run "$root/cmd/stackctl" preflight \
   --stack-file "$stack_file" --profile "$profile" \
   --kubeconfig "$kubeconfig" --context "$context" >/dev/null
-bootstrap_result="$(go run "$root/cmd/stackctl" bootstrap "${operator_arguments[@]}")"
+bootstrap_result="$(go run "$root/cmd/stackctl" bootstrap "${operator_arguments[@]}" --bootstrap-capability-file "$bootstrap_capability_file")"
 bootstrap_complete=true
 bootstrap_uid="$(printf '%s' "$bootstrap_result" | jq -er '.uid')"
 render_digest="$(printf '%s' "$bootstrap_result" | jq -er '.render_digest')"
+operator_arguments+=(--bootstrap-capability-file "$bootstrap_capability_file")
 
 rendered="$(go run "$root/cmd/stackctl" render --stack-file "$stack_file" --profile "$profile")"
 while IFS=$'\t' read -r secret_name secret_key; do
@@ -275,6 +277,7 @@ echo "audited reconcile verified all providers with zero Kubernetes drift"
 go run "$root/cmd/stackctl" teardown "${operator_arguments[@]}" >/dev/null
 apply_complete=false
 bootstrap_complete=false
+kubectl --kubeconfig "$kubeconfig" --context "$context" wait --for=delete "namespace/$namespace" --timeout=120s >/dev/null
 if [[ -n "$(kubectl --kubeconfig "$kubeconfig" --context "$context" get namespace "$namespace" --ignore-not-found -o name)" ]]; then
   echo "audited teardown left the disposable Namespace present" >&2
   exit 1

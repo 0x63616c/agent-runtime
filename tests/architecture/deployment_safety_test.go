@@ -32,6 +32,8 @@ var _ = Describe("M1 deployment safety boundaries", func() {
 		} {
 			Expect(script).To(ContainSubstring(required))
 		}
+		Expect(script).To(ContainSubstring(`operator_arguments+=(--bootstrap-capability-file "$bootstrap_capability_file")`))
+		Expect(script).To(ContainSubstring(`wait --for=delete "namespace/$namespace" --timeout=120s`))
 		for _, forbidden := range []string{
 			"delete namespace",
 			"--from-literal",

@@ -152,6 +152,19 @@ func runWithProbe(ctx context.Context, arguments []string, output io.Writer, pro
 		if err != nil {
 			return err
 		}
+		if arguments[0] == "bootstrap" {
+			authority, authorityErr := stack.NewBootstrapAuthority(rendered, "")
+			if authorityErr != nil {
+				return authorityErr
+			}
+			request.OperatorRequest.BootstrapAuthority = authority
+		} else if requiresBootstrapAuthority(arguments[0]) {
+			authority, authorityErr := stack.ReadBootstrapAuthority(request.CapabilityFile)
+			if authorityErr != nil {
+				return authorityErr
+			}
+			request.OperatorRequest.BootstrapAuthority = authority
+		}
 		adapter, err := stack.NewKubectlAdapter(stack.SystemKubectlRunner{})
 		if err != nil {
 			return err
@@ -169,6 +182,10 @@ func runWithProbe(ctx context.Context, arguments []string, output io.Writer, pro
 			observation, bootstrapErr := operator.Bootstrap(ctx, request.OperatorRequest, rendered)
 			if bootstrapErr != nil {
 				return bootstrapErr
+			}
+			request.OperatorRequest.BootstrapAuthority.NamespaceUID = observation.UID
+			if authorityErr := stack.WriteBootstrapAuthority(request.CapabilityFile, request.OperatorRequest.BootstrapAuthority); authorityErr != nil {
+				return authorityErr
 			}
 			return encodeOperatorResult(output, observation)
 		case "apply":
@@ -208,6 +225,13 @@ func runWithProbe(ctx context.Context, arguments []string, output io.Writer, pro
 		case "teardown":
 			if teardownErr := operator.Teardown(ctx, request.OperatorRequest, rendered); teardownErr != nil {
 				return teardownErr
+			}
+			currentAuthority, authorityErr := stack.ReadBootstrapAuthority(request.CapabilityFile)
+			if authorityErr != nil {
+				return authorityErr
+			}
+			if authorityErr := stack.RemoveBootstrapAuthority(request.CapabilityFile, currentAuthority); authorityErr != nil {
+				return authorityErr
 			}
 			return encodeOperatorResult(output, struct{}{})
 		}
@@ -267,7 +291,8 @@ func parsePreflightArguments(arguments []string) (string, stack.Profile, stack.O
 
 type operatorArguments struct {
 	stack.OperatorRequest
-	Stack string
+	Stack          string
+	CapabilityFile string
 }
 
 func parseOperatorArguments(command string, arguments []string) (operatorArguments, string, stack.Profile, string, string, error) {
@@ -282,13 +307,18 @@ func parseOperatorArguments(command string, arguments []string) (operatorArgumen
 	auditPath := flags.String("audit-file", "", "append-only operator audit file")
 	migrationRoot := flags.String("migration-root", "", "absolute root containing reviewed migration artifacts")
 	rollbackPath := flags.String("rollback-stack-file", "", "previous reviewed Stack document for rollback")
+	capabilityFile := flags.String("bootstrap-capability-file", "", "absolute private capability file created by stackctl bootstrap")
 	if err := flags.Parse(arguments); err != nil {
 		return operatorArguments{}, "", "", "", "", errors.Wrap(err, "parse Kubernetes operator arguments")
 	}
-	if flags.NArg() != 0 || *stackPath == "" || *stackName == "" || *profile == "" || *kubeconfig == "" || *contextName == "" || *actor == "" || *auditPath == "" || *migrationRoot == "" || (command == "rollback" && *rollbackPath == "") || (command != "rollback" && *rollbackPath != "") {
-		return operatorArguments{}, "", "", "", "", errors.Newf("parse %s arguments: --stack-file, --stack, --profile, --kubeconfig, --context, --actor, --audit-file, and --migration-root are required; --rollback-stack-file is required only for rollback", command)
+	if flags.NArg() != 0 || *stackPath == "" || *stackName == "" || *profile == "" || *kubeconfig == "" || *contextName == "" || *actor == "" || *auditPath == "" || *migrationRoot == "" || *capabilityFile == "" || !filepath.IsAbs(*capabilityFile) || (command == "rollback" && *rollbackPath == "") || (command != "rollback" && *rollbackPath != "") {
+		return operatorArguments{}, "", "", "", "", errors.Newf("parse %s arguments: --stack-file, --stack, --profile, --kubeconfig, --context, --actor, --audit-file, --migration-root, and absolute --bootstrap-capability-file are required; --rollback-stack-file is required only for rollback", command)
 	}
-	return operatorArguments{Stack: *stackName, OperatorRequest: stack.OperatorRequest{Actor: *actor, Target: stack.OperatorTarget{Kubeconfig: *kubeconfig, Context: *contextName, MigrationRoot: *migrationRoot}}}, *stackPath, stack.Profile(*profile), *rollbackPath, *auditPath, nil
+	return operatorArguments{Stack: *stackName, CapabilityFile: *capabilityFile, OperatorRequest: stack.OperatorRequest{Actor: *actor, Target: stack.OperatorTarget{Kubeconfig: *kubeconfig, Context: *contextName, MigrationRoot: *migrationRoot}}}, *stackPath, stack.Profile(*profile), *rollbackPath, *auditPath, nil
+}
+
+func requiresBootstrapAuthority(command string) bool {
+	return command == "apply" || command == "reconcile" || command == "rollback" || command == "teardown"
 }
 
 func loadAndRenderNamed(path, name string, profile stack.Profile) (stack.Rendered, error) {
