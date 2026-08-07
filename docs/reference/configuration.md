@@ -16,6 +16,11 @@ read environment variables. Schema version `1` is the only accepted version.
 `cmd/milestone-notify` composes the fixed-topic network transport for milestone
 completion operations. It retains a private crash-durable record before
 delivery, uses a stable sequence identifier, and records retryable failures.
+The required `-milestone` argument selects a compiled, reviewed milestone
+definition; callers cannot supply report labels or terminal requirement
+subsets. `M0` and `M2` are currently supported. Each definition binds the
+operator-facing milestone and next-milestone names to the exact requirement
+IDs that must be complete in the canonical catalog and ledger.
 JSON, formatting, diagnostics, structured logging, fuzz tests, and validation
 errors must not disclose the token. The declarative Stack owns the eventual
 credential reference; the notifier does not create a Secret or bootstrap
