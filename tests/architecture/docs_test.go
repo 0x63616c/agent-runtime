@@ -52,8 +52,8 @@ var _ = Describe("public documentation foundation", func() {
 			Expect(config).To(ContainSubstring(required))
 		}
 		startHere := read("website/docs/start-here/index.mdx")
-		Expect(startHere).To(ContainSubstring(":::caution[Foundation status]"))
-		Expect(startHere).NotTo(ContainSubstring(":::caution Foundation status"))
+		Expect(startHere).To(ContainSubstring(":::caution[Implementation status]"))
+		Expect(startHere).NotTo(ContainSubstring(":::caution Implementation status"))
 	})
 
 	It("declares least-privilege Pages deployment independently of main CI", func() {
