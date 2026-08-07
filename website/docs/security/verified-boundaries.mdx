@@ -6,9 +6,11 @@ description: Evidence levels and security claims during the foundation phase.
 # Verified boundaries
 
 Current M0 checks prove repository governance and deterministic documentation
-behavior. They do **not** prove hostile-tenant isolation, Linux/KVM behavior,
-Firecracker enforcement, production network policy, or command-scoped secret
-delivery.
+behavior. The sandbox control fixture additionally proves unit-level request
+freezing, principal non-enumeration, finite admission, typed termination, and
+redacted bounded replay. It does **not** prove durable storage across a process
+restart, hostile-tenant isolation, Linux/KVM behavior, Firecracker enforcement,
+production network policy, or command-scoped secret delivery.
 
 Future documentation will label proof as unit, workflow, integration, local
 Tilt E2E, or Linux/KVM E2E. A local macOS process adapter can demonstrate

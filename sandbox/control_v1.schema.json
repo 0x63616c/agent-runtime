@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agent-runtime.dev/schema/sandbox.control/v1",
+  "title": "sandbox.control/v1",
+  "type": "object",
+  "required": ["version", "kind"],
+  "additionalProperties": false,
+  "properties": {
+    "version": {"const": "sandbox.control/v1"},
+    "kind": {"enum": ["bind-request", "bind-response", "operation-request"]},
+    "assertion": {"type": "string", "minLength": 1, "maxLength": 512},
+    "expires_at": {"type": "string", "format": "date-time"},
+    "request": {
+      "type": "object",
+      "description": "Canonical OperationRequest object. Its exact tagged-union and field rules are enforced by the sandbox.control/v1 codec before authorization."
+    }
+  },
+  "allOf": [
+    {"if": {"properties": {"kind": {"const": "bind-request"}}}, "then": {"not": {"required": ["assertion", "expires_at"]}}},
+    {"if": {"properties": {"kind": {"const": "bind-response"}}}, "then": {"required": ["assertion", "expires_at"]}},
+    {"if": {"properties": {"kind": {"const": "operation-request"}}}, "then": {"required": ["request"]}}
+  ]
+}

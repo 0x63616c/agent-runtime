@@ -6,10 +6,17 @@ slug: /reference/overview
 
 # Reference status
 
-M0 publishes only the deterministic [source inventory](./generated/source-inventory.mdx).
-There is no public HTTP/OpenAPI contract, Go SDK, deployment catalog, or example
-application to document yet. Their generated reference pages will be added in
-the same implementation slices as those contracts.
+M0 publishes the deterministic [source inventory](./generated/source-inventory.mdx)
+and a compile-tested Go declaration for the `sandbox` control contract. The
+contract declares principal-scoped idempotent Operations, immutable Effective
+Specs, typed process results, bounded output replay, finite limits, and safe
+image-admission metadata.
+
+This is not yet a public HTTP/OpenAPI service, durable database implementation,
+or sandbox host backend. `NewClient` validates explicit client configuration
+but reports unavailable until a control transport is composed. The deterministic
+in-memory fixture is unit/conformance evidence only; it does not claim process
+restart durability, Firecracker enforcement, or tenant isolation.
 
 Generated files live only under `website/docs/reference/generated/`. Curated
 pages explain semantics and ownership without duplicating unverified schemas.
