@@ -300,7 +300,8 @@ func (adapter KubectlDeclaredProviderAdapter) verifyTelemetry(ctx context.Contex
 	if actualTTL != expectedTTL {
 		return errors.New("verify declared telemetry pipeline: collector retention differs from desired state")
 	}
-	result, err := adapter.run(ctx, target, []string{"get", "Endpoints/" + service.Kubernetes.Name, "--namespace", namespace, "-o", "json"}, nil)
+	endpointPath := fmt.Sprintf("/api/v1/namespaces/%s/endpoints/%s", namespace, service.Kubernetes.Name)
+	result, err := adapter.run(ctx, target, []string{"get", "--raw", endpointPath}, nil)
 	if err != nil {
 		return err
 	}

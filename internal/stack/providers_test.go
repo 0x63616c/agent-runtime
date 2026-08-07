@@ -34,7 +34,7 @@ func (runner *fakeProviderRunner) Run(_ context.Context, _ string, arguments []s
 		return stack.KubectlCommandResult{Output: []byte(fmt.Sprintf(`{"metadata":{"uid":"uid-db","labels":{"app.kubernetes.io/part-of":"agent-runtime","agent-runtime.dev/stack":"feature-a","agent-runtime.dev/profile":"local","agent-runtime.dev/external-controller":"local-generated"},"annotations":{"agent-runtime.dev/bootstrap-uid":"uid-namespace","agent-runtime.dev/render-digest":%q}},"data":{"POSTGRES_PASSWORD":"redacted"}}`, runner.expectedDigest))}, nil
 	case strings.Contains(joined, "psql"):
 		return stack.KubectlCommandResult{Output: []byte("1\n")}, nil
-	case strings.Contains(joined, "get Endpoints/telemetry"):
+	case strings.Contains(joined, "get --raw /api/v1/namespaces/ar-feature-a/endpoints/telemetry"):
 		return stack.KubectlCommandResult{Output: []byte(`{"subsets":[{"addresses":[{"ip":"10.0.0.1"}],"ports":[{"name":"otlp"}]}]}`)}, nil
 	default:
 		return stack.KubectlCommandResult{}, nil
@@ -52,6 +52,7 @@ var _ = Describe("Declared provider reconciliation", func() {
 		Expect(err).NotTo(HaveOccurred())
 		Expect(ids).To(Equal([]stack.ResourceID{"blob-creds", "blob-prefix", "db-creds", "runtime-database", "telemetry-pipeline"}))
 		Expect(joinedProviderCommands(runner.commands)).To(ContainSubstring("provider-blob smoke-bucket smoke/payloads http://blob:9000"))
+		Expect(joinedProviderCommands(runner.commands)).To(ContainSubstring("get --raw /api/v1/namespaces/ar-feature-a/endpoints/telemetry"))
 		Expect(joinedProviderCommands(runner.commands)).NotTo(ContainSubstring("redacted"))
 	})
 

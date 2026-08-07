@@ -16,13 +16,17 @@ var _ = Describe("M1 deployment safety boundaries", func() {
 			`AGENT_RUNTIME_SMOKE_KUBECONFIG:?`,
 			`AGENT_RUNTIME_SMOKE_CONTEXT:?`,
 			`AGENT_RUNTIME_SMOKE_AUDIT:?`,
+			`AGENT_RUNTIME_SMOKE_EVIDENCE:?`,
 			`profile="local"`,
 			`stackctl" bootstrap`,
 			`stackctl" apply`,
 			`stackctl" teardown`,
 			`mktemp -d`,
 			`openssl rand -hex 32`,
+			`tr -d '\n'`,
 			`--from-file=`,
+			`create -f -`,
+			`stackctl" reconcile`,
 		} {
 			Expect(script).To(ContainSubstring(required))
 		}
@@ -32,6 +36,7 @@ var _ = Describe("M1 deployment safety boundaries", func() {
 			"fixture-password",
 			"minioadmin",
 			`SMOKE_CONTEXT:-`,
+			`apply -f -`,
 		} {
 			Expect(script).NotTo(ContainSubstring(forbidden))
 		}
