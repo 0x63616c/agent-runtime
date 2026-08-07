@@ -41,11 +41,12 @@ func (spool *outputSpool) Write(chunk []byte) error {
 		return newFailure(FailureResourceLimitExceeded, "produced output limit was exceeded", RetryNever)
 	}
 	spool.produced += uint64(len(chunk))
-	spool.retain(spool.redactor.Write(chunk))
+	redacted, changed := spool.redactor.Write(chunk)
+	spool.retain(redacted, changed)
 	return nil
 }
 
-func (spool *outputSpool) retain(chunk []byte) {
+func (spool *outputSpool) retain(chunk []byte, redacted bool) {
 	if len(chunk) == 0 {
 		return
 	}
@@ -59,29 +60,30 @@ func (spool *outputSpool) retain(chunk []byte) {
 		spool.truncated = true
 	}
 	spool.nextCursor++
-	cursor := outputCursor(spool.nextCursor)
+	cursor := outputCursor(spool.stream, spool.nextCursor)
 	if spool.firstCursor == "" {
 		spool.firstCursor = cursor
 	}
 	spool.retainedBytes += uint64(len(chunk))
-	spool.events = append(spool.events, OutputEvent{Kind: OutputEventChunk, Cursor: cursor, Stream: spool.stream, Chunk: &OutputChunk{Bytes: append([]byte(nil), chunk...), Redacted: spool.redactor.redacted}})
+	spool.events = append(spool.events, OutputEvent{Kind: OutputEventChunk, Cursor: cursor, Stream: spool.stream, Chunk: &OutputChunk{Bytes: append([]byte(nil), chunk...), Redacted: redacted}})
 }
 
 func (spool *outputSpool) Close(result ProcessResult) []OutputEvent {
 	if spool.closed {
 		return spool.Events()
 	}
-	spool.retain(spool.redactor.Flush())
+	redacted, changed := spool.redactor.Flush()
+	spool.retain(redacted, changed)
 	if spool.truncated {
 		spool.nextCursor++
 		earliest := spool.firstCursor
 		if earliest == "" {
-			earliest = outputCursor(spool.nextCursor)
+			earliest = outputCursor(spool.stream, spool.nextCursor)
 		}
-		spool.events = append(spool.events, OutputEvent{Kind: OutputEventGap, Cursor: outputCursor(spool.nextCursor), Stream: spool.stream, Gap: &OutputGap{EarliestRetained: earliest, Reason: "retained output limit exceeded"}})
+		spool.events = append(spool.events, OutputEvent{Kind: OutputEventGap, Cursor: outputCursor(spool.stream, spool.nextCursor), Stream: spool.stream, Gap: &OutputGap{EarliestRetained: earliest, Reason: "retained output limit exceeded"}})
 	}
 	spool.nextCursor++
-	spool.events = append(spool.events, OutputEvent{Kind: OutputEventFinal, Cursor: outputCursor(spool.nextCursor), Stream: spool.stream, Final: &OutputFinal{Result: copyProcessResult(result)}})
+	spool.events = append(spool.events, OutputEvent{Kind: OutputEventFinal, Cursor: outputCursor(spool.stream, spool.nextCursor), Stream: spool.stream, Final: &OutputFinal{Result: copyProcessResult(result)}})
 	spool.closed = true
 	return spool.Events()
 }
@@ -101,7 +103,6 @@ func (spool *outputSpool) Retention() OutputRetention {
 type literalRedactor struct {
 	patterns [][]byte
 	pending  []byte
-	redacted bool
 }
 
 func newLiteralRedactor(patterns []string) (*literalRedactor, error) {
@@ -122,16 +123,16 @@ func newLiteralRedactor(patterns []string) (*literalRedactor, error) {
 	return value, nil
 }
 
-func (redactor *literalRedactor) Write(chunk []byte) []byte {
+func (redactor *literalRedactor) Write(chunk []byte) ([]byte, bool) {
 	redactor.pending = append(redactor.pending, chunk...)
 	if len(redactor.patterns) == 0 {
 		ready := append([]byte(nil), redactor.pending...)
 		redactor.pending = nil
-		return ready
+		return ready, false
 	}
 	limit := len(redactor.pending) - (redactor.longestPattern() - 1)
 	if limit <= 0 {
-		return nil
+		return nil, false
 	}
 	// A pattern may begin before the usual look-behind boundary and end after
 	// it. Keep from the beginning of that pattern so it cannot leak in two
@@ -160,14 +161,14 @@ func (redactor *literalRedactor) Write(chunk []byte) []byte {
 		}
 	}
 	if limit <= 0 {
-		return nil
+		return nil, false
 	}
 	ready := append([]byte(nil), redactor.pending[:limit]...)
 	redactor.pending = append([]byte(nil), redactor.pending[limit:]...)
 	return redactor.replace(ready)
 }
 
-func (redactor *literalRedactor) Flush() []byte {
+func (redactor *literalRedactor) Flush() ([]byte, bool) {
 	ready := redactor.pending
 	redactor.pending = nil
 	return redactor.replace(ready)
@@ -183,12 +184,13 @@ func (redactor *literalRedactor) longestPattern() int {
 	return longest
 }
 
-func (redactor *literalRedactor) replace(value []byte) []byte {
+func (redactor *literalRedactor) replace(value []byte) ([]byte, bool) {
+	changed := false
 	for _, pattern := range redactor.patterns {
 		if bytes.Contains(value, pattern) {
-			redactor.redacted = true
+			changed = true
 			value = bytes.ReplaceAll(value, pattern, []byte("[REDACTED]"))
 		}
 	}
-	return append([]byte(nil), value...)
+	return append([]byte(nil), value...), changed
 }

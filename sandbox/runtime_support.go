@@ -301,7 +301,9 @@ func copyOutputEvent(value OutputEvent) OutputEvent {
 	return copied
 }
 
-func outputCursor(number uint64) OutputCursor { return OutputCursor(strconv.FormatUint(number, 10)) }
+func outputCursor(stream OutputKind, number uint64) OutputCursor {
+	return OutputCursor(string(stream) + ":" + strconv.FormatUint(number, 10))
+}
 
 var _ OperationStream = (*sliceOperationStream)(nil)
 var _ OutputStream = (*sliceOutputStream)(nil)

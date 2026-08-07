@@ -37,3 +37,23 @@ func TestOutputSpoolStopsAtProducedLimit(t *testing.T) {
 		t.Fatal("second Write() error = nil, want output limit")
 	}
 }
+
+func TestOutputSpoolMarksOnlyChunksWhoseBytesWereRedacted(t *testing.T) {
+	spool, err := newOutputSpool(OutputStdout, 64, 64, []string{"secret"})
+	if err != nil {
+		t.Fatalf("newOutputSpool() error = %v", err)
+	}
+	if err := spool.Write([]byte("secret")); err != nil {
+		t.Fatalf("first Write() error = %v", err)
+	}
+	if err := spool.Write([]byte(" ordinary")); err != nil {
+		t.Fatalf("second Write() error = %v", err)
+	}
+	events := spool.Close(ProcessResult{Reason: TerminationCancelled})
+	if len(events) < 2 || !events[0].Chunk.Redacted {
+		t.Fatalf("first output event = %#v, want redacted chunk", events[0])
+	}
+	if events[1].Chunk.Redacted {
+		t.Fatalf("ordinary output event = %#v, must not inherit a prior chunk's redaction flag", events[1])
+	}
+}

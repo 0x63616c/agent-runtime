@@ -89,6 +89,9 @@ type processRecord struct {
 	info        ProcessInfo
 	stdout      *outputSpool
 	stderr      *outputSpool
+	output      []OutputEvent
+	nextOutput  uint64
+	cursors     map[OutputCursor]OutputCursor
 }
 
 func newCoreClient(principal string, now time.Time) *coreClient {
@@ -246,7 +249,7 @@ func (client *coreClient) reserveAcceptedResourcesLocked(ledger *principalLedger
 		limits := entry.effective.limits
 		stdout, _ := newOutputSpool(OutputStdout, limits.ProducedOutputBytes, limits.RetainedOutputBytes, nil)
 		stderr, _ := newOutputSpool(OutputStderr, limits.ProducedOutputBytes, limits.RetainedOutputBytes, nil)
-		ledger.processes[id] = &processRecord{operationID: entry.value.Ref.ID, info: ProcessInfo{ID: id, SandboxID: entry.request.ExecProcess.SandboxID, State: ProcessAccepted}, stdout: stdout, stderr: stderr}
+		ledger.processes[id] = &processRecord{operationID: entry.value.Ref.ID, info: ProcessInfo{ID: id, SandboxID: entry.request.ExecProcess.SandboxID, State: ProcessAccepted}, stdout: stdout, stderr: stderr, cursors: make(map[OutputCursor]OutputCursor)}
 	}
 }
 
@@ -410,7 +413,7 @@ func (client *coreClient) ReplayOutput(ctx context.Context, id ProcessID, from O
 		return nil, newFailure(FailureNotFoundOrDenied, "process was not found", RetryNever)
 	}
 	record := ledger.processes[id]
-	events := append(record.stdout.Events(), record.stderr.Events()...)
+	events := append([]OutputEvent(nil), record.output...)
 	client.ledger.mu.RUnlock()
 	return newSliceOutputStream(events, from)
 }
@@ -541,8 +544,12 @@ func (client *coreClient) startProcess(ctx context.Context, id ProcessID) error 
 func (client *coreClient) completeProcessLocked(ledger *principalLedger, record *processRecord, result ProcessResult) {
 	record.info.State = ProcessTerminal
 	record.info.Result = ptrProcessResult(copyProcessResult(result))
+	stdoutEvents := len(record.stdout.events)
 	record.stdout.Close(result)
+	client.captureOutputLocked(record, record.stdout, stdoutEvents)
+	stderrEvents := len(record.stderr.events)
 	record.stderr.Close(result)
+	client.captureOutputLocked(record, record.stderr, stderrEvents)
 	record.info.Stdout = record.stdout.Retention()
 	record.info.Stderr = record.stderr.Retention()
 	if entry := ledger.operations[record.operationID]; entry != nil && !isTerminalOperation(entry.value.State) {
@@ -568,6 +575,7 @@ func (client *coreClient) appendProcessOutput(id ProcessID, stream OutputKind, c
 	default:
 		return newFailure(FailureInvalidArgument, "output stream is invalid", RetryNever)
 	}
+	before := len(spool.events)
 	if err := spool.Write(chunk); err != nil {
 		failure, _ := AsFailure(err)
 		if failure.Code == FailureResourceLimitExceeded && ledger.processes[id].info.State != ProcessTerminal {
@@ -576,7 +584,31 @@ func (client *coreClient) appendProcessOutput(id ProcessID, stream OutputKind, c
 		}
 		return err
 	}
+	client.captureOutputLocked(ledger.processes[id], spool, before)
 	return nil
+}
+
+// captureOutputLocked assigns one process-wide opaque cursor sequence after
+// each stream-specific spool transition. A replay therefore preserves the
+// control-plane observation order while each spool retains independent limits.
+func (client *coreClient) captureOutputLocked(record *processRecord, spool *outputSpool, from int) {
+	for index := from; index < len(spool.events); index++ {
+		event := spool.events[index]
+		oldCursor := event.Cursor
+		record.nextOutput++
+		event.Cursor = outputCursor("output", record.nextOutput)
+		record.cursors[oldCursor] = event.Cursor
+		if spool.firstCursor == oldCursor {
+			spool.firstCursor = event.Cursor
+		}
+		if event.Gap != nil {
+			if cursor, found := record.cursors[event.Gap.EarliestRetained]; found {
+				event.Gap.EarliestRetained = cursor
+			}
+		}
+		spool.events[index] = event
+		record.output = append(record.output, copyOutputEvent(event))
+	}
 }
 
 func (client *coreClient) acceptedOperation(id OperationID) accepted {

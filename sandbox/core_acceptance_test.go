@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -308,6 +309,65 @@ func TestOutputRetentionGapDoesNotLeakCrossChunkSecretAndFinalIsUnique(t *testin
 	}
 	if _, err := newSliceOutputStream(events, "999"); err == nil {
 		t.Fatal("expired replay cursor must return an explicit output gap")
+	}
+}
+
+func TestProcessOutputCursorsStayUnambiguousAcrossStreams(t *testing.T) {
+	policy := testLimitPolicy()
+	policy.defaults.ProducedOutputBytes, policy.defaults.RetainedOutputBytes = 64, 64
+	policy.maximum.ProducedOutputBytes, policy.maximum.RetainedOutputBytes = 64, 64
+	client, err := newCoreClientWithPolicy("principal-a", time.Date(2026, 8, 6, 12, 0, 0, 0, time.UTC), policy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := OperationRequest{ID: "op_output_cursors", Kind: OperationExecProcess, ExecProcess: &ExecProcessRequest{SandboxID: "sbx_01", Command: Command{Executable: "/bin/echo", Argv: []string{"echo"}, WorkDir: "/work"}}}
+	if _, err := client.Submit(context.Background(), request); err != nil {
+		t.Fatal(err)
+	}
+	processID := processIDFor(request.ID)
+	if err := client.appendProcessOutput(processID, OutputStdout, []byte("one")); err != nil {
+		t.Fatal(err)
+	}
+	if err := client.appendProcessOutput(processID, OutputStderr, []byte("two")); err != nil {
+		t.Fatal(err)
+	}
+	if err := client.completeProcess(processID, ProcessResult{Reason: TerminationCancelled, Cleanup: TreeCleanupConfirmed}); err != nil {
+		t.Fatal(err)
+	}
+	stream, err := client.ReplayOutput(context.Background(), processID, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stream.Close()
+	seen := map[OutputCursor]OutputKind{}
+	chunks := make([]string, 0, 2)
+	stdoutFinal, stderrChunk := -1, -1
+	position := 0
+	for {
+		event, nextErr := stream.Next(context.Background())
+		if nextErr != nil {
+			break
+		}
+		if prior, duplicate := seen[event.Cursor]; duplicate {
+			t.Fatalf("output cursor %q is shared by %q and %q", event.Cursor, prior, event.Stream)
+		}
+		seen[event.Cursor] = event.Stream
+		if event.Chunk != nil {
+			chunks = append(chunks, string(event.Chunk.Bytes))
+			if event.Stream == OutputStderr {
+				stderrChunk = position
+			}
+		}
+		if event.Final != nil && event.Stream == OutputStdout {
+			stdoutFinal = position
+		}
+		position++
+	}
+	if got, want := strings.Join(chunks, ","), "one,two"; got != want {
+		t.Fatalf("replayed chunk order = %q, want %q", got, want)
+	}
+	if stdoutFinal < stderrChunk {
+		t.Fatalf("stdout final at %d arrived before prior stderr output at %d", stdoutFinal, stderrChunk)
 	}
 }
 
