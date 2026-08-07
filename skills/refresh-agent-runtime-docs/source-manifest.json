@@ -1,0 +1,38 @@
+{
+  "schemaVersion": 1,
+  "rendererVersion": "source-inventory/v1",
+  "generated": [
+    {
+      "output": "website/docs/reference/generated/source-inventory.mdx",
+      "inputs": [
+        ".github/workflows/docs-pages.yml",
+        ".nvmrc",
+        "CONTEXT.md",
+        "README.md",
+        "skills/refresh-agent-runtime-docs/SKILL.md",
+        "website/docs/build-and-run/local-foundation.mdx",
+        "website/docs/concepts/runtime-language.mdx",
+        "website/docs/examples/index.mdx",
+        "website/docs/help/publication-operations.mdx",
+        "website/docs/reference/overview.mdx",
+        "website/docs/security/verified-boundaries.mdx",
+        "website/docs/start-here/index.mdx",
+        "website/docusaurus.config.ts",
+        "website/package-lock.json",
+        "website/package.json",
+        "website/sidebars.ts"
+      ],
+      "artifactKind": "source-inventory",
+      "publicStatus": "M0 documentation foundation"
+    }
+  ],
+  "curated": [
+    "website/docs/build-and-run/local-foundation.mdx",
+    "website/docs/concepts/runtime-language.mdx",
+    "website/docs/examples/index.mdx",
+    "website/docs/help/publication-operations.mdx",
+    "website/docs/reference/overview.mdx",
+    "website/docs/security/verified-boundaries.mdx",
+    "website/docs/start-here/index.mdx"
+  ]
+}

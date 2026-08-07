@@ -1,6 +1,7 @@
 # Public documentation stack and refresh contract
 
-**Status:** proposed implementation plan; no site or skill exists yet.
+**Status:** accepted design; M0 site foundation and refresh skill implemented
+for DOC-005/DOC-008, with #34 retaining publication revalidation ownership.
 **Owns:** DOC-001--008, plus documentation checks for API, deployment, examples, and milestone notifications.
 **Decision date:** 2026-08-06.
 **Research standard:** linked sources are current official primary documentation checked on the decision date.
@@ -164,9 +165,9 @@ The deterministic runner:
 2. Runs prerequisite contract checks: OpenAPI, public Go discovery, typed config, and rendered deployment/catalog consistency.
 3. Renders in memory in stable sorted order; timestamps, machine paths, random IDs, secret values, and environment values are banned.
 4. In `--check`, compares bytes only and fails missing/stale output. It never writes, creates directories, or formats.
-5. Normally refuses to replace selected tracked output with differing staged or unstaged edits. Preserve complete `BEGIN/END curated-NAME` byte ranges; print a labelled, unapplied patch proposal when evidence suggests curated prose change.
+5. Refuses to replace any existing untracked output or selected tracked output with differing staged or unstaged edits. A genuinely missing output may be created. Preserve complete `BEGIN/END curated-NAME` byte ranges; print a labelled, unapplied patch proposal when evidence suggests curated prose change.
 6. Writes only changed allow-listed files with same-directory temporary file, fsync/close/atomic rename. Failure leaves no partial tree; unchanged repeat has no diff.
-7. Runs `just docs-check` and only then prints exact unfiltered `git diff --no-ext-diff -- website/ skills/refresh-agent-runtime-docs/ skills/develop-with-agent-runtime/ deploy/catalog.yaml`. Missing git state is reported, never claimed as reviewed.
+7. Runs `just docs-check` and only then prints exact unfiltered `git diff --no-ext-diff HEAD -- website/ skills/refresh-agent-runtime-docs/ skills/develop-with-agent-runtime/ deploy/catalog.yaml`, followed by bounded rendering of existing untracked files. Missing git state is reported, never claimed as reviewed.
 
 No success marker is written. The byte comparison and exact final diff are the evidence.
 
@@ -180,42 +181,56 @@ No success marker is written. The byte comparison and exact final diff are the e
 
 ## Links, snippets, commands, and CI
 
-Docusaurus production build is the deterministic internal link/route gate. Strict anchor and Markdown hooks elevate warnings to errors. A bounded external-link checker follows redirects and requires each exception to name an owner, reason, and expiry; it cannot weaken internal build checking.
+Docusaurus production build is the implemented deterministic internal
+link/route gate. Strict broken-link and broken-anchor settings elevate those
+faults to errors. #34 adds the bounded external-link checker and requires each
+exception to name an owner, reason, and expiry; it cannot weaken internal build
+checking.
 
-Each fenced sh, bash, console, go, json, yaml, and HTTP block has a stable ID in `website/snippets.yaml` and is one of:
+When runnable public capabilities arrive, each fenced sh, bash, console, go,
+json, yaml, and HTTP block will have a stable ID in `website/snippets.yaml` and
+be one of:
 
 - **run:** hermetic executable fixture and expected result;
 - **compile:** extracted parsed/compiled fixture;
 - **verify-only:** redacted/destructive operator command, syntax-checked and linked to exact integration/E2E proof;
 - **non-executable:** diagram/pseudocode only, with rationale.
 
-`tools/doccheck` rejects unclassified blocks and executes fixtures in a temporary checkout with timeout and no ambient credentials. A real local stack is permitted only through a named just fixture that starts and cleans it up. Three tutorials run actual public SDK/HTTP demos. Formatting, spelling, MDX validation, production build, and browser accessibility/navigation smoke are one gate.
+#34 will add `tools/doccheck`, reject unclassified blocks, and execute fixtures
+in a temporary checkout with timeout and no ambient credentials. A real local
+stack is permitted only through a named just fixture that starts and cleans it
+up. The three tutorials will run actual public SDK/HTTP demos. Formatting,
+spelling, MDX validation, production build, and browser
+accessibility/navigation smoke then become one publication gate.
 
-Proposed commands (do not put them in AGENTS.md until implemented):
+Implemented M0 documentation commands:
 
     just docs
+      npm --prefix website ci
       npm --prefix website run start
 
     just docs-generate
       go run ./skills/refresh-agent-runtime-docs/scripts/refresh-docs --root .
 
     just docs-check
-      just api-check
-      go run ./tools/docsgen --root . --check
-      go run ./tools/doccheck --root . --mode all
+      go run ./skills/refresh-agent-runtime-docs/scripts/refresh-docs --root . --check
       npm --prefix website ci
-      npm --prefix website run format:check
-      npm --prefix website run spell:check
+      npm --prefix website audit --omit=dev --audit-level=high
+      npm --prefix website run typecheck
       npm --prefix website run build
-      npm --prefix website run test:a11y
 
-    just verify
-      ...implementation/integration gates...
-      just docs-check
+ci.yml runs `just docs-check` on every default-branch push with exact Node 24
+and an npm cache keyed by `website/package-lock.json`. This direct-main build
+does not add a pull-request-only gate. GitHub documents setup-node caching for
+npm/Yarn/pnpm and warns against cached secrets; cache dependencies only.
 
-ci.yml runs `just docs-check` on every PR/default-branch push with Node 24 and npm cache keyed by website/package-lock.json. GitHub documents setup-node caching for npm/Yarn/pnpm and warns against cached secrets; cache dependencies only.
-
-docs-pages.yml has build/deploy jobs. PRs run full check/build without deploying. Default-branch/manual runs upload website/build using upload-pages-artifact; deploy needs that build and only has contents: read, pages: write, id-token: write, targets protected github-pages, then calls deploy-pages. An administrator sets Pages source to **GitHub Actions** and protects default-branch deployment.
+docs-pages.yml has build/deploy jobs. Default-branch/manual runs build and
+upload `website/build` using upload-pages-artifact. During M0 pre-publication,
+only an explicit manual dispatch runs deploy; #34 enables default-branch
+deployment only after publication proof. Deploy needs that build and only has
+contents: read, pages: write, id-token: write, targets protected github-pages,
+then calls deploy-pages. An administrator sets Pages source to **GitHub
+Actions** and protects default-branch deployment.
 
 Set `url: https://0x63616c.github.io` and `baseUrl: /agent-runtime/` so CI tests the project-site prefix. A custom domain is a separate reviewed change. Enable DocSearch after public crawl with client config in repository variables; build validates config metadata and release check validates deployed search.
 

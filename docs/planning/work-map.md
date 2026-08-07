@@ -92,7 +92,8 @@ start through a closed duplicate.
 
 ## Commands: planned versus working
 
-`tilt up -- --stack=<name>`, `just test`, `just integration`, `just e2e`,
-`just docs`, and `just docs-check` are **planned command contracts** until a
-checked-in implementation and clean-checkout evidence exist.
-Do not copy them into public quickstarts as working commands before then.
+`just docs` and `just docs-check` are implemented by #8. `tilt up
+-- --stack=<name>`, `just test`, `just integration`, and `just e2e` remain
+**planned command contracts** until a checked-in implementation and
+clean-checkout evidence exist. Do not copy planned commands into public
+quickstarts as working commands before then.

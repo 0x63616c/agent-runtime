@@ -178,7 +178,7 @@ not evidence claimed to exist today.
 | DOC-002 | Documentation coverage manifest/link check for every named section. | Docusaurus information architecture. |
 | DOC-003 | Generated OpenAPI/GoDoc reference build and drift check. | Reference pages. |
 | DOC-004 | Snippet harness, link checker, docs build/format/spell CI gate. | Docs contribution guide. |
-| DOC-005 | Docs skill fixture test validates changed API/config behavior is detected and checked. | `skills/docs/SKILL.md`. |
+| DOC-005 | Docs skill fixture test validates changed API/config behavior is detected and checked. | `skills/refresh-agent-runtime-docs/SKILL.md`. |
 | DOC-006 | README command/link/quickstart smoke test. | Root README. |
 | DOC-007 | Claim-classification lint/review with local-vs-KVM fixtures. | Security evidence policy. |
 | DOC-008 | Locked docs-toolchain/site-root/Pages URL/version/search/accessibility/permissions/rollback and docs-skill drift/curated-content fixture suite. | Documentation publication operations guide. |

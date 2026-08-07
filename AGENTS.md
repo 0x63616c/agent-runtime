@@ -206,18 +206,19 @@ behavior sentences. Generated output is never hand-edited.
 
 `just check` is the implemented incremental repository gate; `just verify` is
 the implemented milestone/release completion gate and must remain red until
-every canonical ledger row has valid completed evidence. Do **not** claim that
-`tilt`, docs, integration, E2E, or release commands work until their
-implementation and tests land.
+every canonical ledger row has valid completed evidence. `just docs`, `just
+docs-generate`, and `just docs-check` are implemented for the M0 public-docs
+foundation. Do **not** claim that `tilt`, integration, E2E, or release commands
+work until their implementation and tests land.
 
 The intended command vocabulary is `just check`, `tilt up`, `just test`, `just
 integration`, `just e2e`, `just verify`, `just docs`, and `just docs-check`.
 Only implemented commands are instructions; the remainder are planning
 vocabulary. When a
 public capability, route, configuration field, example, security claim, or
-operator path changes, run `refresh-agent-runtime-docs` only once that
-repo-local tested skill exists; otherwise update only the current truthful
-planning/evidence record and state the missing automation.
+operator path changes, use `skills/refresh-agent-runtime-docs/SKILL.md`; its
+allow-listed runner must remain green and must not invent unimplemented
+behavior.
 
 ## Direct-main AFK policy
 

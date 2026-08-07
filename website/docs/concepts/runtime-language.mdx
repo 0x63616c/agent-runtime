@@ -1,0 +1,19 @@
+---
+title: Runtime language
+description: The small set of terms that make durable agent behavior precise.
+---
+
+# Runtime language
+
+An **Agent revision** is the immutable behavior and policy definition pinned to
+a **Session**. An idempotently accepted **Input** advances that Session through
+one ordered **Turn**, and every Turn has exactly one terminal outcome.
+
+A model's **Tool call** expresses intent only. A **Policy** may deny it, require
+human **Approval**, or issue a bounded **Capability grant**. A separately
+recorded **Tool execution** then attempts the authorized action.
+
+A **Product event** is a bounded caller-safe observation. A **Cursor** resumes
+observation without making the transport connection the owner of durable work.
+The full canonical glossary remains in `CONTEXT.md` until generated public API
+reference exists.

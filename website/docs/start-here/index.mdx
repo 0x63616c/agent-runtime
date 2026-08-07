@@ -1,0 +1,24 @@
+---
+title: Start here
+description: What Agent Runtime is, what exists today, and where to go next.
+slug: /start-here
+sidebar_position: 1
+---
+
+# Agent Runtime
+
+Agent Runtime is being built as one Go monorepo for durable, session-based
+agents. Its intended boundary includes versioned Agents, Sessions, Turns,
+streamed Events, approvals, artifacts, governed tools, provider adapters,
+Temporal orchestration, and optional sandboxes.
+
+:::caution[Foundation status]
+The repository is in M0 foundation work. It does not yet ship the public
+runtime, SDK, three examples, Tilt stack, or verified Firecracker isolation.
+This site deliberately does not provide fictional quickstart commands.
+:::
+
+Start with [the domain language](../concepts/runtime-language.mdx), then read
+[the verified safety boundary](../security/verified-boundaries.mdx). The
+[source inventory](../reference/generated/source-inventory.mdx) records the
+declared inputs behind this documentation snapshot.
