@@ -24,13 +24,13 @@ secret_manifests = local('go run ./tools/dev secrets --stack=' + stack + ' --roo
 k8s_yaml([stack_manifests, secret_manifests])
 
 for role in ['api', 'worker', 'codec']:
-    docker_build('agent-runtime-dev/' + stack + '/' + role, '.', dockerfile='deploy/dev/Dockerfile', only=['cmd/dev-role', 'deploy/dev/Dockerfile', 'go.mod', 'go.sum'])
+    docker_build('agent-runtime-dev/' + stack + '/' + role, '.', dockerfile='deploy/dev/Dockerfile', only=['cmd/runtime', 'internal/roles', 'deploy/dev/Dockerfile', 'go.mod', 'go.sum'])
 
 k8s_resource('postgres', pod_readiness='wait')
 k8s_resource('temporal', resource_deps=['postgres'], pod_readiness='wait')
 k8s_resource('temporal-ui', resource_deps=['temporal'], links=[link('http://temporal-ui:8080', 'Temporal UI')])
 k8s_resource('blob', pod_readiness='wait')
 k8s_resource('telemetry', pod_readiness='wait')
-k8s_resource('api', resource_deps=['postgres', 'temporal', 'blob', 'telemetry'], links=[link('http://api:8080/healthz', 'API health')])
-k8s_resource('worker', resource_deps=['postgres', 'temporal', 'blob', 'telemetry'])
-k8s_resource('codec', resource_deps=['blob', 'temporal'], links=[link('http://codec:8082/healthz', 'Codec health'), link('https://0x63616c.github.io/agent-runtime/', 'Agent Runtime docs')])
+k8s_resource('api', resource_deps=['postgres', 'temporal', 'blob', 'telemetry'], pod_readiness='wait', links=[link('http://api:8080/readyz', 'API runtime readiness')])
+k8s_resource('worker', resource_deps=['postgres', 'temporal', 'blob', 'telemetry'], pod_readiness='wait', links=[link('http://worker:8081/readyz', 'Orchestration runtime readiness')])
+k8s_resource('codec', resource_deps=['blob', 'temporal'], pod_readiness='wait', links=[link('http://codec:8082/readyz', 'Codec runtime readiness'), link('https://0x63616c.github.io/agent-runtime/', 'Agent Runtime docs')])

@@ -9,8 +9,12 @@ The M1 local environment is runnable on macOS with an already-running OrbStack
 Kubernetes cluster. It starts one disposable namespace containing dedicated
 PostgreSQL storage, Temporal and Temporal UI, MinIO-compatible blob storage,
 telemetry, and three small API/worker/codec role images. Each role currently
-proves image build, health, readiness, role wiring, and lifecycle only—it is
-not the public Agent Runtime API, Temporal payload codec, or any example app.
+uses the actual trust-scoped `cmd/runtime` binary and an explicit checked role
+configuration: API, orchestration (the `worker` Deployment), or codec. Tilt
+groups their logs and rebuilds all three images when `cmd/runtime` or
+`internal/roles` changes. This proves binary build, configuration validation,
+secret-reference injection, readiness, and lifecycle—not the complete public
+Agent Runtime API, Temporal payload codec behavior, or any example app.
 
 ## Start
 
@@ -48,8 +52,8 @@ just dev-api stack=research-a
 
 `dev-api` is a foreground port-forward. It selects a local port and exits when
 you stop it; it does not create a hidden background daemon. Tilt exposes links
-for the API health endpoint, Temporal UI, codec health endpoint, and these
-docs.
+for the API, orchestration worker, and codec runtime readiness endpoints,
+Temporal UI, and these docs.
 
 ## Credentials and persistence
 

@@ -253,9 +253,17 @@ func materializeSecrets(stack, root string, reader io.Reader) ([]byte, error) {
 		return nil, fmt.Errorf("read local development secret state: %w", err)
 	}
 	if state.Values == nil {
+		databasePassword := randomValue(reader)
+		temporalToken := randomValue(reader)
+		codecCredential := randomValue(reader)
 		state = localSecrets{Stack: stack, Values: map[string]map[string]string{
-			"database-credentials": {"POSTGRES_USER": "agentruntime", "POSTGRES_PASSWORD": randomValue(reader)},
+			"database-credentials": {"POSTGRES_USER": "agentruntime", "POSTGRES_PASSWORD": databasePassword},
 			"blob-credentials":     {"MINIO_ROOT_USER": "agentruntime", "MINIO_ROOT_PASSWORD": randomValue(reader)},
+			"runtime-role-credentials": {
+				"STATE_DATABASE_DSN":    "postgres://agentruntime:" + databasePassword + "@postgres:5432/agent_runtime",
+				"TEMPORAL_AUTH_TOKEN":   temporalToken,
+				"CODEC_BLOB_CREDENTIAL": codecCredential,
+			},
 		}}
 		encoded, err := json.Marshal(state)
 		if err != nil {
@@ -266,7 +274,7 @@ func materializeSecrets(stack, root string, reader io.Reader) ([]byte, error) {
 		}
 	}
 	items := make([]map[string]any, 0, len(state.Values))
-	for _, name := range []string{"blob-credentials", "database-credentials"} {
+	for _, name := range []string{"blob-credentials", "database-credentials", "runtime-role-credentials"} {
 		items = append(items, map[string]any{"apiVersion": "v1", "kind": "Secret", "metadata": map[string]any{"name": name, "labels": map[string]string{"app.kubernetes.io/part-of": "agent-runtime", "agent-runtime.dev/stack": stack, "agent-runtime.dev/profile": "local", "agent-runtime.dev/resource": name}}, "type": "Opaque", "stringData": state.Values[name]})
 	}
 	encoded, err := json.Marshal(map[string]any{"apiVersion": "v1", "kind": "List", "items": items})
