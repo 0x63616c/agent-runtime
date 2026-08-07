@@ -11,6 +11,7 @@
         "README.md",
         "docs/reference/sandbox-control-v1.md",
         "docs/reference/temporal-payloads.md",
+        "docs/operations/sandbox-control-ledger.md",
         "sandbox/api.go",
         "sandbox/api_example_test.go",
         "skills/refresh-agent-runtime-docs/SKILL.md",
@@ -21,6 +22,7 @@
         "website/docs/help/publication-operations.mdx",
         "website/docs/reference/overview.mdx",
         "website/docs/reference/temporal-payloads.mdx",
+        "website/docs/reference/sandbox-control-ledger.mdx",
         "website/docs/security/verified-boundaries.mdx",
         "website/docs/start-here/index.mdx",
         "website/docusaurus.config.ts",
@@ -40,6 +42,7 @@
     "website/docs/help/publication-operations.mdx",
     "website/docs/reference/overview.mdx",
     "website/docs/reference/temporal-payloads.mdx",
+    "website/docs/reference/sandbox-control-ledger.mdx",
     "website/docs/security/verified-boundaries.mdx",
     "website/docs/start-here/index.mdx"
   ]

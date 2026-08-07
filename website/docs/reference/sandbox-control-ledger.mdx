@@ -1,0 +1,41 @@
+---
+title: Sandbox-control ledger
+description: Implemented PostgreSQL durability and the remaining M3 recovery boundary.
+---
+
+# Sandbox-control ledger
+
+The M3 implementation now includes a PostgreSQL-backed operation ledger behind
+the same durable-store contract as its deterministic memory fixture. This is a
+private control-plane component; public callers continue to use Principal-bound
+Sandbox Operations rather than database or Temporal identifiers.
+
+Implemented and integration-tested behavior includes:
+
+- serializable, immutable Operation acceptance with reconnect and conflict;
+- Principal-scoped non-enumeration and permanent Operation-ID tombstones;
+- finite host leases and monotonically advancing fencing tokens;
+- rejection of stale or late host results;
+- bounded recovery of expired assignments as uncertain outcomes;
+- durable cleanup claim, confirmation, and safe tombstoning;
+- an ordered, content-free transactional outbox; and
+- process/pool restart plus concurrent-acceptance tests against real PostgreSQL.
+
+The sandbox-control binary has no migration authority. Operators apply the
+reviewed artifacts under `deploy/sandboxcontrol/migrations/` through explicit
+infrastructure reconciliation. Ledger rows contain digests and bounded
+recovery facts—not requests, output, artifacts, secrets, credentials, or live
+backend handles.
+
+:::caution Partial M3 evidence
+
+This proves the PostgreSQL adapter, not the complete sandbox service. The
+public HTTPS operation transport still needs to be connected to this store;
+host enrollment and authenticated envelopes belong to the next issue; and the
+full separate-process worker/control/host restart and output-replay suite is
+not green. No M3 requirement is promoted from this slice alone.
+
+:::
+
+The exact state, commit, lease, reaper, and disposable integration procedure is
+documented in `docs/operations/sandbox-control-ledger.md` in the repository.

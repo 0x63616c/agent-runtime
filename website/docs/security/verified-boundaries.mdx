@@ -8,9 +8,14 @@ description: Evidence levels and security claims during the foundation phase.
 Current M0 checks prove repository governance and deterministic documentation
 behavior. The sandbox control fixture additionally proves unit-level request
 freezing, principal non-enumeration, finite admission, typed termination, and
-redacted bounded replay. It does **not** prove durable storage across a process
-restart, hostile-tenant isolation, Linux/KVM behavior, Firecracker enforcement,
-production network policy, or command-scoped secret delivery.
+redacted bounded replay. A real PostgreSQL adapter integration now proves
+serializable immutable acceptance, pool/process-component restart reconnect,
+concurrent conflict handling, lease fencing, cleanup-confirmed tombstones, and
+ordered transactional outbox replay. It does **not** yet prove the complete
+control service across separate process failure, durable output-store replay,
+host-agent enrollment, hostile-tenant isolation, Linux/KVM behavior,
+Firecracker enforcement, production network policy, or command-scoped secret
+delivery.
 
 Future documentation will label proof as unit, workflow, integration, local
 Tilt E2E, or Linux/KVM E2E. A local macOS process adapter can demonstrate

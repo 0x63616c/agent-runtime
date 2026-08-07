@@ -1,0 +1,29 @@
+name: agent-runtime-sandbox-control
+
+services:
+  postgres:
+    image: postgres@sha256:e5507c984377515b8c9922b0eb19f55aba2063fdc7bccf268cefd53133f97054
+    environment:
+      POSTGRES_DB: agent_runtime
+      POSTGRES_USER: sandbox_control
+      POSTGRES_PASSWORD: ${AR_SANDBOXCONTROL_POSTGRES_PASSWORD:?AR_SANDBOXCONTROL_POSTGRES_PASSWORD is required}
+    ports:
+      - "127.0.0.1::5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U sandbox_control -d agent_runtime"]
+      interval: 1s
+      timeout: 2s
+      retries: 30
+    tmpfs:
+      - /var/lib/postgresql/data:rw,noexec,nosuid,size=256m
+      - /var/run/postgresql:rw,noexec,nosuid,size=16m
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - DAC_OVERRIDE
+      - FOWNER
+      - SETGID
+      - SETUID
