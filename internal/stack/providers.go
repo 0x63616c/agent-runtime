@@ -300,36 +300,48 @@ func (adapter KubectlDeclaredProviderAdapter) verifyTelemetry(ctx context.Contex
 	if actualTTL != expectedTTL {
 		return errors.New("verify declared telemetry pipeline: collector retention differs from desired state")
 	}
-	endpointPath := fmt.Sprintf("/api/v1/namespaces/%s/endpoints/%s", namespace, service.Kubernetes.Name)
-	result, err := adapter.run(ctx, target, []string{"get", "--raw", endpointPath}, nil)
+	selector := "kubernetes.io/service-name=" + service.Kubernetes.Name
+	result, err := adapter.run(ctx, target, []string{"get", "EndpointSlice", "--namespace", namespace, "--selector", selector, "-o", "json"}, nil)
 	if err != nil {
 		return err
 	}
 	if result.ExitCode != 0 {
 		return kubectlExitError("get declared telemetry endpoints", result.ExitCode)
 	}
-	var endpoints struct {
-		Subsets []struct {
-			Addresses []json.RawMessage `json:"addresses"`
-			Ports     []struct {
+	var slices struct {
+		Items []struct {
+			Endpoints []struct {
+				Addresses  []string `json:"addresses"`
+				Conditions struct {
+					Ready bool `json:"ready"`
+				} `json:"conditions"`
+			} `json:"endpoints"`
+			Ports []struct {
 				Name string `json:"name"`
 			} `json:"ports"`
-		} `json:"subsets"`
+		} `json:"items"`
 	}
-	if err := json.Unmarshal(result.Output, &endpoints); err != nil {
-		return errors.Wrap(err, "decode declared telemetry endpoints")
+	if err := json.Unmarshal(result.Output, &slices); err != nil {
+		return errors.Wrap(err, "decode declared telemetry EndpointSlices")
 	}
-	for _, subset := range endpoints.Subsets {
-		if len(subset.Addresses) == 0 {
+	for _, slice := range slices.Items {
+		ready := false
+		for _, endpoint := range slice.Endpoints {
+			if endpoint.Conditions.Ready && len(endpoint.Addresses) > 0 {
+				ready = true
+				break
+			}
+		}
+		if !ready {
 			continue
 		}
-		for _, port := range subset.Ports {
+		for _, port := range slice.Ports {
 			if port.Name == resource.Telemetry.PortName {
 				return nil
 			}
 		}
 	}
-	return errors.New("verify declared telemetry pipeline: collector has no ready declared endpoint")
+	return errors.New("verify declared telemetry pipeline: collector has no ready declared EndpointSlice")
 }
 
 func servicePort(service Resource, name string) (int, error) {
