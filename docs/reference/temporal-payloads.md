@@ -40,10 +40,13 @@ malformed payloads fail visibly.
 ## Compatibility and encryption
 
 The emitted format is `agent-runtime-payload-v=1`. Version 1 accepts ordinary
-pre-codec Temporal payloads unchanged and decodes v1 zstd and remote forms. A
-frozen v1 zstd vector is part of the test suite. A version outside this window
-is rejected; changing the format needs retained-history, golden, UI, and
-two-consumer compatibility evidence.
+pre-codec Temporal payloads unchanged and decodes v1 zstd and remote forms.
+Frozen inline, zstd, and remote complete-wire vectors are part of the test
+suite; the remote vector includes its frozen stored-inner payload. Before a
+runtime-owned Temporal client is created, the factory decodes those retained
+vectors and separately verifies current emission against them. A version
+outside this window is rejected; changing the format needs retained-history,
+golden, UI, and two-consumer compatibility evidence.
 
 The codec does **not** encrypt payloads. It offers compression, integrity, and
 storage indirection only. No encryption configuration, key reference, or
@@ -75,14 +78,16 @@ authority.
 
 ## Temporal UI handler
 
-`NewUIHandler` wraps Temporal's `/encode` and `/decode` handler with a
-required `UIRequestAuthorizer`, explicit Temporal namespace allowlist, and
-browser-origin allowlist. The authorizer must establish a trusted identity
+`NewUIHandler` wraps Temporal's `/encode` and `/decode` handler with sealed
+`WithTemporalUINamespaces`, `WithTemporalUIRequestAuthorizer`, and optional
+`WithTemporalUIOrigins` options. The authorizer must establish a trusted identity
 (for example through verified OIDC middleware or mTLS) and authorize that
 identity for the requested namespace. `X-Namespace`, `Origin`, a
 NetworkPolicy, and source address are routing or perimeter inputs—not
 authentication—and must never be trusted as identity. The handler does not log
-or retain credentials. It reuses the exact local Codec, making it an inspection
+or retain credentials. Browser preflight permits Temporal UI's `Authorization`
+and `authorization-extras` headers without enabling ambient browser credentials.
+It reuses the exact local Codec, making it an inspection
 adapter for Temporal UI only. Runtime workers use `Codec.DataConverter()`
 directly and never instantiate Temporal's remote codec client.
 
@@ -97,6 +102,7 @@ Focused deterministic proof:
 
 ```text
 go test -race ./temporalpayload/... ./internal/temporalpayloadruntime
+go test -tags=integration ./temporalpayload/... ./internal/temporalpayloadruntime
 ```
 
 The real disposable MinIO proof requires Docker and runs the S3-compatible

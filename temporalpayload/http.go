@@ -8,11 +8,63 @@ import (
 	"go.temporal.io/sdk/converter"
 )
 
-// UIHandlerOptions restricts a codec endpoint to authenticated Temporal UI requests.
-type UIHandlerOptions struct {
-	AllowedNamespaces []string
-	AllowedOrigins    []string
-	Authorizer        UIRequestAuthorizer
+const authorizationExtrasHeader = "authorization-extras"
+
+// UIHandlerOption configures the authenticated Temporal UI inspection handler.
+type UIHandlerOption interface {
+	applyUIHandler(*uiHandlerConfig) error
+}
+
+type uiHandlerOptionFunc func(*uiHandlerConfig) error
+
+func (option uiHandlerOptionFunc) applyUIHandler(config *uiHandlerConfig) error {
+	return option(config)
+}
+
+// WithTemporalUINamespaces limits the handler to the declared Temporal namespaces.
+func WithTemporalUINamespaces(namespaces ...string) UIHandlerOption {
+	return uiHandlerOptionFunc(func(config *uiHandlerConfig) error {
+		if len(namespaces) == 0 {
+			return errors.New("at least one Temporal UI namespace is required")
+		}
+		for _, namespace := range namespaces {
+			if namespace == "" {
+				return errors.New("Temporal UI namespace is empty")
+			}
+		}
+		config.namespaces = slices.Clone(namespaces)
+		return nil
+	})
+}
+
+// WithTemporalUIOrigins limits browser access to the declared Temporal UI origins.
+func WithTemporalUIOrigins(origins ...string) UIHandlerOption {
+	return uiHandlerOptionFunc(func(config *uiHandlerConfig) error {
+		for _, origin := range origins {
+			if origin == "" {
+				return errors.New("Temporal UI origin is empty")
+			}
+		}
+		config.origins = slices.Clone(origins)
+		return nil
+	})
+}
+
+// WithTemporalUIRequestAuthorizer requires trusted authentication and namespace authorization.
+func WithTemporalUIRequestAuthorizer(authorizer UIRequestAuthorizer) UIHandlerOption {
+	return uiHandlerOptionFunc(func(config *uiHandlerConfig) error {
+		if authorizer == nil {
+			return errors.New("Temporal UI request authorizer is required")
+		}
+		config.authorizer = authorizer
+		return nil
+	})
+}
+
+type uiHandlerConfig struct {
+	namespaces []string
+	origins    []string
+	authorizer UIRequestAuthorizer
 }
 
 // AuthorizationDecision reports the result of an authentication and namespace-authorization check.
@@ -45,28 +97,27 @@ func (authorizer UIRequestAuthorizerFunc) AuthorizeTemporalPayloadUI(request *ht
 }
 
 // NewUIHandler creates the authenticated HTTP adapter used only by Temporal UI inspection.
-func NewUIHandler(codec *Codec, options UIHandlerOptions) (http.Handler, error) {
+func NewUIHandler(codec *Codec, options ...UIHandlerOption) (http.Handler, error) {
 	if codec == nil {
 		return nil, errors.New("temporal payload codec is required for UI handler")
 	}
-	if len(options.AllowedNamespaces) == 0 {
+	config := uiHandlerConfig{}
+	for _, option := range options {
+		if option == nil {
+			return nil, errors.New("Temporal UI handler option is nil")
+		}
+		if err := option.applyUIHandler(&config); err != nil {
+			return nil, errors.Wrap(err, "configure Temporal UI payload handler")
+		}
+	}
+	if len(config.namespaces) == 0 {
 		return nil, errors.New("at least one Temporal UI namespace is required")
 	}
-	if options.Authorizer == nil {
+	if config.authorizer == nil {
 		return nil, errors.New("Temporal UI request authorizer is required")
 	}
-	for _, namespace := range options.AllowedNamespaces {
-		if namespace == "" {
-			return nil, errors.New("Temporal UI namespace is empty")
-		}
-	}
-	for _, origin := range options.AllowedOrigins {
-		if origin == "" {
-			return nil, errors.New("Temporal UI origin is empty")
-		}
-	}
 	codecHandler := converter.NewPayloadCodecHTTPHandler(codec)
-	return cors(options.AllowedOrigins, authorizationGuard(options.Authorizer, namespaceGuard(options.AllowedNamespaces, codecHandler))), nil
+	return cors(config.origins, authorizationGuard(config.authorizer, namespaceGuard(config.namespaces, codecHandler))), nil
 }
 
 func authorizationGuard(authorizer UIRequestAuthorizer, next http.Handler) http.Handler {
@@ -108,7 +159,7 @@ func cors(origins []string, next http.Handler) http.Handler {
 			}
 			writer.Header().Set("Access-Control-Allow-Origin", origin)
 			writer.Header().Set("Access-Control-Allow-Methods", http.MethodPost)
-			writer.Header().Set("Access-Control-Allow-Headers", "Content-Type, X-Namespace")
+			writer.Header().Set("Access-Control-Allow-Headers", "Content-Type, X-Namespace, Authorization, "+authorizationExtrasHeader)
 			writer.Header().Set("Vary", "Origin")
 			if request.Method == http.MethodOptions {
 				writer.WriteHeader(http.StatusNoContent)

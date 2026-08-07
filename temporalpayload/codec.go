@@ -43,10 +43,10 @@ var (
 
 // Observation is a bounded payload codec observation suitable for a metrics adapter.
 type Observation struct {
-	Operation  string
-	Selection  string
-	InputSize  int
-	OutputSize int
+	Operation       string
+	Selection       string
+	InputSizeBytes  int
+	OutputSizeBytes int
 }
 
 // Observer records bounded codec observations without receiving payload bytes or blob keys.
@@ -339,9 +339,9 @@ func (codec *Codec) decompress(value []byte) ([]byte, error) {
 	return codec.decoder.DecodeAll(value, nil)
 }
 
-func (codec *Codec) observe(operation, selection string, inputSize, outputSize int) {
+func (codec *Codec) observe(operation, selection string, inputSizeBytes, outputSizeBytes int) {
 	if codec.observer != nil {
-		codec.observer.ObservePayload(Observation{Operation: operation, Selection: selection, InputSize: inputSize, OutputSize: outputSize})
+		codec.observer.ObservePayload(Observation{Operation: operation, Selection: selection, InputSizeBytes: inputSizeBytes, OutputSizeBytes: outputSizeBytes})
 	}
 }
 

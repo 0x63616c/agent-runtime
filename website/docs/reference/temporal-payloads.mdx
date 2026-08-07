@@ -23,12 +23,20 @@ version, SHA-256 digest, and stored byte count. It does not expose a storage
 endpoint, credential, workflow ID, or payload body. Reads verify the digest and
 size before decoding.
 
+Runtime-owned client creation first decodes frozen inline, zstd, and remote
+vectors (including the remote stored-inner bytes), then checks that current
+encoding still emits those complete wires. A worker can only be constructed
+from that successfully checked client.
+
 ## Local workers; UI-only HTTP
 
 Workers and clients use the local `Codec.DataConverter()` through one
 runtime-owned factory. They never call an HTTP codec endpoint. The Temporal UI
 handler is a separate inspection adapter using the same codec, a required
-trusted-identity authorizer, and explicit namespace/origin allowlists.
+trusted-identity authorizer, and explicit namespace/origin allowlists through
+sealed handler options. Its CORS preflight permits Temporal UI's
+`Authorization` and `authorization-extras` headers without enabling ambient
+browser credentials.
 `X-Namespace`, browser origin, a NetworkPolicy, and source address are not
 authentication; the authorizer must verify identity (such as OIDC middleware
 or mTLS) and authorize it for the requested namespace. The handler does not

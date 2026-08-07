@@ -7,12 +7,14 @@ import (
 
 	"github.com/0x63616c/agent-runtime/temporalpayload"
 	"go.temporal.io/sdk/client"
+	"go.temporal.io/sdk/worker"
 )
 
-func TestFactoryInstallsOneConverterForClientsAndWorkers(t *testing.T) {
+func TestFactoryRefusesClientConstructionWhenRetainedCompatibilityFails(t *testing.T) {
 	t.Parallel()
 
-	codec, err := temporalpayload.NewCodec(temporalpayload.NewMemoryBlobStore(), temporalpayload.WithBlobPrefix("runtime/payloads"))
+	store := temporalpayload.NewMemoryBlobStore()
+	codec, err := temporalpayload.NewCodec(failingStore{BlobStore: store, getErr: errors.New("blob store unavailable")}, temporalpayload.WithBlobPrefix("runtime/payloads"))
 	if err != nil {
 		t.Fatalf("NewCodec() error = %v", err)
 	}
@@ -20,22 +22,12 @@ func TestFactoryInstallsOneConverterForClientsAndWorkers(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewFactory() error = %v", err)
 	}
-	clientOptions := factory.ClientOptions(client.Options{})
-	workerClientOptions := factory.ClientOptions(client.Options{})
-	clientPayload, err := clientOptions.DataConverter.ToPayload("same codec")
-	if err != nil {
-		t.Fatalf("client converter ToPayload() error = %v", err)
-	}
-	var workerValue string
-	if err := workerClientOptions.DataConverter.FromPayload(clientPayload, &workerValue); err != nil {
-		t.Fatalf("worker converter FromPayload() error = %v", err)
-	}
-	if workerValue != "same codec" {
-		t.Fatalf("worker converter value = %q, want same codec", workerValue)
+	if _, err := factory.NewClient(context.Background(), client.Options{HostPort: "127.0.0.1:1"}); err == nil {
+		t.Fatal("NewClient() error = nil, want compatibility gate failure before dialing")
 	}
 }
 
-func TestFactoryFailsStartupBeforeWorkWhenCompatibilityProbeCannotRoundTrip(t *testing.T) {
+func TestFactoryCreatesWorkersOnlyFromOwnedClients(t *testing.T) {
 	t.Parallel()
 
 	store := temporalpayload.NewMemoryBlobStore()
@@ -47,19 +39,8 @@ func TestFactoryFailsStartupBeforeWorkWhenCompatibilityProbeCannotRoundTrip(t *t
 	if err != nil {
 		t.Fatalf("NewFactory() error = %v", err)
 	}
-	if err := factory.CheckStartup(context.Background()); err != nil {
-		t.Fatalf("CheckStartup() error = %v", err)
-	}
-	failingCodec, err := temporalpayload.NewCodec(failingStore{BlobStore: store, getErr: errors.New("blob store unavailable")}, temporalpayload.WithBlobPrefix("runtime/payloads"))
-	if err != nil {
-		t.Fatalf("NewCodec() error = %v", err)
-	}
-	failingFactory, err := NewFactory(failingCodec)
-	if err != nil {
-		t.Fatalf("NewFactory() error = %v", err)
-	}
-	if err := failingFactory.CheckStartup(context.Background()); err == nil {
-		t.Fatal("CheckStartup() error = nil, want startup compatibility failure")
+	if _, err := factory.NewWorker(nil, "runtime-test", worker.Options{}); err == nil {
+		t.Fatal("NewWorker() error = nil, want owned client requirement")
 	}
 }
 

@@ -16,11 +16,11 @@ func TestUIHandlerOnlyPermitsConfiguredTemporalUIRequests(t *testing.T) {
 	t.Parallel()
 
 	codec := newTestCodec(t, NewMemoryBlobStore())
-	handler, err := NewUIHandler(codec, UIHandlerOptions{
-		AllowedNamespaces: []string{"runtime-test"},
-		AllowedOrigins:    []string{"https://temporal.example"},
-		Authorizer:        UIRequestAuthorizerFunc(testUIRequestAuthorizer),
-	})
+	handler, err := NewUIHandler(codec,
+		WithTemporalUINamespaces("runtime-test"),
+		WithTemporalUIOrigins("https://temporal.example"),
+		WithTemporalUIRequestAuthorizer(UIRequestAuthorizerFunc(testUIRequestAuthorizer)),
+	)
 	if err != nil {
 		t.Fatalf("NewUIHandler() error = %v", err)
 	}
@@ -48,20 +48,23 @@ func TestUIHandlerOnlyPermitsConfiguredTemporalUIRequests(t *testing.T) {
 	if got := preflightResponse.Header().Get("Access-Control-Allow-Origin"); got != "https://temporal.example" {
 		t.Fatalf("allow origin = %q, want configured origin", got)
 	}
+	if got := preflightResponse.Header().Get("Access-Control-Allow-Headers"); got != "Content-Type, X-Namespace, Authorization, authorization-extras" {
+		t.Fatalf("allow headers = %q, want Temporal UI credential headers", got)
+	}
 }
 
 func TestUIHandlerRequiresAuthenticationAndNamespaceAuthorization(t *testing.T) {
 	t.Parallel()
 
 	codec := newTestCodec(t, NewMemoryBlobStore())
-	if _, err := NewUIHandler(codec, UIHandlerOptions{AllowedNamespaces: []string{"runtime-test"}}); err == nil {
+	if _, err := NewUIHandler(codec, WithTemporalUINamespaces("runtime-test")); err == nil {
 		t.Fatal("NewUIHandler() error = nil, want required authorizer error")
 	}
-	handler, err := NewUIHandler(codec, UIHandlerOptions{
-		AllowedNamespaces: []string{"runtime-test"},
-		AllowedOrigins:    []string{"https://temporal.example"},
-		Authorizer:        UIRequestAuthorizerFunc(testUIRequestAuthorizer),
-	})
+	handler, err := NewUIHandler(codec,
+		WithTemporalUINamespaces("runtime-test"),
+		WithTemporalUIOrigins("https://temporal.example"),
+		WithTemporalUIRequestAuthorizer(UIRequestAuthorizerFunc(testUIRequestAuthorizer)),
+	)
 	if err != nil {
 		t.Fatalf("NewUIHandler() error = %v", err)
 	}
@@ -99,7 +102,10 @@ func TestTwoConsumersExchangeEveryRepresentationAndTheUIInspectsIt(t *testing.T)
 	store := NewMemoryBlobStore()
 	runtimeConsumer := newTestCodec(t, store)
 	secondConsumer := newTestCodec(t, store)
-	handler, err := NewUIHandler(secondConsumer, UIHandlerOptions{AllowedNamespaces: []string{"runtime-test"}, Authorizer: UIRequestAuthorizerFunc(testUIRequestAuthorizer)})
+	handler, err := NewUIHandler(secondConsumer,
+		WithTemporalUINamespaces("runtime-test"),
+		WithTemporalUIRequestAuthorizer(UIRequestAuthorizerFunc(testUIRequestAuthorizer)),
+	)
 	if err != nil {
 		t.Fatalf("NewUIHandler() error = %v", err)
 	}

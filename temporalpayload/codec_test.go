@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/hex"
 	"errors"
+	"sync"
 	"testing"
 
 	commonpb "go.temporal.io/api/common/v1"
@@ -223,6 +224,32 @@ func TestCodecIsSafeForConcurrentEncodeDecode(t *testing.T) {
 	}
 }
 
+func TestCodecReportsOnlyBoundedByteObservations(t *testing.T) {
+	t.Parallel()
+
+	observer := &recordingObserver{}
+	codec, err := NewCodec(NewMemoryBlobStore(), WithBlobPrefix("test/payloads"), WithObserver(observer))
+	if err != nil {
+		t.Fatalf("NewCodec() error = %v", err)
+	}
+	encoded, err := codec.Encode([]*commonpb.Payload{testPayload(incompressibleBytes(64 * 1024))})
+	if err != nil {
+		t.Fatalf("Encode() error = %v", err)
+	}
+	if _, err := codec.Decode(encoded); err != nil {
+		t.Fatalf("Decode() error = %v", err)
+	}
+	observations := observer.observations()
+	if len(observations) != 2 {
+		t.Fatalf("observations = %d, want encode + remote decode", len(observations))
+	}
+	for _, observation := range observations {
+		if observation.InputSizeBytes <= 0 || observation.OutputSizeBytes <= 0 {
+			t.Fatalf("observation = %#v, want positive bounded byte sizes", observation)
+		}
+	}
+}
+
 type payloadValue struct {
 	Bytes []byte `json:"bytes"`
 }
@@ -268,4 +295,21 @@ func mustDecodeHex(t *testing.T, value string) []byte {
 		t.Fatalf("decode golden hex: %v", err)
 	}
 	return result
+}
+
+type recordingObserver struct {
+	mu     sync.Mutex
+	values []Observation
+}
+
+func (observer *recordingObserver) ObservePayload(observation Observation) {
+	observer.mu.Lock()
+	defer observer.mu.Unlock()
+	observer.values = append(observer.values, observation)
+}
+
+func (observer *recordingObserver) observations() []Observation {
+	observer.mu.Lock()
+	defer observer.mu.Unlock()
+	return append([]Observation(nil), observer.values...)
 }

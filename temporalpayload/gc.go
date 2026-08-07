@@ -70,6 +70,9 @@ func (collector *GarbageCollector) Collect(ctx context.Context, evaluatedAt time
 	cutoff := evaluatedAt.Add(-collector.minimumAge)
 	deleted := make([]BlobKey, 0, len(objects))
 	for _, object := range objects {
+		if object.CreatedAt.Location() != time.UTC {
+			return deleted, errors.Newf("temporal payload retention object %q creation time must be UTC", object.Key)
+		}
 		if object.CreatedAt.After(cutoff) {
 			continue
 		}
@@ -81,6 +84,9 @@ func (collector *GarbageCollector) Collect(ctx context.Context, evaluatedAt time
 			continue
 		}
 		if err := collector.store.DeleteIfUnchanged(ctx, object.Key, object.CreatedAt); err != nil {
+			if errors.Is(err, ErrBlobNotFound) {
+				continue
+			}
 			return deleted, errors.Wrapf(err, "delete eligible temporal payload blob %q", object.Key)
 		}
 		deleted = append(deleted, object.Key)

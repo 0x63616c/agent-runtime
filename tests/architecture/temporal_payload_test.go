@@ -24,6 +24,8 @@ var _ = Describe("Temporal payload composition", func() {
 			Expect(err).NotTo(HaveOccurred(), relative)
 			for _, forbidden := range []string{
 				"client.Dial(",
+				"client.DialContext(",
+				"client.NewLazyClient(",
 				"worker.New(",
 				"NewRemotePayloadCodec(",
 				"NewRemoteDataConverter(",

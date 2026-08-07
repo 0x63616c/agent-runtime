@@ -17,6 +17,12 @@ type Factory struct {
 	dataConverter converter.DataConverter
 }
 
+// Client is a Temporal client created by Factory with the runtime-owned converter.
+type Client struct {
+	temporalClient client.Client
+	dataConverter  converter.DataConverter
+}
+
 // NewFactory creates the only runtime-owned factory for Temporal converter configuration.
 func NewFactory(codec *temporalpayload.Codec) (*Factory, error) {
 	if codec == nil {
@@ -25,55 +31,44 @@ func NewFactory(codec *temporalpayload.Codec) (*Factory, error) {
 	return &Factory{codec: codec, dataConverter: codec.DataConverter()}, nil
 }
 
-// ClientOptions replaces any caller converter with the runtime-owned local converter.
-func (factory *Factory) ClientOptions(options client.Options) client.Options {
+func (factory *Factory) clientOptions(options client.Options) client.Options {
 	options.DataConverter = factory.dataConverter
 	return options
 }
 
-// NewWorker creates a runtime worker from a client configured by ClientOptions.
+// NewClient checks retained compatibility before creating a runtime-owned Temporal client.
+func (factory *Factory) NewClient(ctx context.Context, options client.Options) (*Client, error) {
+	if err := factory.checkStartup(ctx); err != nil {
+		return nil, err
+	}
+	temporalClient, err := client.DialContext(ctx, factory.clientOptions(options))
+	if err != nil {
+		return nil, errors.Wrap(err, "create runtime-owned Temporal client")
+	}
+	return &Client{temporalClient: temporalClient, dataConverter: factory.dataConverter}, nil
+}
+
+// NewWorker creates a runtime worker from a checked runtime-owned client.
 //
 // The Temporal Go SDK takes the DataConverter from its client, not from
-// worker.Options. Keeping worker creation beside ClientOptions prevents a
+// worker.Options. Keeping worker creation beside NewClient prevents a
 // second raw client/worker composition seam from appearing in runtime code.
-func (factory *Factory) NewWorker(temporalClient client.Client, taskQueue string, options worker.Options) (worker.Worker, error) {
-	if temporalClient == nil {
+func (factory *Factory) NewWorker(temporalClient *Client, taskQueue string, options worker.Options) (worker.Worker, error) {
+	if temporalClient == nil || temporalClient.temporalClient == nil {
 		return nil, errors.New("configured Temporal client is required")
 	}
 	if taskQueue == "" {
 		return nil, errors.New("Temporal task queue is required")
 	}
-	return worker.New(temporalClient, taskQueue, options), nil
+	return worker.New(temporalClient.temporalClient, taskQueue, options), nil
 }
 
-// CheckStartup verifies that this exact configured codec chain can encode and decode an offloaded compatibility probe before work is accepted.
-func (factory *Factory) CheckStartup(ctx context.Context) error {
+func (factory *Factory) checkStartup(ctx context.Context) error {
 	if err := ctx.Err(); err != nil {
 		return errors.Wrap(err, "check Temporal payload codec startup compatibility")
 	}
-	probe := startupProbe()
-	payload, err := factory.dataConverter.ToPayload(probe)
-	if err != nil {
-		return errors.Wrap(err, "encode Temporal payload compatibility probe")
-	}
-	var decoded []byte
-	if err := factory.dataConverter.FromPayload(payload, &decoded); err != nil {
-		return errors.Wrap(err, "decode Temporal payload compatibility probe")
-	}
-	if string(decoded) != string(probe) {
-		return errors.New("Temporal payload compatibility probe did not round trip")
+	if err := factory.codec.CheckCompatibility(ctx); err != nil {
+		return errors.Wrap(err, "check retained Temporal payload compatibility vectors")
 	}
 	return nil
-}
-
-func startupProbe() []byte {
-	result := make([]byte, 64*1024)
-	state := uint64(1)
-	for index := range result {
-		state ^= state << 13
-		state ^= state >> 7
-		state ^= state << 17
-		result[index] = byte(state)
-	}
-	return result
 }
