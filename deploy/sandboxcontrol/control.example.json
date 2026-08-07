@@ -15,8 +15,6 @@
   "binding_lifetime_seconds": 300,
   "retention_seconds": 86400,
   "wait_interval_millis": 25,
-  "reconciliation_interval_millis": 1000,
-  "reconciliation_page_size": 100,
   "admission": {
     "version": "development-v1",
     "canonicalizer_version": "sandbox.control/v1",

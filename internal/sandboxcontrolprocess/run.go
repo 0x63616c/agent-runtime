@@ -14,7 +14,6 @@ import (
 	"os"
 	"time"
 
-	"github.com/0x63616c/agent-runtime/internal/clock"
 	"github.com/0x63616c/agent-runtime/internal/sandboxcontrol"
 	"github.com/0x63616c/agent-runtime/internal/sandboxcontrolapi"
 	"github.com/0x63616c/agent-runtime/internal/sandboxhostapi"
@@ -99,21 +98,12 @@ func Run(ctx context.Context, config Config, lookup SecretLookup) error {
 		running := running
 		go func() { serverResult <- running.server.ServeTLS(running.listener, "", "") }()
 	}
-	reconcileResult := make(chan error, 1)
-	go func() {
-		reconcileResult <- reconcileLoop(ctx, store, systemClock{}, config.reconciliationInterval, config.reconciliationPageSize)
-	}()
 	select {
 	case err := <-serverResult:
 		if err == nil || errors.Is(err, http.ErrServerClosed) {
 			return nil
 		}
 		return errors.Wrap(err, "run sandbox-control process")
-	case err := <-reconcileResult:
-		if err == nil || errors.Is(err, context.Canceled) {
-			return nil
-		}
-		return err
 	case <-ctx.Done():
 		shutdownCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
 		defer cancel()
@@ -130,42 +120,6 @@ func Run(ctx context.Context, config Config, lookup SecretLookup) error {
 		}
 		return nil
 	}
-}
-
-type reconciliationStore interface {
-	RecoverExpiredAssignments(context.Context, time.Time, int) ([]sandboxcontrol.Operation, error)
-	ClaimExpiredCleanup(context.Context, time.Time, int) ([]sandboxcontrol.Operation, error)
-	Reap(context.Context, time.Time, int) ([]sandboxcontrol.Operation, error)
-}
-
-func reconcileLoop(ctx context.Context, store reconciliationStore, source clock.Clock, interval time.Duration, pageSize int) error {
-	for {
-		if err := reconcileOnce(ctx, store, source.Now().UTC(), pageSize); err != nil {
-			return err
-		}
-		timer := time.NewTimer(interval)
-		select {
-		case <-ctx.Done():
-			if !timer.Stop() {
-				<-timer.C
-			}
-			return ctx.Err()
-		case <-timer.C:
-		}
-	}
-}
-
-func reconcileOnce(ctx context.Context, store reconciliationStore, now time.Time, pageSize int) error {
-	if _, err := store.RecoverExpiredAssignments(ctx, now, pageSize); err != nil {
-		return errors.Wrap(err, "reconcile expired sandbox host assignments")
-	}
-	if _, err := store.ClaimExpiredCleanup(ctx, now, pageSize); err != nil {
-		return errors.Wrap(err, "claim expired sandbox cleanup")
-	}
-	if _, err := store.Reap(ctx, now, pageSize); err != nil {
-		return errors.Wrap(err, "reap expired sandbox operations")
-	}
-	return nil
 }
 
 type runningServer struct {

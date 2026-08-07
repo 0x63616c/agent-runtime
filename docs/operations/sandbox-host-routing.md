@@ -26,7 +26,7 @@ Use `deploy/sandboxcontrol/control.example.json` as the strict control
 declaration and `deploy/sandboxhost/reference.example.json` as the strict
 one-shot reference-host declaration. Paths are absolute mounted paths. Secret
 fields name injected environment values; secret material is never serialized
-in either document. The two `test_fault_*` fields exist only for the reference
+in either document. The three `test_fault_*` fields exist only for the reference
 host's recovery test profile and must remain false in normal runs.
 
 Enrollment is a separate audited operator action using the durable
@@ -59,8 +59,9 @@ it never permits an unspecified generation or certificate digest.
 
 Reassignment is forbidden until cleanup is explicit for cleanup-required work.
 The M3 reference proof calls `ConfirmHostCleanupAndRequeue` directly as an
-operator seam. A future production reconciler must preserve that evidence
-boundary rather than infer cleanup from timeout, process exit, or revocation.
+operator seam. The independent `sandbox-reaper` owns expiry, cleanup claims,
+and safe tombstoning, but it preserves this evidence boundary rather than
+inferring cleanup from timeout, process exit, or revocation.
 
 ## Disposable PostgreSQL and multi-process evidence
 

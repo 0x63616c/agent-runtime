@@ -29,28 +29,24 @@ type Config struct {
 	bindingLifetime        time.Duration
 	retention              time.Duration
 	waitInterval           time.Duration
-	reconciliationInterval time.Duration
-	reconciliationPageSize int
 	admission              sandbox.OperationAdmissionPolicy
 	hostControl            *hostControlConfig
 }
 
 type document struct {
-	Version                      int                  `json:"version"`
-	ListenAddress                string               `json:"listen_address"`
-	TLSCertificateFile           string               `json:"tls_certificate_file"`
-	TLSPrivateKeyFile            string               `json:"tls_private_key_file"`
-	DatabaseDSNEnvironment       string               `json:"database_dsn_environment"`
-	AuthorizationEnv             string               `json:"authorization_environment"`
-	AssertionKeyEnv              string               `json:"assertion_key_environment"`
-	Identity                     identityDocument     `json:"identity"`
-	BindingLifetimeSeconds       uint32               `json:"binding_lifetime_seconds"`
-	RetentionSeconds             uint32               `json:"retention_seconds"`
-	WaitIntervalMillis           uint32               `json:"wait_interval_millis"`
-	ReconciliationIntervalMillis uint32               `json:"reconciliation_interval_millis"`
-	ReconciliationPageSize       uint16               `json:"reconciliation_page_size"`
-	Admission                    admissionDocument    `json:"admission"`
-	HostControl                  *hostControlDocument `json:"host_control"`
+	Version                int                  `json:"version"`
+	ListenAddress          string               `json:"listen_address"`
+	TLSCertificateFile     string               `json:"tls_certificate_file"`
+	TLSPrivateKeyFile      string               `json:"tls_private_key_file"`
+	DatabaseDSNEnvironment string               `json:"database_dsn_environment"`
+	AuthorizationEnv       string               `json:"authorization_environment"`
+	AssertionKeyEnv        string               `json:"assertion_key_environment"`
+	Identity               identityDocument     `json:"identity"`
+	BindingLifetimeSeconds uint32               `json:"binding_lifetime_seconds"`
+	RetentionSeconds       uint32               `json:"retention_seconds"`
+	WaitIntervalMillis     uint32               `json:"wait_interval_millis"`
+	Admission              admissionDocument    `json:"admission"`
+	HostControl            *hostControlDocument `json:"host_control"`
 }
 
 type hostControlDocument struct {
@@ -162,8 +158,7 @@ func Parse(input io.Reader) (Config, error) {
 	bindingLifetime := time.Duration(decoded.BindingLifetimeSeconds) * time.Second
 	retention := time.Duration(decoded.RetentionSeconds) * time.Second
 	waitInterval := time.Duration(decoded.WaitIntervalMillis) * time.Millisecond
-	reconciliationInterval := time.Duration(decoded.ReconciliationIntervalMillis) * time.Millisecond
-	if bindingLifetime <= 0 || bindingLifetime > time.Hour || retention <= 0 || retention > 365*24*time.Hour || waitInterval <= 0 || waitInterval > time.Second || reconciliationInterval <= 0 || reconciliationInterval > time.Minute || decoded.ReconciliationPageSize == 0 || decoded.ReconciliationPageSize > 1000 {
+	if bindingLifetime <= 0 || bindingLifetime > time.Hour || retention <= 0 || retention > 365*24*time.Hour || waitInterval <= 0 || waitInterval > time.Second {
 		return Config{}, errors.New("validate sandbox-control configuration: lifetimes and wait interval must be finite")
 	}
 	hostControl, err := parseHostControl(decoded.HostControl, decoded.ListenAddress, decoded.TLSCertificateFile, decoded.TLSPrivateKeyFile)
@@ -175,7 +170,6 @@ func Parse(input io.Reader) (Config, error) {
 		tlsPrivateKeyFile: decoded.TLSPrivateKeyFile, databaseDSNEnvironment: decoded.DatabaseDSNEnvironment,
 		authorizationEnv: decoded.AuthorizationEnv, assertionKeyEnv: decoded.AssertionKeyEnv,
 		identity: decoded.Identity.apiIdentity(), bindingLifetime: bindingLifetime, retention: retention, waitInterval: waitInterval,
-		reconciliationInterval: reconciliationInterval, reconciliationPageSize: int(decoded.ReconciliationPageSize),
 		admission:   sandbox.OperationAdmissionPolicy{Version: decoded.Admission.Version, CanonicalizerVersion: decoded.Admission.CanonicalizerVersion, CapabilityVersion: decoded.Admission.CapabilityVersion, ImageAdmissionVersion: decoded.Admission.ImageAdmissionVersion, Defaults: decoded.Admission.Defaults.resourceLimits(), Maximum: decoded.Admission.Maximum.resourceLimits(), Capabilities: decoded.Admission.Capabilities, AdmittedImages: decoded.Admission.AdmittedImages},
 		hostControl: hostControl,
 	}, nil

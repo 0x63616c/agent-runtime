@@ -58,6 +58,16 @@ durably confirmed. Cleanup-pending records remain addressable. Tombstones keep
 the Principal/Operation identity and bounded recovery facts so garbage
 collection cannot make an idempotency key reusable.
 
+`cmd/sandbox-reaper` is the independently deployable owner of these periodic
+database passes. Its strict declaration names only a PostgreSQL DSN secret,
+finite interval, and finite page size; see
+`deploy/sandboxreaper/reaper.example.json`. It emits bounded JSON summaries of
+recovered assignments, cleanup claims, and tombstones. It has no public API,
+Temporal dependency, certificate authority, migration authority, or guest
+backend credential. Until M4 supplies a certified cleanup adapter, it leaves
+cleanup-required records visibly pending for separately authorized cleanup
+evidence rather than guessing from liveness.
+
 ## Operator integration lane
 
 Run the explicit disposable PostgreSQL harness from the repository root:
