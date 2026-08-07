@@ -1,12 +1,13 @@
 # Agent Runtime
 
 Agent Runtime is a Go monorepo for a durable, session-based agent platform.
-M0 currently provides the governed foundation only; it does not yet bootstrap
-infrastructure, expose a runtime service, or claim sandbox isolation.
+M0 is complete. M1 declarative infrastructure and M3 sandbox-contract work are
+active; the repository does not yet expose the public agent runtime service,
+working examples, isolated Tilt quickstart, or verified Firecracker isolation.
 
 ## Verification
 
-The supported incremental M0 check is:
+The supported incremental repository check is:
 
 ```sh
 just check
@@ -23,7 +24,8 @@ register is structurally honest; it does not turn non-green rows into passes.
 `check`, emits the complete 183-row status/evidence report, and currently fails
 because requirements are `in_progress` or `not_started`, with no immutable
 main-CI or complete acceptance evidence. `just completion-check` is an alias.
-M0 remains open and no notification is sent.
+This is expected until the full release ledger is green; it does not reopen a
+previously completed milestone.
 
 ## Configuration and status evidence
 
@@ -32,12 +34,13 @@ packages do not read environment variables. Diagnostics, JSON, formatting and
 structured logs redact notifier credentials. The only accepted status topic is
 `https://ntfy.sh/0x63616c-ai-agant` (spelling intentional).
 
-The internal milestone foundation accepts a complete canonical catalog before it
+The milestone implementation accepts a complete canonical catalog before it
 builds a weighted estimate, retains evidence before notifier delivery, records
 failures as retryable classified codes, and transports only the ADR-defined
-structured payload. It provides a deterministic fake notifier for tests. This foundation
-does not send a real milestone notification; a later completion owner may do so
-only after all M0 evidence gates are green.
+structured payload. It provides a deterministic fake notifier for tests and a
+fixed-topic ntfy transport for completion operations. The retained M0 record
+preceded successful delivery; later milestone owners use the same pipeline only
+after their complete evidence gates are green.
 
 ## Compatibility
 
@@ -46,7 +49,7 @@ The repository publishes one root module,
 Contributor and delivery policy is in [CONTRIBUTING.md](CONTRIBUTING.md); the
 [Go compatibility](docs/engineering/go-compatibility.md) and
 [generated ownership](docs/engineering/generated-ownership.md) policies state
-the current M0 boundaries.
+the current boundaries.
 All public packages share one semver release train. Compatibility, deprecation,
 generated API ownership, and clean external-consumer verification remain
-in-progress M0 requirements and are not yet release guarantees.
+release requirements and are not yet release guarantees.

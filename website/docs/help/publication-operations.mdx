@@ -13,8 +13,9 @@ inputs. Repeatable jobs use `npm ci`; dependency upgrades are reviewed changes.
 
 ## Search privacy and cost
 
-Search is deliberately disabled before the public site exists. After GitHub
-Pages deployment, the project may apply for Algolia DocSearch. Its hosted
+Search is deliberately disabled while the public site awaits crawler review.
+The site is deployed on GitHub Pages; the project may now apply for Algolia
+DocSearch. Its hosted
 crawler sends public page content to Algolia and visitor queries to that
 service, so the privacy boundary and free public-program eligibility must be
 reviewed before repository configuration is enabled. Navigation does not
@@ -31,9 +32,10 @@ before publication; the production build alone is not that proof.
 
 The Pages workflow has least-privilege read access while building. Only its
 deployment job receives `pages: write` and `id-token: write`, and it targets the
-protected `github-pages` environment. During M0 pre-publication the deployment
-job requires explicit manual dispatch; #34 owns enabling and proving the
-default-branch publication path. Main CI cannot deploy.
+protected `github-pages` environment. The Pages source is GitHub Actions and the
+M0 project-site deployment has been verified publicly. #34 still owns the final
+default-branch publication, accessibility, search, navigation, and rollback
+evidence. Main CI cannot deploy.
 
 GitHub retains deployments and their immutable source revisions. A rollback is
 a reviewed revert or an explicit redeployment of a previously verified

@@ -26,7 +26,7 @@
         "website/sidebars.ts"
       ],
       "artifactKind": "source-inventory",
-      "publicStatus": "M0 documentation foundation"
+      "publicStatus": "M0 complete; M1/M3 implementation active"
     }
   ],
   "curated": [

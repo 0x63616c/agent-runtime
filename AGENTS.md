@@ -24,8 +24,10 @@ clients.
 
 ## Authoritative sources and planning status
 
-The current build is still in M0 foundation work. Planning is not proof that a
-feature exists. Never document planned behavior as implemented.
+M0 is complete. M1 infrastructure, M2 payload, and M3 sandbox work may proceed
+along their declared dependency edges. Planning is not proof that a feature
+exists; the requirements ledger and retained evidence remain authoritative.
+Never document planned behavior as implemented.
 
 | Source | Authority |
 | --- | --- |

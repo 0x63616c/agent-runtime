@@ -225,12 +225,13 @@ does not add a pull-request-only gate. GitHub documents setup-node caching for
 npm/Yarn/pnpm and warns against cached secrets; cache dependencies only.
 
 docs-pages.yml has build/deploy jobs. Default-branch/manual runs build and
-upload `website/build` using upload-pages-artifact. During M0 pre-publication,
-only an explicit manual dispatch runs deploy; #34 enables default-branch
-deployment only after publication proof. Deploy needs that build and only has
-contents: read, pages: write, id-token: write, targets protected github-pages,
-then calls deploy-pages. An administrator sets Pages source to **GitHub
-Actions** and protects default-branch deployment.
+upload `website/build` using upload-pages-artifact. GitHub Pages is enabled with
+GitHub Actions as its source, and the M0 deployment at the declared project URL
+was verified over HTTPS. Deploy needs that build and only has contents: read,
+pages: write, id-token: write, targets protected github-pages, then calls
+deploy-pages. #34 still owns final-release accessibility, navigation, search,
+versioning, and rollback evidence rather than treating early publication as the
+M10 documentation gate.
 
 Set `url: https://0x63616c.github.io` and `baseUrl: /agent-runtime/` so CI tests the project-site prefix. A custom domain is a separate reviewed change. Enable DocSearch after public crawl with client config in repository variables; build validates config metadata and release check validates deployed search.
 
