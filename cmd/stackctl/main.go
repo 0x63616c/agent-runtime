@@ -132,7 +132,11 @@ func run(ctx context.Context, arguments []string, output io.Writer) error {
 		if err != nil {
 			return err
 		}
-		operator, err := stack.NewKubernetesOperator(adapter, stack.JSONLineAuditLog{Path: auditPath})
+		orchestration, err := stack.NewTemporalCLIAdapter(stack.SystemKubectlRunner{})
+		if err != nil {
+			return err
+		}
+		operator, err := stack.NewKubernetesOperatorWithOrchestration(adapter, orchestration, stack.JSONLineAuditLog{Path: auditPath})
 		if err != nil {
 			return err
 		}

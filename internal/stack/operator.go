@@ -79,6 +79,11 @@ type KubernetesMigrationAdapter interface {
 	Rollback(context.Context, OperatorTarget, Rendered, Rendered) error
 }
 
+// OrchestrationAdapter reconciles only reviewed durable orchestration declarations.
+type OrchestrationAdapter interface {
+	ReconcileOrchestration(context.Context, OperatorTarget, Rendered) ([]ResourceID, error)
+}
+
 // OperatorAuditRecord is a secret-safe retained record of a requested operator action.
 type OperatorAuditRecord struct {
 	// Action is the explicit operator operation.
@@ -108,8 +113,22 @@ type OperatorAuditSink interface {
 // KubernetesOperator is the only Stack package service that can call a Kubernetes mutation adapter.
 // Construction alone grants no infrastructure authority; callers must supply an explicit request.
 type KubernetesOperator struct {
-	adapter KubernetesOperatorAdapter
-	audit   OperatorAuditSink
+	adapter       KubernetesOperatorAdapter
+	orchestration OrchestrationAdapter
+	audit         OperatorAuditSink
+}
+
+// NewKubernetesOperatorWithOrchestration constructs an operator with an explicit orchestration control plane.
+func NewKubernetesOperatorWithOrchestration(adapter KubernetesOperatorAdapter, orchestration OrchestrationAdapter, audit OperatorAuditSink) (KubernetesOperator, error) {
+	operator, err := NewKubernetesOperator(adapter, audit)
+	if err != nil {
+		return KubernetesOperator{}, err
+	}
+	if orchestration == nil {
+		return KubernetesOperator{}, errors.New("construct Kubernetes operator: orchestration adapter is required")
+	}
+	operator.orchestration = orchestration
+	return operator, nil
 }
 
 // ReconcileResult describes whether observed drift required an explicit apply action.
@@ -143,6 +162,11 @@ func (operator KubernetesOperator) Apply(ctx context.Context, request OperatorRe
 	}
 	if migrationErr := operator.upgradeMigrations(ctx, request.Target, rendered, document); migrationErr != nil {
 		return KubernetesObservation{}, operator.recordFailure(ctx, request, document, OperatorActionApply, migrationErr)
+	}
+	if operator.orchestration != nil {
+		if _, orchestrationErr := operator.orchestration.ReconcileOrchestration(ctx, request.Target, rendered); orchestrationErr != nil {
+			return KubernetesObservation{}, operator.recordFailure(ctx, request, document, OperatorActionApply, orchestrationErr)
+		}
 	}
 	if err := operator.record(ctx, request, document, OperatorActionApply, "applied", observation.ObjectIDs); err != nil {
 		return KubernetesObservation{}, err
