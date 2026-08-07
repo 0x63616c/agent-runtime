@@ -1,0 +1,86 @@
+---
+title: Isolated local Stack
+description: Launch and remove a disposable full local infrastructure Stack on OrbStack.
+---
+
+# Isolated local Stack
+
+The M1 local environment is runnable on macOS with an already-running OrbStack
+Kubernetes cluster. It starts one disposable namespace containing dedicated
+PostgreSQL storage, Temporal and Temporal UI, MinIO-compatible blob storage,
+telemetry, and three small API/worker/codec role images. Each role currently
+proves image build, health, readiness, role wiring, and lifecycle only—it is
+not the public Agent Runtime API, Temporal payload codec, or any example app.
+
+## Start
+
+```text
+just dev-preflight
+just dev
+```
+
+The omitted Stack name deterministically derives from the current worktree. To
+run two worktrees or two explicit stacks at once, use different names:
+
+```text
+just dev stack=research-a
+just dev stack=research-b
+```
+
+The public Tilt identity is the same in both forms—there is no `instance`
+identity:
+
+```text
+tilt up -- --stack=research-a
+```
+
+The `just` wrapper additionally selects `orbstack`, the explicit
+`ar-<stack>` namespace, and an OS-selected dashboard port. It writes private
+per-worktree state beneath ignored `.runtime/dev/`; it never changes your
+Kubernetes current context.
+
+## Inspect and connect
+
+```text
+just dev-status stack=research-a
+just dev-api stack=research-a
+```
+
+`dev-api` is a foreground port-forward. It selects a local port and exits when
+you stop it; it does not create a hidden background daemon. Tilt exposes links
+for the API health endpoint, Temporal UI, codec health endpoint, and these
+docs.
+
+## Credentials and persistence
+
+The checked-in Stack contains only Secret references and their key names. The
+local materializer generates random development-only values once per Stack and
+stores them in a mode-`0600`, ignored local file. Values never appear in the
+typed Stack document or repository. `dev-down` removes the namespace and those
+Kubernetes Secrets; remove the ignored local state if you want entirely fresh
+development credentials next time.
+
+Workloads use an explicit ServiceAccount with token automounting disabled, and
+they receive no Kubernetes Role or RoleBinding. The local role images do not
+call the Kubernetes API.
+
+PostgreSQL and blob storage each use a finite per-Stack persistent claim.
+Temporal task-queue routing, the Temporal namespace declaration, blob prefix,
+resource labels, and image names derive from the same Stack identity.
+
+## Reset and teardown
+
+```text
+just dev-reset stack=research-a
+just dev-down stack=research-a
+```
+
+`dev-reset` restarts only the declared API, worker, and codec Deployments.
+Before reset or teardown, the launcher re-reads the target Namespace and
+requires its UID plus Agent Runtime, Stack, and local-profile labels to match.
+It refuses a missing, relabelled, or foreign namespace. It never targets
+`default`, another Stack, or a cluster-scoped object.
+
+This is local container/Kubernetes infrastructure, not Firecracker evidence or
+hostile-tenant sandbox isolation. The real Agent Runtime, payload pipeline,
+public SDK, and examples remain separate implementation milestones.

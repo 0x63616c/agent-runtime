@@ -114,6 +114,10 @@ func RenderKubernetes(rendered Rendered) (KubernetesManifests, error) {
 		Metadata: KubernetesMetadata{Name: document.Namespace, Labels: labels},
 	}
 	objects := make([]KubernetesManifest, 0)
+	resources := make(map[ResourceID]Resource, len(document.Resources))
+	for _, resource := range document.Resources {
+		resources[resource.ID] = resource
+	}
 	for _, resource := range document.Resources {
 		if resource.Kind != ResourceKubernetes {
 			continue
@@ -121,7 +125,7 @@ func RenderKubernetes(rendered Rendered) (KubernetesManifests, error) {
 		if resource.Kubernetes.Kind == "Namespace" {
 			continue
 		}
-		manifest, manifestErr := renderKubernetesResource(resource, document.Namespace, document.Stack, document.Profile)
+		manifest, manifestErr := renderKubernetesResource(resource, document.Namespace, document.Stack, document.Profile, resources)
 		if manifestErr != nil {
 			return KubernetesManifests{}, manifestErr
 		}
@@ -140,7 +144,7 @@ func RenderKubernetes(rendered Rendered) (KubernetesManifests, error) {
 	return KubernetesManifests{namespace: namespace, objects: objects, data: append(encoded, '\n'), stack: document.Stack, profile: document.Profile, digest: document.Digest}, nil
 }
 
-func renderKubernetesResource(resource Resource, namespace, stack string, profile Profile) (KubernetesManifest, error) {
+func renderKubernetesResource(resource Resource, namespace, stack string, profile Profile, resources map[ResourceID]Resource) (KubernetesManifest, error) {
 	object := resource.Kubernetes
 	manifest := KubernetesManifest{
 		Resource: resource.ID, APIVersion: object.APIVersion, Kind: object.Kind,
@@ -165,7 +169,7 @@ func renderKubernetesResource(resource Resource, namespace, stack string, profil
 		manifest.Subjects = []kubernetesSubject{{Kind: "ServiceAccount", Name: object.ServiceAccount, Namespace: namespace}}
 		return manifest, nil
 	case "Deployment", "StatefulSet", "Job":
-		spec, err := marshalWorkloadSpec(resource, namespace, stack, profile)
+		spec, err := marshalWorkloadSpec(resource, namespace, stack, profile, resources)
 		manifest.Spec = spec
 		return manifest, err
 	case "Service":
@@ -187,7 +191,8 @@ func renderKubernetesResource(resource Resource, namespace, stack string, profil
 		}})
 		return manifest, nil
 	case "Ingress":
-		return KubernetesManifest{}, fmt.Errorf("render Kubernetes resource %s: Ingress requires an explicit HTTP rule contract", resource.ID)
+		manifest.Spec = marshalJSON(kubernetesIngressSpec{Rules: ingressRules(object.IngressRules, resources)})
+		return manifest, nil
 	default:
 		return KubernetesManifest{}, fmt.Errorf("render Kubernetes resource %s: unsupported kind %s", resource.ID, object.Kind)
 	}
@@ -198,6 +203,38 @@ type kubernetesWorkloadSpec struct {
 	Selector kubernetesSelector    `json:"selector,omitempty"`
 	Service  string                `json:"serviceName,omitempty"`
 	Template kubernetesPodTemplate `json:"template"`
+}
+
+type kubernetesIngressSpec struct {
+	Rules []kubernetesIngressRule `json:"rules"`
+}
+
+type kubernetesIngressRule struct {
+	Host string                       `json:"host"`
+	HTTP kubernetesIngressHTTPRuleSet `json:"http"`
+}
+
+type kubernetesIngressHTTPRuleSet struct {
+	Paths []kubernetesIngressPath `json:"paths"`
+}
+
+type kubernetesIngressPath struct {
+	Path     string                   `json:"path"`
+	PathType string                   `json:"pathType"`
+	Backend  kubernetesIngressBackend `json:"backend"`
+}
+
+type kubernetesIngressBackend struct {
+	Service kubernetesIngressServiceBackend `json:"service"`
+}
+
+type kubernetesIngressServiceBackend struct {
+	Name string                      `json:"name"`
+	Port kubernetesIngressPortNumber `json:"port"`
+}
+
+type kubernetesIngressPortNumber struct {
+	Name string `json:"name"`
 }
 
 type kubernetesSelector struct {
@@ -214,20 +251,34 @@ type kubernetesPodMetadata struct {
 }
 
 type kubernetesPodSpec struct {
-	ServiceAccountName string                `json:"serviceAccountName"`
-	RestartPolicy      string                `json:"restartPolicy,omitempty"`
-	Containers         []kubernetesContainer `json:"containers"`
+	ServiceAccountName           string                `json:"serviceAccountName"`
+	AutomountServiceAccountToken bool                  `json:"automountServiceAccountToken"`
+	EnableServiceLinks           bool                  `json:"enableServiceLinks"`
+	RestartPolicy                string                `json:"restartPolicy,omitempty"`
+	Containers                   []kubernetesContainer `json:"containers"`
+	Volumes                      []kubernetesVolume    `json:"volumes,omitempty"`
+}
+
+type kubernetesVolume struct {
+	Name                  string                          `json:"name"`
+	PersistentVolumeClaim kubernetesPersistentVolumeClaim `json:"persistentVolumeClaim"`
+}
+
+type kubernetesPersistentVolumeClaim struct {
+	ClaimName string `json:"claimName"`
+	ReadOnly  bool   `json:"readOnly,omitempty"`
 }
 
 type kubernetesContainer struct {
-	Name      string                          `json:"name"`
-	Image     string                          `json:"image"`
-	Command   []string                        `json:"command,omitempty"`
-	Args      []string                        `json:"args,omitempty"`
-	Env       []kubernetesEnvironmentVariable `json:"env,omitempty"`
-	Ports     []kubernetesContainerPort       `json:"ports,omitempty"`
-	Resources kubernetesResourceRequirements  `json:"resources"`
-	Readiness *kubernetesReadinessProbe       `json:"readinessProbe,omitempty"`
+	Name         string                          `json:"name"`
+	Image        string                          `json:"image"`
+	Command      []string                        `json:"command,omitempty"`
+	Args         []string                        `json:"args,omitempty"`
+	Env          []kubernetesEnvironmentVariable `json:"env,omitempty"`
+	VolumeMounts []kubernetesVolumeMount         `json:"volumeMounts,omitempty"`
+	Ports        []kubernetesContainerPort       `json:"ports,omitempty"`
+	Resources    kubernetesResourceRequirements  `json:"resources"`
+	Readiness    *kubernetesReadinessProbe       `json:"readinessProbe,omitempty"`
 }
 
 type kubernetesReadinessProbe struct {
@@ -242,8 +293,24 @@ type kubernetesExecAction struct {
 }
 
 type kubernetesEnvironmentVariable struct {
-	Name  string `json:"name"`
-	Value string `json:"value"`
+	Name      string                          `json:"name"`
+	Value     string                          `json:"value,omitempty"`
+	ValueFrom *kubernetesEnvironmentValueFrom `json:"valueFrom,omitempty"`
+}
+
+type kubernetesEnvironmentValueFrom struct {
+	SecretKeyRef kubernetesSecretKeyReference `json:"secretKeyRef"`
+}
+
+type kubernetesSecretKeyReference struct {
+	Name string `json:"name"`
+	Key  string `json:"key"`
+}
+
+type kubernetesVolumeMount struct {
+	Name      string `json:"name"`
+	MountPath string `json:"mountPath"`
+	ReadOnly  bool   `json:"readOnly,omitempty"`
 }
 
 type kubernetesContainerPort struct {
@@ -257,7 +324,7 @@ type kubernetesResourceRequirements struct {
 	Requests map[string]string `json:"requests,omitempty"`
 }
 
-func marshalWorkloadSpec(resource Resource, namespace, stack string, profile Profile) (json.RawMessage, error) {
+func marshalWorkloadSpec(resource Resource, namespace, stack string, profile Profile, resources map[ResourceID]Resource) (json.RawMessage, error) {
 	object := resource.Kubernetes
 	podLabels := resourceLabels(stack, profile, resource.ID)
 	ports := make([]kubernetesContainerPort, 0, len(object.Ports))
@@ -266,22 +333,34 @@ func marshalWorkloadSpec(resource Resource, namespace, stack string, profile Pro
 	}
 	environment := make([]kubernetesEnvironmentVariable, 0, len(object.Environment))
 	for _, variable := range object.Environment {
-		environment = append(environment, kubernetesEnvironmentVariable(variable))
+		environment = append(environment, kubernetesEnvironmentVariable{Name: variable.Name, Value: variable.Value})
+	}
+	for _, variable := range object.SecretEnvironment {
+		secret := resources[variable.Secret].SecretReference
+		environment = append(environment, kubernetesEnvironmentVariable{Name: variable.Name, ValueFrom: &kubernetesEnvironmentValueFrom{SecretKeyRef: kubernetesSecretKeyReference{Name: secret.Reference, Key: variable.Key}}})
+	}
+	volumes := make([]kubernetesVolume, 0, len(object.VolumeMounts))
+	mounts := make([]kubernetesVolumeMount, 0, len(object.VolumeMounts))
+	for _, mount := range object.VolumeMounts {
+		claim := resources[mount.Claim].Kubernetes
+		volumes = append(volumes, kubernetesVolume{Name: string(mount.Claim), PersistentVolumeClaim: kubernetesPersistentVolumeClaim{ClaimName: claim.Name, ReadOnly: mount.ReadOnly}})
+		mounts = append(mounts, kubernetesVolumeMount{Name: string(mount.Claim), MountPath: mount.Path, ReadOnly: mount.ReadOnly})
 	}
 	container := kubernetesContainer{
 		Name: object.Name, Image: object.Image, Command: append([]string(nil), object.Command...), Args: append([]string(nil), object.Arguments...), Env: environment, Ports: ports,
-		Resources: kubernetesResourceRequirements{Limits: map[string]string{"cpu": milliCPUQuantity(object.Compute.LimitMilliCPU), "memory": byteQuantity(object.Compute.LimitMemoryBytes)}, Requests: map[string]string{"cpu": milliCPUQuantity(object.Compute.RequestMilliCPU), "memory": byteQuantity(object.Compute.RequestMemoryBytes)}},
+		VolumeMounts: mounts,
+		Resources:    kubernetesResourceRequirements{Limits: map[string]string{"cpu": milliCPUQuantity(object.Compute.LimitMilliCPU), "memory": byteQuantity(object.Compute.LimitMemoryBytes)}, Requests: map[string]string{"cpu": milliCPUQuantity(object.Compute.RequestMilliCPU), "memory": byteQuantity(object.Compute.RequestMemoryBytes)}},
 	}
 	if object.Readiness != nil {
 		container.Readiness = &kubernetesReadinessProbe{Exec: kubernetesExecAction{Command: append([]string(nil), object.Readiness.Command...)}, InitialDelaySeconds: object.Readiness.InitialDelaySeconds, PeriodSeconds: object.Readiness.PeriodSeconds, FailureThreshold: object.Readiness.FailureThreshold}
 	}
-	spec := kubernetesWorkloadSpec{Selector: kubernetesSelector{MatchLabels: map[string]string{resourceLabel: string(resource.ID)}}, Template: kubernetesPodTemplate{Metadata: kubernetesPodMetadata{Labels: podLabels}, Spec: kubernetesPodSpec{ServiceAccountName: object.ServiceAccount, Containers: []kubernetesContainer{container}}}}
+	spec := kubernetesWorkloadSpec{Selector: kubernetesSelector{MatchLabels: map[string]string{resourceLabel: string(resource.ID)}}, Template: kubernetesPodTemplate{Metadata: kubernetesPodMetadata{Labels: podLabels}, Spec: kubernetesPodSpec{ServiceAccountName: object.ServiceAccount, AutomountServiceAccountToken: false, EnableServiceLinks: false, Containers: []kubernetesContainer{container}, Volumes: volumes}}}
 	switch object.Kind {
 	case "Deployment":
-		replicas := 1
+		replicas := effectiveReplicas(object.Replicas)
 		spec.Replicas = &replicas
 	case "StatefulSet":
-		replicas := 1
+		replicas := effectiveReplicas(object.Replicas)
 		spec.Replicas = &replicas
 		spec.Service = object.Name
 	case "Job":
@@ -289,6 +368,22 @@ func marshalWorkloadSpec(resource Resource, namespace, stack string, profile Pro
 		spec.Template.Spec.RestartPolicy = "Never"
 	}
 	return marshalJSON(spec), nil
+}
+
+func effectiveReplicas(value int) int {
+	if value == 0 {
+		return 1
+	}
+	return value
+}
+
+func ingressRules(rules []IngressRule, resources map[ResourceID]Resource) []kubernetesIngressRule {
+	result := make([]kubernetesIngressRule, 0, len(rules))
+	for _, rule := range rules {
+		service := resources[rule.Service].Kubernetes
+		result = append(result, kubernetesIngressRule{Host: rule.Host, HTTP: kubernetesIngressHTTPRuleSet{Paths: []kubernetesIngressPath{{Path: rule.Path, PathType: rule.PathType, Backend: kubernetesIngressBackend{Service: kubernetesIngressServiceBackend{Name: service.Name, Port: kubernetesIngressPortNumber{Name: rule.ServicePort}}}}}}})
+	}
+	return result
 }
 
 type kubernetesServiceSpec struct {

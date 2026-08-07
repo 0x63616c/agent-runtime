@@ -119,6 +119,9 @@ type KubernetesResource struct {
 	Kind string `json:"kind"`
 	// Name is the DNS-label-safe object name.
 	Name string `json:"name"`
+	// Replicas is the finite desired count for a Deployment or StatefulSet.
+	// Omission in Stack schema v1 resolves to one replica for compatibility.
+	Replicas int `json:"replicas,omitempty"`
 	// Image is an immutable digest-qualified reference for workloads.
 	Image string `json:"image,omitempty"`
 	// ServiceAccount names the least-privilege account used by a workload or binding.
@@ -133,6 +136,11 @@ type KubernetesResource struct {
 	Arguments []string `json:"arguments,omitempty"`
 	// Environment contains reviewed non-secret workload environment values.
 	Environment []EnvironmentVariable `json:"environment,omitempty"`
+	// SecretEnvironment binds named environment values to declared Secret references.
+	// It contains references only; secret material never appears in Stack desired state.
+	SecretEnvironment []SecretEnvironmentVariable `json:"secret_environment,omitempty"`
+	// VolumeMounts binds a workload to explicitly declared PersistentVolumeClaims.
+	VolumeMounts []PersistentVolumeMount `json:"volume_mounts,omitempty"`
 	// Readiness is the explicit workload health probe when an operator must await service readiness.
 	Readiness *ReadinessProbe `json:"readiness,omitempty"`
 	// Ports is explicit, including an empty array for workloads with no ports.
@@ -147,6 +155,22 @@ type KubernetesResource struct {
 	Permissions []Permission `json:"permissions,omitempty"`
 	// Data contains reviewed non-secret ConfigMap values.
 	Data map[string]string `json:"data,omitempty"`
+	// IngressRules are explicit HTTP routes owned by a networking.k8s.io/v1 Ingress.
+	IngressRules []IngressRule `json:"ingress_rules,omitempty"`
+}
+
+// IngressRule is one bounded route to a declared namespaced Service port.
+type IngressRule struct {
+	// Host is the reviewed DNS host, or localhost for local development only.
+	Host string `json:"host"`
+	// Path is the absolute HTTP path.
+	Path string `json:"path"`
+	// PathType is Exact or Prefix.
+	PathType string `json:"path_type"`
+	// Service names the Stack Service resource.
+	Service ResourceID `json:"service"`
+	// ServicePort is the named Service port.
+	ServicePort string `json:"service_port"`
 }
 
 // EnvironmentVariable is one reviewed non-secret workload environment value.
@@ -155,6 +179,27 @@ type EnvironmentVariable struct {
 	Name string `json:"name"`
 	// Value is the bounded non-secret literal value.
 	Value string `json:"value"`
+}
+
+// SecretEnvironmentVariable binds one process environment variable to one key
+// in a declared Secret reference.
+type SecretEnvironmentVariable struct {
+	// Name is the process environment variable name.
+	Name string `json:"name"`
+	// Secret names the Stack SecretReference resource.
+	Secret ResourceID `json:"secret"`
+	// Key is the declared non-secret key name within Secret.
+	Key string `json:"key"`
+}
+
+// PersistentVolumeMount binds a workload mount path to a declared PVC resource.
+type PersistentVolumeMount struct {
+	// Claim names the Stack PersistentVolumeClaim resource.
+	Claim ResourceID `json:"claim"`
+	// Path is the absolute in-container mount path.
+	Path string `json:"path"`
+	// ReadOnly controls write authority inside the workload.
+	ReadOnly bool `json:"read_only"`
 }
 
 // ReadinessProbe is a bounded exec health check declared with a workload.
@@ -225,6 +270,8 @@ type Permission struct {
 type OrchestrationResource struct {
 	// Namespace is the explicit durable orchestration namespace.
 	Namespace string `json:"namespace"`
+	// TaskQueuePrefix confines durable worker routing to this Stack profile.
+	TaskQueuePrefix string `json:"task_queue_prefix"`
 	// RetentionDays is finite namespace history retention.
 	RetentionDays int `json:"retention_days"`
 	// SearchAttributes is the complete typed search-attribute set.
@@ -297,6 +344,8 @@ type SecretReferenceResource struct {
 	Reference string `json:"reference"`
 	// Version pins the reviewed secret schema/version selector.
 	Version string `json:"version"`
+	// Keys is the reviewed non-secret key-name inventory. It never contains values.
+	Keys []string `json:"keys,omitempty"`
 }
 
 // TelemetryResource declares a collector service and finite retention.
@@ -309,7 +358,7 @@ type TelemetryResource struct {
 	RetentionDays int `json:"retention_days"`
 }
 
-func validateResource(resource Resource, namespace string) error {
+func validateResource(resource Resource, namespace string, profile Profile) error {
 	if !resourceIDPattern.MatchString(string(resource.ID)) {
 		return errors.New("resource id must be a lowercase stack-local identifier")
 	}
@@ -345,7 +394,7 @@ func validateResource(resource Resource, namespace string) error {
 	}
 	switch resource.Kind {
 	case ResourceKubernetes:
-		if err := validateKubernetes(resource, namespace); err != nil {
+		if err := validateKubernetes(resource, namespace, profile); err != nil {
 			return err
 		}
 	case ResourceOrchestration:
@@ -377,7 +426,7 @@ func validateResource(resource Resource, namespace string) error {
 	return nil
 }
 
-func validateKubernetes(resource Resource, namespace string) error {
+func validateKubernetes(resource Resource, namespace string, profile Profile) error {
 	object := resource.Kubernetes
 	if object.APIVersion == "" || !resourceIDPattern.MatchString(object.Name) {
 		return errors.Newf("resource %s Kubernetes api_version and name are required", resource.ID)
@@ -402,6 +451,9 @@ func validateKubernetes(resource Resource, namespace string) error {
 	}
 	switch object.Kind {
 	case "Deployment", "StatefulSet", "Job":
+		if object.Replicas < 0 || object.Replicas > 100 || (object.Replicas > 0 && object.Kind == "Job") {
+			return errors.Newf("resource %s replicas must be between 1 and 100 for Deployment or StatefulSet", resource.ID)
+		}
 		if !imageDigestPattern.MatchString(object.Image) {
 			return errors.Newf("resource %s workload image must use an immutable sha256 digest", resource.ID)
 		}
@@ -421,6 +473,33 @@ func validateKubernetes(resource Resource, namespace string) error {
 				return errors.Newf("resource %s workload environment must be bounded and non-secret", resource.ID)
 			}
 		}
+		names := make(map[string]struct{}, len(object.Environment)+len(object.SecretEnvironment))
+		for _, variable := range object.Environment {
+			names[variable.Name] = struct{}{}
+		}
+		claims := make(map[ResourceID]struct{}, len(object.VolumeMounts))
+		paths := make(map[string]struct{}, len(object.VolumeMounts))
+		for _, variable := range object.SecretEnvironment {
+			if !environmentNamePattern.MatchString(variable.Name) || variable.Secret == "" || !environmentNamePattern.MatchString(variable.Key) || len(variable.Key) > 253 {
+				return errors.Newf("resource %s secret environment must name a declared key and Secret reference", resource.ID)
+			}
+			if _, duplicate := names[variable.Name]; duplicate {
+				return errors.Newf("resource %s environment variable %s is declared more than once", resource.ID, variable.Name)
+			}
+			names[variable.Name] = struct{}{}
+		}
+		for _, mount := range object.VolumeMounts {
+			if mount.Claim == "" || !strings.HasPrefix(mount.Path, "/") || strings.Contains(mount.Path, "..") || len(mount.Path) > 1024 {
+				return errors.Newf("resource %s volume mount must use a declared claim and bounded absolute path", resource.ID)
+			}
+			if _, duplicate := claims[mount.Claim]; duplicate {
+				return errors.Newf("resource %s volume claim %s is mounted more than once", resource.ID, mount.Claim)
+			}
+			if _, duplicate := paths[mount.Path]; duplicate {
+				return errors.Newf("resource %s mount path %s is declared more than once", resource.ID, mount.Path)
+			}
+			claims[mount.Claim], paths[mount.Path] = struct{}{}, struct{}{}
+		}
 		if object.Readiness != nil {
 			if object.Readiness.InitialDelaySeconds < 0 || object.Readiness.PeriodSeconds <= 0 || object.Readiness.FailureThreshold <= 0 || len(object.Readiness.Command) == 0 {
 				return errors.Newf("resource %s workload readiness probe must be complete and finite", resource.ID)
@@ -431,9 +510,18 @@ func validateKubernetes(resource Resource, namespace string) error {
 				}
 			}
 		}
-	case "Service", "Ingress":
+	case "Service":
 		if len(object.Ports) == 0 || object.Selector == "" {
 			return errors.Newf("resource %s service or ingress must declare ports and a workload selector", resource.ID)
+		}
+	case "Ingress":
+		if object.APIVersion != "networking.k8s.io/v1" || len(object.IngressRules) == 0 {
+			return errors.Newf("resource %s Ingress must declare networking.k8s.io/v1 rules", resource.ID)
+		}
+		for _, rule := range object.IngressRules {
+			if !validIngressHost(rule.Host, profile) || !strings.HasPrefix(rule.Path, "/") || strings.Contains(rule.Path, "..") || (rule.PathType != "Exact" && rule.PathType != "Prefix") || rule.Service == "" || !resourceIDPattern.MatchString(rule.ServicePort) {
+				return errors.Newf("resource %s Ingress contains an invalid explicit route", resource.ID)
+			}
 		}
 	case "NetworkPolicy":
 		if object.Network == nil || !object.Network.DefaultDeny || object.Network.AllowedEgress == nil {
@@ -492,6 +580,21 @@ func validateKubernetes(resource Resource, namespace string) error {
 	return nil
 }
 
+func validIngressHost(host string, profile Profile) bool {
+	if host == "localhost" {
+		return profile == ProfileLocal || profile == ProfileCI
+	}
+	if len(host) == 0 || len(host) > 253 || strings.Contains(host, "..") {
+		return false
+	}
+	for _, label := range strings.Split(host, ".") {
+		if !resourceIDPattern.MatchString(label) {
+			return false
+		}
+	}
+	return true
+}
+
 func looksLikeSecretEnvironment(name string) bool {
 	upper := strings.ToUpper(name)
 	return strings.Contains(upper, "PASSWORD") || strings.Contains(upper, "SECRET") || strings.Contains(upper, "TOKEN") || strings.HasSuffix(upper, "_KEY")
@@ -506,7 +609,7 @@ func validateCompute(id ResourceID, compute *ComputeResources) error {
 
 func validateOrchestration(resource Resource) error {
 	declaration := resource.Orchestration
-	if declaration.Namespace == "" || declaration.RetentionDays <= 0 || declaration.SearchAttributes == nil || declaration.Schedules == nil {
+	if declaration.Namespace == "" || declaration.TaskQueuePrefix == "" || len(declaration.TaskQueuePrefix) > 128 || declaration.RetentionDays <= 0 || declaration.SearchAttributes == nil || declaration.Schedules == nil {
 		return errors.Newf("resource %s orchestration declaration is incomplete or unbounded", resource.ID)
 	}
 	for _, attribute := range declaration.SearchAttributes {

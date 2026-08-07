@@ -1,0 +1,30 @@
+{
+  "schema_version": 1,
+  "issue": 12,
+  "observed_at_utc": "2026-08-07T05:23:05Z",
+  "scope": "M1 isolated local Tilt foundation; intentionally not production runtime-image evidence",
+  "commands": [
+    "tilt ci --context orbstack --namespace ar-tiltproof --port 0 --timeout 12m -- --stack=tiltproof",
+    "tilt ci --context orbstack --namespace ar-tiltpeer --port 0 --timeout 12m -- --stack=tiltpeer",
+    "tilt ci --context orbstack --namespace ar-lastproof --port 0 --timeout 12m -- --stack=lastproof",
+    "kubectl --context orbstack --namespace ar-tiltproof port-forward --address 127.0.0.1 service/api 18080:8080",
+    "go run ./tools/dev reset --stack tiltproof --root .",
+    "go run ./tools/dev down --stack tiltproof --root .",
+    "tilt down --context orbstack --namespace ar-tiltpeer --delete-namespaces -- --stack=tiltpeer",
+    "tilt down --context orbstack --namespace ar-lastproof --delete-namespaces -- --stack=lastproof"
+  ],
+  "two_stack_result": {
+    "tiltproof_namespace": "ar-tiltproof",
+    "tiltpeer_namespace": "ar-tiltpeer",
+    "ready_deployments_each": ["api", "blob", "codec", "postgres", "telemetry", "temporal", "temporal-ui", "worker"],
+    "api_readyz": "ready",
+    "api_root": "agent-runtime local api role",
+    "final_manifest_confirmation": "ar-lastproof reached Tilt CI healthy with token automount disabled and no Role or RoleBinding"
+  },
+  "lifecycle_result": {
+    "reset": "verified namespace identity then restarted only api, worker, and codec in ar-tiltproof",
+    "isolation": "ar-tiltpeer remained eight of eight Deployments ready after the tiltproof reset",
+    "teardown": "tiltproof, tiltpeer, finalproof, and lastproof were all confirmed NotFound after their respective teardown commands"
+  },
+  "redaction": "No generated Secret values, local state files, credentials, tokens, or raw pod logs are retained."
+}

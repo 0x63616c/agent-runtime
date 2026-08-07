@@ -28,6 +28,46 @@ var _ = Describe("Typed Kubernetes manifests", func() {
 		Expect(compact.String()).To(ContainSubstring(`"kind":"NetworkPolicy"`))
 		Expect(compact.String()).To(ContainSubstring(`"podSelector":{"matchLabels":{"agent-runtime.dev/resource":"api"}}`))
 		Expect(compact.String()).To(ContainSubstring(`"resources":{"limits":{"cpu":"500m","memory":"256Mi"},"requests":{"cpu":"100m","memory":"128Mi"}}`))
+		Expect(compact.String()).To(ContainSubstring(`"automountServiceAccountToken":false`))
+	})
+
+	It("projects declared secret references and persistent claims without serializing secret values", func() {
+		resources := `[
+  {"id":"database-credentials","kind":"secret_reference","owner":"platform-operator","scope":"namespace","dependencies":[],"retention":{"policy":"external","days":0},"backup_restore_owner":"platform-operator","delete_behavior":"retain","external_controller":true,"secret_reference":{"provider":"local-generated","reference":"database-credentials","version":"v1","keys":["POSTGRES_PASSWORD"]}},
+  {"id":"runtime-account","kind":"kubernetes","owner":"platform-operator","scope":"namespace","dependencies":[],"retention":{"policy":"ephemeral","days":0},"backup_restore_owner":"none","delete_behavior":"delete","external_controller":false,"kubernetes":{"api_version":"v1","kind":"ServiceAccount","name":"runtime-account"}},
+  {"id":"postgres-data","kind":"kubernetes","owner":"platform-operator","scope":"namespace","dependencies":[],"retention":{"policy":"ephemeral","days":0},"backup_restore_owner":"none","delete_behavior":"delete","external_controller":false,"kubernetes":{"api_version":"v1","kind":"PersistentVolumeClaim","name":"postgres-data","storage":[{"name":"data","size_bytes":1073741824,"class":"local-path"}]}},
+  {"id":"postgres","kind":"kubernetes","owner":"platform-operator","scope":"namespace","dependencies":["database-credentials","runtime-account","postgres-data"],"retention":{"policy":"ephemeral","days":0},"backup_restore_owner":"none","delete_behavior":"delete","external_controller":false,"kubernetes":{"api_version":"apps/v1","kind":"Deployment","name":"postgres","image":"registry.invalid/postgres@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","service_account":"runtime-account","secret_environment":[{"name":"POSTGRES_PASSWORD","secret":"database-credentials","key":"POSTGRES_PASSWORD"}],"volume_mounts":[{"claim":"postgres-data","path":"/var/lib/postgresql/data","read_only":false}],"ports":[],"compute":{"request_milli_cpu":100,"limit_milli_cpu":500,"request_memory_bytes":134217728,"limit_memory_bytes":268435456},"storage":[]}}
+]`
+		spec, err := stack.Parse(strings.NewReader(stackDocument(resources, resources, resources)))
+		Expect(err).NotTo(HaveOccurred())
+		rendered, err := stack.Render(spec, stack.ProfileLocal)
+		Expect(err).NotTo(HaveOccurred())
+		manifests, err := stack.RenderKubernetes(rendered)
+		Expect(err).NotTo(HaveOccurred())
+		var compactBuffer bytes.Buffer
+		Expect(json.Compact(&compactBuffer, manifests.JSON())).To(Succeed())
+		compact := compactBuffer.String()
+		Expect(compact).To(ContainSubstring(`"secretKeyRef"`))
+		Expect(compact).To(ContainSubstring(`"claimName":"postgres-data"`))
+		Expect(compact).NotTo(ContainSubstring(`"value":"POSTGRES_PASSWORD"`))
+	})
+
+	It("renders an explicit replica count and declared ingress service route", func() {
+		resources := strings.Replace(kubernetesManifestResources, `"name":"api","image"`, `"name":"api","replicas":3,"image"`, 1)
+		resources = strings.TrimSuffix(resources, `]`) + `,
+  {"id":"api-ingress","kind":"kubernetes","owner":"platform-operator","scope":"namespace","dependencies":["api-service"],"retention":{"policy":"ephemeral","days":0},"backup_restore_owner":"none","delete_behavior":"delete","external_controller":false,"kubernetes":{"api_version":"networking.k8s.io/v1","kind":"Ingress","name":"api-ingress","ingress_rules":[{"host":"api.localhost","path":"/","path_type":"Prefix","service":"api-service","service_port":"http"}]}}
+]`
+		spec, err := stack.Parse(strings.NewReader(stackDocument(resources, resources, resources)))
+		Expect(err).NotTo(HaveOccurred())
+		rendered, err := stack.Render(spec, stack.ProfileLocal)
+		Expect(err).NotTo(HaveOccurred())
+		manifests, err := stack.RenderKubernetes(rendered)
+		Expect(err).NotTo(HaveOccurred())
+		var compact bytes.Buffer
+		Expect(json.Compact(&compact, manifests.JSON())).To(Succeed())
+		Expect(compact.String()).To(ContainSubstring(`"replicas":3`))
+		Expect(compact.String()).To(ContainSubstring(`"pathType":"Prefix"`))
+		Expect(compact.String()).To(ContainSubstring(`"service":{"name":"api-service","port":{"name":"http"}}`))
 	})
 })
 

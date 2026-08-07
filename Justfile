@@ -33,3 +33,26 @@ docs-check:
     npm --prefix website audit --omit=dev --audit-level=high
     npm --prefix website run typecheck
     npm --prefix website run build
+
+# Starts one isolated declarative OrbStack environment. STACK is optional; an
+# omitted value derives a deterministic identity from this worktree.
+dev stack="":
+    go run ./tools/dev up --stack "{{stack}}" --root .
+
+dev-preflight stack="":
+    go run ./tools/dev preflight --stack "{{stack}}" --root .
+
+dev-status stack="":
+    go run ./tools/dev status --stack "{{stack}}" --root .
+
+# Opens a foreground OS-selected API forward. Ctrl-C closes only the forward.
+dev-api stack="":
+    go run ./tools/dev api --stack "{{stack}}" --root .
+
+# Restarts only the three declared local role Deployments after label/UID checks.
+dev-reset stack="":
+    go run ./tools/dev reset --stack "{{stack}}" --root .
+
+# Deletes only a verified labelled Stack namespace and its declared local objects.
+dev-down stack="":
+    go run ./tools/dev down --stack "{{stack}}" --root .

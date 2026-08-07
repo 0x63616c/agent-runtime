@@ -179,7 +179,7 @@ func parseProfile(profile Profile, input profileDocument) (ProfileSpec, error) {
 		return ProfileSpec{}, errors.Newf("validate %s stack profile: resources must not be empty", profile)
 	}
 	for _, resource := range resources {
-		if err := validateResource(resource, input.Namespace); err != nil {
+		if err := validateResource(resource, input.Namespace, profile); err != nil {
 			return ProfileSpec{}, errors.Wrapf(err, "validate %s stack profile", profile)
 		}
 	}
@@ -258,6 +258,15 @@ func validateTypedReferences(resource Resource, resources map[ResourceID]Resourc
 				required[reference] = ResourceKubernetes
 			}
 		}
+		for _, variable := range resource.Kubernetes.SecretEnvironment {
+			required[variable.Secret] = ResourceSecretReference
+		}
+		for _, mount := range resource.Kubernetes.VolumeMounts {
+			required[mount.Claim] = ResourceKubernetes
+		}
+		for _, rule := range resource.Kubernetes.IngressRules {
+			required[rule.Service] = ResourceKubernetes
+		}
 	}
 	declaredDependency := make(map[ResourceID]struct{}, len(resource.Dependencies))
 	for _, dependency := range resource.Dependencies {
@@ -276,6 +285,23 @@ func validateTypedReferences(resource Resource, resources map[ResourceID]Resourc
 		}
 		if expectedKind != "" && target.Kind != expectedKind {
 			return errors.Newf("resource %s reference %s must have kind %s", resource.ID, reference, expectedKind)
+		}
+		if resource.Kind == ResourceKubernetes && resource.Kubernetes != nil {
+			for _, variable := range resource.Kubernetes.SecretEnvironment {
+				if variable.Secret == reference && !containsSecretKey(target.SecretReference, variable.Key) {
+					return errors.Newf("resource %s secret environment key %s is not declared by %s", resource.ID, variable.Key, reference)
+				}
+			}
+			for _, mount := range resource.Kubernetes.VolumeMounts {
+				if mount.Claim == reference && (target.Kubernetes == nil || target.Kubernetes.Kind != "PersistentVolumeClaim") {
+					return errors.Newf("resource %s volume claim %s must name a PersistentVolumeClaim", resource.ID, reference)
+				}
+			}
+			for _, rule := range resource.Kubernetes.IngressRules {
+				if rule.Service == reference && !isServicePort(target.Kubernetes, rule.ServicePort) {
+					return errors.Newf("resource %s Ingress service port %s is not declared by %s", resource.ID, rule.ServicePort, reference)
+				}
+			}
 		}
 	}
 	if resource.Kind == ResourceKubernetes {
@@ -311,6 +337,14 @@ func validateTypedReferences(resource Resource, resources map[ResourceID]Resourc
 				return errors.Newf("resource %s RoleBinding must depend on its declared Role and ServiceAccount", resource.ID)
 			}
 		}
+		if object.Kind == "Ingress" {
+			for _, rule := range object.IngressRules {
+				target := resources[rule.Service]
+				if target.Kubernetes == nil || target.Kubernetes.Kind != "Service" {
+					return errors.Newf("resource %s Ingress route service %s must name a Service", resource.ID, rule.Service)
+				}
+			}
+		}
 	}
 	if resource.Kind == ResourceDatabase {
 		target := resources[resource.Database.MigrationTarget]
@@ -319,6 +353,30 @@ func validateTypedReferences(resource Resource, resources map[ResourceID]Resourc
 		}
 	}
 	return nil
+}
+
+func isServicePort(resource *KubernetesResource, name string) bool {
+	if resource == nil || resource.Kind != "Service" {
+		return false
+	}
+	for _, port := range resource.Ports {
+		if port.Name == name {
+			return true
+		}
+	}
+	return false
+}
+
+func containsSecretKey(secret *SecretReferenceResource, key string) bool {
+	if secret == nil {
+		return false
+	}
+	for _, candidate := range secret.Keys {
+		if candidate == key {
+			return true
+		}
+	}
+	return false
 }
 
 func isKubernetesWorkload(resource Resource) bool {
