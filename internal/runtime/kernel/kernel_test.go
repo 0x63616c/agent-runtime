@@ -101,6 +101,24 @@ var _ = Describe("durable Agent kernel", func() {
 		Expect(again.Session.AgentRevision).To(Equal(first.RevisionID))
 	})
 
+	It("resolves a tenant Agent revision into a principal-owned Session without sharing Session authority", func() {
+		agent := createAgent(service, ctx, scope)
+		principal, err := kernel.ParseScope("tenant-a-principal-one")
+		Expect(err).NotTo(HaveOccurred())
+		other, err := kernel.ParseScope("tenant-a-principal-two")
+		Expect(err).NotTo(HaveOccurred())
+
+		resolved, err := service.GetAgentRevision(ctx, scope, agent.ID, agent.RevisionID)
+		Expect(err).NotTo(HaveOccurred())
+		session, err := service.CreateSessionFromRevision(ctx, principal, agentruntime.CreateSessionRequest{
+			IdempotencyKey: "principal-session", AgentRevision: resolved.RevisionID,
+		}, resolved)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(session.AgentRevision).To(Equal(agent.RevisionID))
+		_, err = service.InspectSession(ctx, other, session.ID)
+		Expect(err).To(MatchError(ContainSubstring("not found")))
+	})
+
 	It("admits equal Input once and rejects conflicting reuse of its idempotency key", func() {
 		session := createSession(service, ctx, scope)
 		request := agentruntime.SendInputRequest{
@@ -214,13 +232,16 @@ var _ = Describe("durable Agent kernel", func() {
 		Expect(err).NotTo(HaveOccurred())
 		Expect(view.ActiveTurn.ID).To(Equal(second.Turn.ID))
 		Expect(view.ActiveTurn.State).To(Equal(agentruntime.TurnRunning))
+		observed, err := service.InspectTurn(ctx, scope, session.ID, completed.ID)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(observed).To(Equal(completed))
 	})
 
 	It("cancels explicitly, promotes queued work, and makes duplicate cancellation idempotent", func() {
 		session := createSession(service, ctx, scope)
 		first := sendText(service, ctx, scope, session.ID, "first", "one")
 		second := sendText(service, ctx, scope, session.ID, "second", "two")
-		request := agentruntime.CancelTurnRequest{TurnID: first.Turn.ID, IdempotencyKey: "cancel-first"}
+		request := agentruntime.CancelTurnRequest{SessionID: session.ID, TurnID: first.Turn.ID, IdempotencyKey: "cancel-first"}
 
 		cancelled, err := service.CancelTurn(ctx, scope, request)
 		Expect(err).NotTo(HaveOccurred())
@@ -228,6 +249,9 @@ var _ = Describe("durable Agent kernel", func() {
 		again, err := service.CancelTurn(ctx, scope, request)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(again).To(Equal(cancelled))
+		other := createSessionWithKey(service, ctx, scope, "cancel-other-session")
+		_, err = service.CancelTurn(ctx, scope, agentruntime.CancelTurnRequest{SessionID: other.ID, TurnID: first.Turn.ID, IdempotencyKey: request.IdempotencyKey})
+		Expect(err).To(MatchError(ContainSubstring("conflict")))
 
 		view, err := service.InspectSession(ctx, scope, session.ID)
 		Expect(err).NotTo(HaveOccurred())
@@ -240,7 +264,7 @@ var _ = Describe("durable Agent kernel", func() {
 		second := sendText(service, ctx, scope, session.ID, "second", "two")
 		third := sendText(service, ctx, scope, session.ID, "third", "three")
 
-		cancelled, err := service.CancelTurn(ctx, scope, agentruntime.CancelTurnRequest{TurnID: second.Turn.ID, IdempotencyKey: "cancel-second"})
+		cancelled, err := service.CancelTurn(ctx, scope, agentruntime.CancelTurnRequest{SessionID: session.ID, TurnID: second.Turn.ID, IdempotencyKey: "cancel-second"})
 		Expect(err).NotTo(HaveOccurred())
 		Expect(cancelled.State).To(Equal(agentruntime.TurnCancelled))
 
@@ -248,6 +272,29 @@ var _ = Describe("durable Agent kernel", func() {
 		Expect(err).NotTo(HaveOccurred())
 		Expect(view.ActiveTurn.ID).To(Equal(first.Turn.ID))
 		Expect(view.QueuedTurns).To(ConsistOf(WithTransform(func(turn agentruntime.Turn) agentruntime.TurnID { return turn.ID }, Equal(third.Turn.ID))))
+	})
+
+	It("refuses cancellation when the Turn belongs to another Session", func() {
+		owning := createSession(service, ctx, scope)
+		other := createSessionWithKey(service, ctx, scope, "mismatch-other-session")
+		turn := sendText(service, ctx, scope, owning.ID, "first", "one")
+		_, err := service.CancelTurn(ctx, scope, agentruntime.CancelTurnRequest{SessionID: other.ID, TurnID: turn.Turn.ID, IdempotencyKey: "wrong-session"})
+		Expect(err).To(MatchError(ContainSubstring("not found")))
+		observed, err := service.InspectTurn(ctx, scope, owning.ID, turn.Turn.ID)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(observed.State).To(Equal(agentruntime.TurnRunning))
+	})
+
+	It("bounds Session inspection while reporting omitted queued Turns explicitly", func() {
+		session := createSession(service, ctx, scope)
+		for index := 0; index < agentruntime.MaxSessionViewQueuedTurns+6; index++ {
+			sendText(service, ctx, scope, session.ID, fmt.Sprintf("input-%d", index), "bounded")
+		}
+		view, err := service.InspectSession(ctx, scope, session.ID)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(view.QueuedTurns).To(HaveLen(agentruntime.MaxSessionViewQueuedTurns))
+		Expect(view.QueuedTurnCount).To(Equal(uint64(agentruntime.MaxSessionViewQueuedTurns + 5)))
+		Expect(view.QueuedTurnsTruncated).To(BeTrue())
 	})
 
 	It("closes admission, drains accepted Turns, and completes exactly once", func() {
@@ -313,7 +360,7 @@ var _ = Describe("durable Agent kernel", func() {
 		go func() {
 			defer GinkgoRecover()
 			defer wait.Done()
-			result, err := service.CancelTurn(ctx, scope, agentruntime.CancelTurnRequest{TurnID: turn.Turn.ID, IdempotencyKey: "racing-cancel"})
+			result, err := service.CancelTurn(ctx, scope, agentruntime.CancelTurnRequest{SessionID: session.ID, TurnID: turn.Turn.ID, IdempotencyKey: "racing-cancel"})
 			results <- result
 			errors <- err
 		}()
@@ -425,6 +472,17 @@ var _ = Describe("durable Agent kernel", func() {
 })
 
 func createSession(service *kernel.Kernel, ctx context.Context, scope kernel.Scope) agentruntime.Session {
+	return createSessionWithKey(service, ctx, scope, "session")
+}
+
+func createSessionWithKey(service *kernel.Kernel, ctx context.Context, scope kernel.Scope, key string) agentruntime.Session {
+	agent := createAgent(service, ctx, scope)
+	session, err := service.CreateSession(ctx, scope, agentruntime.CreateSessionRequest{IdempotencyKey: key, AgentRevision: agent.RevisionID})
+	ExpectWithOffset(1, err).NotTo(HaveOccurred())
+	return session
+}
+
+func createAgent(service *kernel.Kernel, ctx context.Context, scope kernel.Scope) agentruntime.AgentSpecification {
 	agent, err := service.CreateAgent(ctx, scope, agentruntime.CreateAgentRequest{
 		IdempotencyKey: "agent",
 		Name:           "assistant",
@@ -432,9 +490,7 @@ func createSession(service *kernel.Kernel, ctx context.Context, scope kernel.Sco
 		Instructions:   "Be useful.",
 	})
 	ExpectWithOffset(1, err).NotTo(HaveOccurred())
-	session, err := service.CreateSession(ctx, scope, agentruntime.CreateSessionRequest{IdempotencyKey: "session", AgentRevision: agent.RevisionID})
-	ExpectWithOffset(1, err).NotTo(HaveOccurred())
-	return session
+	return agent
 }
 
 func sendText(service *kernel.Kernel, ctx context.Context, scope kernel.Scope, sessionID agentruntime.SessionID, key, text string) agentruntime.SendInputResult {

@@ -73,6 +73,10 @@ func TestEveryPublicIdentifierHasStrictJSONAndRedactionSemantics(t *testing.T) {
 			id, err := agentruntime.ParseArtifactID(value)
 			return id.String(), err
 		}},
+		{"Request", "req_1234567890ABCDEF", func(value string) (string, error) {
+			id, err := agentruntime.ParseRequestID(value)
+			return id.String(), err
+		}},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

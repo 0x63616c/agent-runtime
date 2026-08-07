@@ -22,7 +22,7 @@ The package currently defines:
   results requiring Session inspection;
 - requests for Agent creation/revision, Session creation, idempotent Input,
   explicit Turn cancellation, and draining Session close; and
-- the small `Client` interface that future HTTP transport code must implement.
+- the narrow `RuntimeClient` interface and its strict concrete HTTP `Client`.
 
 The deterministic internal kernel implements the first S2 transition slice
 through an atomic, context-aware repository port. It creates immutable Agent
@@ -50,9 +50,14 @@ than silently skipping records.
 
 ## Deliberately not claimed
 
-This slice does not provide an HTTP server/client implementation, OpenAPI
-description, authentication transport, PostgreSQL adapter, outbox, live event
-stream, Temporal workflow, model invocation, tool/approval execution,
-Artifact download, admin policy surface, or a runnable example. Those remain
-required by issues #23–#25 and their acceptance-ledger rows. No M5 requirement
-is promoted by this partial slice.
+The HTTP client requires an explicit HTTP implementation, credential source,
+request-ID source, finite response bound, and HTTPS origin (loopback HTTP is
+allowed for local development). It performs no hidden retries and rejects
+unknown or trailing JSON, oversized responses, unsafe failure envelopes, and
+mismatched request IDs.
+
+The standalone API role uses an explicitly configured `memory-unsafe`
+repository. It proves the public transport and process boundary, not restart
+durability. PostgreSQL/outbox authority, live push streaming, Temporal
+workflow execution, model/tool/approval execution, and Artifact transfer are
+still unimplemented. No M5 requirement is promoted by this partial slice.

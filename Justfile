@@ -3,12 +3,18 @@ set shell := ["bash", "-ceu"]
 # Runs the passing deterministic gate for an incremental main change. Requires just 1.58.0.
 check:
     go run ./cmd/generate-requirement-manifest --check
+    go run ./cmd/generate-runtime-openapi --check
     for evidence_file in evidence/afk/*.json; do go run ./cmd/afk-evidence -mode validate -file "$evidence_file"; done
     go mod verify
     go test -race ./...
     go vet ./...
     go run ./cmd/no-real-wait --root .
     go run ./cmd/ledger-report --catalog evidence/requirements-catalog.json --ledger evidence/requirements-ledger.json
+
+# Regenerates checked-in source artifacts from their binding authorities.
+generate:
+    go run ./cmd/generate-requirement-manifest
+    go run ./cmd/generate-runtime-openapi
 
 # Runs check, then requires all 183 rows to have valid completed evidence.
 verify: check

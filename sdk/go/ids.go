@@ -31,6 +31,9 @@ type Cursor string
 // ArtifactID identifies an authorized immutable Artifact reference.
 type ArtifactID string
 
+// RequestID correlates one HTTP attempt without identifying durable work.
+type RequestID string
+
 const (
 	agentPrefix         = "agent_"
 	agentRevisionPrefix = "arev_"
@@ -40,6 +43,7 @@ const (
 	eventPrefix         = "evt_"
 	cursorPrefix        = "cur_"
 	artifactPrefix      = "art_"
+	requestPrefix       = "req_"
 )
 
 // ParseAgentID validates an externally supplied Agent ID.
@@ -69,6 +73,9 @@ func ParseCursor(value string) (Cursor, error) { return parseID[Cursor](value, c
 func ParseArtifactID(value string) (ArtifactID, error) {
 	return parseID[ArtifactID](value, artifactPrefix)
 }
+
+// ParseRequestID validates an externally supplied request correlation ID.
+func ParseRequestID(value string) (RequestID, error) { return parseID[RequestID](value, requestPrefix) }
 
 type opaqueID interface {
 	~string
@@ -248,3 +255,18 @@ func (id ArtifactID) MarshalJSON() ([]byte, error) { return marshalID(id, artifa
 
 // UnmarshalJSON decodes and validates an Artifact ID.
 func (id *ArtifactID) UnmarshalJSON(data []byte) error { return unmarshalID(data, id, artifactPrefix) }
+
+// String returns the canonical request correlation ID.
+func (id RequestID) String() string { return string(id) }
+
+// Redacted returns a safe diagnostic request correlation ID.
+func (id RequestID) Redacted() string { return redactID(id, requestPrefix) }
+
+// LogValue returns a redacted request correlation ID for structured logs.
+func (id RequestID) LogValue() slog.Value { return slog.StringValue(id.Redacted()) }
+
+// MarshalJSON encodes a validated request correlation ID.
+func (id RequestID) MarshalJSON() ([]byte, error) { return marshalID(id, requestPrefix) }
+
+// UnmarshalJSON decodes and validates a request correlation ID.
+func (id *RequestID) UnmarshalJSON(data []byte) error { return unmarshalID(data, id, requestPrefix) }

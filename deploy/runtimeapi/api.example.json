@@ -1,0 +1,21 @@
+{
+  "version": 1,
+  "listen_address": "127.0.0.1:8088",
+  "storage": { "mode": "memory-unsafe" },
+  "model_profiles": ["balanced"],
+  "max_request_bytes": 4194304,
+  "principals": [
+    {
+      "tenant": "local",
+      "principal": "admin",
+      "admin": true,
+      "bearer_token_environment": "AGENT_RUNTIME_ADMIN_TOKEN"
+    },
+    {
+      "tenant": "local",
+      "principal": "developer",
+      "admin": false,
+      "bearer_token_environment": "AGENT_RUNTIME_DEVELOPER_TOKEN"
+    }
+  ]
+}

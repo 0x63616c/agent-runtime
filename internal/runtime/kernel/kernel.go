@@ -153,6 +153,43 @@ func (kernel *Kernel) ReviseAgent(ctx context.Context, scope Scope, request agen
 	return result.Clone(), err
 }
 
+// GetAgentRevision returns one immutable revision from its owning Agent catalog.
+func (kernel *Kernel) GetAgentRevision(ctx context.Context, scope Scope, agentID agentruntime.AgentID, revisionID agentruntime.AgentRevisionID) (agentruntime.AgentSpecification, error) {
+	if err := kernel.validateScopeAndContext(ctx, scope); err != nil {
+		return agentruntime.AgentSpecification{}, err
+	}
+	var result agentruntime.AgentSpecification
+	err := kernel.store.View(ctx, scope, func(state *TenantState) error {
+		revision, ok := state.revisions[revisionID]
+		if !ok || revision.ID != agentID {
+			return notFound("Agent revision not found")
+		}
+		result = revision.Clone()
+		return nil
+	})
+	return result.Clone(), err
+}
+
+// ResolveAgentRevision returns one immutable revision when its opaque revision ID is already authorized by the caller's catalog scope.
+func (kernel *Kernel) ResolveAgentRevision(ctx context.Context, scope Scope, revisionID agentruntime.AgentRevisionID) (agentruntime.AgentSpecification, error) {
+	if err := kernel.validateScopeAndContext(ctx, scope); err != nil {
+		return agentruntime.AgentSpecification{}, err
+	}
+	if _, err := agentruntime.ParseAgentRevisionID(revisionID.String()); err != nil {
+		return agentruntime.AgentSpecification{}, invalid("invalid Agent revision ID")
+	}
+	var result agentruntime.AgentSpecification
+	err := kernel.store.View(ctx, scope, func(state *TenantState) error {
+		revision, ok := state.revisions[revisionID]
+		if !ok {
+			return notFound("Agent revision not found")
+		}
+		result = revision.Clone()
+		return nil
+	})
+	return result.Clone(), err
+}
+
 // CreateSession creates a durable Session pinned to one exact Agent revision.
 func (kernel *Kernel) CreateSession(ctx context.Context, scope Scope, request agentruntime.CreateSessionRequest) (agentruntime.Session, error) {
 	if err := kernel.validateScopeAndContext(ctx, scope); err != nil {
@@ -187,6 +224,68 @@ func (kernel *Kernel) CreateSession(ctx context.Context, scope Scope, request ag
 		record := sessionRecord{session: result, inputs: make(map[agentruntime.InputID]agentruntime.Input), trimmed: make(map[agentruntime.Cursor]struct{})}
 		if err := kernel.appendEvent(&record, agentruntime.EventSessionCreated, "", ""); err != nil {
 			return err
+		}
+		state.sessions[sessionID] = record
+		state.idempotency[request.IdempotencyKey] = idempotencyRecord{command: "create_session", digest: digest, session: sessionID}
+		return nil
+	})
+	return result, err
+}
+
+// CreateSessionFromRevision pins a principal-owned Session to a revision resolved by an authorized catalog boundary.
+func (kernel *Kernel) CreateSessionFromRevision(ctx context.Context, scope Scope, request agentruntime.CreateSessionRequest, revision agentruntime.AgentSpecification) (agentruntime.Session, error) {
+	if err := kernel.validateScopeAndContext(ctx, scope); err != nil {
+		return agentruntime.Session{}, err
+	}
+	if request.AgentRevision != revision.RevisionID || revision.ID == "" || revision.Revision == 0 {
+		return agentruntime.Session{}, invalid("resolved Agent revision does not match the Session request")
+	}
+	if _, err := agentruntime.ParseAgentID(revision.ID.String()); err != nil {
+		return agentruntime.Session{}, invalid("resolved Agent revision has an invalid Agent ID")
+	}
+	if _, err := agentruntime.ParseAgentRevisionID(revision.RevisionID.String()); err != nil {
+		return agentruntime.Session{}, invalid("resolved Agent revision has an invalid revision ID")
+	}
+	digest, err := canonicalDigest(request)
+	if err != nil {
+		return agentruntime.Session{}, internalFailure("create session", err)
+	}
+	var result agentruntime.Session
+	err = kernel.store.Transact(ctx, scope, func(state *TenantState) error {
+		if record, ok := state.idempotency[request.IdempotencyKey]; ok {
+			if record.command != "create_session" || record.digest != digest {
+				return conflict("idempotency key conflicts with another mutation")
+			}
+			result = state.sessions[record.session].session
+			return nil
+		}
+		if err := validateIdempotencyKey(request.IdempotencyKey); err != nil {
+			return err
+		}
+		if existing, ok := state.revisions[revision.RevisionID]; ok {
+			existingDigest, digestErr := canonicalDigest(existing)
+			if digestErr != nil {
+				return internalFailure("compare resolved Agent revision", digestErr)
+			}
+			revisionDigest, digestErr := canonicalDigest(revision)
+			if digestErr != nil {
+				return internalFailure("compare resolved Agent revision", digestErr)
+			}
+			if existingDigest != revisionDigest {
+				return conflict("resolved Agent revision conflicts with pinned revision")
+			}
+		} else {
+			state.revisions[revision.RevisionID] = revision.Clone()
+		}
+		sessionID, createErr := kernel.newSessionID()
+		if createErr != nil {
+			return createErr
+		}
+		timestamp := kernel.now()
+		result = agentruntime.Session{ID: sessionID, AgentID: revision.ID, AgentRevision: revision.RevisionID, State: agentruntime.SessionOpen, CreatedAt: timestamp, UpdatedAt: timestamp}
+		record := sessionRecord{session: result, inputs: make(map[agentruntime.InputID]agentruntime.Input), trimmed: make(map[agentruntime.Cursor]struct{})}
+		if appendErr := kernel.appendEvent(&record, agentruntime.EventSessionCreated, "", ""); appendErr != nil {
+			return appendErr
 		}
 		state.sessions[sessionID] = record
 		state.idempotency[request.IdempotencyKey] = idempotencyRecord{command: "create_session", digest: digest, session: sessionID}
@@ -323,7 +422,13 @@ func (kernel *Kernel) CancelTurn(ctx context.Context, scope Scope, request agent
 	if err := kernel.validateScopeAndContext(ctx, scope); err != nil {
 		return agentruntime.Turn{}, err
 	}
-	digest, err := canonicalDigest(request.TurnID)
+	if _, err := agentruntime.ParseSessionID(request.SessionID.String()); err != nil {
+		return agentruntime.Turn{}, invalid("invalid Session ID")
+	}
+	digest, err := canonicalDigest(struct {
+		SessionID agentruntime.SessionID
+		TurnID    agentruntime.TurnID
+	}{request.SessionID, request.TurnID})
 	if err != nil {
 		return agentruntime.Turn{}, internalFailure("cancel turn", err)
 	}
@@ -341,7 +446,7 @@ func (kernel *Kernel) CancelTurn(ctx context.Context, scope Scope, request agent
 			return err
 		}
 		sessionID, session, index, ok := findTurn(state, request.TurnID)
-		if !ok {
+		if !ok || sessionID != request.SessionID {
 			return notFound("Turn not found")
 		}
 		turn := session.turns[index]
@@ -433,14 +538,39 @@ func (kernel *Kernel) InspectSession(ctx context.Context, scope Scope, sessionID
 				clone := turn.Clone()
 				result.ActiveTurn = &clone
 			case agentruntime.TurnQueued:
-				result.QueuedTurns = append(result.QueuedTurns, turn.Clone())
+				result.QueuedTurnCount++
+				if len(result.QueuedTurns) < agentruntime.MaxSessionViewQueuedTurns {
+					result.QueuedTurns = append(result.QueuedTurns, turn.Clone())
+				}
 			}
 		}
+		result.QueuedTurnsTruncated = result.QueuedTurnCount > uint64(len(result.QueuedTurns))
 		start := len(session.events) - 20
 		if start < 0 {
 			start = 0
 		}
 		result.RecentEvents = append([]agentruntime.Event(nil), session.events[start:]...)
+		return nil
+	})
+	return result.Clone(), err
+}
+
+// InspectTurn returns one immutable Turn snapshot from its owning Session.
+func (kernel *Kernel) InspectTurn(ctx context.Context, scope Scope, sessionID agentruntime.SessionID, turnID agentruntime.TurnID) (agentruntime.Turn, error) {
+	if err := kernel.validateScopeAndContext(ctx, scope); err != nil {
+		return agentruntime.Turn{}, err
+	}
+	var result agentruntime.Turn
+	err := kernel.store.View(ctx, scope, func(state *TenantState) error {
+		session, ok := state.sessions[sessionID]
+		if !ok {
+			return notFound("Turn not found")
+		}
+		index := turnIndex(session, turnID)
+		if index < 0 {
+			return notFound("Turn not found")
+		}
+		result = session.turns[index].Clone()
 		return nil
 	})
 	return result.Clone(), err
