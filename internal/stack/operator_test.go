@@ -144,6 +144,23 @@ var _ = Describe("Audited Kubernetes operator", func() {
 		}
 	})
 
+	It("rolls back a changed reviewed rendering while retaining current bootstrap authority", func() {
+		rendered := renderIdentityStack()
+		previousSpec, err := stack.Parse(strings.NewReader(strings.Replace(validIdentityStack, `"version":"v1"`, `"version":"v2"`, 1)))
+		Expect(err).NotTo(HaveOccurred())
+		previous, err := stack.Render(previousSpec, stack.ProfileLocal)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(previous.Digest()).NotTo(Equal(rendered.Digest()))
+		adapter := &fakeKubernetesOperator{}
+		operator, err := stack.NewKubernetesOperator(adapter, &recordedAudit{})
+		Expect(err).NotTo(HaveOccurred())
+
+		_, err = operator.Rollback(context.Background(), operatorRequest(rendered), rendered, previous)
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(adapter.applies).To(Equal(1))
+	})
+
 	It("tears provider resources down before Kubernetes dependencies", func() {
 		spec, err := stack.Parse(strings.NewReader(validIdentityStack))
 		Expect(err).NotTo(HaveOccurred())

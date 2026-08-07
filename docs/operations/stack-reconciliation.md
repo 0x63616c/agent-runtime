@@ -40,8 +40,10 @@ the file path as `--bootstrap-capability-file`. The adapter re-reads the
 Namespace immediately before each Kubernetes or declared-provider mutation and
 refuses an absent, replaced, unowned, or different-rendered Namespace, or a
 Namespace without that nonce-digest binding. A cached state file cannot
-substitute for this private capability and live containment check. Successful
-teardown removes the unchanged capability file.
+substitute for this private capability and live containment check. Namespace
+deletion is asynchronous, so teardown retains the capability until deletion is
+observed; a stuck finalizer or timeout remains retryable under that same
+identity-bound authority. Successful teardown then removes the unchanged file.
 
 ## Reconcile and rollback procedure
 
@@ -100,11 +102,14 @@ only Kubernetes' automatic `default` ServiceAccount and
 state file is only a locator; it is never teardown authority. A mismatch stops the operation without
 deleting a sibling Stack, `default`, or cluster-scoped state.
 
-If a later teardown step fails after a local-generated Secret was deleted, the
-capability file records that exact Secret UID only after its preconditioned
-delete succeeds. A retry treats that specific missing Secret as completed and
-re-verifies every remaining Secret; it cannot convert a replacement into a
-deletion by name.
+Before a local-generated Secret delete, the capability records its exact UID
+as pending. A retry treats only that specific missing UID as completed and
+rejects a present replacement with a different UID; it cannot convert a crash
+or replacement into deletion by name. Kubernetes teardown uses the
+just-observed UID and resource version as API delete preconditions for the
+same reason. Rollback authenticates the current rendering through the
+capability, then accepts only a separately reviewed prior rendering with the
+same Stack, profile, and Namespace identity.
 
 The disposable smoke harness never performs raw Namespace deletion. It invokes
 teardown only after full apply returned the exact declared Kubernetes resource
