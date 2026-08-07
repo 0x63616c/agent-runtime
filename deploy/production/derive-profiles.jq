@@ -107,7 +107,7 @@ def extras($namespace; $profile):
       image:"minio/mc@sha256:aead63c77f9db9107f1696fb08ecb0faeda23729cde94b0f663edf4fe09728e3",service_account:"blob-account",
       command:["/bin/sh"],arguments:["-c","trap : TERM INT; sleep infinity & wait"],environment:[],
       secret_environment:[{name:"MINIO_ROOT_USER",secret:"blob-storage-secret",key:"MINIO_ROOT_USER"},{name:"MINIO_ROOT_PASSWORD",secret:"blob-storage-secret",key:"MINIO_ROOT_PASSWORD"}],
-      ports:[],compute:{request_milli_cpu:25,limit_milli_cpu:100,request_memory_bytes:33554432,limit_memory_bytes:134217728},storage:[]
+      ports:[],compute:{request_milli_cpu:25,limit_milli_cpu:100,request_memory_bytes:67108864,limit_memory_bytes:268435456},storage:[]
     }}) | .dependencies=["blob-account","blob-storage-secret","blob-service"]),
     (common("blob-reconciler-egress";"kubernetes";"security-operator";$profile;{kubernetes:{api_version:"networking.k8s.io/v1",kind:"NetworkPolicy",name:"blob-reconciler-egress",network:{default_deny:true,subject:"blob-reconciler",allowed_egress:["blob"]}}}) | .dependencies=["blob-reconciler","blob"]),
     ({

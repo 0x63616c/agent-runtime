@@ -2713,8 +2713,8 @@
             "compute": {
               "request_milli_cpu": 25,
               "limit_milli_cpu": 100,
-              "request_memory_bytes": 33554432,
-              "limit_memory_bytes": 134217728
+              "request_memory_bytes": 67108864,
+              "limit_memory_bytes": 268435456
             },
             "storage": []
           }
@@ -5511,8 +5511,8 @@
             "compute": {
               "request_milli_cpu": 25,
               "limit_milli_cpu": 100,
-              "request_memory_bytes": 33554432,
-              "limit_memory_bytes": 134217728
+              "request_memory_bytes": 67108864,
+              "limit_memory_bytes": 268435456
             },
             "storage": []
           }
@@ -8309,8 +8309,8 @@
             "compute": {
               "request_milli_cpu": 25,
               "limit_milli_cpu": 100,
-              "request_memory_bytes": 33554432,
-              "limit_memory_bytes": 134217728
+              "request_memory_bytes": 67108864,
+              "limit_memory_bytes": 268435456
             },
             "storage": []
           }

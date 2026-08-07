@@ -89,6 +89,8 @@ var _ = Describe("Self-hosted production Stack", func() {
 		Expect(bindAddress).To(Equal("0.0.0.0"))
 		Expect(temporal.Kubernetes.Readiness.Command).To(ContainElements("--address", "127.0.0.1:7233", "cluster", "health"))
 		Expect(findResource(resources, "blob").Kubernetes.Image).To(Equal("minio/minio@sha256:a1ea29fa28355559ef137d71fc570e508a214ec84ff8083e39bc5428980b015e"))
+		Expect(findResource(resources, "blob-reconciler").Kubernetes.Compute.RequestMemoryBytes).To(Equal(int64(67108864)))
+		Expect(findResource(resources, "blob-reconciler").Kubernetes.Compute.LimitMemoryBytes).To(Equal(int64(268435456)))
 		Expect(findResource(resources, "telemetry").Kubernetes.Image).To(Equal("jaegertracing/all-in-one@sha256:12fa17a231abded2c3b5b715bd252a043678495c588cbe772173991fbdcdf7c8"))
 		telemetryTTL, found := environmentValue(findResource(resources, "telemetry"), "BADGER_SPAN_STORE_TTL")
 		Expect(found).To(BeTrue())
