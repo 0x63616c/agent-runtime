@@ -103,15 +103,69 @@
     },
     {
       "id": "DEP-001",
-      "status": "not_started"
+      "status": "completed",
+      "evidence": [
+        {
+          "revision": "c1c9344f3efe6b4d80136ace229ead80c14d6709",
+          "utc_time": "2026-08-07T05:46:50Z",
+          "proof_level": "main_ci",
+          "command_id": "just-check",
+          "artifact_ref": "gha-31151573962-check",
+          "result": "passed"
+        },
+        {
+          "revision": "d634224a05b6a11627f89b435ad34dcca9a83e57",
+          "utc_time": "2026-08-07T05:35:33Z",
+          "proof_level": "local_tilt_e2e",
+          "command_id": "issue12-two-stack-runtime-tilt",
+          "artifact_ref": "issue-12-tilt-e2e",
+          "result": "passed"
+        }
+      ]
     },
     {
       "id": "DEP-002",
-      "status": "not_started"
+      "status": "completed",
+      "evidence": [
+        {
+          "revision": "c1c9344f3efe6b4d80136ace229ead80c14d6709",
+          "utc_time": "2026-08-07T05:46:50Z",
+          "proof_level": "main_ci",
+          "command_id": "just-check",
+          "artifact_ref": "gha-31151573962-check",
+          "result": "passed"
+        },
+        {
+          "revision": "d634224a05b6a11627f89b435ad34dcca9a83e57",
+          "utc_time": "2026-08-07T05:35:33Z",
+          "proof_level": "local_tilt_e2e",
+          "command_id": "issue12-two-stack-runtime-tilt",
+          "artifact_ref": "issue-12-tilt-e2e",
+          "result": "passed"
+        }
+      ]
     },
     {
       "id": "DEP-003",
-      "status": "not_started"
+      "status": "completed",
+      "evidence": [
+        {
+          "revision": "c1c9344f3efe6b4d80136ace229ead80c14d6709",
+          "utc_time": "2026-08-07T05:46:50Z",
+          "proof_level": "main_ci",
+          "command_id": "just-check",
+          "artifact_ref": "gha-31151573962-check",
+          "result": "passed"
+        },
+        {
+          "revision": "d634224a05b6a11627f89b435ad34dcca9a83e57",
+          "utc_time": "2026-08-07T05:35:33Z",
+          "proof_level": "local_tilt_e2e",
+          "command_id": "issue12-two-stack-runtime-tilt",
+          "artifact_ref": "issue-12-tilt-e2e",
+          "result": "passed"
+        }
+      ]
     },
     {
       "id": "DEP-004",
