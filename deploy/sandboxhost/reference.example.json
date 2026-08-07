@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "control_url": "https://sandbox-control.internal:9443",
+  "server_name": "sandbox-control.internal",
+  "trust_bundle_file": "/run/sandbox-host/control-ca.crt",
+  "client_certificate_file": "/run/sandbox-host/tls.crt",
+  "client_private_key_file": "/run/sandbox-host/tls.key",
+  "host_id": "host_local_01",
+  "host_generation": 1,
+  "journal_file": "/var/lib/sandbox-host/receipts.json",
+  "maximum_receipts": 10000,
+  "control_key_id": "control_signing_2026_01",
+  "control_public_key_environment": "SANDBOX_CONTROL_PUBLIC_KEY",
+  "host_signing_key_environment": "SANDBOX_HOST_SIGNING_KEY",
+  "request_timeout_seconds": 10,
+  "test_fault_after_journal": false,
+  "test_fault_after_receipt": false,
+  "test_fault_after_result_send": false
+}

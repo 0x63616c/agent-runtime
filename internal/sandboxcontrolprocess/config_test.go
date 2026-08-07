@@ -13,7 +13,7 @@ func TestParseStrictDeclarativeConfiguration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Parse() error = %v", err)
 	}
-	if config.listenAddress != "127.0.0.1:8443" || config.identity.Principal != "principal_01" {
+	if config.listenAddress != "127.0.0.1:8443" || config.identity.Principal != "principal_01" || config.reconciliationInterval != time.Second || config.reconciliationPageSize != 100 {
 		t.Fatalf("Parse() config = %#v", config)
 	}
 	if config.admission.Defaults.MilliCPU != 100 || config.admission.Defaults.Lifetime != 60*time.Second {
@@ -56,6 +56,30 @@ func TestRequiredSecretDoesNotDiscloseValues(t *testing.T) {
 	}
 }
 
+func TestParseHostControlRequiresDistinctExplicitAuthority(t *testing.T) {
+	t.Parallel()
+
+	withHost := strings.TrimSuffix(validDocument, "\n}") + `,
+  "host_control": {
+    "listen_address": "127.0.0.1:9443",
+    "tls_certificate_file": "/run/host-control/tls.crt",
+    "tls_private_key_file": "/run/host-control/tls.key",
+    "client_ca_file": "/run/host-control/client-ca.crt",
+    "control_key_id": "control_01",
+    "control_signing_key_environment": "SANDBOX_CONTROL_SIGNING_KEY",
+    "lease_seconds": 60
+  }
+}`
+	config, err := Parse(strings.NewReader(withHost))
+	if err != nil || config.hostControl == nil || config.hostControl.lease != time.Minute {
+		t.Fatalf("Parse(host control) = %#v, %v", config.hostControl, err)
+	}
+	invalid := strings.Replace(withHost, `"127.0.0.1:9443"`, `"127.0.0.1:8443"`, 1)
+	if _, err := Parse(strings.NewReader(invalid)); err == nil {
+		t.Fatal("Parse() accepted shared public/host listener")
+	}
+}
+
 const validDocument = `{
   "version": 1,
   "listen_address": "127.0.0.1:8443",
@@ -73,6 +97,8 @@ const validDocument = `{
   "binding_lifetime_seconds": 300,
   "retention_seconds": 86400,
   "wait_interval_millis": 25,
+  "reconciliation_interval_millis": 1000,
+  "reconciliation_page_size": 100,
   "admission": {
     "version": "policy-v1",
     "canonicalizer_version": "sandbox.control/v1",

@@ -62,6 +62,9 @@ const (
 // Assignment binds an operation to one host and monotonic fencing authority.
 type Assignment struct {
 	HostID         string
+	HostGeneration uint64
+	AssignmentID   string
+	LeaseEpoch     uint64
 	FencingToken   uint64
 	LeaseExpiresAt time.Time
 }
@@ -71,6 +74,7 @@ type Assignment struct {
 // and output content belongs in their dedicated stores.
 type Operation struct {
 	Principal           string
+	Tenant              string
 	ID                  string
 	Kind                string
 	TargetKind          string
@@ -79,6 +83,7 @@ type Operation struct {
 	CanonicalDigest     string
 	EffectiveSpecDigest string
 	CapabilityDigest    string
+	DispatchBody        string
 	State               State
 	Version             uint64
 	AcceptedAt          time.Time
@@ -174,16 +179,22 @@ type MemoryLedger struct {
 	mu         sync.Mutex
 	operations map[string]Operation
 	outbox     []OutboxRecord
+	hosts      map[string]HostEnrollment
+	dispatches map[string]hostAssignmentFields
+	hostOutput map[string]hostOutputFields
 }
 
 // NewMemoryLedger constructs an empty deterministic operation ledger.
-func NewMemoryLedger() *MemoryLedger { return &MemoryLedger{operations: make(map[string]Operation)} }
+func NewMemoryLedger() *MemoryLedger {
+	return &MemoryLedger{operations: make(map[string]Operation), hosts: make(map[string]HostEnrollment), dispatches: make(map[string]hostAssignmentFields), hostOutput: make(map[string]hostOutputFields)}
+}
 
 // Accept records an immutable operation or returns a prior identical record.
 func (ledger *MemoryLedger) Accept(ctx context.Context, operation Operation) (Operation, bool, error) {
 	if err := ctx.Err(); err != nil {
 		return Operation{}, false, errors.Wrap(err, "accept sandbox operation")
 	}
+	operation = normalizeOperationForPersistence(operation)
 	if err := validateOperation(operation); err != nil {
 		return Operation{}, false, err
 	}
@@ -210,7 +221,7 @@ func (ledger *MemoryLedger) Accept(ctx context.Context, operation Operation) (Op
 	operation.RetentionExpiresAt = operation.RetentionExpiresAt.UTC()
 	ledger.operations[key] = operation
 	ledger.appendOutbox(operation, OutboxAccepted)
-	return operation, false, nil
+	return copyOperationRecord(operation), false, nil
 }
 
 // Get returns one authorized durable operation without revealing another principal's record.
@@ -224,7 +235,7 @@ func (ledger *MemoryLedger) Get(ctx context.Context, principal, id string) (Oper
 	if !exists {
 		return Operation{}, ErrNotFoundOrDenied
 	}
-	return operation, nil
+	return copyOperationRecord(operation), nil
 }
 
 // Transition records one optimistic-concurrency-checked lifecycle transition.
@@ -423,10 +434,14 @@ func (ledger *MemoryLedger) appendOutbox(operation Operation, event OutboxEvent)
 }
 
 func validateOperation(operation Operation) error {
-	if !validBounded(operation.Principal, maxPrincipalBytes) || !validBounded(operation.ID, maxOperationIDBytes) || !validBounded(operationInputDigest(operation), maxDigestBytes) || !validBounded(operation.CanonicalDigest, maxDigestBytes) || !validBounded(operation.EffectiveSpecDigest, maxDigestBytes) || operation.AcceptedAt.IsZero() || operation.RetentionExpiresAt.IsZero() || !operation.RetentionExpiresAt.After(operation.AcceptedAt) {
+	if !validBounded(operation.Principal, maxPrincipalBytes) || (operation.Tenant != "" && !validBounded(operation.Tenant, 256)) || len(operation.DispatchBody) > 1<<20 || !validBounded(operation.ID, maxOperationIDBytes) || !validBounded(operationInputDigest(operation), maxDigestBytes) || !validBounded(operation.CanonicalDigest, maxDigestBytes) || !validBounded(operation.EffectiveSpecDigest, maxDigestBytes) || operation.AcceptedAt.IsZero() || operation.RetentionExpiresAt.IsZero() || !operation.RetentionExpiresAt.After(operation.AcceptedAt) {
 		return errors.New("accept sandbox operation: principal, id, digests and ordered retention are required")
 	}
 	return nil
+}
+
+func copyOperationRecord(operation Operation) Operation {
+	return operation
 }
 
 func operationInputDigest(operation Operation) string {
@@ -434,6 +449,16 @@ func operationInputDigest(operation Operation) string {
 		return operation.InputDigest
 	}
 	return operation.CanonicalDigest
+}
+
+func normalizeOperationForPersistence(operation Operation) Operation {
+	if operation.Tenant == "" {
+		operation.Tenant = strings.SplitN(operation.Principal, ":", 2)[0]
+	}
+	if operation.DispatchBody == "" {
+		operation.DispatchBody = "{}"
+	}
+	return operation
 }
 
 func validBounded(value string, maxBytes int) bool {

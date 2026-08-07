@@ -2,16 +2,22 @@ package sandboxcontrolprocess
 
 import (
 	"context"
+	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/tls"
+	"crypto/x509"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"net"
 	"net/http"
+	"os"
 	"time"
 
+	"github.com/0x63616c/agent-runtime/internal/clock"
 	"github.com/0x63616c/agent-runtime/internal/sandboxcontrol"
 	"github.com/0x63616c/agent-runtime/internal/sandboxcontrolapi"
+	"github.com/0x63616c/agent-runtime/internal/sandboxhostapi"
 	"github.com/cockroachdb/errors"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -79,27 +85,129 @@ func Run(ctx context.Context, config Config, lookup SecretLookup) error {
 	mux.HandleFunc("GET /healthz", ready)
 	mux.HandleFunc("GET /readyz", ready)
 	mux.Handle("/", handler)
-	server := &http.Server{Handler: mux, ReadHeaderTimeout: 5 * time.Second, IdleTimeout: 30 * time.Second, MaxHeaderBytes: 16 << 10, TLSConfig: &tls.Config{MinVersion: tls.VersionTLS13, Certificates: []tls.Certificate{certificate}}}
-	result := make(chan error, 1)
-	go func() { result <- server.ServeTLS(listener, "", "") }()
+	servers := []runningServer{{server: boundedHTTPServer(mux, &tls.Config{MinVersion: tls.VersionTLS13, Certificates: []tls.Certificate{certificate}}), listener: listener}}
+	if config.hostControl != nil {
+		host, err := newHostControlServer(config.hostControl, lookup, store)
+		if err != nil {
+			return err
+		}
+		defer func() { _ = host.listener.Close() }()
+		servers = append(servers, host)
+	}
+	serverResult := make(chan error, len(servers))
+	for _, running := range servers {
+		running := running
+		go func() { serverResult <- running.server.ServeTLS(running.listener, "", "") }()
+	}
+	reconcileResult := make(chan error, 1)
+	go func() {
+		reconcileResult <- reconcileLoop(ctx, store, systemClock{}, config.reconciliationInterval, config.reconciliationPageSize)
+	}()
 	select {
-	case err := <-result:
+	case err := <-serverResult:
 		if err == nil || errors.Is(err, http.ErrServerClosed) {
 			return nil
 		}
 		return errors.Wrap(err, "run sandbox-control process")
+	case err := <-reconcileResult:
+		if err == nil || errors.Is(err, context.Canceled) {
+			return nil
+		}
+		return err
 	case <-ctx.Done():
 		shutdownCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
 		defer cancel()
-		if err := server.Shutdown(shutdownCtx); err != nil {
-			return errors.Wrap(err, "stop sandbox-control process")
+		for _, running := range servers {
+			if err := running.server.Shutdown(shutdownCtx); err != nil {
+				return errors.Wrap(err, "stop sandbox-control process")
+			}
 		}
-		err := <-result
-		if err == nil || errors.Is(err, http.ErrServerClosed) {
-			return nil
+		for range servers {
+			err := <-serverResult
+			if err != nil && !errors.Is(err, http.ErrServerClosed) {
+				return errors.Wrap(err, "stop sandbox-control process")
+			}
 		}
-		return errors.Wrap(err, "stop sandbox-control process")
+		return nil
 	}
+}
+
+type reconciliationStore interface {
+	RecoverExpiredAssignments(context.Context, time.Time, int) ([]sandboxcontrol.Operation, error)
+	ClaimExpiredCleanup(context.Context, time.Time, int) ([]sandboxcontrol.Operation, error)
+	Reap(context.Context, time.Time, int) ([]sandboxcontrol.Operation, error)
+}
+
+func reconcileLoop(ctx context.Context, store reconciliationStore, source clock.Clock, interval time.Duration, pageSize int) error {
+	for {
+		if err := reconcileOnce(ctx, store, source.Now().UTC(), pageSize); err != nil {
+			return err
+		}
+		timer := time.NewTimer(interval)
+		select {
+		case <-ctx.Done():
+			if !timer.Stop() {
+				<-timer.C
+			}
+			return ctx.Err()
+		case <-timer.C:
+		}
+	}
+}
+
+func reconcileOnce(ctx context.Context, store reconciliationStore, now time.Time, pageSize int) error {
+	if _, err := store.RecoverExpiredAssignments(ctx, now, pageSize); err != nil {
+		return errors.Wrap(err, "reconcile expired sandbox host assignments")
+	}
+	if _, err := store.ClaimExpiredCleanup(ctx, now, pageSize); err != nil {
+		return errors.Wrap(err, "claim expired sandbox cleanup")
+	}
+	if _, err := store.Reap(ctx, now, pageSize); err != nil {
+		return errors.Wrap(err, "reap expired sandbox operations")
+	}
+	return nil
+}
+
+type runningServer struct {
+	server   *http.Server
+	listener net.Listener
+}
+
+func newHostControlServer(config *hostControlConfig, lookup SecretLookup, store sandboxcontrol.HostControlStore) (runningServer, error) {
+	encodedKey, err := requiredSecret(lookup, config.controlSigningKeyEnvironment)
+	if err != nil {
+		return runningServer{}, err
+	}
+	privateKey, err := base64.RawStdEncoding.DecodeString(encodedKey)
+	if err != nil || len(privateKey) != ed25519.PrivateKeySize {
+		return runningServer{}, errors.New("run sandbox-control process: host-control signing key is invalid")
+	}
+	certificate, err := tls.LoadX509KeyPair(config.tlsCertificateFile, config.tlsPrivateKeyFile)
+	if err != nil {
+		return runningServer{}, errors.Wrap(err, "run sandbox-control process: load host-control TLS identity")
+	}
+	clientPEM, err := os.ReadFile(config.clientCAFile)
+	if err != nil || len(clientPEM) == 0 || len(clientPEM) > 1<<20 {
+		return runningServer{}, errors.New("run sandbox-control process: host client CA is unavailable")
+	}
+	clientCAs := x509.NewCertPool()
+	if !clientCAs.AppendCertsFromPEM(clientPEM) {
+		return runningServer{}, errors.New("run sandbox-control process: host client CA is invalid")
+	}
+	handler, err := sandboxhostapi.NewHandler(sandboxhostapi.Config{Store: store, ControlKeyID: config.controlKeyID, ControlSigningKey: ed25519.PrivateKey(privateKey), Entropy: rand.Reader, Clock: systemClock{}, LeaseDuration: config.lease})
+	if err != nil {
+		return runningServer{}, err
+	}
+	listener, err := net.Listen("tcp", config.listenAddress)
+	if err != nil {
+		return runningServer{}, errors.Wrap(err, "run sandbox-control process: listen for enrolled hosts")
+	}
+	server := boundedHTTPServer(handler, &tls.Config{MinVersion: tls.VersionTLS13, Certificates: []tls.Certificate{certificate}, ClientAuth: tls.RequireAndVerifyClientCert, ClientCAs: clientCAs})
+	return runningServer{server: server, listener: listener}, nil
+}
+
+func boundedHTTPServer(handler http.Handler, tlsConfig *tls.Config) *http.Server {
+	return &http.Server{Handler: handler, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, WriteTimeout: 15 * time.Second, IdleTimeout: 30 * time.Second, MaxHeaderBytes: 16 << 10, TLSConfig: tlsConfig}
 }
 
 func requiredSecret(lookup SecretLookup, name string) (string, error) {
