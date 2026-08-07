@@ -266,7 +266,7 @@ func marshalWorkloadSpec(resource Resource, namespace, stack string, profile Pro
 	}
 	environment := make([]kubernetesEnvironmentVariable, 0, len(object.Environment))
 	for _, variable := range object.Environment {
-		environment = append(environment, kubernetesEnvironmentVariable{Name: variable.Name, Value: variable.Value})
+		environment = append(environment, kubernetesEnvironmentVariable(variable))
 	}
 	container := kubernetesContainer{
 		Name: object.Name, Image: object.Image, Command: append([]string(nil), object.Command...), Args: append([]string(nil), object.Arguments...), Env: environment, Ports: ports,
