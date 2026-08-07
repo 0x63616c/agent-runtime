@@ -1,10 +1,11 @@
 # Self-hosted deployment contract
 
 Status: the v1 declarative role-composition and configuration-validation slice
-is implemented. The public agent API, Temporal workflow implementation,
-production container image, and Firecracker host-agent implementation remain
-future milestones. Do not treat a rendered reference Stack as a production
-runtime release claim.
+is implemented. A signed, digest-pinned production role image is published to
+GHCR. The public agent API, Temporal workflow implementation, and Firecracker
+host-agent implementation remain future milestones. Do not treat a rendered
+reference Stack or published role image as a completed production rollout;
+live Kubernetes/Temporal/blob evidence is retained separately.
 
 Agent Runtime is self-hosted as explicit, separately deployable processes. An
 operator applies a reviewed typed Stack with `stackctl`; no runtime binary,
@@ -110,9 +111,10 @@ agent API, workers, or sandbox implementation have started.
 `deploy/production/stack.json` is the checked-in typed reference Stack. Its
 role/Secret/replica/ingress/NetworkPolicy/migration topology is parsed and
 rendered by the production Stack smoke suite, and the role documents are
-validated through the same composition seam. It deliberately uses a
-non-release image digest placeholder while the runtime image publishing lane is
-unfinished, so it is not yet evidence of a live production deployment. An
-operator must replace that placeholder only through a reviewed Stack revision
-that pins the released image digest; never hand-convert this desired state into
-untracked manifests.
+validated through the same composition seam. Runtime workloads pin the
+attested GHCR image by digest; PostgreSQL, Temporal, MinIO, telemetry, and the
+migration runner are separately pinned third-party workloads. The publisher
+never changes the Stack, and Stack-only promotions do not rebuild an image:
+the operator verifies the source revision label and GitHub provenance for an
+immutable digest, then makes a reviewed Stack revision that pins it. Never
+hand-convert this desired state into untracked manifests.

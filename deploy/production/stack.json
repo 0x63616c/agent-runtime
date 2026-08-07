@@ -62,6 +62,7 @@
             "reference": "agent-runtime-state-db-secret",
             "version": "v1",
             "keys": [
+              "POSTGRES_PASSWORD",
               "STATE_DATABASE_DSN"
             ]
           }
@@ -194,7 +195,9 @@
             "reference": "agent-runtime-blob-storage-secret",
             "version": "v1",
             "keys": [
-              "BLOB_STORAGE_CREDENTIAL"
+              "BLOB_STORAGE_CREDENTIAL",
+              "MINIO_ROOT_PASSWORD",
+              "MINIO_ROOT_USER"
             ]
           }
         },
@@ -572,7 +575,7 @@
             "kind": "Deployment",
             "name": "api",
             "replicas": 1,
-            "image": "ghcr.io/0x63616c/agent-runtime@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "image": "ghcr.io/0x63616c/agent-runtime@sha256:ac867c17ee4474138778a2f22dec6b5128f9fa3931b69991197e910eaf321770",
             "service_account": "api-account",
             "command": [
               "/runtime"
@@ -641,7 +644,7 @@
             "kind": "Deployment",
             "name": "orchestration",
             "replicas": 3,
-            "image": "ghcr.io/0x63616c/agent-runtime@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "image": "ghcr.io/0x63616c/agent-runtime@sha256:ac867c17ee4474138778a2f22dec6b5128f9fa3931b69991197e910eaf321770",
             "service_account": "orchestration-account",
             "command": [
               "/runtime"
@@ -721,7 +724,7 @@
             "kind": "Deployment",
             "name": "model",
             "replicas": 1,
-            "image": "ghcr.io/0x63616c/agent-runtime@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "image": "ghcr.io/0x63616c/agent-runtime@sha256:ac867c17ee4474138778a2f22dec6b5128f9fa3931b69991197e910eaf321770",
             "service_account": "model-account",
             "command": [
               "/runtime"
@@ -801,7 +804,7 @@
             "kind": "Deployment",
             "name": "tool",
             "replicas": 1,
-            "image": "ghcr.io/0x63616c/agent-runtime@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "image": "ghcr.io/0x63616c/agent-runtime@sha256:ac867c17ee4474138778a2f22dec6b5128f9fa3931b69991197e910eaf321770",
             "service_account": "tool-account",
             "command": [
               "/runtime"
@@ -880,7 +883,7 @@
             "kind": "Deployment",
             "name": "blob-role",
             "replicas": 1,
-            "image": "ghcr.io/0x63616c/agent-runtime@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "image": "ghcr.io/0x63616c/agent-runtime@sha256:ac867c17ee4474138778a2f22dec6b5128f9fa3931b69991197e910eaf321770",
             "service_account": "blob-role-account",
             "command": [
               "/runtime"
@@ -954,7 +957,7 @@
             "kind": "Deployment",
             "name": "codec",
             "replicas": 1,
-            "image": "ghcr.io/0x63616c/agent-runtime@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "image": "ghcr.io/0x63616c/agent-runtime@sha256:ac867c17ee4474138778a2f22dec6b5128f9fa3931b69991197e910eaf321770",
             "service_account": "codec-account",
             "command": [
               "/runtime"
@@ -1033,7 +1036,7 @@
             "kind": "Deployment",
             "name": "sandbox-control",
             "replicas": 1,
-            "image": "ghcr.io/0x63616c/agent-runtime@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "image": "ghcr.io/0x63616c/agent-runtime@sha256:ac867c17ee4474138778a2f22dec6b5128f9fa3931b69991197e910eaf321770",
             "service_account": "sandbox-control-account",
             "command": [
               "/runtime"
@@ -1113,7 +1116,7 @@
             "kind": "Deployment",
             "name": "sandbox-host",
             "replicas": 1,
-            "image": "ghcr.io/0x63616c/agent-runtime@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "image": "ghcr.io/0x63616c/agent-runtime@sha256:ac867c17ee4474138778a2f22dec6b5128f9fa3931b69991197e910eaf321770",
             "service_account": "sandbox-host-account",
             "command": [
               "/runtime"
@@ -1192,27 +1195,32 @@
             "kind": "Deployment",
             "name": "state",
             "replicas": 1,
-            "image": "ghcr.io/0x63616c/agent-runtime@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "image": "postgres@sha256:e5507c984377515b8c9922b0eb19f55aba2063fdc7bccf268cefd53133f97054",
             "service_account": "state-account",
-            "command": [
-              "/runtime"
+            "environment": [
+              {
+                "name": "POSTGRES_DB",
+                "value": "agent_runtime"
+              },
+              {
+                "name": "POSTGRES_USER",
+                "value": "postgres"
+              }
             ],
-            "arguments": [
-              "--config-env",
-              "RUNTIME_ROLE_CONFIG",
-              "--role",
-              "api"
+            "secret_environment": [
+              {
+                "name": "POSTGRES_PASSWORD",
+                "secret": "state-db-secret",
+                "key": "POSTGRES_PASSWORD"
+              }
             ],
-            "environment": [],
-            "secret_environment": [],
             "readiness": {
               "command": [
-                "/runtime",
-                "--config-env",
-                "RUNTIME_ROLE_CONFIG",
-                "--role",
-                "api",
-                "--check"
+                "pg_isready",
+                "-U",
+                "postgres",
+                "-d",
+                "agent_runtime"
               ],
               "initial_delay_seconds": 1,
               "period_seconds": 5,
@@ -1256,32 +1264,33 @@
             "kind": "Deployment",
             "name": "temporal",
             "replicas": 1,
-            "image": "ghcr.io/0x63616c/agent-runtime@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "image": "temporalio/auto-setup@sha256:b44cbfeb43dbeae42db113b44fb8414c3452f05643b3d6b1592f955277d73526",
             "service_account": "temporal-account",
-            "command": [
-              "/runtime"
+            "environment": [
+              {
+                "name": "DB",
+                "value": "postgres12"
+              },
+              {
+                "name": "DB_PORT",
+                "value": "5432"
+              },
+              {
+                "name": "POSTGRES_SEEDS",
+                "value": "state"
+              },
+              {
+                "name": "POSTGRES_USER",
+                "value": "postgres"
+              }
             ],
-            "arguments": [
-              "--config-env",
-              "RUNTIME_ROLE_CONFIG",
-              "--role",
-              "api"
+            "secret_environment": [
+              {
+                "name": "POSTGRES_PWD",
+                "secret": "state-db-secret",
+                "key": "POSTGRES_PASSWORD"
+              }
             ],
-            "environment": [],
-            "secret_environment": [],
-            "readiness": {
-              "command": [
-                "/runtime",
-                "--config-env",
-                "RUNTIME_ROLE_CONFIG",
-                "--role",
-                "api",
-                "--check"
-              ],
-              "initial_delay_seconds": 1,
-              "period_seconds": 5,
-              "failure_threshold": 12
-            },
             "ports": [
               {
                 "name": "http",
@@ -1319,32 +1328,27 @@
             "kind": "Deployment",
             "name": "blob",
             "replicas": 1,
-            "image": "ghcr.io/0x63616c/agent-runtime@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "image": "minio/minio@sha256:a1ea29fa28355559ef137d71fc570e508a214ec84ff8083e39bc5428980b015e",
             "service_account": "blob-account",
             "command": [
-              "/runtime"
+              "server"
             ],
             "arguments": [
-              "--config-env",
-              "RUNTIME_ROLE_CONFIG",
-              "--role",
-              "api"
+              "/data"
             ],
             "environment": [],
-            "secret_environment": [],
-            "readiness": {
-              "command": [
-                "/runtime",
-                "--config-env",
-                "RUNTIME_ROLE_CONFIG",
-                "--role",
-                "api",
-                "--check"
-              ],
-              "initial_delay_seconds": 1,
-              "period_seconds": 5,
-              "failure_threshold": 12
-            },
+            "secret_environment": [
+              {
+                "name": "MINIO_ROOT_USER",
+                "secret": "blob-storage-secret",
+                "key": "MINIO_ROOT_USER"
+              },
+              {
+                "name": "MINIO_ROOT_PASSWORD",
+                "secret": "blob-storage-secret",
+                "key": "MINIO_ROOT_PASSWORD"
+              }
+            ],
             "ports": [
               {
                 "name": "http",
@@ -1381,32 +1385,10 @@
             "kind": "Deployment",
             "name": "telemetry",
             "replicas": 1,
-            "image": "ghcr.io/0x63616c/agent-runtime@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "image": "jaegertracing/all-in-one@sha256:12fa17a231abded2c3b5b715bd252a043678495c588cbe772173991fbdcdf7c8",
             "service_account": "telemetry-account",
-            "command": [
-              "/runtime"
-            ],
-            "arguments": [
-              "--config-env",
-              "RUNTIME_ROLE_CONFIG",
-              "--role",
-              "api"
-            ],
             "environment": [],
             "secret_environment": [],
-            "readiness": {
-              "command": [
-                "/runtime",
-                "--config-env",
-                "RUNTIME_ROLE_CONFIG",
-                "--role",
-                "api",
-                "--check"
-              ],
-              "initial_delay_seconds": 1,
-              "period_seconds": 5,
-              "failure_threshold": 12
-            },
             "ports": [
               {
                 "name": "http",
@@ -1443,7 +1425,7 @@
             "kind": "Deployment",
             "name": "egress-proxy",
             "replicas": 2,
-            "image": "ghcr.io/0x63616c/agent-runtime@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "image": "ghcr.io/0x63616c/agent-runtime@sha256:ac867c17ee4474138778a2f22dec6b5128f9fa3931b69991197e910eaf321770",
             "service_account": "egress-proxy-account",
             "command": [
               "/egress-proxy"
@@ -1489,9 +1471,8 @@
           "owner": "database-operator",
           "scope": "namespace",
           "dependencies": [
-              "migration-runner-account",
-              "state-db-secret",
-              "temporal-auth-secret"
+            "migration-runner-account",
+            "state-db-secret"
           ],
           "retention": {
             "policy": "persistent",
@@ -1505,48 +1486,22 @@
             "kind": "Deployment",
             "name": "migration-runner",
             "replicas": 1,
-            "image": "ghcr.io/0x63616c/agent-runtime@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "image": "postgres@sha256:e5507c984377515b8c9922b0eb19f55aba2063fdc7bccf268cefd53133f97054",
             "service_account": "migration-runner-account",
             "command": [
-              "/runtime"
+              "sleep"
             ],
             "arguments": [
-              "--config-env",
-              "RUNTIME_ROLE_CONFIG",
-              "--role",
-              "orchestration"
+              "infinity"
             ],
-            "environment": [
-              {
-                "name": "RUNTIME_ROLE_CONFIG",
-                "value": "{\"version\":1,\"role\":\"orchestration\",\"namespace\":\"agent-runtime\",\"listen_address\":\"0.0.0.0:8090\",\"dependencies\":[{\"name\":\"state\",\"endpoint\":\"postgres://state.agent-runtime.svc:5432/agent_runtime\",\"secret_environment\":\"STATE_DATABASE_DSN\"},{\"name\":\"telemetry\",\"endpoint\":\"http://telemetry.agent-runtime.svc:4318\"},{\"name\":\"temporal\",\"endpoint\":\"temporal.agent-runtime.svc:7233\",\"secret_environment\":\"TEMPORAL_AUTH_TOKEN\"}]}"
-              }
-            ],
+            "environment": [],
             "secret_environment": [
               {
-                "name": "STATE_DATABASE_DSN",
+                "name": "PGPASSWORD",
                 "secret": "state-db-secret",
-                "key": "STATE_DATABASE_DSN"
-              },
-              {
-                "name": "TEMPORAL_AUTH_TOKEN",
-                "secret": "temporal-auth-secret",
-                "key": "TEMPORAL_AUTH_TOKEN"
+                "key": "POSTGRES_PASSWORD"
               }
             ],
-            "readiness": {
-              "command": [
-                "/runtime",
-                "--config-env",
-                "RUNTIME_ROLE_CONFIG",
-                "--role",
-                "orchestration",
-                "--check"
-              ],
-              "initial_delay_seconds": 1,
-              "period_seconds": 5,
-              "failure_threshold": 12
-            },
             "ports": [
               {
                 "name": "http",
@@ -1560,7 +1515,21 @@
               "request_memory_bytes": 134217728,
               "limit_memory_bytes": 536870912
             },
-            "storage": []
+            "storage": [],
+            "readiness": {
+              "command": [
+                "pg_isready",
+                "-h",
+                "state",
+                "-U",
+                "postgres",
+                "-d",
+                "agent_runtime"
+              ],
+              "initial_delay_seconds": 1,
+              "period_seconds": 5,
+              "failure_threshold": 12
+            }
           }
         },
         {
@@ -2081,7 +2050,8 @@
           "owner": "security-operator",
           "scope": "namespace",
           "dependencies": [
-            "temporal"
+            "temporal",
+            "state"
           ],
           "retention": {
             "policy": "persistent",
@@ -2097,7 +2067,9 @@
             "network": {
               "default_deny": true,
               "subject": "temporal",
-              "allowed_egress": []
+              "allowed_egress": [
+                "state"
+              ]
             }
           }
         },
@@ -2159,7 +2131,8 @@
           "owner": "security-operator",
           "scope": "namespace",
           "dependencies": [
-            "migration-runner"
+            "migration-runner",
+            "state"
           ],
           "retention": {
             "policy": "persistent",
@@ -2175,7 +2148,9 @@
             "network": {
               "default_deny": true,
               "subject": "migration-runner",
-              "allowed_egress": []
+              "allowed_egress": [
+                "state"
+              ]
             }
           }
         },
@@ -2279,8 +2254,8 @@
             "migrations": [
               {
                 "version": 1,
-                  "upgrade_digest": "sha256:9e2ebf76c416f3d3da19e1601a71a3b9742ff4641b2a31999774f32e0a9aea3f",
-                  "rollback_digest": "sha256:311919bbb28bc9abe61077e60e46c7040edb56e078bc52a2c0a01dd8e5f4ee6a",
+                "upgrade_digest": "sha256:9e2ebf76c416f3d3da19e1601a71a3b9742ff4641b2a31999774f32e0a9aea3f",
+                "rollback_digest": "sha256:311919bbb28bc9abe61077e60e46c7040edb56e078bc52a2c0a01dd8e5f4ee6a",
                 "upgrade_artifact": "migrations/runtime-v1.up.sql",
                 "rollback_artifact": "migrations/runtime-v1.down.sql"
               }
@@ -2370,6 +2345,7 @@
             "reference": "agent-runtime-state-db-secret",
             "version": "v1",
             "keys": [
+              "POSTGRES_PASSWORD",
               "STATE_DATABASE_DSN"
             ]
           }
@@ -2502,7 +2478,9 @@
             "reference": "agent-runtime-blob-storage-secret",
             "version": "v1",
             "keys": [
-              "BLOB_STORAGE_CREDENTIAL"
+              "BLOB_STORAGE_CREDENTIAL",
+              "MINIO_ROOT_PASSWORD",
+              "MINIO_ROOT_USER"
             ]
           }
         },
@@ -2880,7 +2858,7 @@
             "kind": "Deployment",
             "name": "api",
             "replicas": 1,
-            "image": "ghcr.io/0x63616c/agent-runtime@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "image": "ghcr.io/0x63616c/agent-runtime@sha256:ac867c17ee4474138778a2f22dec6b5128f9fa3931b69991197e910eaf321770",
             "service_account": "api-account",
             "command": [
               "/runtime"
@@ -2949,7 +2927,7 @@
             "kind": "Deployment",
             "name": "orchestration",
             "replicas": 3,
-            "image": "ghcr.io/0x63616c/agent-runtime@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "image": "ghcr.io/0x63616c/agent-runtime@sha256:ac867c17ee4474138778a2f22dec6b5128f9fa3931b69991197e910eaf321770",
             "service_account": "orchestration-account",
             "command": [
               "/runtime"
@@ -3029,7 +3007,7 @@
             "kind": "Deployment",
             "name": "model",
             "replicas": 1,
-            "image": "ghcr.io/0x63616c/agent-runtime@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "image": "ghcr.io/0x63616c/agent-runtime@sha256:ac867c17ee4474138778a2f22dec6b5128f9fa3931b69991197e910eaf321770",
             "service_account": "model-account",
             "command": [
               "/runtime"
@@ -3109,7 +3087,7 @@
             "kind": "Deployment",
             "name": "tool",
             "replicas": 1,
-            "image": "ghcr.io/0x63616c/agent-runtime@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "image": "ghcr.io/0x63616c/agent-runtime@sha256:ac867c17ee4474138778a2f22dec6b5128f9fa3931b69991197e910eaf321770",
             "service_account": "tool-account",
             "command": [
               "/runtime"
@@ -3188,7 +3166,7 @@
             "kind": "Deployment",
             "name": "blob-role",
             "replicas": 1,
-            "image": "ghcr.io/0x63616c/agent-runtime@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "image": "ghcr.io/0x63616c/agent-runtime@sha256:ac867c17ee4474138778a2f22dec6b5128f9fa3931b69991197e910eaf321770",
             "service_account": "blob-role-account",
             "command": [
               "/runtime"
@@ -3262,7 +3240,7 @@
             "kind": "Deployment",
             "name": "codec",
             "replicas": 1,
-            "image": "ghcr.io/0x63616c/agent-runtime@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "image": "ghcr.io/0x63616c/agent-runtime@sha256:ac867c17ee4474138778a2f22dec6b5128f9fa3931b69991197e910eaf321770",
             "service_account": "codec-account",
             "command": [
               "/runtime"
@@ -3341,7 +3319,7 @@
             "kind": "Deployment",
             "name": "sandbox-control",
             "replicas": 1,
-            "image": "ghcr.io/0x63616c/agent-runtime@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "image": "ghcr.io/0x63616c/agent-runtime@sha256:ac867c17ee4474138778a2f22dec6b5128f9fa3931b69991197e910eaf321770",
             "service_account": "sandbox-control-account",
             "command": [
               "/runtime"
@@ -3421,7 +3399,7 @@
             "kind": "Deployment",
             "name": "sandbox-host",
             "replicas": 1,
-            "image": "ghcr.io/0x63616c/agent-runtime@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "image": "ghcr.io/0x63616c/agent-runtime@sha256:ac867c17ee4474138778a2f22dec6b5128f9fa3931b69991197e910eaf321770",
             "service_account": "sandbox-host-account",
             "command": [
               "/runtime"
@@ -3500,27 +3478,32 @@
             "kind": "Deployment",
             "name": "state",
             "replicas": 1,
-            "image": "ghcr.io/0x63616c/agent-runtime@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "image": "postgres@sha256:e5507c984377515b8c9922b0eb19f55aba2063fdc7bccf268cefd53133f97054",
             "service_account": "state-account",
-            "command": [
-              "/runtime"
+            "environment": [
+              {
+                "name": "POSTGRES_DB",
+                "value": "agent_runtime"
+              },
+              {
+                "name": "POSTGRES_USER",
+                "value": "postgres"
+              }
             ],
-            "arguments": [
-              "--config-env",
-              "RUNTIME_ROLE_CONFIG",
-              "--role",
-              "api"
+            "secret_environment": [
+              {
+                "name": "POSTGRES_PASSWORD",
+                "secret": "state-db-secret",
+                "key": "POSTGRES_PASSWORD"
+              }
             ],
-            "environment": [],
-            "secret_environment": [],
             "readiness": {
               "command": [
-                "/runtime",
-                "--config-env",
-                "RUNTIME_ROLE_CONFIG",
-                "--role",
-                "api",
-                "--check"
+                "pg_isready",
+                "-U",
+                "postgres",
+                "-d",
+                "agent_runtime"
               ],
               "initial_delay_seconds": 1,
               "period_seconds": 5,
@@ -3564,32 +3547,33 @@
             "kind": "Deployment",
             "name": "temporal",
             "replicas": 1,
-            "image": "ghcr.io/0x63616c/agent-runtime@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "image": "temporalio/auto-setup@sha256:b44cbfeb43dbeae42db113b44fb8414c3452f05643b3d6b1592f955277d73526",
             "service_account": "temporal-account",
-            "command": [
-              "/runtime"
+            "environment": [
+              {
+                "name": "DB",
+                "value": "postgres12"
+              },
+              {
+                "name": "DB_PORT",
+                "value": "5432"
+              },
+              {
+                "name": "POSTGRES_SEEDS",
+                "value": "state"
+              },
+              {
+                "name": "POSTGRES_USER",
+                "value": "postgres"
+              }
             ],
-            "arguments": [
-              "--config-env",
-              "RUNTIME_ROLE_CONFIG",
-              "--role",
-              "api"
+            "secret_environment": [
+              {
+                "name": "POSTGRES_PWD",
+                "secret": "state-db-secret",
+                "key": "POSTGRES_PASSWORD"
+              }
             ],
-            "environment": [],
-            "secret_environment": [],
-            "readiness": {
-              "command": [
-                "/runtime",
-                "--config-env",
-                "RUNTIME_ROLE_CONFIG",
-                "--role",
-                "api",
-                "--check"
-              ],
-              "initial_delay_seconds": 1,
-              "period_seconds": 5,
-              "failure_threshold": 12
-            },
             "ports": [
               {
                 "name": "http",
@@ -3627,32 +3611,27 @@
             "kind": "Deployment",
             "name": "blob",
             "replicas": 1,
-            "image": "ghcr.io/0x63616c/agent-runtime@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "image": "minio/minio@sha256:a1ea29fa28355559ef137d71fc570e508a214ec84ff8083e39bc5428980b015e",
             "service_account": "blob-account",
             "command": [
-              "/runtime"
+              "server"
             ],
             "arguments": [
-              "--config-env",
-              "RUNTIME_ROLE_CONFIG",
-              "--role",
-              "api"
+              "/data"
             ],
             "environment": [],
-            "secret_environment": [],
-            "readiness": {
-              "command": [
-                "/runtime",
-                "--config-env",
-                "RUNTIME_ROLE_CONFIG",
-                "--role",
-                "api",
-                "--check"
-              ],
-              "initial_delay_seconds": 1,
-              "period_seconds": 5,
-              "failure_threshold": 12
-            },
+            "secret_environment": [
+              {
+                "name": "MINIO_ROOT_USER",
+                "secret": "blob-storage-secret",
+                "key": "MINIO_ROOT_USER"
+              },
+              {
+                "name": "MINIO_ROOT_PASSWORD",
+                "secret": "blob-storage-secret",
+                "key": "MINIO_ROOT_PASSWORD"
+              }
+            ],
             "ports": [
               {
                 "name": "http",
@@ -3689,32 +3668,10 @@
             "kind": "Deployment",
             "name": "telemetry",
             "replicas": 1,
-            "image": "ghcr.io/0x63616c/agent-runtime@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "image": "jaegertracing/all-in-one@sha256:12fa17a231abded2c3b5b715bd252a043678495c588cbe772173991fbdcdf7c8",
             "service_account": "telemetry-account",
-            "command": [
-              "/runtime"
-            ],
-            "arguments": [
-              "--config-env",
-              "RUNTIME_ROLE_CONFIG",
-              "--role",
-              "api"
-            ],
             "environment": [],
             "secret_environment": [],
-            "readiness": {
-              "command": [
-                "/runtime",
-                "--config-env",
-                "RUNTIME_ROLE_CONFIG",
-                "--role",
-                "api",
-                "--check"
-              ],
-              "initial_delay_seconds": 1,
-              "period_seconds": 5,
-              "failure_threshold": 12
-            },
             "ports": [
               {
                 "name": "http",
@@ -3751,7 +3708,7 @@
             "kind": "Deployment",
             "name": "egress-proxy",
             "replicas": 2,
-            "image": "ghcr.io/0x63616c/agent-runtime@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "image": "ghcr.io/0x63616c/agent-runtime@sha256:ac867c17ee4474138778a2f22dec6b5128f9fa3931b69991197e910eaf321770",
             "service_account": "egress-proxy-account",
             "command": [
               "/egress-proxy"
@@ -3797,9 +3754,8 @@
           "owner": "database-operator",
           "scope": "namespace",
           "dependencies": [
-              "migration-runner-account",
-              "state-db-secret",
-              "temporal-auth-secret"
+            "migration-runner-account",
+            "state-db-secret"
           ],
           "retention": {
             "policy": "persistent",
@@ -3813,48 +3769,22 @@
             "kind": "Deployment",
             "name": "migration-runner",
             "replicas": 1,
-            "image": "ghcr.io/0x63616c/agent-runtime@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "image": "postgres@sha256:e5507c984377515b8c9922b0eb19f55aba2063fdc7bccf268cefd53133f97054",
             "service_account": "migration-runner-account",
             "command": [
-              "/runtime"
+              "sleep"
             ],
             "arguments": [
-              "--config-env",
-              "RUNTIME_ROLE_CONFIG",
-              "--role",
-              "orchestration"
+              "infinity"
             ],
-            "environment": [
-              {
-                "name": "RUNTIME_ROLE_CONFIG",
-                "value": "{\"version\":1,\"role\":\"orchestration\",\"namespace\":\"agent-runtime\",\"listen_address\":\"0.0.0.0:8090\",\"dependencies\":[{\"name\":\"state\",\"endpoint\":\"postgres://state.agent-runtime.svc:5432/agent_runtime\",\"secret_environment\":\"STATE_DATABASE_DSN\"},{\"name\":\"telemetry\",\"endpoint\":\"http://telemetry.agent-runtime.svc:4318\"},{\"name\":\"temporal\",\"endpoint\":\"temporal.agent-runtime.svc:7233\",\"secret_environment\":\"TEMPORAL_AUTH_TOKEN\"}]}"
-              }
-            ],
+            "environment": [],
             "secret_environment": [
               {
-                "name": "STATE_DATABASE_DSN",
+                "name": "PGPASSWORD",
                 "secret": "state-db-secret",
-                "key": "STATE_DATABASE_DSN"
-              },
-              {
-                "name": "TEMPORAL_AUTH_TOKEN",
-                "secret": "temporal-auth-secret",
-                "key": "TEMPORAL_AUTH_TOKEN"
+                "key": "POSTGRES_PASSWORD"
               }
             ],
-            "readiness": {
-              "command": [
-                "/runtime",
-                "--config-env",
-                "RUNTIME_ROLE_CONFIG",
-                "--role",
-                "orchestration",
-                "--check"
-              ],
-              "initial_delay_seconds": 1,
-              "period_seconds": 5,
-              "failure_threshold": 12
-            },
             "ports": [
               {
                 "name": "http",
@@ -3868,7 +3798,21 @@
               "request_memory_bytes": 134217728,
               "limit_memory_bytes": 536870912
             },
-            "storage": []
+            "storage": [],
+            "readiness": {
+              "command": [
+                "pg_isready",
+                "-h",
+                "state",
+                "-U",
+                "postgres",
+                "-d",
+                "agent_runtime"
+              ],
+              "initial_delay_seconds": 1,
+              "period_seconds": 5,
+              "failure_threshold": 12
+            }
           }
         },
         {
@@ -4389,7 +4333,8 @@
           "owner": "security-operator",
           "scope": "namespace",
           "dependencies": [
-            "temporal"
+            "temporal",
+            "state"
           ],
           "retention": {
             "policy": "persistent",
@@ -4405,7 +4350,9 @@
             "network": {
               "default_deny": true,
               "subject": "temporal",
-              "allowed_egress": []
+              "allowed_egress": [
+                "state"
+              ]
             }
           }
         },
@@ -4467,7 +4414,8 @@
           "owner": "security-operator",
           "scope": "namespace",
           "dependencies": [
-            "migration-runner"
+            "migration-runner",
+            "state"
           ],
           "retention": {
             "policy": "persistent",
@@ -4483,7 +4431,9 @@
             "network": {
               "default_deny": true,
               "subject": "migration-runner",
-              "allowed_egress": []
+              "allowed_egress": [
+                "state"
+              ]
             }
           }
         },
@@ -4587,8 +4537,8 @@
             "migrations": [
               {
                 "version": 1,
-                  "upgrade_digest": "sha256:9e2ebf76c416f3d3da19e1601a71a3b9742ff4641b2a31999774f32e0a9aea3f",
-                  "rollback_digest": "sha256:311919bbb28bc9abe61077e60e46c7040edb56e078bc52a2c0a01dd8e5f4ee6a",
+                "upgrade_digest": "sha256:9e2ebf76c416f3d3da19e1601a71a3b9742ff4641b2a31999774f32e0a9aea3f",
+                "rollback_digest": "sha256:311919bbb28bc9abe61077e60e46c7040edb56e078bc52a2c0a01dd8e5f4ee6a",
                 "upgrade_artifact": "migrations/runtime-v1.up.sql",
                 "rollback_artifact": "migrations/runtime-v1.down.sql"
               }
@@ -4678,6 +4628,7 @@
             "reference": "agent-runtime-state-db-secret",
             "version": "v1",
             "keys": [
+              "POSTGRES_PASSWORD",
               "STATE_DATABASE_DSN"
             ]
           }
@@ -4810,7 +4761,9 @@
             "reference": "agent-runtime-blob-storage-secret",
             "version": "v1",
             "keys": [
-              "BLOB_STORAGE_CREDENTIAL"
+              "BLOB_STORAGE_CREDENTIAL",
+              "MINIO_ROOT_PASSWORD",
+              "MINIO_ROOT_USER"
             ]
           }
         },
@@ -5188,7 +5141,7 @@
             "kind": "Deployment",
             "name": "api",
             "replicas": 1,
-            "image": "ghcr.io/0x63616c/agent-runtime@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "image": "ghcr.io/0x63616c/agent-runtime@sha256:ac867c17ee4474138778a2f22dec6b5128f9fa3931b69991197e910eaf321770",
             "service_account": "api-account",
             "command": [
               "/runtime"
@@ -5257,7 +5210,7 @@
             "kind": "Deployment",
             "name": "orchestration",
             "replicas": 3,
-            "image": "ghcr.io/0x63616c/agent-runtime@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "image": "ghcr.io/0x63616c/agent-runtime@sha256:ac867c17ee4474138778a2f22dec6b5128f9fa3931b69991197e910eaf321770",
             "service_account": "orchestration-account",
             "command": [
               "/runtime"
@@ -5337,7 +5290,7 @@
             "kind": "Deployment",
             "name": "model",
             "replicas": 1,
-            "image": "ghcr.io/0x63616c/agent-runtime@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "image": "ghcr.io/0x63616c/agent-runtime@sha256:ac867c17ee4474138778a2f22dec6b5128f9fa3931b69991197e910eaf321770",
             "service_account": "model-account",
             "command": [
               "/runtime"
@@ -5417,7 +5370,7 @@
             "kind": "Deployment",
             "name": "tool",
             "replicas": 1,
-            "image": "ghcr.io/0x63616c/agent-runtime@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "image": "ghcr.io/0x63616c/agent-runtime@sha256:ac867c17ee4474138778a2f22dec6b5128f9fa3931b69991197e910eaf321770",
             "service_account": "tool-account",
             "command": [
               "/runtime"
@@ -5496,7 +5449,7 @@
             "kind": "Deployment",
             "name": "blob-role",
             "replicas": 1,
-            "image": "ghcr.io/0x63616c/agent-runtime@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "image": "ghcr.io/0x63616c/agent-runtime@sha256:ac867c17ee4474138778a2f22dec6b5128f9fa3931b69991197e910eaf321770",
             "service_account": "blob-role-account",
             "command": [
               "/runtime"
@@ -5570,7 +5523,7 @@
             "kind": "Deployment",
             "name": "codec",
             "replicas": 1,
-            "image": "ghcr.io/0x63616c/agent-runtime@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "image": "ghcr.io/0x63616c/agent-runtime@sha256:ac867c17ee4474138778a2f22dec6b5128f9fa3931b69991197e910eaf321770",
             "service_account": "codec-account",
             "command": [
               "/runtime"
@@ -5649,7 +5602,7 @@
             "kind": "Deployment",
             "name": "sandbox-control",
             "replicas": 1,
-            "image": "ghcr.io/0x63616c/agent-runtime@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "image": "ghcr.io/0x63616c/agent-runtime@sha256:ac867c17ee4474138778a2f22dec6b5128f9fa3931b69991197e910eaf321770",
             "service_account": "sandbox-control-account",
             "command": [
               "/runtime"
@@ -5729,7 +5682,7 @@
             "kind": "Deployment",
             "name": "sandbox-host",
             "replicas": 1,
-            "image": "ghcr.io/0x63616c/agent-runtime@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "image": "ghcr.io/0x63616c/agent-runtime@sha256:ac867c17ee4474138778a2f22dec6b5128f9fa3931b69991197e910eaf321770",
             "service_account": "sandbox-host-account",
             "command": [
               "/runtime"
@@ -5808,27 +5761,32 @@
             "kind": "Deployment",
             "name": "state",
             "replicas": 1,
-            "image": "ghcr.io/0x63616c/agent-runtime@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "image": "postgres@sha256:e5507c984377515b8c9922b0eb19f55aba2063fdc7bccf268cefd53133f97054",
             "service_account": "state-account",
-            "command": [
-              "/runtime"
+            "environment": [
+              {
+                "name": "POSTGRES_DB",
+                "value": "agent_runtime"
+              },
+              {
+                "name": "POSTGRES_USER",
+                "value": "postgres"
+              }
             ],
-            "arguments": [
-              "--config-env",
-              "RUNTIME_ROLE_CONFIG",
-              "--role",
-              "api"
+            "secret_environment": [
+              {
+                "name": "POSTGRES_PASSWORD",
+                "secret": "state-db-secret",
+                "key": "POSTGRES_PASSWORD"
+              }
             ],
-            "environment": [],
-            "secret_environment": [],
             "readiness": {
               "command": [
-                "/runtime",
-                "--config-env",
-                "RUNTIME_ROLE_CONFIG",
-                "--role",
-                "api",
-                "--check"
+                "pg_isready",
+                "-U",
+                "postgres",
+                "-d",
+                "agent_runtime"
               ],
               "initial_delay_seconds": 1,
               "period_seconds": 5,
@@ -5872,32 +5830,33 @@
             "kind": "Deployment",
             "name": "temporal",
             "replicas": 1,
-            "image": "ghcr.io/0x63616c/agent-runtime@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "image": "temporalio/auto-setup@sha256:b44cbfeb43dbeae42db113b44fb8414c3452f05643b3d6b1592f955277d73526",
             "service_account": "temporal-account",
-            "command": [
-              "/runtime"
+            "environment": [
+              {
+                "name": "DB",
+                "value": "postgres12"
+              },
+              {
+                "name": "DB_PORT",
+                "value": "5432"
+              },
+              {
+                "name": "POSTGRES_SEEDS",
+                "value": "state"
+              },
+              {
+                "name": "POSTGRES_USER",
+                "value": "postgres"
+              }
             ],
-            "arguments": [
-              "--config-env",
-              "RUNTIME_ROLE_CONFIG",
-              "--role",
-              "api"
+            "secret_environment": [
+              {
+                "name": "POSTGRES_PWD",
+                "secret": "state-db-secret",
+                "key": "POSTGRES_PASSWORD"
+              }
             ],
-            "environment": [],
-            "secret_environment": [],
-            "readiness": {
-              "command": [
-                "/runtime",
-                "--config-env",
-                "RUNTIME_ROLE_CONFIG",
-                "--role",
-                "api",
-                "--check"
-              ],
-              "initial_delay_seconds": 1,
-              "period_seconds": 5,
-              "failure_threshold": 12
-            },
             "ports": [
               {
                 "name": "http",
@@ -5935,32 +5894,27 @@
             "kind": "Deployment",
             "name": "blob",
             "replicas": 1,
-            "image": "ghcr.io/0x63616c/agent-runtime@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "image": "minio/minio@sha256:a1ea29fa28355559ef137d71fc570e508a214ec84ff8083e39bc5428980b015e",
             "service_account": "blob-account",
             "command": [
-              "/runtime"
+              "server"
             ],
             "arguments": [
-              "--config-env",
-              "RUNTIME_ROLE_CONFIG",
-              "--role",
-              "api"
+              "/data"
             ],
             "environment": [],
-            "secret_environment": [],
-            "readiness": {
-              "command": [
-                "/runtime",
-                "--config-env",
-                "RUNTIME_ROLE_CONFIG",
-                "--role",
-                "api",
-                "--check"
-              ],
-              "initial_delay_seconds": 1,
-              "period_seconds": 5,
-              "failure_threshold": 12
-            },
+            "secret_environment": [
+              {
+                "name": "MINIO_ROOT_USER",
+                "secret": "blob-storage-secret",
+                "key": "MINIO_ROOT_USER"
+              },
+              {
+                "name": "MINIO_ROOT_PASSWORD",
+                "secret": "blob-storage-secret",
+                "key": "MINIO_ROOT_PASSWORD"
+              }
+            ],
             "ports": [
               {
                 "name": "http",
@@ -5997,32 +5951,10 @@
             "kind": "Deployment",
             "name": "telemetry",
             "replicas": 1,
-            "image": "ghcr.io/0x63616c/agent-runtime@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "image": "jaegertracing/all-in-one@sha256:12fa17a231abded2c3b5b715bd252a043678495c588cbe772173991fbdcdf7c8",
             "service_account": "telemetry-account",
-            "command": [
-              "/runtime"
-            ],
-            "arguments": [
-              "--config-env",
-              "RUNTIME_ROLE_CONFIG",
-              "--role",
-              "api"
-            ],
             "environment": [],
             "secret_environment": [],
-            "readiness": {
-              "command": [
-                "/runtime",
-                "--config-env",
-                "RUNTIME_ROLE_CONFIG",
-                "--role",
-                "api",
-                "--check"
-              ],
-              "initial_delay_seconds": 1,
-              "period_seconds": 5,
-              "failure_threshold": 12
-            },
             "ports": [
               {
                 "name": "http",
@@ -6059,7 +5991,7 @@
             "kind": "Deployment",
             "name": "egress-proxy",
             "replicas": 2,
-            "image": "ghcr.io/0x63616c/agent-runtime@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "image": "ghcr.io/0x63616c/agent-runtime@sha256:ac867c17ee4474138778a2f22dec6b5128f9fa3931b69991197e910eaf321770",
             "service_account": "egress-proxy-account",
             "command": [
               "/egress-proxy"
@@ -6105,9 +6037,8 @@
           "owner": "database-operator",
           "scope": "namespace",
           "dependencies": [
-              "migration-runner-account",
-              "state-db-secret",
-              "temporal-auth-secret"
+            "migration-runner-account",
+            "state-db-secret"
           ],
           "retention": {
             "policy": "persistent",
@@ -6121,48 +6052,22 @@
             "kind": "Deployment",
             "name": "migration-runner",
             "replicas": 1,
-            "image": "ghcr.io/0x63616c/agent-runtime@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "image": "postgres@sha256:e5507c984377515b8c9922b0eb19f55aba2063fdc7bccf268cefd53133f97054",
             "service_account": "migration-runner-account",
             "command": [
-              "/runtime"
+              "sleep"
             ],
             "arguments": [
-              "--config-env",
-              "RUNTIME_ROLE_CONFIG",
-              "--role",
-              "orchestration"
+              "infinity"
             ],
-            "environment": [
-              {
-                "name": "RUNTIME_ROLE_CONFIG",
-                "value": "{\"version\":1,\"role\":\"orchestration\",\"namespace\":\"agent-runtime\",\"listen_address\":\"0.0.0.0:8090\",\"dependencies\":[{\"name\":\"state\",\"endpoint\":\"postgres://state.agent-runtime.svc:5432/agent_runtime\",\"secret_environment\":\"STATE_DATABASE_DSN\"},{\"name\":\"telemetry\",\"endpoint\":\"http://telemetry.agent-runtime.svc:4318\"},{\"name\":\"temporal\",\"endpoint\":\"temporal.agent-runtime.svc:7233\",\"secret_environment\":\"TEMPORAL_AUTH_TOKEN\"}]}"
-              }
-            ],
+            "environment": [],
             "secret_environment": [
               {
-                "name": "STATE_DATABASE_DSN",
+                "name": "PGPASSWORD",
                 "secret": "state-db-secret",
-                "key": "STATE_DATABASE_DSN"
-              },
-              {
-                "name": "TEMPORAL_AUTH_TOKEN",
-                "secret": "temporal-auth-secret",
-                "key": "TEMPORAL_AUTH_TOKEN"
+                "key": "POSTGRES_PASSWORD"
               }
             ],
-            "readiness": {
-              "command": [
-                "/runtime",
-                "--config-env",
-                "RUNTIME_ROLE_CONFIG",
-                "--role",
-                "orchestration",
-                "--check"
-              ],
-              "initial_delay_seconds": 1,
-              "period_seconds": 5,
-              "failure_threshold": 12
-            },
             "ports": [
               {
                 "name": "http",
@@ -6176,7 +6081,21 @@
               "request_memory_bytes": 134217728,
               "limit_memory_bytes": 536870912
             },
-            "storage": []
+            "storage": [],
+            "readiness": {
+              "command": [
+                "pg_isready",
+                "-h",
+                "state",
+                "-U",
+                "postgres",
+                "-d",
+                "agent_runtime"
+              ],
+              "initial_delay_seconds": 1,
+              "period_seconds": 5,
+              "failure_threshold": 12
+            }
           }
         },
         {
@@ -6697,7 +6616,8 @@
           "owner": "security-operator",
           "scope": "namespace",
           "dependencies": [
-            "temporal"
+            "temporal",
+            "state"
           ],
           "retention": {
             "policy": "persistent",
@@ -6713,7 +6633,9 @@
             "network": {
               "default_deny": true,
               "subject": "temporal",
-              "allowed_egress": []
+              "allowed_egress": [
+                "state"
+              ]
             }
           }
         },
@@ -6775,7 +6697,8 @@
           "owner": "security-operator",
           "scope": "namespace",
           "dependencies": [
-            "migration-runner"
+            "migration-runner",
+            "state"
           ],
           "retention": {
             "policy": "persistent",
@@ -6791,7 +6714,9 @@
             "network": {
               "default_deny": true,
               "subject": "migration-runner",
-              "allowed_egress": []
+              "allowed_egress": [
+                "state"
+              ]
             }
           }
         },
@@ -6895,8 +6820,8 @@
             "migrations": [
               {
                 "version": 1,
-                  "upgrade_digest": "sha256:9e2ebf76c416f3d3da19e1601a71a3b9742ff4641b2a31999774f32e0a9aea3f",
-                  "rollback_digest": "sha256:311919bbb28bc9abe61077e60e46c7040edb56e078bc52a2c0a01dd8e5f4ee6a",
+                "upgrade_digest": "sha256:9e2ebf76c416f3d3da19e1601a71a3b9742ff4641b2a31999774f32e0a9aea3f",
+                "rollback_digest": "sha256:311919bbb28bc9abe61077e60e46c7040edb56e078bc52a2c0a01dd8e5f4ee6a",
                 "upgrade_artifact": "migrations/runtime-v1.up.sql",
                 "rollback_artifact": "migrations/runtime-v1.down.sql"
               }

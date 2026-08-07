@@ -1,8 +1,19 @@
 # Issue #14 deployment-role evidence
 
-Status: local composition and declarative-render evidence only. This record is
-not a claim that a production cluster was mutated or that the placeholder
-runtime image was deployed.
+Status: local composition, declarative-render, and immutable-image publication
+evidence. This record is not yet a claim that a production cluster was mutated.
+
+## Published image proof
+
+On 2026-08-07, GitHub Actions run `31151851398` built and published
+`ghcr.io/0x63616c/agent-runtime@sha256:ac867c17ee4474138778a2f22dec6b5128f9fa3931b69991197e910eaf321770`.
+The OCI revision label is `104fdc985787e46474f3c69e17d031104aff725d`, the
+same immutable source revision that triggered the publisher. The publisher
+completed its Buildx push, SBOM/provenance generation, GitHub signed
+attestation, and digest inspection successfully. A local
+`gh attestation verify` against the digest and `0x63616c/agent-runtime`
+succeeded. This proves the published artifact provenance, not Kubernetes
+runtime behavior.
 
 ## Retained local proof
 
@@ -55,8 +66,6 @@ profile of the Stack:
 
 ## Remaining acceptance evidence
 
-- A released immutable runtime image must replace the deliberate placeholder
-  digest before a real cluster apply/startup smoke can run.
 - The platform-owned live Kubernetes/Temporal/blob/backup/observability smoke
   must be executed through the audited operator action with explicit operator
   target and retained redacted results.
