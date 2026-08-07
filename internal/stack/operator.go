@@ -305,14 +305,36 @@ func (operator KubernetesOperator) Reconcile(ctx context.Context, request Operat
 	canonicalizeChanges(difference.Changes)
 	result := ReconcileResult{Changes: append([]Change(nil), difference.Changes...)}
 	auditResult := "unchanged"
+	affected := changeResources(difference.Changes)
 	if len(difference.Changes) > 0 {
 		if _, applyErr := operator.adapter.Apply(ctx, request.Target, manifests); applyErr != nil {
 			return ReconcileResult{}, operator.recordFailure(ctx, request, document, OperatorActionReconcile, applyErr)
 		}
+		if migrationErr := operator.upgradeMigrations(ctx, request.Target, rendered, document); migrationErr != nil {
+			return ReconcileResult{}, operator.recordFailure(ctx, request, document, OperatorActionReconcile, migrationErr)
+		}
+		if operator.orchestration != nil {
+			if _, orchestrationErr := operator.orchestration.ReconcileOrchestration(ctx, request.Target, rendered); orchestrationErr != nil {
+				return ReconcileResult{}, operator.recordFailure(ctx, request, document, OperatorActionReconcile, orchestrationErr)
+			}
+		}
 		result.Applied = true
 		auditResult = "applied"
 	}
-	if err := operator.record(ctx, request, document, OperatorActionReconcile, auditResult, changeResources(difference.Changes)); err != nil {
+	if operator.providers != nil {
+		providerIDs, providerErr := operator.providers.ReconcileDeclared(ctx, request.Target, rendered)
+		if providerErr != nil {
+			return ReconcileResult{}, operator.recordFailure(ctx, request, document, OperatorActionReconcile, providerErr)
+		}
+		if providerErr := validateDeclaredProviderIDs(document.Resources, providerIDs); providerErr != nil {
+			return ReconcileResult{}, operator.recordFailure(ctx, request, document, OperatorActionReconcile, providerErr)
+		}
+		affected = append(affected, providerIDs...)
+		if auditResult == "unchanged" {
+			auditResult = "reconciled"
+		}
+	}
+	if err := operator.record(ctx, request, document, OperatorActionReconcile, auditResult, affected); err != nil {
 		return ReconcileResult{}, err
 	}
 	return result, nil

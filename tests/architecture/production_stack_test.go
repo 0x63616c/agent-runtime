@@ -30,6 +30,16 @@ var _ = Describe("Self-hosted production Stack", func() {
 		Expect(err).NotTo(HaveOccurred())
 		Expect(normalizedProfile(local.Resources(), "ar-agent-runtime")).To(Equal(normalizedProfile(production.Resources(), "agent-runtime")))
 		Expect(normalizedProfile(ci.Resources(), "ar-ci-agent-runtime")).To(Equal(normalizedProfile(production.Resources(), "agent-runtime")))
+		for _, rendered := range []stack.Rendered{local, ci} {
+			for _, resource := range rendered.Resources() {
+				if resource.Kind != stack.ResourceSecretReference {
+					continue
+				}
+				Expect(resource.SecretReference.Provider).To(Equal("local-generated"), resource.ID)
+				Expect(resource.Retention.Policy).To(Equal(stack.RetentionEphemeral), resource.ID)
+				Expect(resource.DeleteBehavior).To(Equal(stack.DeleteOwned), resource.ID)
+			}
+		}
 
 		command := exec.Command("jq", "-f", "deploy/production/derive-profiles.jq", "deploy/production/stack.json")
 		command.Dir = "../.."
@@ -68,6 +78,8 @@ var _ = Describe("Self-hosted production Stack", func() {
 		Expect(secretEnvironmentNames(findResource(resources, "model"))).NotTo(ContainElement("TEMPORAL_AUTH_TOKEN"))
 		Expect(findResource(resources, "model-egress").Kubernetes.Network.AllowedEgress).To(ContainElement(stack.ResourceID("egress-proxy")))
 		Expect(findResource(resources, "temporal-namespace").Orchestration.RetentionDays).To(BeNumerically(">", 0))
+		Expect(findResource(resources, "temporal-persistence").Database.Database).To(Equal("temporal"))
+		Expect(findResource(resources, "temporal-visibility-persistence").Database.Database).To(Equal("temporal_visibility"))
 		Expect(findResource(resources, "runtime-database").Database.Migrations).ToNot(BeEmpty())
 		Expect(findResource(resources, "state").Kubernetes.Image).To(Equal("postgres@sha256:e5507c984377515b8c9922b0eb19f55aba2063fdc7bccf268cefd53133f97054"))
 		temporal := findResource(resources, "temporal")
@@ -78,6 +90,9 @@ var _ = Describe("Self-hosted production Stack", func() {
 		Expect(temporal.Kubernetes.Readiness.Command).To(ContainElements("--address", "127.0.0.1:7233", "cluster", "health"))
 		Expect(findResource(resources, "blob").Kubernetes.Image).To(Equal("minio/minio@sha256:a1ea29fa28355559ef137d71fc570e508a214ec84ff8083e39bc5428980b015e"))
 		Expect(findResource(resources, "telemetry").Kubernetes.Image).To(Equal("jaegertracing/all-in-one@sha256:12fa17a231abded2c3b5b715bd252a043678495c588cbe772173991fbdcdf7c8"))
+		telemetryTTL, found := environmentValue(findResource(resources, "telemetry"), "BADGER_SPAN_STORE_TTL")
+		Expect(found).To(BeTrue())
+		Expect(telemetryTTL).To(Equal("720h"))
 		Expect(findResource(resources, "migration-runner").Kubernetes.Image).To(Equal("postgres@sha256:e5507c984377515b8c9922b0eb19f55aba2063fdc7bccf268cefd53133f97054"))
 		expectedRoleConfigs := map[stack.ResourceID]string{
 			"api":             `{"version":1,"role":"api","namespace":"agent-runtime","listen_address":"0.0.0.0:8080","dependencies":[{"name":"state","endpoint":"http://state.agent-runtime.svc:8080"},{"name":"telemetry","endpoint":"http://telemetry.agent-runtime.svc:4318"}]}`,

@@ -1,8 +1,8 @@
 def lifecycle($profile):
   if $profile == "production" then .
   elif .kind == "secret_reference" then
-    .retention = {policy:"external",days:0} |
-    .delete_behavior = "retain" |
+    .retention = {policy:"ephemeral",days:0} |
+    .delete_behavior = "delete" |
     .backup_restore_owner = "none"
   else
     .retention = {policy:"ephemeral",days:0} |
@@ -82,8 +82,8 @@ def extras($namespace; $profile):
   [
     ({
       id:"temporal-db-secret",kind:"secret_reference",owner:"security-operator",scope:"namespace",dependencies:[],
-      retention:{policy:"external",days:0},backup_restore_owner:(if $profile == "production" then "platform-operator" else "none" end),
-      delete_behavior:"retain",external_controller:true,
+      retention:(if $profile == "production" then {policy:"external",days:0} else {policy:"ephemeral",days:0} end),backup_restore_owner:(if $profile == "production" then "platform-operator" else "none" end),
+      delete_behavior:(if $profile == "production" then "retain" else "delete" end),external_controller:true,
       secret_reference:{provider:(if $profile == "production" then "external-secrets" else "local-generated" end),reference:($namespace + "-temporal-db-secret"),version:"v1",keys:["POSTGRES_PASSWORD"]}
     }),
     common("temporal-state-account";"kubernetes";"platform-operator";$profile;{kubernetes:{api_version:"v1",kind:"ServiceAccount",name:"temporal-state-account"}}),
@@ -116,6 +116,13 @@ def extras($namespace; $profile):
       backup_restore_owner:(if $profile == "production" then "platform-operator" else "none" end),
       delete_behavior:(if $profile == "production" then "retain" else "delete" end),external_controller:true,
       database:{database:"temporal",schema:"public",connection_reference:"temporal-db-secret",migration_target:"temporal-state",migrations:[]}
+    }),
+    ({
+      id:"temporal-visibility-persistence",kind:"database",owner:"database-operator",scope:"namespace",dependencies:["temporal","temporal-db-secret","temporal-state"],
+      retention:(if $profile == "production" then {policy:"persistent",days:30} else {policy:"ephemeral",days:0} end),
+      backup_restore_owner:(if $profile == "production" then "platform-operator" else "none" end),
+      delete_behavior:(if $profile == "production" then "retain" else "delete" end),external_controller:true,
+      database:{database:"temporal_visibility",schema:"public",connection_reference:"temporal-db-secret",migration_target:"temporal-state",migrations:[]}
     })
   ];
 
@@ -126,7 +133,8 @@ def generated_extra:
   . == "temporal-db-secret" or . == "temporal-state-account" or . == "state-data" or
   . == "temporal-state-data" or . == "blob-data" or . == "telemetry-data" or
   . == "temporal-state" or . == "temporal-state-service" or . == "temporal-state-egress" or
-  . == "blob-reconciler" or . == "blob-reconciler-egress" or . == "temporal-persistence";
+  . == "blob-reconciler" or . == "blob-reconciler-egress" or . == "temporal-persistence" or
+  . == "temporal-visibility-persistence";
 
 (.profiles.production.resources | map(select((.id | generated_extra) | not))) as $base |
 .profiles.local.resources = resources_for($base; .profiles.local.namespace; "local") |

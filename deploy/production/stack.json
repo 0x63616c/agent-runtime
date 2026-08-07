@@ -51,11 +51,11 @@
           "scope": "namespace",
           "dependencies": [],
           "retention": {
-            "policy": "external",
+            "policy": "ephemeral",
             "days": 0
           },
           "backup_restore_owner": "none",
-          "delete_behavior": "retain",
+          "delete_behavior": "delete",
           "external_controller": true,
           "secret_reference": {
             "provider": "local-generated",
@@ -74,11 +74,11 @@
           "scope": "namespace",
           "dependencies": [],
           "retention": {
-            "policy": "external",
+            "policy": "ephemeral",
             "days": 0
           },
           "backup_restore_owner": "none",
-          "delete_behavior": "retain",
+          "delete_behavior": "delete",
           "external_controller": true,
           "secret_reference": {
             "provider": "local-generated",
@@ -96,11 +96,11 @@
           "scope": "namespace",
           "dependencies": [],
           "retention": {
-            "policy": "external",
+            "policy": "ephemeral",
             "days": 0
           },
           "backup_restore_owner": "none",
-          "delete_behavior": "retain",
+          "delete_behavior": "delete",
           "external_controller": true,
           "secret_reference": {
             "provider": "local-generated",
@@ -118,11 +118,11 @@
           "scope": "namespace",
           "dependencies": [],
           "retention": {
-            "policy": "external",
+            "policy": "ephemeral",
             "days": 0
           },
           "backup_restore_owner": "none",
-          "delete_behavior": "retain",
+          "delete_behavior": "delete",
           "external_controller": true,
           "secret_reference": {
             "provider": "local-generated",
@@ -140,11 +140,11 @@
           "scope": "namespace",
           "dependencies": [],
           "retention": {
-            "policy": "external",
+            "policy": "ephemeral",
             "days": 0
           },
           "backup_restore_owner": "none",
-          "delete_behavior": "retain",
+          "delete_behavior": "delete",
           "external_controller": true,
           "secret_reference": {
             "provider": "local-generated",
@@ -162,11 +162,11 @@
           "scope": "namespace",
           "dependencies": [],
           "retention": {
-            "policy": "external",
+            "policy": "ephemeral",
             "days": 0
           },
           "backup_restore_owner": "none",
-          "delete_behavior": "retain",
+          "delete_behavior": "delete",
           "external_controller": true,
           "secret_reference": {
             "provider": "local-generated",
@@ -184,11 +184,11 @@
           "scope": "namespace",
           "dependencies": [],
           "retention": {
-            "policy": "external",
+            "policy": "ephemeral",
             "days": 0
           },
           "backup_restore_owner": "none",
-          "delete_behavior": "retain",
+          "delete_behavior": "delete",
           "external_controller": true,
           "secret_reference": {
             "provider": "local-generated",
@@ -208,11 +208,11 @@
           "scope": "namespace",
           "dependencies": [],
           "retention": {
-            "policy": "external",
+            "policy": "ephemeral",
             "days": 0
           },
           "backup_restore_owner": "none",
-          "delete_behavior": "retain",
+          "delete_behavior": "delete",
           "external_controller": true,
           "secret_reference": {
             "provider": "local-generated",
@@ -230,11 +230,11 @@
           "scope": "namespace",
           "dependencies": [],
           "retention": {
-            "policy": "external",
+            "policy": "ephemeral",
             "days": 0
           },
           "backup_restore_owner": "none",
-          "delete_behavior": "retain",
+          "delete_behavior": "delete",
           "external_controller": true,
           "secret_reference": {
             "provider": "local-generated",
@@ -252,11 +252,11 @@
           "scope": "namespace",
           "dependencies": [],
           "retention": {
-            "policy": "external",
+            "policy": "ephemeral",
             "days": 0
           },
           "backup_restore_owner": "none",
-          "delete_behavior": "retain",
+          "delete_behavior": "delete",
           "external_controller": true,
           "secret_reference": {
             "provider": "local-generated",
@@ -274,11 +274,11 @@
           "scope": "namespace",
           "dependencies": [],
           "retention": {
-            "policy": "external",
+            "policy": "ephemeral",
             "days": 0
           },
           "backup_restore_owner": "none",
-          "delete_behavior": "retain",
+          "delete_behavior": "delete",
           "external_controller": true,
           "secret_reference": {
             "provider": "local-generated",
@@ -2396,11 +2396,11 @@
           "scope": "namespace",
           "dependencies": [],
           "retention": {
-            "policy": "external",
+            "policy": "ephemeral",
             "days": 0
           },
           "backup_restore_owner": "none",
-          "delete_behavior": "retain",
+          "delete_behavior": "delete",
           "external_controller": true,
           "secret_reference": {
             "provider": "local-generated",
@@ -2772,6 +2772,31 @@
             "migration_target": "temporal-state",
             "migrations": []
           }
+        },
+        {
+          "id": "temporal-visibility-persistence",
+          "kind": "database",
+          "owner": "database-operator",
+          "scope": "namespace",
+          "dependencies": [
+            "temporal",
+            "temporal-db-secret",
+            "temporal-state"
+          ],
+          "retention": {
+            "policy": "ephemeral",
+            "days": 0
+          },
+          "backup_restore_owner": "none",
+          "delete_behavior": "delete",
+          "external_controller": true,
+          "database": {
+            "database": "temporal_visibility",
+            "schema": "public",
+            "connection_reference": "temporal-db-secret",
+            "migration_target": "temporal-state",
+            "migrations": []
+          }
         }
       ]
     },
@@ -2824,11 +2849,11 @@
           "scope": "namespace",
           "dependencies": [],
           "retention": {
-            "policy": "external",
+            "policy": "ephemeral",
             "days": 0
           },
           "backup_restore_owner": "none",
-          "delete_behavior": "retain",
+          "delete_behavior": "delete",
           "external_controller": true,
           "secret_reference": {
             "provider": "local-generated",
@@ -2847,11 +2872,11 @@
           "scope": "namespace",
           "dependencies": [],
           "retention": {
-            "policy": "external",
+            "policy": "ephemeral",
             "days": 0
           },
           "backup_restore_owner": "none",
-          "delete_behavior": "retain",
+          "delete_behavior": "delete",
           "external_controller": true,
           "secret_reference": {
             "provider": "local-generated",
@@ -2869,11 +2894,11 @@
           "scope": "namespace",
           "dependencies": [],
           "retention": {
-            "policy": "external",
+            "policy": "ephemeral",
             "days": 0
           },
           "backup_restore_owner": "none",
-          "delete_behavior": "retain",
+          "delete_behavior": "delete",
           "external_controller": true,
           "secret_reference": {
             "provider": "local-generated",
@@ -2891,11 +2916,11 @@
           "scope": "namespace",
           "dependencies": [],
           "retention": {
-            "policy": "external",
+            "policy": "ephemeral",
             "days": 0
           },
           "backup_restore_owner": "none",
-          "delete_behavior": "retain",
+          "delete_behavior": "delete",
           "external_controller": true,
           "secret_reference": {
             "provider": "local-generated",
@@ -2913,11 +2938,11 @@
           "scope": "namespace",
           "dependencies": [],
           "retention": {
-            "policy": "external",
+            "policy": "ephemeral",
             "days": 0
           },
           "backup_restore_owner": "none",
-          "delete_behavior": "retain",
+          "delete_behavior": "delete",
           "external_controller": true,
           "secret_reference": {
             "provider": "local-generated",
@@ -2935,11 +2960,11 @@
           "scope": "namespace",
           "dependencies": [],
           "retention": {
-            "policy": "external",
+            "policy": "ephemeral",
             "days": 0
           },
           "backup_restore_owner": "none",
-          "delete_behavior": "retain",
+          "delete_behavior": "delete",
           "external_controller": true,
           "secret_reference": {
             "provider": "local-generated",
@@ -2957,11 +2982,11 @@
           "scope": "namespace",
           "dependencies": [],
           "retention": {
-            "policy": "external",
+            "policy": "ephemeral",
             "days": 0
           },
           "backup_restore_owner": "none",
-          "delete_behavior": "retain",
+          "delete_behavior": "delete",
           "external_controller": true,
           "secret_reference": {
             "provider": "local-generated",
@@ -2981,11 +3006,11 @@
           "scope": "namespace",
           "dependencies": [],
           "retention": {
-            "policy": "external",
+            "policy": "ephemeral",
             "days": 0
           },
           "backup_restore_owner": "none",
-          "delete_behavior": "retain",
+          "delete_behavior": "delete",
           "external_controller": true,
           "secret_reference": {
             "provider": "local-generated",
@@ -3003,11 +3028,11 @@
           "scope": "namespace",
           "dependencies": [],
           "retention": {
-            "policy": "external",
+            "policy": "ephemeral",
             "days": 0
           },
           "backup_restore_owner": "none",
-          "delete_behavior": "retain",
+          "delete_behavior": "delete",
           "external_controller": true,
           "secret_reference": {
             "provider": "local-generated",
@@ -3025,11 +3050,11 @@
           "scope": "namespace",
           "dependencies": [],
           "retention": {
-            "policy": "external",
+            "policy": "ephemeral",
             "days": 0
           },
           "backup_restore_owner": "none",
-          "delete_behavior": "retain",
+          "delete_behavior": "delete",
           "external_controller": true,
           "secret_reference": {
             "provider": "local-generated",
@@ -3047,11 +3072,11 @@
           "scope": "namespace",
           "dependencies": [],
           "retention": {
-            "policy": "external",
+            "policy": "ephemeral",
             "days": 0
           },
           "backup_restore_owner": "none",
-          "delete_behavior": "retain",
+          "delete_behavior": "delete",
           "external_controller": true,
           "secret_reference": {
             "provider": "local-generated",
@@ -5169,11 +5194,11 @@
           "scope": "namespace",
           "dependencies": [],
           "retention": {
-            "policy": "external",
+            "policy": "ephemeral",
             "days": 0
           },
           "backup_restore_owner": "none",
-          "delete_behavior": "retain",
+          "delete_behavior": "delete",
           "external_controller": true,
           "secret_reference": {
             "provider": "local-generated",
@@ -5540,6 +5565,31 @@
           "external_controller": true,
           "database": {
             "database": "temporal",
+            "schema": "public",
+            "connection_reference": "temporal-db-secret",
+            "migration_target": "temporal-state",
+            "migrations": []
+          }
+        },
+        {
+          "id": "temporal-visibility-persistence",
+          "kind": "database",
+          "owner": "database-operator",
+          "scope": "namespace",
+          "dependencies": [
+            "temporal",
+            "temporal-db-secret",
+            "temporal-state"
+          ],
+          "retention": {
+            "policy": "ephemeral",
+            "days": 0
+          },
+          "backup_restore_owner": "none",
+          "delete_behavior": "delete",
+          "external_controller": true,
+          "database": {
+            "database": "temporal_visibility",
             "schema": "public",
             "connection_reference": "temporal-db-secret",
             "migration_target": "temporal-state",
@@ -8313,6 +8363,31 @@
           "external_controller": true,
           "database": {
             "database": "temporal",
+            "schema": "public",
+            "connection_reference": "temporal-db-secret",
+            "migration_target": "temporal-state",
+            "migrations": []
+          }
+        },
+        {
+          "id": "temporal-visibility-persistence",
+          "kind": "database",
+          "owner": "database-operator",
+          "scope": "namespace",
+          "dependencies": [
+            "temporal",
+            "temporal-db-secret",
+            "temporal-state"
+          ],
+          "retention": {
+            "policy": "persistent",
+            "days": 30
+          },
+          "backup_restore_owner": "platform-operator",
+          "delete_behavior": "retain",
+          "external_controller": true,
+          "database": {
+            "database": "temporal_visibility",
             "schema": "public",
             "connection_reference": "temporal-db-secret",
             "migration_target": "temporal-state",

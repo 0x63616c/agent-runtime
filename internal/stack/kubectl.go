@@ -182,8 +182,47 @@ func (adapter KubectlAdapter) Teardown(ctx context.Context, target OperatorTarge
 	if currentNamespace.UID() != plan.NamespaceUID || currentNamespace.labels() != state.Labels {
 		return errors.New("teardown rendered Kubernetes manifests: Namespace changed identity before deletion")
 	}
+	if err := adapter.verifyNamespaceEmpty(ctx, target, manifests.namespace.Metadata.Name); err != nil {
+		return err
+	}
 	if err := adapter.runSuccess(ctx, target, deleteArguments(manifests.namespace), nil); err != nil {
 		return errors.Wrap(err, "teardown rendered Kubernetes Namespace")
+	}
+	return nil
+}
+
+func (adapter KubectlAdapter) verifyNamespaceEmpty(ctx context.Context, target OperatorTarget, namespace string) error {
+	resources := "deployments,statefulsets,jobs,services,ingresses,serviceaccounts,roles,rolebindings,networkpolicies,persistentvolumeclaims,configmaps,resourcequotas,secrets"
+	result, err := adapter.run(ctx, target, []string{"get", resources, "--namespace", namespace, "-o", "json"}, nil)
+	if err != nil {
+		return err
+	}
+	if result.ExitCode != 0 {
+		return kubectlExitError("inventory Namespace before deletion", result.ExitCode)
+	}
+	return verifyNamespaceEmptyForDeletion(result.Output)
+}
+
+func verifyNamespaceEmptyForDeletion(encoded []byte) error {
+	var inventory struct {
+		Items []struct {
+			Kind     string `json:"kind"`
+			Metadata struct {
+				Name string `json:"name"`
+			} `json:"metadata"`
+		} `json:"items"`
+	}
+	if err := json.Unmarshal(encoded, &inventory); err != nil {
+		return errors.Wrap(err, "decode Namespace inventory before deletion")
+	}
+	for _, item := range inventory.Items {
+		if item.Kind == "" || item.Metadata.Name == "" {
+			return errors.New("verify Namespace inventory before deletion: object is missing identity")
+		}
+		if (item.Kind == "ServiceAccount" && item.Metadata.Name == "default") || (item.Kind == "ConfigMap" && item.Metadata.Name == "kube-root-ca.crt") {
+			continue
+		}
+		return errors.Newf("verify Namespace inventory before deletion: undeclared object %s/%s remains", item.Kind, item.Metadata.Name)
 	}
 	return nil
 }

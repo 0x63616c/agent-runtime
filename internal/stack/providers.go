@@ -19,7 +19,13 @@ test "$(mc cat "declared/$1/$2/.agent-runtime-prefix")" = "$2"`
 const teardownBlobScript = `set -eu
 mc alias set declared "$3" "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD" >/dev/null
 mc rm --recursive --force "declared/$1/$2" >/dev/null
-mc rb --force "declared/$1" >/dev/null`
+mc rb "declared/$1" >/dev/null`
+
+const (
+	externalControllerLabel = "agent-runtime.dev/external-controller"
+	bootstrapUIDAnnotation  = "agent-runtime.dev/bootstrap-uid"
+	renderDigestAnnotation  = "agent-runtime.dev/render-digest"
+)
 
 // KubectlDeclaredProviderAdapter reconciles the complete non-Kubernetes portion
 // of a Stack through explicitly declared in-cluster operator workloads.
@@ -54,7 +60,7 @@ func (adapter KubectlDeclaredProviderAdapter) ReconcileDeclared(ctx context.Cont
 		var reconcileErr error
 		switch resource.Kind {
 		case ResourceSecretReference:
-			reconcileErr = adapter.verifySecretReference(ctx, target, document.Namespace, resource)
+			reconcileErr = adapter.verifySecretReference(ctx, target, document, resource)
 		case ResourceDatabase:
 			reconcileErr = adapter.verifyDatabase(ctx, target, document.Namespace, resource, resources)
 		case ResourceOrchestration:
@@ -104,7 +110,19 @@ func (adapter KubectlDeclaredProviderAdapter) TeardownDeclared(ctx context.Conte
 				// Their declared authority is physically contained by identity-bound
 				// Kubernetes storage and is removed by the following Kubernetes plan.
 			case ResourceSecretReference:
-				return nil, errors.Newf("teardown declared provider resource %s: externally controlled secret references cannot be deleted", resource.ID)
+				if resource.SecretReference.Provider != "local-generated" {
+					return nil, errors.Newf("teardown declared provider resource %s: only local-generated secret references can be deleted", resource.ID)
+				}
+				if err := adapter.verifySecretReference(ctx, target, document, resource); err != nil {
+					return nil, errors.Wrapf(err, "teardown declared provider resource %s", resource.ID)
+				}
+				result, err := adapter.run(ctx, target, []string{"delete", "Secret/" + resource.SecretReference.Reference, "--namespace", document.Namespace, "--ignore-not-found=false"}, nil)
+				if err != nil {
+					return nil, errors.Wrapf(err, "teardown declared provider resource %s", resource.ID)
+				}
+				if result.ExitCode != 0 {
+					return nil, errors.Wrapf(kubectlExitError("delete declared local-generated Secret", result.ExitCode), "teardown declared provider resource %s", resource.ID)
+				}
 			}
 		}
 		ids = append(ids, resource.ID)
@@ -121,8 +139,8 @@ func declaredProviderDocument(rendered Rendered) (renderedDocument, map[Resource
 	return document, resourcesByID(document.Resources), nil
 }
 
-func (adapter KubectlDeclaredProviderAdapter) verifySecretReference(ctx context.Context, target OperatorTarget, namespace string, resource Resource) error {
-	result, err := adapter.run(ctx, target, []string{"get", "Secret/" + resource.SecretReference.Reference, "--namespace", namespace, "-o", "json"}, nil)
+func (adapter KubectlDeclaredProviderAdapter) verifySecretReference(ctx context.Context, target OperatorTarget, document renderedDocument, resource Resource) error {
+	result, err := adapter.run(ctx, target, []string{"get", "Secret/" + resource.SecretReference.Reference, "--namespace", document.Namespace, "-o", "json"}, nil)
 	if err != nil {
 		return err
 	}
@@ -130,6 +148,11 @@ func (adapter KubectlDeclaredProviderAdapter) verifySecretReference(ctx context.
 		return kubectlExitError("get declared Secret reference", result.ExitCode)
 	}
 	var secret struct {
+		Metadata struct {
+			UID         string            `json:"uid"`
+			Labels      map[string]string `json:"labels"`
+			Annotations map[string]string `json:"annotations"`
+		} `json:"metadata"`
 		Data map[string]string `json:"data"`
 	}
 	if err := json.Unmarshal(result.Output, &secret); err != nil {
@@ -145,7 +168,71 @@ func (adapter KubectlDeclaredProviderAdapter) verifySecretReference(ctx context.
 	if strings.Join(actual, "\x00") != strings.Join(expected, "\x00") {
 		return errors.New("verify declared Secret reference: key inventory differs from desired state")
 	}
+	if resource.SecretReference.Provider != "local-generated" {
+		return nil
+	}
+	namespaceResult, err := adapter.run(ctx, target, []string{"get", "Namespace/" + document.Namespace, "-o", "json"}, nil)
+	if err != nil {
+		return err
+	}
+	if namespaceResult.ExitCode != 0 {
+		return kubectlExitError("get Namespace for local-generated Secret proof", namespaceResult.ExitCode)
+	}
+	var namespace struct {
+		Metadata struct {
+			UID    string            `json:"uid"`
+			Labels map[string]string `json:"labels"`
+		} `json:"metadata"`
+	}
+	if err := json.Unmarshal(namespaceResult.Output, &namespace); err != nil {
+		return errors.Wrap(err, "decode Namespace for local-generated Secret proof")
+	}
+	expectedNamespaceLabels := map[string]string{partOfLabel: document.Labels.PartOf, stackLabel: document.Stack, profileLabel: string(document.Profile)}
+	if namespace.Metadata.UID == "" || !containsStringMap(namespace.Metadata.Labels, expectedNamespaceLabels) || !onlyExpectedNamespaceLabels(namespace.Metadata.Labels, document.Namespace) {
+		return errors.New("verify local-generated Secret reference: Namespace identity or labels differ from desired state")
+	}
+	expectedSecretLabels := map[string]string{partOfLabel: document.Labels.PartOf, stackLabel: document.Stack, profileLabel: string(document.Profile), externalControllerLabel: "local-generated"}
+	expectedAnnotations := map[string]string{bootstrapUIDAnnotation: namespace.Metadata.UID, renderDigestAnnotation: document.Digest}
+	if secret.Metadata.UID == "" || !equalStringMap(secret.Metadata.Labels, expectedSecretLabels) || !equalStringMap(secret.Metadata.Annotations, expectedAnnotations) {
+		return errors.New("verify local-generated Secret reference: identity binding differs from desired state")
+	}
 	return nil
+}
+
+func equalStringMap(actual, expected map[string]string) bool {
+	if len(actual) != len(expected) {
+		return false
+	}
+	for key, value := range expected {
+		if actual[key] != value {
+			return false
+		}
+	}
+	return true
+}
+
+func containsStringMap(actual, expected map[string]string) bool {
+	for key, value := range expected {
+		if actual[key] != value {
+			return false
+		}
+	}
+	return true
+}
+
+func onlyExpectedNamespaceLabels(labels map[string]string, namespace string) bool {
+	for key, value := range labels {
+		switch key {
+		case partOfLabel, stackLabel, profileLabel:
+			continue
+		case "kubernetes.io/metadata.name":
+			if value == namespace {
+				continue
+			}
+		}
+		return false
+	}
+	return true
 }
 
 func (adapter KubectlDeclaredProviderAdapter) verifyDatabase(ctx context.Context, target OperatorTarget, namespace string, resource Resource, resources map[ResourceID]Resource) error {
@@ -198,6 +285,21 @@ func (adapter KubectlDeclaredProviderAdapter) runBlobScript(ctx context.Context,
 
 func (adapter KubectlDeclaredProviderAdapter) verifyTelemetry(ctx context.Context, target OperatorTarget, namespace string, resource Resource, resources map[ResourceID]Resource) error {
 	service := resources[resource.Telemetry.CollectorService]
+	collector := resources[service.Kubernetes.Selector]
+	if err := adapter.waitForWorkload(ctx, target, namespace, collector.Kubernetes); err != nil {
+		return err
+	}
+	expectedTTL := fmt.Sprintf("%dh", resource.Telemetry.RetentionDays*24)
+	actualTTL := ""
+	for _, variable := range collector.Kubernetes.Environment {
+		if variable.Name == "BADGER_SPAN_STORE_TTL" {
+			actualTTL = variable.Value
+			break
+		}
+	}
+	if actualTTL != expectedTTL {
+		return errors.New("verify declared telemetry pipeline: collector retention differs from desired state")
+	}
 	result, err := adapter.run(ctx, target, []string{"get", "Endpoints/" + service.Kubernetes.Name, "--namespace", namespace, "-o", "json"}, nil)
 	if err != nil {
 		return err

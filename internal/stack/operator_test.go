@@ -138,6 +138,26 @@ var _ = Describe("Audited Kubernetes operator", func() {
 		Expect(audit.records[0].Resources).To(Equal([]stack.ResourceID{"api"}))
 	})
 
+	It("reconciles declared providers even when Kubernetes manifests are unchanged", func() {
+		spec, err := stack.Parse(strings.NewReader(validIdentityStack))
+		Expect(err).NotTo(HaveOccurred())
+		rendered, err := stack.Render(spec, stack.ProfileLocal)
+		Expect(err).NotTo(HaveOccurred())
+		adapter := &fakeKubernetesOperator{}
+		provider := &fakeDeclaredProvider{reconciled: []stack.ResourceID{"notifier-secret"}}
+		audit := &recordedAudit{}
+		operator, err := stack.NewKubernetesOperatorWithProviders(adapter, provider, audit)
+		Expect(err).NotTo(HaveOccurred())
+
+		result, err := operator.Reconcile(context.Background(), stack.OperatorRequest{Actor: "platform-operator", Target: stack.OperatorTarget{Kubeconfig: "/explicit/kubeconfig", Context: "disposable-ci"}}, rendered)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(result.Applied).To(BeFalse())
+		Expect(provider.reconciles).To(Equal(1))
+		Expect(audit.records).To(HaveLen(1))
+		Expect(audit.records[0].Result).To(Equal("reconciled"))
+		Expect(audit.records[0].Resources).To(Equal([]stack.ResourceID{"notifier-secret"}))
+	})
+
 	It("does not mutate when observed state already matches the rendered manifests", func() {
 		spec, err := stack.Parse(strings.NewReader(stackDocument(kubernetesManifestResources, kubernetesManifestResources, kubernetesManifestResources)))
 		Expect(err).NotTo(HaveOccurred())

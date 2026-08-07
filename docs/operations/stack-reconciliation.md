@@ -38,7 +38,8 @@ through stdin rather than argv or logs, and are never retained as evidence.
    apply, so it does not manufacture a conflict with the operator itself.
 4. Review the bounded resource changes and immutable migration pairs.
 5. Run audited `stackctl apply` or `stackctl reconcile`; reconcile applies only
-   when the bounded live diff is non-empty.
+   Kubernetes manifests when the bounded live diff is non-empty, and always
+   reconciles or verifies every declared provider resource.
 6. Re-observe and retain the JSONL audit outcome.
 7. On failure, run audited `stackctl rollback` with an explicit previous Stack
    document. It digest-verifies and executes only rollback artifacts newer than
@@ -54,7 +55,9 @@ before passing the bytes to `psql` over argv-only `kubectl exec`.
 ## Containment-safe teardown
 
 `stack.PlanTeardown` produces no mutation capability. `stackctl teardown`
-then asks its Kubernetes adapter to re-observe and execute that plan. It refuses
+first asks each declared provider adapter to re-observe and execute its owned
+lifecycle, then asks its Kubernetes adapter to re-observe and execute that
+plan. It refuses
 any plan unless:
 
 - Stack, profile, namespace, and rendered digest match;
@@ -67,8 +70,15 @@ Actions are reverse dependency ordered and retain each resource's declared
 `delete`, `tombstone`, or `retain` behavior. The Kubernetes adapter re-fetches
 and compares labels and UID immediately before every deletion, refuses a
 tombstone without a registered containment adapter, and leaves the Namespace
-in place when a Kubernetes object is retained. A cached state file is only a
-locator; it is never teardown authority. A mismatch stops the operation without
+in place when a Kubernetes object is retained. Local/CI `local-generated`
+Secrets are ephemeral/delete resources: their provider verifies exact keys,
+UID, containment/controller labels, bootstrap Namespace UID, and render digest
+before explicit deletion. Production external-provider Secret references stay
+retained. Blob teardown deletes only the declared prefix and refuses to remove
+a non-empty bucket. Immediately before Namespace deletion, the adapter permits
+only Kubernetes' automatic `default` ServiceAccount and
+`kube-root-ca.crt` ConfigMap; any other namespaced object fails closed. A cached
+state file is only a locator; it is never teardown authority. A mismatch stops the operation without
 deleting a sibling Stack, `default`, or cluster-scoped state.
 
 The disposable smoke harness never performs raw Namespace deletion. It invokes

@@ -41,9 +41,9 @@ required.
 | `kubernetes` | Allowlisted namespaced object, immutable workload image, explicit service account/ports/storage, finite compute, bounded RBAC, or default-deny network policy. |
 | `orchestration` | Namespace, finite retention, task-queue prefix, and explicit search-attribute/schedule sets. The current private Temporal adapter reconciles namespace existence and retention; it rejects non-empty search-attribute or schedule sets until those provider mappings are implemented. |
 | `blob` | Bucket/prefix plus declared endpoint and credential-resource references. |
-| `database` | Database/schema, credential-resource reference, and ordered immutable upgrade/rollback migration digests. |
-| `secret_reference` | Provider-owned reference and version only. Literal secret material is not a schema field. |
-| `telemetry` | Declared collector-service reference, port name, and finite retention. |
+| `database` | Database/schema, credential-resource reference, and ordered immutable upgrade/rollback migration digests. Runtime persistence and Temporal primary/visibility persistence are separate explicit declarations. |
+| `secret_reference` | Provider-owned reference and version only. Literal secret material is not a schema field. Local/CI generated references are ephemeral/delete; production external-provider references are retained. |
+| `telemetry` | Declared collector-service reference, port name, and finite retention. Provider verification binds collector TTL to that declaration. |
 
 The renderer emits canonical ResourceID order, canonical nested lists, an
 ownership/lifecycle catalog, per-resource SHA-256 digests, Stack/profile labels,
