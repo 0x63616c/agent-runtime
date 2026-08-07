@@ -17,6 +17,7 @@ go run ./cmd/stackctl manifests --stack-file deploy/production/stack.json --prof
 STATE_DATABASE_DSN=fixture TEMPORAL_AUTH_TOKEN=fixture go run ./cmd/runtime serve --config deploy/production/role-configs/orchestration.json --role orchestration --check
 go run ./cmd/egress-proxy --listen 127.0.0.1:8088 --allowed-target model-provider.example.invalid:443 --check
 docker build --file deploy/production/Dockerfile --tag agent-runtime-role-smoke:local .
+deploy/production/run-container-smoke.sh
 ```
 
 The migration artifacts were verified against the digests referenced by each
@@ -47,6 +48,10 @@ profile of the Stack:
   capabilities, accepted only its declared orchestration credentials, and
   returned `{"role":"orchestration","namespace":"agent-runtime","status":"ready"}`
   from its dynamically bound `/readyz` port before containment-safe removal.
+- `run-container-smoke.sh` builds the same image and starts every declared
+  runtime role with only its role-specific fixture environment keys, plus the
+  separate egress proxy. This prevents a permissive all-secrets container
+  fixture from standing in for trust separation.
 
 ## Remaining acceptance evidence
 
