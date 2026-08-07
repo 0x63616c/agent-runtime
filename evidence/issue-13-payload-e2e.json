@@ -1,23 +1,45 @@
 {
   "schema_version": 1,
   "issue": 13,
-  "observed_at_utc": "2026-08-07T05:31:07Z",
-  "tested_revision": "86ad7511e00a2a5f2df862b9d718b6a5ed3f5acd",
-  "scope": "M2 reusable Temporal payload and immutable S3-compatible blob pipeline",
+  "started_at_utc": "2026-08-07T06:39:51Z",
+  "observed_at_utc": "2026-08-07T06:41:00Z",
+  "tested_revision": "676f69ecc8fd02260e247cb08e2cae3fa7814753",
+  "review_reference": {
+    "revision": "d834cc3105347a9cc5a62ff7567fb2d2b7a030b3",
+    "artifacts": [
+      "docs/reviews/m2-payload-spec-review.md",
+      "docs/reviews/m2-payload-standards-review.md"
+    ],
+    "verdict": "PASS - 0 P0, 0 P1, 0 P2 findings"
+  },
+  "scope": "Terminal local acceptance for the reviewed M2 Temporal payload and immutable S3-compatible blob pipeline",
   "commands": [
-    "go test -race ./temporalpayload/... ./internal/temporalpayloadruntime ./tests/architecture",
+    "just check",
+    "go test -tags=integration ./internal/temporalpayloadruntime -run '^TestFactoryWorkerExchangesEveryPayloadRepresentationAgainstTemporal$' -count=1",
     "deploy/temporalpayload/minio/run-integration.sh",
-    "docker ps/network/volume label inspection for the disposable Compose project"
+    "docker ps -a --filter 'label=com.docker.compose.project=agent-runtime-payload-12716-22443' --format '{{.ID}}'",
+    "docker network ls --filter 'label=com.docker.compose.project=agent-runtime-payload-12716-22443' --format '{{.ID}}'",
+    "docker volume ls --filter 'label=com.docker.compose.project=agent-runtime-payload-12716-22443' --format '{{.Name}}'",
+    "just docs-check"
   ],
   "results": {
-    "codec_and_architecture": "passed",
-    "real_minio_protocol": "passed",
-    "concurrent_identical_create": "passed",
-    "conflicting_same_key_rejected": "passed",
-    "bounded_read_and_integrity": "passed",
-    "authenticated_ui_inspection": "passed",
-    "startup_compatibility_round_trip": "passed",
-    "cleanup": "no container, network, or volume remained for project agent-runtime-payload-16311-22207"
+    "clean_detached_checkout_before_and_after": "passed",
+    "repository_check_race_vet_no_real_wait_and_ledger_validation": "passed",
+    "real_temporal_inline_zstd_remote_exchange": "passed",
+    "independent_public_codec_and_authorized_ui_inspection": "passed",
+    "real_minio_protocol_and_s3_adapter": "passed",
+    "minio_concurrent_identical_create_and_conflicting_key_rejection": "passed",
+    "minio_project": "agent-runtime-payload-12716-22443",
+    "minio_cleanup": {
+      "containers_remaining": 0,
+      "networks_remaining": 0,
+      "volumes_remaining": 0
+    },
+    "documentation": "passed; generated docs current, typecheck/build passed, and the high-severity audit gate passed; npm reported 18 moderate advisories"
   },
-  "redaction": "No generated credentials, payload bodies, blob keys, authorization values, or container logs are retained."
+  "limitations": [
+    "This is local acceptance evidence only; it does not claim hosted CI.",
+    "M2 ledger rows remain in_progress and no milestone notification is authorized by this artifact."
+  ],
+  "redaction": "No generated credentials, payload bodies, blob keys, authorization values, container logs, or unbounded command output are retained."
 }

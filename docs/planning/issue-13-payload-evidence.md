@@ -1,9 +1,12 @@
 # Issue #13 evidence — Temporal payload/blob pipeline (M2)
 
-Status: implementation evidence only. The retained MinIO artifact records one
-bounded S3 integration run; it must not be reused as proof for unrelated
-handler, worker, GC, or two-consumer requirements. Ledger promotion requires
-the exact checked revision and the acceptance proof for each row.
+Status: terminal local acceptance evidence for reviewed implementation revision
+`676f69ecc8fd02260e247cb08e2cae3fa7814753`. The bounded machine-readable
+artifact records a clean repository check, real Temporal all-representation
+exchange, disposable MinIO/S3 integration and cleanup, and documentation check.
+Independent review revision `d834cc3105347a9cc5a62ff7567fb2d2b7a030b3`
+records PASS with no P0/P1/P2 findings. This does not claim hosted CI or promote
+the ledger; every M2 row remains `in_progress` until separately authorized.
 
 ## Implemented evidence
 
@@ -32,12 +35,11 @@ the exact checked revision and the acceptance proof for each row.
 ## Commands and expected proof
 
 ```text
-go test -race ./temporalpayload/... ./internal/temporalpayloadruntime
-go test -tags=integration ./temporalpayload/... ./internal/temporalpayloadruntime
-go test ./tests/architecture
+just check
+go test -tags=integration ./internal/temporalpayloadruntime -run '^TestFactoryWorkerExchangesEveryPayloadRepresentationAgainstTemporal$' -count=1
 deploy/temporalpayload/minio/run-integration.sh
-go vet ./temporalpayload/... ./internal/temporalpayloadruntime
-git diff --check
+docker container/network/volume label inspection for the disposable Compose project
+just docs-check
 ```
 
 The MinIO harness uses the pinned disposable service in
