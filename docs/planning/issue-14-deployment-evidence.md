@@ -75,7 +75,8 @@ profile of the Stack:
   dependency/secret entitlement validation, and a health/readiness composition
   path.
 - The model role must use a finite-target egress proxy; the proxy rejects
-  undeclared targets and private/loopback resolution before dialing.
+  undeclared targets and the complete reviewed IANA IPv4/IPv6 special-purpose
+  address inventory before dialing.
 - The production desired state declares Secret references rather than values,
   role replicas, service accounts, default-deny NetworkPolicies, explicit
   ingress routing, Temporal namespace retention, blob prefix, telemetry, and

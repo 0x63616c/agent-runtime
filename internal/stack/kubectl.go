@@ -69,6 +69,36 @@ func (adapter KubectlAdapter) Apply(ctx context.Context, target OperatorTarget, 
 	return adapter.Observe(ctx, target, manifests)
 }
 
+// BootstrapNamespace atomically creates only an absent rendered Namespace and then re-observes its identity.
+func (adapter KubectlAdapter) BootstrapNamespace(ctx context.Context, target OperatorTarget, manifests KubernetesManifests) (KubernetesNamespaceObservation, error) {
+	result, err := adapter.run(ctx, target, []string{"get", "Namespace/" + manifests.namespace.Metadata.Name, "--ignore-not-found=true", "-o", "json"}, nil)
+	if err != nil {
+		return KubernetesNamespaceObservation{}, err
+	}
+	if result.ExitCode != 0 {
+		return KubernetesNamespaceObservation{}, kubectlExitError("get Namespace for bootstrap", result.ExitCode)
+	}
+	if len(bytes.TrimSpace(result.Output)) != 0 {
+		return KubernetesNamespaceObservation{}, errors.New("bootstrap rendered Kubernetes Namespace: refuse pre-existing Namespace")
+	}
+	encoded, err := json.Marshal(manifests.namespace)
+	if err != nil {
+		return KubernetesNamespaceObservation{}, errors.Wrap(err, "encode rendered Kubernetes Namespace")
+	}
+	if err := adapter.runSuccess(ctx, target, []string{"create", "--field-manager=agent-runtime-stackctl", "-f", "-"}, append(encoded, '\n')); err != nil {
+		return KubernetesNamespaceObservation{}, errors.Wrap(err, "bootstrap rendered Kubernetes Namespace")
+	}
+	observed, err := adapter.observeManifest(ctx, target, manifests.namespace)
+	if err != nil {
+		return KubernetesNamespaceObservation{}, errors.Wrap(err, "observe bootstrapped Kubernetes Namespace")
+	}
+	expected := OwnershipLabels{PartOf: "agent-runtime", Stack: manifests.stack, Profile: manifests.profile}
+	if observed.UID() == "" || observed.labels() != expected {
+		return KubernetesNamespaceObservation{}, errors.New("observe bootstrapped Kubernetes Namespace: containment labels or UID do not match")
+	}
+	return KubernetesNamespaceObservation{Namespace: manifests.namespace.Metadata.Name, UID: observed.UID(), Labels: observed.labels(), RenderDigest: manifests.digest}, nil
+}
+
 // Observe reads every expected object UID and containment label without mutation.
 func (adapter KubectlAdapter) Observe(ctx context.Context, target OperatorTarget, manifests KubernetesManifests) (KubernetesObservation, error) {
 	state, err := adapter.observeState(ctx, target, manifests)

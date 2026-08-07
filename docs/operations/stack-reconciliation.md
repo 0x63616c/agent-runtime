@@ -20,9 +20,18 @@ It passes kubeconfig/context as argv to `kubectl`; it does not read
 current-context or ambient credential selection. Provider discovery can report
 drift but cannot widen desired state.
 
+For a disposable local proof, audited `stackctl bootstrap` first uses an
+atomic Kubernetes create to establish only the absent rendered Namespace. It
+fails if the name already exists and retains the new UID, exact containment
+labels, and rendered digest. The declared `local-generated` Secret controller
+may then populate exactly the declared key inventories before full apply.
+Secret values are generated per run, remain in mode-0600 temporary files, flow
+through stdin rather than argv or logs, and are never retained as evidence.
+
 ## Reconcile and rollback procedure
 
-1. Run `stackctl preflight` for declared, read-only prerequisites.
+1. Run `stackctl preflight` with the absolute kubeconfig and explicit context
+   that will be passed unchanged to the audited action.
 2. Render the selected profile and inspect `stackctl manifests` output.
 3. Run audited `stackctl observe` and `stackctl diff-live` with the explicit
    operator target. `diff-live` uses the same server-side field manager as
@@ -61,6 +70,12 @@ tombstone without a registered containment adapter, and leaves the Namespace
 in place when a Kubernetes object is retained. A cached state file is only a
 locator; it is never teardown authority. A mismatch stops the operation without
 deleting a sibling Stack, `default`, or cluster-scoped state.
+
+The disposable smoke harness never performs raw Namespace deletion. It invokes
+teardown only after full apply returned the exact declared Kubernetes resource
+set. If bootstrap or apply stops before that checkpoint, or any UID, label,
+digest, provider resource, or declared object later differs, the Namespace is
+retained for explicit operator inspection instead of being guessed safe.
 
 ## Prerequisite failure
 

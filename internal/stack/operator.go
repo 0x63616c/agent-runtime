@@ -15,6 +15,8 @@ var operatorActorPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9@._-]{0,127}$`)
 type OperatorAction string
 
 const (
+	// OperatorActionBootstrap atomically creates and records only an absent rendered Namespace.
+	OperatorActionBootstrap OperatorAction = "bootstrap"
 	// OperatorActionApply applies reviewed Kubernetes manifests.
 	OperatorActionApply OperatorAction = "apply"
 	// OperatorActionObserve reads provider identity without mutation.
@@ -53,6 +55,18 @@ type KubernetesObservation struct {
 	ObjectIDs []ResourceID
 }
 
+// KubernetesNamespaceObservation binds a newly bootstrapped Namespace to reviewed desired state.
+type KubernetesNamespaceObservation struct {
+	// Namespace is the exact rendered Namespace name.
+	Namespace string `json:"namespace"`
+	// UID is the provider-assigned immutable object identity.
+	UID ObservedUID `json:"uid"`
+	// Labels are the complete containment identity re-observed after creation.
+	Labels OwnershipLabels `json:"labels"`
+	// RenderDigest binds the observation to the canonical Stack profile.
+	RenderDigest string `json:"render_digest"`
+}
+
 // KubernetesDifference contains provider-observed bounded manifest drift.
 type KubernetesDifference struct {
 	// Changes are sorted Stack resource changes. Empty means the provider matches desired manifests.
@@ -61,6 +75,8 @@ type KubernetesDifference struct {
 
 // KubernetesOperatorAdapter performs provider effects only when explicitly called by KubernetesOperator.
 type KubernetesOperatorAdapter interface {
+	// BootstrapNamespace atomically creates only an absent rendered Namespace and re-observes its identity.
+	BootstrapNamespace(context.Context, OperatorTarget, KubernetesManifests) (KubernetesNamespaceObservation, error)
 	// Apply applies one canonical manifest set and returns its re-observed identities.
 	Apply(context.Context, OperatorTarget, KubernetesManifests) (KubernetesObservation, error)
 	// Observe reads the concrete provider objects for one canonical manifest set.
@@ -111,6 +127,10 @@ type OperatorAuditRecord struct {
 	Result string `json:"result"`
 	// Resources is a bounded sorted affected resource identity list.
 	Resources []ResourceID `json:"resources,omitempty"`
+	// NamespaceUID is retained only for bootstrap, proving which new Namespace was created.
+	NamespaceUID ObservedUID `json:"namespace_uid,omitempty"`
+	// NamespaceLabels are retained only for bootstrap and bind its containment identity.
+	NamespaceLabels *OwnershipLabels `json:"namespace_labels,omitempty"`
 }
 
 // OperatorAuditSink retains each operator result outside runtime startup.
@@ -172,6 +192,32 @@ func NewKubernetesOperator(adapter KubernetesOperatorAdapter, audit OperatorAudi
 		return KubernetesOperator{}, errors.New("construct Kubernetes operator: audit sink is required")
 	}
 	return KubernetesOperator{adapter: adapter, audit: audit}, nil
+}
+
+// Bootstrap atomically creates only the rendered Namespace after proving it is absent.
+// External controllers may then populate exact declared Secret references before Apply.
+func (operator KubernetesOperator) Bootstrap(ctx context.Context, request OperatorRequest, rendered Rendered) (KubernetesNamespaceObservation, error) {
+	manifests, document, err := operator.prepare(ctx, request, rendered)
+	if err != nil {
+		return KubernetesNamespaceObservation{}, err
+	}
+	observation, bootstrapErr := operator.adapter.BootstrapNamespace(ctx, request.Target, manifests)
+	if bootstrapErr != nil {
+		return KubernetesNamespaceObservation{}, operator.recordFailure(ctx, request, document, OperatorActionBootstrap, bootstrapErr)
+	}
+	expectedLabels := OwnershipLabels{PartOf: document.Labels.PartOf, Stack: document.Labels.Stack, Profile: document.Labels.Profile}
+	if observation.Namespace != document.Namespace || observation.UID == "" || observation.Labels != expectedLabels || observation.RenderDigest != document.Digest {
+		return KubernetesNamespaceObservation{}, operator.recordFailure(ctx, request, document, OperatorActionBootstrap, errors.New("namespace observation does not match rendered desired state"))
+	}
+	record := OperatorAuditRecord{
+		Action: OperatorActionBootstrap, Actor: request.Actor, Context: request.Target.Context,
+		Stack: document.Stack, Profile: document.Profile, Digest: document.Digest, Result: "bootstrapped",
+		Resources: []ResourceID{"namespace"}, NamespaceUID: observation.UID, NamespaceLabels: &observation.Labels,
+	}
+	if err := operator.audit.Append(ctx, record); err != nil {
+		return KubernetesNamespaceObservation{}, errors.Wrap(err, "retain Kubernetes operator bootstrap audit record")
+	}
+	return observation, nil
 }
 
 // Apply renders and applies one reviewed Stack profile as an explicit audited operator action.

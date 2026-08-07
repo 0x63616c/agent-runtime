@@ -23,6 +23,10 @@ type fakeKubernetesOperator struct {
 	teardowns int
 }
 
+func (*fakeKubernetesOperator) BootstrapNamespace(_ context.Context, _ stack.OperatorTarget, _ stack.KubernetesManifests) (stack.KubernetesNamespaceObservation, error) {
+	return stack.KubernetesNamespaceObservation{}, nil
+}
+
 type fakeDeclaredProvider struct {
 	reconciled []stack.ResourceID
 	tornDown   []stack.ResourceID

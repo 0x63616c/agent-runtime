@@ -1,77 +1,173 @@
 #!/usr/bin/env bash
-# Runs the explicit disposable self-hosted proof. Fixture secrets are created
-# only in the named disposable namespace and are deleted with that namespace.
+# Runs the explicit disposable self-hosted proof through the audited Stack
+# operator. It never deletes or relabels a namespace that existed before this run.
 set -euo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-namespace="agent-runtime"
+cd "$root"
 stack_file="$root/deploy/production/stack.json"
-kubeconfig="${AGENT_RUNTIME_SMOKE_KUBECONFIG:?set an explicit kubeconfig path}"
-context="${AGENT_RUNTIME_SMOKE_CONTEXT:-orbstack}"
-audit_file="${AGENT_RUNTIME_SMOKE_AUDIT:?set an explicit audit file path}"
+stack_name="agent-runtime"
+profile="local"
+namespace="ar-agent-runtime"
+kubeconfig="${AGENT_RUNTIME_SMOKE_KUBECONFIG:?set an explicit absolute kubeconfig path}"
+context="${AGENT_RUNTIME_SMOKE_CONTEXT:?set an explicit Kubernetes context}"
+audit_file="${AGENT_RUNTIME_SMOKE_AUDIT:?set an explicit absolute audit file path}"
+
+if [[ "$kubeconfig" != /* || "$audit_file" != /* ]]; then
+  echo "smoke kubeconfig and audit file paths must be absolute" >&2
+  exit 1
+fi
+for executable in jq kubectl openssl; do
+  command -v "$executable" >/dev/null || {
+    echo "required smoke executable is unavailable: $executable" >&2
+    exit 1
+  }
+done
+
+secret_dir="$(mktemp -d)"
+bootstrap_complete=false
+apply_complete=false
+
+operator_arguments=(
+  --stack-file "$stack_file"
+  --stack "$stack_name"
+  --profile "$profile"
+  --kubeconfig "$kubeconfig"
+  --context "$context"
+  --actor issue-14-smoke
+  --audit-file "$audit_file"
+  --migration-root "$root/deploy/production"
+)
 
 cleanup() {
-  kubectl --kubeconfig "$kubeconfig" --context "$context" delete namespace "$namespace" --ignore-not-found --wait=true --timeout=120s
-  kubectl --kubeconfig "$kubeconfig" --context "$context" wait --for=delete "namespace/$namespace" --timeout=120s 2>/dev/null || true
+  local original_status=$?
+  local cleanup_status=0
+  set +e
+  if [[ "$apply_complete" == true ]]; then
+    go run "$root/cmd/stackctl" teardown "${operator_arguments[@]}" >/dev/null
+    cleanup_status=$?
+    if [[ $cleanup_status -ne 0 ]]; then
+      echo "audited teardown refused cleanup; retained $namespace for inspection" >&2
+    fi
+  elif [[ "$bootstrap_complete" == true ]]; then
+    echo "full desired state was not observed; retained $namespace for inspection" >&2
+  fi
+  rm -rf -- "$secret_dir"
+  trap - EXIT
+  if [[ $original_status -ne 0 ]]; then
+    exit "$original_status"
+  fi
+  exit "$cleanup_status"
 }
 trap cleanup EXIT
 
-cleanup
+# Preflight selects this exact kubeconfig/context. Bootstrap then uses create,
+# not apply, so a race or any pre-existing namespace fails without takeover.
+go run "$root/cmd/stackctl" preflight \
+  --stack-file "$stack_file" --profile "$profile" \
+  --kubeconfig "$kubeconfig" --context "$context" >/dev/null
+bootstrap_result="$(go run "$root/cmd/stackctl" bootstrap "${operator_arguments[@]}")"
+bootstrap_complete=true
+bootstrap_uid="$(printf '%s' "$bootstrap_result" | jq -er '.uid')"
+render_digest="$(printf '%s' "$bootstrap_result" | jq -er '.render_digest')"
 
-go run "$root/cmd/stackctl" manifests --stack-file "$stack_file" --profile production |
-  jq '{apiVersion,kind,items:[.items[0]]}' |
-  kubectl --kubeconfig "$kubeconfig" --context "$context" apply -f -
+rendered="$(go run "$root/cmd/stackctl" render --stack-file "$stack_file" --profile "$profile")"
+while IFS=$'\t' read -r secret_name secret_key; do
+  directory="$secret_dir/$secret_name"
+  mkdir -p "$directory"
+  openssl rand -hex 32 >"$directory/$secret_key"
+  chmod 600 "$directory/$secret_key"
+done < <(printf '%s' "$rendered" | jq -r '
+  .resources[] |
+  select(.kind == "secret_reference" and .secret_reference.provider == "local-generated") |
+  .secret_reference.reference as $name |
+  .secret_reference.keys[] |
+  [$name, .] | @tsv
+')
 
-secret() {
-  kubectl --kubeconfig "$kubeconfig" --context "$context" -n "$namespace" create secret generic "$1" "${@:2}" --dry-run=client -o json |
-    kubectl --kubeconfig "$kubeconfig" --context "$context" apply -f -
+secret_reference() {
+  printf '%s' "$rendered" | jq -er --arg id "$1" '.resources[] | select(.id == $id) | .secret_reference.reference'
 }
-secret agent-runtime-state-db-secret --from-literal=POSTGRES_PASSWORD=fixture-password --from-literal=STATE_DATABASE_DSN='postgres://postgres:fixture-password@state:5432/agent_runtime?sslmode=disable'
-secret agent-runtime-temporal-auth-secret --from-literal=TEMPORAL_AUTH_TOKEN=fixture
-secret agent-runtime-conversation-secret --from-literal=CONVERSATION_ACCESS_TOKEN=fixture
-secret agent-runtime-model-secret --from-literal=MODEL_API_KEY=fixture
-secret agent-runtime-tool-broker-secret --from-literal=TOOL_BROKER_TOKEN=fixture
-secret agent-runtime-sandbox-control-secret --from-literal=SANDBOX_CONTROL_TOKEN=fixture
-secret agent-runtime-blob-storage-secret --from-literal=BLOB_STORAGE_CREDENTIAL=fixture --from-literal=MINIO_ROOT_USER=minioadmin --from-literal=MINIO_ROOT_PASSWORD=minioadmin
-secret agent-runtime-codec-blob-secret --from-literal=CODEC_BLOB_CREDENTIAL=fixture
-secret agent-runtime-sandbox-host-ca-secret --from-literal=SANDBOX_HOST_CA=fixture
-secret agent-runtime-sandbox-state-secret --from-literal=SANDBOX_STATE_DSN=fixture
-secret agent-runtime-sandbox-host-identity-secret --from-literal=SANDBOX_HOST_IDENTITY=fixture
+state_secret="$(secret_reference state-db-secret)"
+temporal_database_secret="$(secret_reference temporal-db-secret)"
+sandbox_state_secret="$(secret_reference sandbox-state-secret)"
+state_password="$(<"$secret_dir/$state_secret/POSTGRES_PASSWORD")"
+printf 'postgres://postgres:%s@state:5432/agent_runtime?sslmode=disable' "$state_password" >"$secret_dir/$state_secret/STATE_DATABASE_DSN"
+printf 'postgres://postgres:%s@state:5432/agent_runtime?sslmode=disable' "$state_password" >"$secret_dir/$sandbox_state_secret/SANDBOX_STATE_DSN"
+chmod 600 "$secret_dir/$state_secret/STATE_DATABASE_DSN" "$secret_dir/$sandbox_state_secret/SANDBOX_STATE_DSN"
+test -s "$secret_dir/$temporal_database_secret/POSTGRES_PASSWORD"
 
-apply_result="$(go run "$root/cmd/stackctl" apply --stack-file "$stack_file" --stack agent-runtime --profile production --kubeconfig "$kubeconfig" --context "$context" --actor issue-14-smoke --audit-file "$audit_file" --migration-root "$root/deploy/production")"
-echo "$apply_result"
-expected_ids="$(go run "$root/cmd/stackctl" render --stack-file "$stack_file" --profile production | jq -c '[.resources[] | select(.kind == "kubernetes") | .id] | sort')"
+# This is the declared local-generated external Secret controller. Secret
+# values flow through stdin from mode-0600 files; no value enters argv or logs.
+for directory in "$secret_dir"/*; do
+  secret_name="$(basename "$directory")"
+  from_files=()
+  for secret_file in "$directory"/*; do
+    from_files+=("--from-file=$(basename "$secret_file")=$secret_file")
+  done
+  kubectl --kubeconfig "$kubeconfig" --context "$context" --namespace "$namespace" \
+    create secret generic "$secret_name" "${from_files[@]}" --dry-run=client -o json |
+    jq \
+      --arg uid "$bootstrap_uid" \
+      --arg digest "$render_digest" \
+      '.metadata.labels = {
+        "app.kubernetes.io/part-of":"agent-runtime",
+        "agent-runtime.dev/stack":"agent-runtime",
+        "agent-runtime.dev/profile":"local",
+        "agent-runtime.dev/external-controller":"local-generated"
+      } | .metadata.annotations = {
+        "agent-runtime.dev/bootstrap-uid":$uid,
+        "agent-runtime.dev/render-digest":$digest
+      }' |
+    kubectl --kubeconfig "$kubeconfig" --context "$context" apply -f - >/dev/null
+done
+
+apply_result="$(go run "$root/cmd/stackctl" apply "${operator_arguments[@]}")"
+expected_ids="$(printf '%s' "$rendered" | jq -c '[.resources[] | select(.kind == "kubernetes") | .id] | sort')"
 observed_ids="$(printf '%s' "$apply_result" | jq -c '.ObjectIDs | sort')"
 if [[ "$observed_ids" != "$expected_ids" ]]; then
-  echo "observed resource IDs do not exactly match desired state" >&2
+  echo "observed Kubernetes resource IDs do not exactly match desired state" >&2
   exit 1
 fi
-echo "all 50 desired Kubernetes resource IDs were observed exactly"
+apply_complete=true
+echo "all declared Kubernetes and provider resource IDs were reconciled exactly"
 
-go run "$root/cmd/stackctl" manifests --stack-file "$stack_file" --profile production |
-  jq -e '[.items[] | select(.kind == "Deployment")] | length == 14' >/dev/null
-go run "$root/cmd/stackctl" manifests --stack-file "$stack_file" --profile production |
-  jq -r '.items[] | select(.kind == "Deployment") | .metadata.name' |
-  while IFS= read -r deployment; do
-    kubectl --kubeconfig "$kubeconfig" --context "$context" -n "$namespace" rollout status "deployment/$deployment" --timeout=120s >/dev/null
-  done
-echo "all 14 declared Deployments are Ready"
-kubectl --kubeconfig "$kubeconfig" --context "$context" -n "$namespace" get pods -o json |
-  jq -e '(.items | length) == 17 and all(.items[]; .status.phase == "Running" and ([.status.containerStatuses[]?.ready] | all))' >/dev/null
-echo "all 17 expected pods are Running and Ready"
+manifests="$(go run "$root/cmd/stackctl" manifests --stack-file "$stack_file" --profile "$profile")"
+deployments="$(printf '%s' "$manifests" | jq -r '.items[] | select(.kind == "Deployment") | .metadata.name')"
+deployment_count="$(printf '%s' "$manifests" | jq '[.items[] | select(.kind == "Deployment")] | length')"
+while IFS= read -r deployment; do
+  [[ -n "$deployment" ]] || continue
+  kubectl --kubeconfig "$kubeconfig" --context "$context" --namespace "$namespace" \
+    rollout status "deployment/$deployment" --timeout=120s >/dev/null
+done <<<"$deployments"
+echo "all $deployment_count declared Deployments are Ready"
 
-kubectl --kubeconfig "$kubeconfig" --context "$context" -n "$namespace" exec deploy/temporal -- temporal --address 127.0.0.1:7233 --command-timeout 30s --output json operator namespace describe --namespace agent-runtime |
-  jq -e '.config.workflowExecutionRetentionTtl == "2592000s"' >/dev/null
-echo "Temporal namespace retention is exactly 30 days"
+expected_pods="$(printf '%s' "$manifests" | jq '[.items[] | select(.kind == "Deployment") | (.spec.replicas // 1)] | add')"
+kubectl --kubeconfig "$kubeconfig" --context "$context" --namespace "$namespace" get pods \
+  -l 'app.kubernetes.io/part-of=agent-runtime,agent-runtime.dev/stack=agent-runtime,agent-runtime.dev/profile=local' -o json |
+  jq -e --argjson expected "$expected_pods" '
+    (.items | length) == $expected and
+    all(.items[]; .status.phase == "Running" and ([.status.containerStatuses[]?.ready] | all))
+  ' >/dev/null
+echo "all $expected_pods expected pods are Running and Ready"
 
-kubectl --kubeconfig "$kubeconfig" --context "$context" -n "$namespace" port-forward service/blob 9000:9000 >/dev/null 2>&1 &
-forward_pid=$!
-trap 'kill "$forward_pid" 2>/dev/null || true; cleanup' EXIT
-mc_image="minio/mc@sha256:aead63c77f9db9107f1696fb08ecb0faeda23729cde94b0f663edf4fe09728e3"
-curl --fail --silent --show-error --retry 10 --retry-connrefused --max-time 30 http://127.0.0.1:9000/minio/health/live >/dev/null
-blob_value="$(docker run --rm --entrypoint /bin/sh "$mc_image" -c 'mc alias set local http://host.docker.internal:9000 minioadmin minioadmin >/dev/null && mc mb local/issue14-smoke >/dev/null && printf smoke | mc pipe local/issue14-smoke/proof >/dev/null && mc cat local/issue14-smoke/proof && mc rm local/issue14-smoke/proof >/dev/null && mc rb local/issue14-smoke >/dev/null')"
+temporal_namespace="$(printf '%s' "$rendered" | jq -er '.resources[] | select(.kind == "orchestration") | .orchestration.namespace')"
+retention_days="$(printf '%s' "$rendered" | jq -er '.resources[] | select(.kind == "orchestration") | .orchestration.retention_days')"
+expected_retention_seconds=$((retention_days * 24 * 60 * 60))
+kubectl --kubeconfig "$kubeconfig" --context "$context" --namespace "$namespace" exec deploy/temporal -- \
+  temporal --address 127.0.0.1:7233 --command-timeout 30s --output json \
+  operator namespace describe --namespace "$temporal_namespace" |
+  jq -e --arg expected "${expected_retention_seconds}s" '.config.workflowExecutionRetentionTtl == $expected' >/dev/null
+echo "Temporal namespace retention matches the declared $retention_days days"
+
+blob_bucket="$(printf '%s' "$rendered" | jq -er '.resources[] | select(.kind == "blob") | .blob.bucket')"
+blob_prefix="$(printf '%s' "$rendered" | jq -er '.resources[] | select(.kind == "blob") | .blob.prefix')"
+# shellcheck disable=SC2016 # Positional and credential variables expand only inside the reconciler pod.
+blob_value="$(kubectl --kubeconfig "$kubeconfig" --context "$context" --namespace "$namespace" exec deploy/blob-reconciler -- \
+  /bin/sh -c 'set -eu; mc alias set declared "$3" "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD" >/dev/null; printf smoke | mc pipe "declared/$1/$2/proof" >/dev/null; mc cat "declared/$1/$2/proof"; mc rm "declared/$1/$2/proof" >/dev/null' \
+  smoke-blob "$blob_bucket" "$blob_prefix" http://blob:9000)"
 if [[ "$blob_value" != "smoke" ]]; then
-  echo "blob round trip returned unexpected content" >&2
+  echo "declared blob round trip returned unexpected content" >&2
   exit 1
 fi
-echo "blob round trip succeeded"
+echo "declared blob prefix write/read/delete round trip succeeded"

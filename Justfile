@@ -3,7 +3,7 @@ set shell := ["bash", "-ceu"]
 # Runs the passing deterministic gate for an incremental main change. Requires just 1.58.0.
 check:
     go run ./cmd/generate-requirement-manifest --check
-    go run ./cmd/afk-evidence -mode validate -file evidence/afk/m0-foundation-local.json
+    for evidence_file in evidence/afk/*.json; do go run ./cmd/afk-evidence -mode validate -file "$evidence_file"; done
     go mod verify
     go test -race ./...
     go vet ./...

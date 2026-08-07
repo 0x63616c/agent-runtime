@@ -56,6 +56,23 @@ var _ = Describe("render and check", func() {
 		}
 	})
 
+	It("requires the full explicit audited target for namespace bootstrap", func() {
+		_, _, _, _, _, err := parseOperatorArguments("bootstrap", []string{"--stack-file", "/stack.json", "--stack", "agent-runtime", "--profile", "local"})
+		Expect(err).To(MatchError(ContainSubstring("--kubeconfig, --context, --actor, --audit-file, and --migration-root are required")))
+
+		request, stackPath, profile, rollbackPath, auditPath, err := parseOperatorArguments("bootstrap", []string{
+			"--stack-file", "/stack.json", "--stack", "agent-runtime", "--profile", "local",
+			"--kubeconfig", "/kubeconfig", "--context", "disposable", "--actor", "smoke-bootstrap",
+			"--audit-file", "/audit.jsonl", "--migration-root", "/migrations",
+		})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(stackPath).To(Equal("/stack.json"))
+		Expect(profile).To(Equal(stack.ProfileLocal))
+		Expect(rollbackPath).To(BeEmpty())
+		Expect(auditPath).To(Equal("/audit.jsonl"))
+		Expect(request.Target).To(Equal(stack.OperatorTarget{Kubeconfig: "/kubeconfig", Context: "disposable", MigrationRoot: "/migrations"}))
+	})
+
 	It("emits canonical role configurations from Stack desired state without a second file source", func() {
 		resources := []stack.Resource{
 			{ID: "api", Kubernetes: &stack.KubernetesResource{Environment: []stack.EnvironmentVariable{{Name: "RUNTIME_ROLE_CONFIG", Value: `{"version":1,"role":"api","namespace":"runtime","listen_address":"127.0.0.1:8080","dependencies":[{"name":"state","endpoint":"http://state:8080"},{"name":"telemetry","endpoint":"http://telemetry:4318"}]}`}}}},

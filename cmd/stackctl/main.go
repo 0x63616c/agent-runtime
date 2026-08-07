@@ -36,7 +36,7 @@ func runWithProbe(ctx context.Context, arguments []string, output io.Writer, pro
 		return errors.Wrap(err, "run stack operator command")
 	}
 	if len(arguments) == 0 {
-		return errors.New("run stack operator command: render, manifests, role-configs, check, diff, preflight, apply, observe, reconcile, rollback, or teardown is required")
+		return errors.New("run stack operator command: render, manifests, role-configs, check, diff, preflight, bootstrap, apply, observe, reconcile, rollback, or teardown is required")
 	}
 	switch arguments[0] {
 	case "render":
@@ -143,7 +143,7 @@ func runWithProbe(ctx context.Context, arguments []string, output io.Writer, pro
 			return errors.New("check stack prerequisites: one or more declared prerequisites failed")
 		}
 		return nil
-	case "apply", "observe", "diff-live", "reconcile", "rollback", "teardown":
+	case "bootstrap", "apply", "observe", "diff-live", "reconcile", "rollback", "teardown":
 		request, stackPath, profile, rollbackPath, auditPath, err := parseOperatorArguments(arguments[0], arguments[1:])
 		if err != nil {
 			return err
@@ -165,6 +165,12 @@ func runWithProbe(ctx context.Context, arguments []string, output io.Writer, pro
 			return err
 		}
 		switch arguments[0] {
+		case "bootstrap":
+			observation, bootstrapErr := operator.Bootstrap(ctx, request.OperatorRequest, rendered)
+			if bootstrapErr != nil {
+				return bootstrapErr
+			}
+			return encodeOperatorResult(output, observation)
 		case "apply":
 			observation, applyErr := operator.Apply(ctx, request.OperatorRequest, rendered)
 			if applyErr != nil {

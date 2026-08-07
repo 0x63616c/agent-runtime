@@ -55,6 +55,13 @@ The model role has no direct provider egress. It reaches a separately deployed
 operator configuration. The proxy permits only exact DNS targets (no wildcard,
 CIDR, or implicit port), strips proxy credentials before ordinary HTTP
 forwarding, and checks the CONNECT destination before opening an HTTPS tunnel.
+Every DNS result is checked against the reviewed IANA
+[IPv4](https://www.iana.org/assignments/iana-ipv4-special-registry/iana-ipv4-special-registry.xhtml)
+and [IPv6](https://www.iana.org/assignments/iana-ipv6-special-registry/iana-ipv6-special-registry.xhtml)
+special-purpose registries before dialing; private, loopback, link-local,
+carrier-grade NAT, documentation, benchmarking, transition, multicast and
+reserved ranges all fail closed, including registry entries that are globally
+reachable for protocol-specific purposes.
 Its own Internet reachability is deliberately a separate network/host policy:
 Kubernetes NetworkPolicy cannot truthfully enforce FQDN domain allowlists, so
 the proxy is the application-layer enforcement point. Provider credentials and
@@ -100,14 +107,17 @@ Before a production rollout, the platform operator must define and test:
 
 ## Running the implemented composition check
 
-The checked-in role documents under
-`deploy/production/role-configs/` deliberately contain endpoint identities and
-environment-key references only. They are not sample Secret values. An
-operator mounts the corresponding external Secret references into the matching
-role process, then validates that exact role:
+Each workload's `RUNTIME_ROLE_CONFIG` value in the typed Stack is the sole role
+configuration source. `stackctl role-configs` extracts those exact canonical
+documents for inspection; there is no separately maintained role-config file
+tree. After the declared external Secret controller injects the matching
+credential environment keys, an operator can validate that exact role:
 
 ```sh
-runtime serve --config deploy/production/role-configs/orchestration.json \
+RUNTIME_ROLE_CONFIG="$(go run ./cmd/stackctl role-configs \
+  --stack-file deploy/production/stack.json --profile production |
+  jq -c '.orchestration')" \
+go run ./cmd/runtime serve --config-env RUNTIME_ROLE_CONFIG \
   --role orchestration --check
 ```
 
@@ -119,7 +129,7 @@ agent API, workers, or sandbox implementation have started.
 
 `deploy/production/stack.json` is the checked-in typed reference Stack. Its
 role/Secret/replica/ingress/NetworkPolicy/migration topology is parsed and
-rendered by the production Stack smoke suite, and the role documents are
+rendered by the production Stack smoke suite, and extracted role documents are
 validated through the same composition seam. Runtime workloads pin the
 attested GHCR image by digest; PostgreSQL, Temporal, MinIO, telemetry, and the
 migration runner are separately pinned third-party workloads. The publisher

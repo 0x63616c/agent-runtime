@@ -77,24 +77,31 @@ go run ./cmd/stackctl render --stack-file <document.json> --profile local
 go run ./cmd/stackctl manifests --stack-file <document.json> --profile local
 go run ./cmd/stackctl check --stack-file <document.json> --profile local --observed <rendered.json>
 go run ./cmd/stackctl diff --stack-file <document.json> --profile local --observed <rendered.json>
-go run ./cmd/stackctl preflight --stack-file <document.json> --profile local
+go run ./cmd/stackctl preflight --stack-file <document.json> --profile local \
+  --kubeconfig </absolute/path/to/kubeconfig> --context <context>
 ```
 
 `render` writes canonical provider-independent desired state and `manifests`
 writes its typed Kubernetes projection. `check` verifies provenance and exact
 digest equality. `diff` accepts only self-consistent rendered input and reports
-bounded added/modified/removed resource IDs. `preflight` performs declared
-read-only executable, Kubernetes-context, architecture, and free-disk probes;
-it returns direct repairs but never applies them.
+bounded added/modified/removed resource IDs. `preflight` requires the same
+absolute kubeconfig and explicit context shape as mutating actions, proves that
+the named context is selectable from that file, then performs declared
+read-only executable, Kubernetes-context, architecture, and free-disk probes.
+It returns direct repairs but never applies them or reads current-context.
 
-`stackctl` also exposes separately audited `apply`, `observe`, `diff-live`,
-`reconcile`, `rollback`, and `teardown` actions. Each requires the exact
+`stackctl` also exposes separately audited `bootstrap`, `apply`, `observe`,
+`diff-live`, `reconcile`, `rollback`, and `teardown` actions. `bootstrap`
+atomically creates only an absent rendered Namespace, then records its
+provider UID, exact containment labels, and Stack digest; it never adopts or
+relabels an existing Namespace. Each audited action requires the exact
 `--stack` identity, `--stack-file`, `--profile`, absolute `--kubeconfig`,
 explicit `--context`, `--actor`, `--audit-file`, and absolute
 `--migration-root`; rollback additionally requires `--rollback-stack-file`.
 It never uses current-context, `KUBECONFIG`, or an inferred migration location.
 The audit record contains only action, actor, context, Stack/profile/digest,
-result, and bounded resource IDs.
+result, and bounded resource IDs; the bootstrap record additionally contains
+the newly assigned Namespace UID and its non-secret containment labels.
 
 For a Database declaration, each migration also names reviewed relative upgrade
 and rollback artifact paths and their SHA-256 digests, plus the declared
