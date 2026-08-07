@@ -2235,7 +2235,7 @@
           "scope": "namespace",
           "dependencies": [
             "state-db-secret",
-            "migration-runner"
+            "state"
           ],
           "retention": {
             "policy": "persistent",
@@ -2248,7 +2248,7 @@
             "database": "agent_runtime",
             "schema": "runtime",
             "connection_reference": "state-db-secret",
-            "migration_target": "migration-runner",
+            "migration_target": "state",
             "migrations": [
               {
                 "version": 1,
@@ -4516,7 +4516,7 @@
           "scope": "namespace",
           "dependencies": [
             "state-db-secret",
-            "migration-runner"
+            "state"
           ],
           "retention": {
             "policy": "persistent",
@@ -4529,7 +4529,7 @@
             "database": "agent_runtime",
             "schema": "runtime",
             "connection_reference": "state-db-secret",
-            "migration_target": "migration-runner",
+            "migration_target": "state",
             "migrations": [
               {
                 "version": 1,
@@ -6797,7 +6797,7 @@
           "scope": "namespace",
           "dependencies": [
             "state-db-secret",
-            "migration-runner"
+            "state"
           ],
           "retention": {
             "policy": "persistent",
@@ -6810,7 +6810,7 @@
             "database": "agent_runtime",
             "schema": "runtime",
             "connection_reference": "state-db-secret",
-            "migration_target": "migration-runner",
+            "migration_target": "state",
             "migrations": [
               {
                 "version": 1,
