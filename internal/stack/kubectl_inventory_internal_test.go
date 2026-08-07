@@ -1,20 +1,28 @@
 package stack
 
 import (
-	"testing"
-
-	"github.com/stretchr/testify/require"
+	. "github.com/onsi/ginkgo/v2"
+	. "github.com/onsi/gomega"
 )
 
-func TestVerifyNamespaceEmptyForDeletion(t *testing.T) {
-	t.Parallel()
+var _ = Describe("Kubectl inventory", func() {
+	Describe("verifyNamespaceEmptyForDeletion", func() {
+		It("accepts the Kubernetes-owned default objects", func() {
+			inventory := []byte(`{"items":[{"kind":"ServiceAccount","metadata":{"name":"default"}},{"kind":"ConfigMap","metadata":{"name":"kube-root-ca.crt"}}]}`)
 
-	allowed := []byte(`{"items":[{"kind":"ServiceAccount","metadata":{"name":"default"}},{"kind":"ConfigMap","metadata":{"name":"kube-root-ca.crt"}}]}`)
-	require.NoError(t, verifyNamespaceEmptyForDeletion(allowed))
+			Expect(verifyNamespaceEmptyForDeletion(inventory)).To(Succeed())
+		})
 
-	foreign := []byte(`{"items":[{"kind":"ServiceAccount","metadata":{"name":"default"}},{"kind":"Secret","metadata":{"name":"foreign"}}]}`)
-	require.ErrorContains(t, verifyNamespaceEmptyForDeletion(foreign), "undeclared object Secret/foreign")
+		It("refuses a foreign object", func() {
+			inventory := []byte(`{"items":[{"kind":"ServiceAccount","metadata":{"name":"default"}},{"kind":"Secret","metadata":{"name":"foreign"}}]}`)
 
-	malformed := []byte(`{"items":[{"kind":"Secret","metadata":{}}]}`)
-	require.ErrorContains(t, verifyNamespaceEmptyForDeletion(malformed), "missing identity")
-}
+			Expect(verifyNamespaceEmptyForDeletion(inventory)).To(MatchError(ContainSubstring("undeclared object Secret/foreign")))
+		})
+
+		It("refuses an object without an identity", func() {
+			inventory := []byte(`{"items":[{"kind":"Secret","metadata":{}}]}`)
+
+			Expect(verifyNamespaceEmptyForDeletion(inventory)).To(MatchError(ContainSubstring("missing identity")))
+		})
+	})
+})

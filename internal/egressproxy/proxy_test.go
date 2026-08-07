@@ -3,11 +3,13 @@ package egressproxy_test
 import (
 	"bufio"
 	"context"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 
 	"github.com/0x63616c/agent-runtime/internal/egressproxy"
 	. "github.com/onsi/ginkgo/v2"
@@ -16,14 +18,17 @@ import (
 
 var _ = Describe("Allowlisted egress proxy", func() {
 	It("forwards only an absolute HTTP request to an exact allowlisted host and port", func() {
-		transport := roundTripperFunc(func(request *http.Request) (*http.Response, error) {
-			Expect(request.URL.String()).To(Equal("http://models.example.invalid:8080/v1/messages"))
-			Expect(request.Header.Get("Proxy-Authorization")).To(BeEmpty())
-			return &http.Response{StatusCode: http.StatusAccepted, Header: http.Header{"X-Upstream": []string{"allowed"}}, Body: io.NopCloser(strings.NewReader("accepted"))}, nil
-		})
+		client, upstream := net.Pipe()
+		responded := respondToHTTP(upstream, http.StatusAccepted, "X-Upstream: allowed\r\n", "accepted")
 		proxy, err := egressproxy.New(egressproxy.Config{
 			AllowedTargets: []egressproxy.Target{{Host: "models.example.invalid", Port: 8080}},
-			Transport:      transport,
+			Resolve: func(context.Context, string) ([]net.IPAddr, error) {
+				return []net.IPAddr{{IP: net.ParseIP("8.8.8.8")}}, nil
+			},
+			DialContext: func(_ context.Context, _ string, address string) (net.Conn, error) {
+				Expect(address).To(Equal("8.8.8.8:8080"))
+				return client, nil
+			},
 		})
 		Expect(err).NotTo(HaveOccurred())
 
@@ -35,16 +40,14 @@ var _ = Describe("Allowlisted egress proxy", func() {
 		Expect(response.Code).To(Equal(http.StatusAccepted))
 		Expect(response.Header().Get("X-Upstream")).To(Equal("allowed"))
 		Expect(response.Body.String()).To(Equal("accepted"))
+		<-responded
 	})
 
-	It("refuses undeclared hosts, ports, proxy credentials, and origin-form requests before transport", func() {
+	It("refuses undeclared hosts, ports, proxy credentials, and origin-form requests before dialing", func() {
 		called := false
 		proxy, err := egressproxy.New(egressproxy.Config{
 			AllowedTargets: []egressproxy.Target{{Host: "models.example.invalid", Port: 443}},
-			Transport: roundTripperFunc(func(*http.Request) (*http.Response, error) {
-				called = true
-				return nil, nil
-			}),
+			DialContext:    func(context.Context, string, string) (net.Conn, error) { called = true; return nil, nil },
 		})
 		Expect(err).NotTo(HaveOccurred())
 		for _, request := range []*http.Request{
@@ -57,6 +60,94 @@ var _ = Describe("Allowlisted egress proxy", func() {
 			Expect(response.Code).To(Equal(http.StatusForbidden))
 		}
 		Expect(called).To(BeFalse())
+	})
+
+	It("does not let a resolver or dial test seam reach a special address through HTTP", func() {
+		for _, address := range []string{"10.0.0.1", "127.0.0.1", "169.254.169.254", "::1", "fc00::1"} {
+			address := address
+			By("refusing IANA special-use address " + address)
+			dialed := false
+			proxy, err := egressproxy.New(egressproxy.Config{
+				AllowedTargets: []egressproxy.Target{{Host: "models.example.invalid", Port: 443}},
+				Resolve: func(context.Context, string) ([]net.IPAddr, error) {
+					return []net.IPAddr{{IP: net.ParseIP(address)}}, nil
+				},
+				DialContext: func(context.Context, string, string) (net.Conn, error) { dialed = true; return nil, nil },
+			})
+			Expect(err).NotTo(HaveOccurred())
+			response := httptest.NewRecorder()
+			proxy.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "http://models.example.invalid:443/v1/messages", nil))
+			Expect(response.Code).To(Equal(http.StatusBadGateway), address)
+			Expect(dialed).To(BeFalse(), address)
+		}
+	})
+
+	It("checks the resolved address again when an HTTP redirect is requested", func() {
+		firstClient, firstUpstream := net.Pipe()
+		responded := respondToHTTP(firstUpstream, http.StatusFound, "Location: http://redirect.example.invalid:8080/token\r\n", "")
+		var dials atomic.Int32
+		proxy, err := egressproxy.New(egressproxy.Config{
+			AllowedTargets: []egressproxy.Target{
+				{Host: "models.example.invalid", Port: 8080},
+				{Host: "redirect.example.invalid", Port: 8080},
+			},
+			Resolve: func(_ context.Context, host string) ([]net.IPAddr, error) {
+				if host == "models.example.invalid" {
+					return []net.IPAddr{{IP: net.ParseIP("8.8.8.8")}}, nil
+				}
+				Expect(host).To(Equal("redirect.example.invalid"))
+				return []net.IPAddr{{IP: net.ParseIP("127.0.0.1")}}, nil
+			},
+			DialContext: func(_ context.Context, _ string, address string) (net.Conn, error) {
+				Expect(address).To(Equal("8.8.8.8:8080"))
+				dials.Add(1)
+				return firstClient, nil
+			},
+		})
+		Expect(err).NotTo(HaveOccurred())
+
+		initial := httptest.NewRecorder()
+		proxy.ServeHTTP(initial, httptest.NewRequest(http.MethodGet, "http://models.example.invalid:8080/v1/messages", nil))
+		Expect(initial.Code).To(Equal(http.StatusFound))
+		Expect(initial.Header().Get("Location")).To(Equal("http://redirect.example.invalid:8080/token"))
+		<-responded
+
+		redirect := httptest.NewRecorder()
+		proxy.ServeHTTP(redirect, httptest.NewRequest(http.MethodGet, "http://redirect.example.invalid:8080/token", nil))
+		Expect(redirect.Code).To(Equal(http.StatusBadGateway))
+		Expect(dials.Load()).To(Equal(int32(1)))
+	})
+
+	It("checks a fresh HTTP resolution before each new upstream connection", func() {
+		firstClient, firstUpstream := net.Pipe()
+		responded := respondToHTTP(firstUpstream, http.StatusOK, "", "first")
+		var resolutions atomic.Int32
+		var dials atomic.Int32
+		proxy, err := egressproxy.New(egressproxy.Config{
+			AllowedTargets: []egressproxy.Target{{Host: "models.example.invalid", Port: 8080}},
+			Resolve: func(context.Context, string) ([]net.IPAddr, error) {
+				if resolutions.Add(1) == 1 {
+					return []net.IPAddr{{IP: net.ParseIP("8.8.8.8")}}, nil
+				}
+				return []net.IPAddr{{IP: net.ParseIP("127.0.0.1")}}, nil
+			},
+			DialContext: func(_ context.Context, _ string, address string) (net.Conn, error) {
+				Expect(address).To(Equal("8.8.8.8:8080"))
+				dials.Add(1)
+				return firstClient, nil
+			},
+		})
+		Expect(err).NotTo(HaveOccurred())
+
+		first := httptest.NewRecorder()
+		proxy.ServeHTTP(first, httptest.NewRequest(http.MethodGet, "http://models.example.invalid:8080/v1/messages", nil))
+		Expect(first.Code).To(Equal(http.StatusOK))
+		<-responded
+		second := httptest.NewRecorder()
+		proxy.ServeHTTP(second, httptest.NewRequest(http.MethodGet, "http://models.example.invalid:8080/v1/messages", nil))
+		Expect(second.Code).To(Equal(http.StatusBadGateway))
+		Expect(resolutions.Load()).To(Equal(int32(2)))
+		Expect(dials.Load()).To(Equal(int32(1)))
 	})
 
 	It("requires a finite exact target inventory", func() {
@@ -137,10 +228,20 @@ var _ = Describe("Allowlisted egress proxy", func() {
 	})
 })
 
-type roundTripperFunc func(*http.Request) (*http.Response, error)
-
-func (function roundTripperFunc) RoundTrip(request *http.Request) (*http.Response, error) {
-	return function(request)
+func respondToHTTP(connection net.Conn, status int, headers, body string) <-chan struct{} {
+	responded := make(chan struct{})
+	go func() {
+		defer GinkgoRecover()
+		defer close(responded)
+		defer func() { _ = connection.Close() }()
+		request, err := http.ReadRequest(bufio.NewReader(connection))
+		Expect(err).NotTo(HaveOccurred())
+		Expect(request.URL.Path).To(Equal("/v1/messages"))
+		Expect(request.Header.Get("Proxy-Authorization")).To(BeEmpty())
+		_, err = io.WriteString(connection, fmt.Sprintf("HTTP/1.1 %d %s\r\n%sContent-Length: %d\r\nConnection: close\r\n\r\n%s", status, http.StatusText(status), headers, len(body), body))
+		Expect(err).NotTo(HaveOccurred())
+	}()
+	return responded
 }
 
 type hijackResponseWriter struct {

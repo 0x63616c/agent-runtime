@@ -54,8 +54,10 @@ The model role has no direct provider egress. It reaches a separately deployed
 `egress-proxy` Service, whose finite host-and-port allowlist is explicit
 operator configuration. The proxy permits only exact DNS targets (no wildcard,
 CIDR, or implicit port), strips proxy credentials before ordinary HTTP
-forwarding, and checks the CONNECT destination before opening an HTTPS tunnel.
-Every DNS result is checked against the reviewed IANA
+forwarding, and sends both ordinary HTTP forwarding and CONNECT tunnels through
+the same resolved dialer. Configuration deliberately has no transport override
+that can select a destination after the proxy validates it. Every DNS result is
+checked against the reviewed IANA
 [IPv4](https://www.iana.org/assignments/iana-ipv4-special-registry/iana-ipv4-special-registry.xhtml)
 and [IPv6](https://www.iana.org/assignments/iana-ipv6-special-registry/iana-ipv6-special-registry.xhtml)
 special-purpose registries before dialing; private, loopback, link-local,

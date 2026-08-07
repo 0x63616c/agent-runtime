@@ -70,8 +70,6 @@ type Target struct {
 type Config struct {
 	// AllowedTargets is the finite exact host/port allowlist.
 	AllowedTargets []Target
-	// Transport forwards non-CONNECT HTTP requests. Nil selects the standard transport.
-	Transport http.RoundTripper
 	// DialContext establishes one already-authorized target connection. Nil uses a standard dialer.
 	DialContext func(context.Context, string, string) (net.Conn, error)
 	// Resolve resolves a declared DNS host before dialing. Nil uses the system resolver.
@@ -118,11 +116,10 @@ func New(config Config) (Proxy, error) {
 		resolve = net.DefaultResolver.LookupIPAddr
 	}
 	proxy := Proxy{allowed: allowed, dial: dial, resolve: resolve}
-	if config.Transport == nil {
-		proxy.transport = &http.Transport{DialContext: proxy.dialResolved}
-	} else {
-		proxy.transport = config.Transport
-	}
+	// Every ordinary HTTP request must use dialResolved. Config intentionally
+	// exposes no RoundTripper seam: one could select an arbitrary destination
+	// after ServeHTTP has checked the URL.
+	proxy.transport = &http.Transport{DialContext: proxy.dialResolved}
 	return proxy, nil
 }
 
