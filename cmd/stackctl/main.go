@@ -32,6 +32,22 @@ func run(ctx context.Context, arguments []string, output io.Writer) error {
 }
 
 func runWithProbe(ctx context.Context, arguments []string, output io.Writer, probe stack.HostProbe) error {
+	return runWithProbeAndOperator(ctx, arguments, output, probe, systemOperator)
+}
+
+type stackOperator interface {
+	Bootstrap(context.Context, stack.OperatorRequest, stack.Rendered) (stack.KubernetesNamespaceObservation, error)
+	Apply(context.Context, stack.OperatorRequest, stack.Rendered) (stack.KubernetesObservation, error)
+	Observe(context.Context, stack.OperatorRequest, stack.Rendered) (stack.KubernetesObservation, error)
+	Diff(context.Context, stack.OperatorRequest, stack.Rendered) (stack.KubernetesDifference, error)
+	Reconcile(context.Context, stack.OperatorRequest, stack.Rendered) (stack.ReconcileResult, error)
+	Rollback(context.Context, stack.OperatorRequest, stack.Rendered, stack.Rendered) (stack.KubernetesObservation, error)
+	Teardown(context.Context, stack.OperatorRequest, stack.Rendered) error
+}
+
+type operatorFactory func(string) (stackOperator, error)
+
+func runWithProbeAndOperator(ctx context.Context, arguments []string, output io.Writer, probe stack.HostProbe, factory operatorFactory) error {
 	if err := ctx.Err(); err != nil {
 		return errors.Wrap(err, "run stack operator command")
 	}
@@ -165,15 +181,7 @@ func runWithProbe(ctx context.Context, arguments []string, output io.Writer, pro
 			}
 			request.BootstrapAuthority = authority
 		}
-		adapter, err := stack.NewKubectlAdapter(stack.SystemKubectlRunner{})
-		if err != nil {
-			return err
-		}
-		providers, err := stack.NewKubectlDeclaredProviderAdapter(stack.SystemKubectlRunner{})
-		if err != nil {
-			return err
-		}
-		operator, err := stack.NewKubernetesOperatorWithProviders(adapter, providers, stack.JSONLineAuditLog{Path: auditPath})
+		operator, err := factory(auditPath)
 		if err != nil {
 			return err
 		}
@@ -239,6 +247,18 @@ func runWithProbe(ctx context.Context, arguments []string, output io.Writer, pro
 	default:
 		return errors.Newf("run stack operator command: unknown command %q", arguments[0])
 	}
+}
+
+func systemOperator(auditPath string) (stackOperator, error) {
+	adapter, err := stack.NewKubectlAdapter(stack.SystemKubectlRunner{})
+	if err != nil {
+		return nil, err
+	}
+	providers, err := stack.NewKubectlDeclaredProviderAdapter(stack.SystemKubectlRunner{})
+	if err != nil {
+		return nil, err
+	}
+	return stack.NewKubernetesOperatorWithProviders(adapter, providers, stack.JSONLineAuditLog{Path: auditPath})
 }
 
 func extractRoleConfigurations(resources []stack.Resource) (map[string]json.RawMessage, error) {

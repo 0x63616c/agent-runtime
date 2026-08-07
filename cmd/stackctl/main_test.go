@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/0x63616c/agent-runtime/internal/stack"
+	"github.com/cockroachdb/errors"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 )
@@ -89,6 +90,42 @@ var _ = Describe("render and check", func() {
 		Expect(request.CapabilityFile).To(Equal("/bootstrap-capability.json"))
 	})
 
+	It("retains the bootstrap capability until namespace deletion succeeds on retry", func() {
+		directory := GinkgoT().TempDir()
+		stackPath := filepath.Join(directory, "stack.json")
+		capabilityPath := filepath.Join(directory, "bootstrap-capability.json")
+		auditPath := filepath.Join(directory, "audit.jsonl")
+		migrationRoot := filepath.Join(directory, "migrations")
+		Expect(os.WriteFile(stackPath, []byte(stackDocument), 0o600)).To(Succeed())
+		Expect(os.Mkdir(migrationRoot, 0o700)).To(Succeed())
+
+		rendered, err := loadAndRenderNamed(stackPath, "feature-a", stack.ProfileLocal)
+		Expect(err).NotTo(HaveOccurred())
+		authority, err := stack.NewBootstrapAuthority(rendered, "uid-bootstrap")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(stack.WriteBootstrapAuthority(capabilityPath, authority)).To(Succeed())
+		initialCapability, err := os.ReadFile(capabilityPath)
+		Expect(err).NotTo(HaveOccurred())
+
+		operator := &retryingTeardownOperator{errors: []error{errors.New("wait for Namespace/ar-feature-a deletion: timeout")}}
+		factory := func(string) (stackOperator, error) { return operator, nil }
+		arguments := []string{
+			"teardown", "--stack-file", stackPath, "--stack", "feature-a", "--profile", "local",
+			"--kubeconfig", "/explicit/kubeconfig", "--context", "disposable", "--actor", "test-operator",
+			"--audit-file", auditPath, "--migration-root", migrationRoot, "--bootstrap-capability-file", capabilityPath,
+		}
+
+		Expect(runWithProbeAndOperator(context.Background(), arguments, &bytes.Buffer{}, systemProbe{}, factory)).To(MatchError(ContainSubstring("wait for Namespace/ar-feature-a deletion: timeout")))
+		retainedCapability, err := os.ReadFile(capabilityPath)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(retainedCapability).To(Equal(initialCapability))
+
+		Expect(runWithProbeAndOperator(context.Background(), arguments, &bytes.Buffer{}, systemProbe{}, factory)).To(Succeed())
+		_, err = os.Stat(capabilityPath)
+		Expect(os.IsNotExist(err)).To(BeTrue())
+		Expect(operator.teardowns).To(Equal(2))
+	})
+
 	It("emits canonical role configurations from Stack desired state without a second file source", func() {
 		resources := []stack.Resource{
 			{ID: "api", Kubernetes: &stack.KubernetesResource{Environment: []stack.EnvironmentVariable{{Name: "RUNTIME_ROLE_CONFIG", Value: `{"version":1,"role":"api","namespace":"runtime","listen_address":"127.0.0.1:8080","dependencies":[{"name":"state","endpoint":"http://state:8080"},{"name":"telemetry","endpoint":"http://telemetry:4318"}]}`}}}},
@@ -115,6 +152,43 @@ func (probe *cliProbe) KubernetesContext(_ context.Context, target stack.Operato
 }
 func (*cliProbe) Architecture(context.Context) (string, error) { return runtime.GOARCH, nil }
 func (*cliProbe) FreeDiskBytes(context.Context) (int64, error) { return 1 << 40, nil }
+
+type retryingTeardownOperator struct {
+	errors    []error
+	teardowns int
+}
+
+func (*retryingTeardownOperator) Bootstrap(context.Context, stack.OperatorRequest, stack.Rendered) (stack.KubernetesNamespaceObservation, error) {
+	return stack.KubernetesNamespaceObservation{}, nil
+}
+
+func (*retryingTeardownOperator) Apply(context.Context, stack.OperatorRequest, stack.Rendered) (stack.KubernetesObservation, error) {
+	return stack.KubernetesObservation{}, nil
+}
+
+func (*retryingTeardownOperator) Observe(context.Context, stack.OperatorRequest, stack.Rendered) (stack.KubernetesObservation, error) {
+	return stack.KubernetesObservation{}, nil
+}
+
+func (*retryingTeardownOperator) Diff(context.Context, stack.OperatorRequest, stack.Rendered) (stack.KubernetesDifference, error) {
+	return stack.KubernetesDifference{}, nil
+}
+
+func (*retryingTeardownOperator) Reconcile(context.Context, stack.OperatorRequest, stack.Rendered) (stack.ReconcileResult, error) {
+	return stack.ReconcileResult{}, nil
+}
+
+func (*retryingTeardownOperator) Rollback(context.Context, stack.OperatorRequest, stack.Rendered, stack.Rendered) (stack.KubernetesObservation, error) {
+	return stack.KubernetesObservation{}, nil
+}
+
+func (operator *retryingTeardownOperator) Teardown(context.Context, stack.OperatorRequest, stack.Rendered) error {
+	defer func() { operator.teardowns++ }()
+	if operator.teardowns < len(operator.errors) {
+		return operator.errors[operator.teardowns]
+	}
+	return nil
+}
 
 var stackDocument = strings.ReplaceAll(`{"version":1,"name":"feature-a","profiles":{
 "local":{"namespace":"ar-feature-a","prerequisites":[],"sandbox_quota_policy":POLICY,"resources":[{"id":"notifier-secret","kind":"secret_reference","owner":"release-operations","scope":"namespace","dependencies":[],"retention":{"policy":"external","days":0},"backup_restore_owner":"platform-operator","delete_behavior":"retain","external_controller":true,"secret_reference":{"provider":"kubernetes","reference":"ntfy-token","version":"v1"}}]},
