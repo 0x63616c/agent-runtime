@@ -39,16 +39,19 @@ func (ledger *PostgresLedger) Accept(ctx context.Context, operation Operation) (
 	err := ledger.transaction(ctx, "accept sandbox operation", func(tx pgx.Tx) error {
 		row := tx.QueryRow(ctx, `
 			INSERT INTO runtime.sandbox_operations (
-				principal, operation_id, canonical_digest, effective_spec_digest,
+				principal, operation_id, kind, target_kind, target_id,
+				input_digest, canonical_digest, effective_spec_digest, capability_digest,
 				state, version, accepted_at, retention_expires_at, cleanup_required,
 				assignment_fencing_token
-			) VALUES ($1, $2, $3, $4, $5, 1, $6, $7, $8, 0)
-			ON CONFLICT (principal, operation_id) DO NOTHING
-			RETURNING principal, operation_id, canonical_digest, effective_spec_digest,
+			) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 1, $11, $12, $13, 0)
+			ON CONFLICT DO NOTHING
+			RETURNING principal, operation_id, kind, target_kind, target_id,
+				input_digest, canonical_digest, effective_spec_digest, capability_digest,
 				state, version, accepted_at, retention_expires_at, cleanup_required,
 				assignment_host_id, assignment_fencing_token, assignment_lease_expires_at`,
-			operation.Principal, operation.ID, operation.CanonicalDigest,
-			operation.EffectiveSpecDigest, StateAccepted, operation.AcceptedAt.UTC(),
+			operation.Principal, operation.ID, operation.Kind, operation.TargetKind,
+			operation.TargetID, operationInputDigest(operation), operation.CanonicalDigest, operation.EffectiveSpecDigest,
+			operation.CapabilityDigest, StateAccepted, operation.AcceptedAt.UTC(),
 			operation.RetentionExpiresAt.UTC(), operation.CleanupRequired)
 		inserted, err := scanOperation(row)
 		switch {
@@ -60,13 +63,16 @@ func (ledger *PostgresLedger) Accept(ctx context.Context, operation Operation) (
 		}
 
 		prior, err := scanOperation(tx.QueryRow(ctx, selectOperationSQL+` FOR UPDATE`, operation.Principal, operation.ID))
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrNotFoundOrDenied
+		}
 		if err != nil {
 			return errors.Wrap(err, "read prior sandbox operation")
 		}
 		if prior.State == StateTombstoned {
 			return ErrOperationIDExpired
 		}
-		if prior.CanonicalDigest != operation.CanonicalDigest || prior.EffectiveSpecDigest != operation.EffectiveSpecDigest || prior.CleanupRequired != operation.CleanupRequired {
+		if operationInputDigest(prior) != operationInputDigest(operation) {
 			return ErrConflict
 		}
 		accepted = prior
@@ -319,6 +325,27 @@ func (ledger *PostgresLedger) ReadOutbox(ctx context.Context, afterID uint64, li
 	return records, nil
 }
 
+// ReadOperationOutbox returns one authorized Operation's ordered state facts
+// strictly after its durable version cursor.
+func (ledger *PostgresLedger) ReadOperationOutbox(ctx context.Context, principal, id string, afterVersion uint64, limit int) ([]OutboxRecord, error) {
+	if !validBounded(principal, maxPrincipalBytes) || !validBounded(id, maxOperationIDBytes) || afterVersion > math.MaxInt64 || limit <= 0 || limit > maxLedgerPage {
+		return nil, errors.New("read sandbox operation outbox: identity, cursor or limit is invalid")
+	}
+	if _, err := ledger.Get(ctx, principal, id); err != nil {
+		return nil, err
+	}
+	rows, err := ledger.pool.Query(ctx, `
+		SELECT outbox_id, principal, operation_id, operation_version, event, state
+		FROM runtime.sandbox_operation_outbox
+		WHERE principal = $1 AND operation_id = $2 AND operation_version > $3
+		ORDER BY operation_version
+		LIMIT $4`, principal, id, int64(afterVersion), limit)
+	if err != nil {
+		return nil, errors.Wrap(err, "read sandbox operation outbox")
+	}
+	return collectOutbox(rows, limit)
+}
+
 func (ledger *PostgresLedger) transaction(ctx context.Context, action string, apply func(pgx.Tx) error) error {
 	for attempt := 0; attempt < serializableAttempts; attempt++ {
 		tx, err := ledger.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.Serializable})
@@ -349,7 +376,8 @@ func retryablePostgres(err error) bool {
 	return errors.As(err, &postgresError) && (postgresError.Code == "40001" || postgresError.Code == "40P01")
 }
 
-const selectOperationColumns = `principal, operation_id, canonical_digest, effective_spec_digest,
+const selectOperationColumns = `principal, operation_id, kind, target_kind, target_id,
+	input_digest, canonical_digest, effective_spec_digest, capability_digest,
 	state, version, accepted_at, retention_expires_at, cleanup_required,
 	assignment_host_id, assignment_fencing_token, assignment_lease_expires_at`
 
@@ -393,8 +421,9 @@ func scanOperation(row rowScanner) (Operation, error) {
 	var hostID *string
 	var leaseExpiresAt *time.Time
 	err := row.Scan(
-		&operation.Principal, &operation.ID, &operation.CanonicalDigest,
-		&operation.EffectiveSpecDigest, &operation.State, &version,
+		&operation.Principal, &operation.ID, &operation.Kind, &operation.TargetKind,
+		&operation.TargetID, &operation.InputDigest, &operation.CanonicalDigest, &operation.EffectiveSpecDigest,
+		&operation.CapabilityDigest, &operation.State, &version,
 		&operation.AcceptedAt, &operation.RetentionExpiresAt,
 		&operation.CleanupRequired, &hostID, &fence, &leaseExpiresAt,
 	)
@@ -415,6 +444,28 @@ func scanOperation(row rowScanner) (Operation, error) {
 		operation.Assignment.LeaseExpiresAt = leaseExpiresAt.UTC()
 	}
 	return operation, nil
+}
+
+func collectOutbox(rows pgx.Rows, limit int) ([]OutboxRecord, error) {
+	defer rows.Close()
+	records := make([]OutboxRecord, 0, limit)
+	for rows.Next() {
+		var record OutboxRecord
+		var outboxID, version int64
+		if err := rows.Scan(&outboxID, &record.Principal, &record.OperationID, &version, &record.Event, &record.State); err != nil {
+			return nil, errors.Wrap(err, "scan sandbox operation outbox")
+		}
+		if outboxID <= 0 || version <= 0 {
+			return nil, errors.New("scan sandbox operation outbox: invalid persisted sequence")
+		}
+		record.ID = uint64(outboxID)
+		record.OperationVersion = uint64(version)
+		records = append(records, record)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, errors.Wrap(err, "iterate sandbox operation outbox")
+	}
+	return records, nil
 }
 
 func collectOperations(rows pgx.Rows) ([]Operation, error) {

@@ -139,6 +139,40 @@ type OperationRequest struct {
 	DeleteSnapshot   *DeleteSnapshotRequest
 	ApproveSensitive *ApproveSensitiveOperationRequest
 }
+
+// OperationAdmissionPolicy is the explicit, versioned authority used by a
+// control service to freeze and resolve an Operation request before durable
+// acceptance. Maps and slices are defensively copied during resolution.
+type OperationAdmissionPolicy struct {
+	Version               string
+	CanonicalizerVersion  string
+	CapabilityVersion     string
+	ImageAdmissionVersion string
+	Defaults              ResourceLimits
+	Maximum               ResourceLimits
+	Capabilities          CapabilitySnapshot
+	AdmittedImages        map[Digest]ImageInfo
+}
+
+// ResolvedOperation is the bounded output of strict control-wire decoding and
+// admission. It contains safe metadata only; secret values and backend handles
+// are never part of this value.
+type ResolvedOperation struct {
+	Operation Operation
+	// InputDigest identifies the exact canonical wire request before operator
+	// defaults are resolved. Control stores use it to reconnect retries to the
+	// already accepted effective policy instead of silently adopting new defaults.
+	InputDigest     Digest
+	CleanupRequired bool
+}
+
+// ResolveControlOperationRequest strictly decodes sandbox.control/v1 bytes,
+// freezes caller-owned input, resolves finite defaults and admission policy,
+// and returns the durable public Operation metadata.
+func ResolveControlOperationRequest(input []byte, acceptedAt, retentionExpiresAt time.Time, policy OperationAdmissionPolicy) (ResolvedOperation, error) {
+	return resolveControlOperationRequest(input, acceptedAt, retentionExpiresAt, policy)
+}
+
 type CreateSandboxRequest struct{ Spec SandboxSpec }
 type RestoreSandboxRequest struct {
 	SnapshotID SnapshotID

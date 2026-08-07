@@ -39,6 +39,30 @@ func TestMemoryLedgerReconnectsTransitionsAndFencesStaleHostResults(t *testing.T
 	}
 }
 
+func TestMemoryLedgerReconnectUsesInputDigestAcrossPolicyChanges(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 8, 7, 12, 0, 0, 0, time.UTC)
+	ledger := NewMemoryLedger()
+	first := Operation{Principal: "tenant-a:principal-a", ID: "op_policy", InputDigest: "sha256:wire", CanonicalDigest: "sha256:defaults-v1", EffectiveSpecDigest: "sha256:effective-v1", AcceptedAt: now, RetentionExpiresAt: now.Add(time.Hour)}
+	accepted, replay, err := ledger.Accept(context.Background(), first)
+	if err != nil || replay {
+		t.Fatalf("Accept(first) = %#v, %t, %v", accepted, replay, err)
+	}
+	retry := first
+	retry.CanonicalDigest = "sha256:defaults-v2"
+	retry.EffectiveSpecDigest = "sha256:effective-v2"
+	reconnected, replay, err := ledger.Accept(context.Background(), retry)
+	if err != nil || !replay || reconnected.CanonicalDigest != first.CanonicalDigest {
+		t.Fatalf("Accept(retry) = %#v, %t, %v", reconnected, replay, err)
+	}
+	changed := retry
+	changed.InputDigest = "sha256:different-wire"
+	if _, _, err := ledger.Accept(context.Background(), changed); !errors.Is(err, ErrConflict) {
+		t.Fatalf("Accept(changed) error = %v", err)
+	}
+}
+
 func TestMemoryLedgerExpiresLeaseBeforeAcceptingLateHostResult(t *testing.T) {
 	ledger := NewMemoryLedger()
 	now := time.Date(2026, 8, 7, 0, 0, 0, 0, time.UTC)

@@ -72,8 +72,13 @@ type Assignment struct {
 type Operation struct {
 	Principal           string
 	ID                  string
+	Kind                string
+	TargetKind          string
+	TargetID            string
+	InputDigest         string
 	CanonicalDigest     string
 	EffectiveSpecDigest string
+	CapabilityDigest    string
 	State               State
 	Version             uint64
 	AcceptedAt          time.Time
@@ -130,6 +135,7 @@ type DurableStore interface {
 	ClaimExpiredCleanup(context.Context, time.Time, int) ([]Operation, error)
 	Reap(context.Context, time.Time, int) ([]Operation, error)
 	ReadOutbox(context.Context, uint64, int) ([]OutboxRecord, error)
+	ReadOperationOutbox(context.Context, string, string, uint64, int) ([]OutboxRecord, error)
 }
 
 // ClaimExpiredCleanup fences any outstanding host and records durable cleanup
@@ -188,10 +194,15 @@ func (ledger *MemoryLedger) Accept(ctx context.Context, operation Operation) (Op
 		if prior.State == StateTombstoned {
 			return Operation{}, false, ErrOperationIDExpired
 		}
-		if prior.CanonicalDigest != operation.CanonicalDigest || prior.EffectiveSpecDigest != operation.EffectiveSpecDigest || prior.CleanupRequired != operation.CleanupRequired {
+		if operationInputDigest(prior) != operationInputDigest(operation) {
 			return Operation{}, false, ErrConflict
 		}
 		return prior, true, nil
+	}
+	for _, prior := range ledger.operations {
+		if prior.ID == operation.ID {
+			return Operation{}, false, ErrNotFoundOrDenied
+		}
 	}
 	operation.State = StateAccepted
 	operation.Version = 1
@@ -380,15 +391,49 @@ func (ledger *MemoryLedger) ReadOutbox(ctx context.Context, afterID uint64, limi
 	return records, nil
 }
 
+// ReadOperationOutbox returns one authorized Operation's ordered state facts
+// strictly after its durable version cursor.
+func (ledger *MemoryLedger) ReadOperationOutbox(ctx context.Context, principal, id string, afterVersion uint64, limit int) ([]OutboxRecord, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, errors.Wrap(err, "read sandbox operation outbox")
+	}
+	if !validBounded(principal, maxPrincipalBytes) || !validBounded(id, maxOperationIDBytes) || limit <= 0 || limit > maxLedgerPage {
+		return nil, errors.New("read sandbox operation outbox: identity or limit is invalid")
+	}
+	ledger.mu.Lock()
+	defer ledger.mu.Unlock()
+	if _, exists := ledger.operations[operationKey(principal, id)]; !exists {
+		return nil, ErrNotFoundOrDenied
+	}
+	records := make([]OutboxRecord, 0, limit)
+	for _, record := range ledger.outbox {
+		if record.Principal != principal || record.OperationID != id || record.OperationVersion <= afterVersion {
+			continue
+		}
+		records = append(records, record)
+		if len(records) == limit {
+			break
+		}
+	}
+	return records, nil
+}
+
 func (ledger *MemoryLedger) appendOutbox(operation Operation, event OutboxEvent) {
 	ledger.outbox = append(ledger.outbox, OutboxRecord{ID: uint64(len(ledger.outbox) + 1), Principal: operation.Principal, OperationID: operation.ID, OperationVersion: operation.Version, Event: event, State: operation.State})
 }
 
 func validateOperation(operation Operation) error {
-	if !validBounded(operation.Principal, maxPrincipalBytes) || !validBounded(operation.ID, maxOperationIDBytes) || !validBounded(operation.CanonicalDigest, maxDigestBytes) || !validBounded(operation.EffectiveSpecDigest, maxDigestBytes) || operation.AcceptedAt.IsZero() || operation.RetentionExpiresAt.IsZero() || !operation.RetentionExpiresAt.After(operation.AcceptedAt) {
+	if !validBounded(operation.Principal, maxPrincipalBytes) || !validBounded(operation.ID, maxOperationIDBytes) || !validBounded(operationInputDigest(operation), maxDigestBytes) || !validBounded(operation.CanonicalDigest, maxDigestBytes) || !validBounded(operation.EffectiveSpecDigest, maxDigestBytes) || operation.AcceptedAt.IsZero() || operation.RetentionExpiresAt.IsZero() || !operation.RetentionExpiresAt.After(operation.AcceptedAt) {
 		return errors.New("accept sandbox operation: principal, id, digests and ordered retention are required")
 	}
 	return nil
+}
+
+func operationInputDigest(operation Operation) string {
+	if operation.InputDigest != "" {
+		return operation.InputDigest
+	}
+	return operation.CanonicalDigest
 }
 
 func validBounded(value string, maxBytes int) bool {

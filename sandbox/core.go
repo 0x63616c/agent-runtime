@@ -112,6 +112,50 @@ func newCoreClientWithLedger(principal string, now time.Time, limits limitPolicy
 	return &coreClient{principal: principal, now: now.UTC(), limits: limits, ledger: ledger, streams: make(map[*sliceOperationStream]struct{})}, nil
 }
 
+func resolveControlOperationRequest(input []byte, acceptedAt, retentionExpiresAt time.Time, policy OperationAdmissionPolicy) (ResolvedOperation, error) {
+	if acceptedAt.IsZero() || acceptedAt.Location() != time.UTC || retentionExpiresAt.IsZero() || retentionExpiresAt.Location() != time.UTC || !retentionExpiresAt.After(acceptedAt) {
+		return ResolvedOperation{}, newFailure(FailureInvalidArgument, "operation acceptance and retention times must be ordered UTC values", RetryNever)
+	}
+	request, err := decodeOperationRequestV1(input)
+	if err != nil {
+		return ResolvedOperation{}, err
+	}
+	limits := limitPolicy{
+		defaults:              policy.Defaults,
+		maximum:               policy.Maximum,
+		version:               policy.Version,
+		canonicalizerVersion:  policy.CanonicalizerVersion,
+		capabilityVersion:     policy.CapabilityVersion,
+		imageAdmissionVersion: policy.ImageAdmissionVersion,
+		admittedImages:        policy.AdmittedImages,
+		capabilities:          policy.Capabilities,
+	}
+	limits = freezeLimitPolicy(normalizedLimitPolicy(limits))
+	if !validLimitPolicy(limits) {
+		return ResolvedOperation{}, newFailure(FailureInvalidArgument, "operation admission policy requires finite defaults and maximums", RetryNever)
+	}
+	frozen, digest, err := normalizeRequest(request, limits)
+	if err != nil {
+		return ResolvedOperation{}, err
+	}
+	effective, err := newEffectiveSpec(frozen, digest, limits)
+	if err != nil {
+		return ResolvedOperation{}, err
+	}
+	operation := Operation{
+		Ref:                 OperationRef{ID: frozen.ID, AcceptedAt: acceptedAt},
+		Kind:                frozen.Kind,
+		State:               OperationAccepted,
+		Target:              targetFor(frozen),
+		CanonicalDigest:     digest,
+		EffectiveSpecDigest: effective.digest,
+		CapabilityDigest:    effective.capabilities.Digest,
+		RetentionExpiresAt:  retentionExpiresAt,
+		LatestCursor:        "operation:1",
+	}
+	return ResolvedOperation{Operation: operation, InputDigest: canonicalDigestBytes(input), CleanupRequired: frozen.Kind != OperationApproveSensitive}, nil
+}
+
 func freezeLimitPolicy(policy limitPolicy) limitPolicy {
 	frozen := policy
 	frozen.capabilities = copyCapabilitySnapshot(policy.capabilities)

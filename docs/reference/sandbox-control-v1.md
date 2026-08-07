@@ -6,16 +6,18 @@ semantic authority is the accepted [sandbox specification](../specs/sandbox.md).
 
 ## Current implementation boundary
 
-The package currently provides a deterministic in-memory control fixture and a
-public HTTPS construction/bind slice for unit and conformance evidence.
+The package provides a deterministic in-memory control fixture and a strict
+public HTTPS operation transport backed by the separately runnable
+`sandbox-control` role.
 `NewClient` resolves an explicit named trust bundle, parses private cloned TLS
 roots, refuses redirects and ambient system trust, applies a request-scoped
 credential, and completes the strict `/sandbox.control/v1/bind` handshake
-before returning. Operation transport methods remain `unavailable` until their
-strict response/stream envelopes land. The package does not yet ship a
-database-backed ledger, host agent, local process adapter, or Firecracker
-implementation. Nothing here is evidence of isolation, durable storage across
-a process restart, or host execution.
+before returning. `Submit`, `GetOperation`, `WaitOperation`, and
+`WatchOperation` use canonical, bounded `sandbox.control/v1` envelopes. The
+role durably accepts those operations in PostgreSQL and reconnects after a
+separate-process restart. Resource queries, host dispatch, output/artifact
+storage, a local process adapter, and Firecracker are not implemented. This is
+durable control evidence, not evidence of guest isolation or host execution.
 
 ## Client and identity
 
@@ -101,10 +103,27 @@ output causes. A backend SPI is intentionally absent from the public package:
 real adapters must receive only normalized internal dispatch data and cannot
 replace ledger, grant, lifecycle, redaction, or error semantics.
 
+## Operator process
+
+`cmd/sandbox-control` consumes one strict JSON document, mounted TLS identity,
+and three explicitly named secret environment values: PostgreSQL DSN, static
+development authorization, and a 32–128 byte hex assertion key. It serves TLS
+1.3 only, never creates or migrates infrastructure, and exposes `/healthz` and
+`/readyz`. The declaration rejects unknown fields, relative TLS paths,
+implicit secret names, unbounded lifetimes, and invalid listen addresses. See
+[`deploy/sandboxcontrol/control.example.json`](../../deploy/sandboxcontrol/control.example.json).
+
+The static authenticator is for an isolated development or single-service
+identity and requires a high-entropy credential. Multi-principal issuer
+integration remains later work.
+
 ## Contract status
 
-The in-memory fixture covers principal scoping, operation identity, freeze and
-canonicalization, finite defaults/admission, typed terminal observations, and
-output replay semantics with deterministic tests. Durable persistence,
-authenticated host envelopes, reconciliation, and Linux/KVM enforcement remain
-separate delivery work and require their own evidence lanes.
+The in-memory fixture and PostgreSQL control role cover principal scoping,
+operation identity, freeze and canonicalization, finite defaults/admission,
+strict HTTPS acceptance/read/watch, durable restart reconnect, and bounded
+outbox observation. Exact input identity is stored separately from resolved
+policy digests, so a retry reconnects to the previously accepted Effective
+Spec after operator defaults change. Host dispatch, authenticated host
+envelopes, output/artifact stores, reconciliation, and Linux/KVM enforcement
+remain separate delivery work and require their own evidence lanes.

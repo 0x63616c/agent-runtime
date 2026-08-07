@@ -2,10 +2,13 @@ package sandbox
 
 import (
 	"context"
+	"encoding/json"
 	"encoding/pem"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -58,6 +61,184 @@ func TestNewClientBindsThroughPinnedHTTPSWithoutAmbientTrust(t *testing.T) {
 	if err := client.Close(context.Background()); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func TestHTTPClientSubmitsAndReconnectsOperationWithFreshBoundCredential(t *testing.T) {
+	acceptedAt := time.Date(2026, 8, 7, 1, 0, 0, 0, time.UTC)
+	request := OperationRequest{ID: "op_http", Kind: OperationCloseSandbox, CloseSandbox: &CloseSandboxRequest{SandboxID: "sbx_http"}}
+	operation := Operation{Ref: OperationRef{ID: request.ID, AcceptedAt: acceptedAt}, Kind: request.Kind, State: OperationAccepted, Target: OperationTarget{Kind: TargetSandbox, SandboxID: "sbx_http"}, CanonicalDigest: "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", EffectiveSpecDigest: "sha256:abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789", CapabilityDigest: "sha256:1111111111111111111111111111111111111111111111111111111111111111", RetentionExpiresAt: acceptedAt.Add(time.Hour), LatestCursor: "operation:1"}
+	var calls atomic.Int64
+	server := httptest.NewTLSServer(http.HandlerFunc(func(writer http.ResponseWriter, httpRequest *http.Request) {
+		call := calls.Add(1)
+		if got := httpRequest.Header.Get("Authorization"); got != "Bearer credential-"+string(rune('0'+call)) {
+			t.Errorf("call %d authorization = %q", call, got)
+		}
+		switch call {
+		case 1:
+			if httpRequest.URL.Path != bindRouteV1 {
+				t.Errorf("bind path = %q", httpRequest.URL.Path)
+			}
+			writeTestJSON(t, writer, bindResponse{Version: controlV1, Kind: bindResponseKind, Assertion: "opaque-binding", ExpiresAt: time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC)})
+		case 2:
+			if httpRequest.Method != http.MethodPost || httpRequest.URL.Path != operationsRouteV1 || httpRequest.Header.Get(bindingHeaderV1) != "opaque-binding" {
+				t.Errorf("submit request = %s %s binding=%q", httpRequest.Method, httpRequest.URL.Path, httpRequest.Header.Get(bindingHeaderV1))
+			}
+			body, err := io.ReadAll(httpRequest.Body)
+			if err != nil {
+				t.Fatal(err)
+			}
+			decoded, err := decodeOperationRequestV1(body)
+			if err != nil || decoded.ID != request.ID || decoded.Kind != request.Kind {
+				t.Errorf("decode submit = %#v, %v", decoded, err)
+			}
+			writeTestJSON(t, writer, operationResponseEnvelope{Version: controlV1, Kind: operationResponseKind, Operation: operation})
+		case 3:
+			if httpRequest.Method != http.MethodGet || httpRequest.URL.Path != operationsRouteV1+"/op_http" || httpRequest.Header.Get(bindingHeaderV1) != "opaque-binding" {
+				t.Errorf("get request = %s %s binding=%q", httpRequest.Method, httpRequest.URL.Path, httpRequest.Header.Get(bindingHeaderV1))
+			}
+			writeTestJSON(t, writer, operationResponseEnvelope{Version: controlV1, Kind: operationResponseKind, Operation: operation})
+		default:
+			t.Errorf("unexpected request %d", call)
+		}
+	}))
+	t.Cleanup(server.Close)
+
+	client := newTestHTTPClient(t, server, func(_ context.Context, sink CredentialSink) error {
+		call := calls.Load() + 1
+		return sink.SetAuthorization("Bearer", "credential-"+string(rune('0'+call)))
+	})
+	ref, err := client.Submit(context.Background(), request)
+	if err != nil || ref != operation.Ref {
+		t.Fatalf("Submit() = %#v, %v; want %#v", ref, err, operation.Ref)
+	}
+	got, err := client.GetOperation(context.Background(), request.ID)
+	if err != nil || got.Ref != operation.Ref || got.CanonicalDigest != operation.CanonicalDigest {
+		t.Fatalf("GetOperation() = %#v, %v", got, err)
+	}
+	if calls.Load() != 3 {
+		t.Fatalf("HTTP calls = %d, want bind plus two operation attempts", calls.Load())
+	}
+}
+
+func TestHTTPClientMapsSafeFailureAndCancellationWithoutTransportCause(t *testing.T) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.URL.Path == bindRouteV1 {
+			writeTestJSON(t, writer, bindResponse{Version: controlV1, Kind: bindResponseKind, Assertion: "opaque-binding", ExpiresAt: time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC)})
+			return
+		}
+		writer.WriteHeader(http.StatusConflict)
+		writeTestJSON(t, writer, failureResponseEnvelope{Version: controlV1, Kind: failureResponseKind, Failure: Failure{Code: FailureOperationConflict, Message: "operation ID has different immutable input", Retry: RetryNever}})
+	}))
+	t.Cleanup(server.Close)
+	client := newTestHTTPClient(t, server, func(_ context.Context, sink CredentialSink) error {
+		return sink.SetAuthorization("Bearer", "credential")
+	})
+	_, err := client.Submit(context.Background(), OperationRequest{ID: "op_conflict", Kind: OperationCloseSandbox, CloseSandbox: &CloseSandboxRequest{SandboxID: "sbx_conflict"}})
+	failure, ok := AsFailure(err)
+	if !ok || failure.Code != FailureOperationConflict || errors.Unwrap(err) != nil || failure.Message != "operation ID has different immutable input" {
+		t.Fatalf("Submit() failure = %#v, unwrap=%v, error=%v", failure, errors.Unwrap(err), err)
+	}
+
+	cancelled, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err = client.GetOperation(cancelled, "op_conflict")
+	failure, ok = AsFailure(err)
+	if !ok || failure.Code != FailureCancelled || !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancelled GetOperation() failure = %#v, %v", failure, err)
+	}
+}
+
+func TestHTTPClientRejectsNonCanonicalOrOversizedOperationResponse(t *testing.T) {
+	acceptedAt := time.Date(2026, 8, 7, 1, 0, 0, 0, time.UTC)
+	valid := Operation{Ref: OperationRef{ID: "op_response", AcceptedAt: acceptedAt}, Kind: OperationCloseSandbox, State: OperationAccepted, Target: OperationTarget{Kind: TargetSandbox, SandboxID: "sbx_response"}, CanonicalDigest: "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", EffectiveSpecDigest: "sha256:abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789", CapabilityDigest: "sha256:1111111111111111111111111111111111111111111111111111111111111111", RetentionExpiresAt: acceptedAt.Add(time.Hour), LatestCursor: "operation:1"}
+	unknownState := valid
+	unknownState.State = "server-invented-state"
+	ambiguousTarget := valid
+	ambiguousTarget.Target.ProcessID = "prc_smuggled"
+	invalidCursor := valid
+	invalidCursor.LatestCursor = "operation:0"
+	responses := [][]byte{
+		[]byte(`{"version":"sandbox.control/v1","kind":"operation-response","operation":{},"operation":{}}`),
+		make([]byte, maxControlV1Bytes+1),
+		mustMarshalTest(t, operationResponseEnvelope{Version: controlV1, Kind: operationResponseKind, Operation: unknownState}),
+		mustMarshalTest(t, operationResponseEnvelope{Version: controlV1, Kind: operationResponseKind, Operation: ambiguousTarget}),
+		mustMarshalTest(t, operationResponseEnvelope{Version: controlV1, Kind: operationResponseKind, Operation: invalidCursor}),
+	}
+	for index, response := range responses {
+		t.Run(string(rune('a'+index)), func(t *testing.T) {
+			server := httptest.NewTLSServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+				if request.URL.Path == bindRouteV1 {
+					writeTestJSON(t, writer, bindResponse{Version: controlV1, Kind: bindResponseKind, Assertion: "opaque-binding", ExpiresAt: time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC)})
+					return
+				}
+				_, _ = writer.Write(response)
+			}))
+			t.Cleanup(server.Close)
+			client := newTestHTTPClient(t, server, func(_ context.Context, sink CredentialSink) error {
+				return sink.SetAuthorization("Bearer", "credential")
+			})
+			_, err := client.GetOperation(context.Background(), "op_response")
+			failure, ok := AsFailure(err)
+			if !ok || failure.Code != FailureUnavailable {
+				t.Fatalf("GetOperation() failure = %#v, %v", failure, err)
+			}
+		})
+	}
+}
+
+func TestHTTPClientRejectsHostileFailureDetails(t *testing.T) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.URL.Path == bindRouteV1 {
+			writeTestJSON(t, writer, bindResponse{Version: controlV1, Kind: bindResponseKind, Assertion: "opaque-binding", ExpiresAt: time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC)})
+			return
+		}
+		writer.WriteHeader(http.StatusConflict)
+		_, _ = writer.Write(mustMarshalTest(t, failureResponseEnvelope{Version: controlV1, Kind: failureResponseKind, Failure: Failure{Code: FailureOperationConflict, Message: "unsafe", Retry: RetryNever, Details: []FailureDetail{{Key: "server-private-field", Value: "leak"}}}}))
+	}))
+	t.Cleanup(server.Close)
+	client := newTestHTTPClient(t, server, func(_ context.Context, sink CredentialSink) error {
+		return sink.SetAuthorization("Bearer", "credential")
+	})
+	_, err := client.GetOperation(context.Background(), "op_response")
+	failure, ok := AsFailure(err)
+	if !ok || failure.Code != FailureUnavailable || failure.Message != "sandbox control failure response is invalid" {
+		t.Fatalf("GetOperation() failure = %#v, %v", failure, err)
+	}
+}
+
+func mustMarshalTest(t *testing.T, value any) []byte {
+	t.Helper()
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return encoded
+}
+
+func newTestHTTPClient(t *testing.T, server *httptest.Server, credentials credentialSourceFunc) Client {
+	t.Helper()
+	certificate := server.Certificate()
+	roots := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certificate.Raw})
+	source, err := NewStaticTrustBundleSource(map[TrustBundleRef]TrustBundle{"trust/test": {Version: "test/v1", PEMRoots: roots}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	client, err := NewClient(context.Background(), ClientConfig{Endpoint: Endpoint{URL: server.URL}, TLS: TLSConfig{ServerName: certificate.DNSNames[0], TrustBundleRef: "trust/test"}, Credentials: credentials, TrustBundles: source, RequestTimeout: time.Second})
+	if err != nil {
+		t.Fatalf("NewClient() error = %v", err)
+	}
+	t.Cleanup(func() { _ = client.Close(context.Background()) })
+	return client
+}
+
+func writeTestJSON(t *testing.T, writer http.ResponseWriter, value any) {
+	t.Helper()
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writer.Header().Set("Content-Type", "application/json")
+	_, _ = writer.Write(encoded)
 }
 
 func TestStaticTrustBundleSourceFreezesAndDefensivelyReturnsPEM(t *testing.T) {

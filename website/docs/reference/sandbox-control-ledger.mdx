@@ -19,7 +19,8 @@ Implemented and integration-tested behavior includes:
 - bounded recovery of expired assignments as uncertain outcomes;
 - durable cleanup claim, confirmation, and safe tombstoning;
 - an ordered, content-free transactional outbox; and
-- process/pool restart plus concurrent-acceptance tests against real PostgreSQL.
+- strict pinned-TLS Submit/Get/Wait/Watch operation transport; and
+- a real separate-process control restart/reconnect test against PostgreSQL.
 
 The sandbox-control binary has no migration authority. Operators apply the
 reviewed artifacts under `deploy/sandboxcontrol/migrations/` through explicit
@@ -29,11 +30,11 @@ backend handles.
 
 :::caution Partial M3 evidence
 
-This proves the PostgreSQL adapter, not the complete sandbox service. The
-public HTTPS operation transport still needs to be connected to this store;
-host enrollment and authenticated envelopes belong to the next issue; and the
-full separate-process worker/control/host restart and output-replay suite is
-not green. No M3 requirement is promoted from this slice alone.
+This proves durable public operation acceptance and observation, not the
+complete sandbox service. Host enrollment and authenticated envelopes belong
+to the next issue; resource queries and output/artifact storage are absent; and
+the full worker/control/host restart and output-replay suite is not green. No
+M3 requirement is promoted from this slice alone.
 
 :::
 

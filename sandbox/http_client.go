@@ -14,6 +14,11 @@ import (
 
 const bindRouteV1 = "/sandbox.control/v1/bind"
 
+const (
+	operationsRouteV1 = "/sandbox.control/v1/operations"
+	bindingHeaderV1   = "Sandbox-Binding"
+)
+
 var bindRequestV1 = []byte(`{"version":"sandbox.control/v1","kind":"bind-request"}`)
 
 type httpControlClient struct {
@@ -113,42 +118,147 @@ func applyAuthorization(ctx context.Context, source CredentialSource) (string, e
 	return sink.consumeAuthorization()
 }
 
-func (client *httpControlClient) unavailable() error {
-	return newFailure(FailureUnavailable, "sandbox control operation transport is not implemented", RetryAfterReconcile)
+func (client *httpControlClient) Submit(ctx context.Context, request OperationRequest) (OperationRef, error) {
+	body, err := encodeOperationRequestV1(request)
+	if err != nil {
+		return OperationRef{}, err
+	}
+	response, err := client.do(ctx, http.MethodPost, operationsRouteV1, body)
+	if err != nil {
+		return OperationRef{}, err
+	}
+	operation, err := decodeOperationResponseV1(response)
+	if err != nil || operation.Ref.ID != request.ID || operation.Kind != request.Kind {
+		return OperationRef{}, newFailure(FailureUnavailable, "sandbox submit response is invalid", RetryAfterReconcile)
+	}
+	return operation.Ref, nil
 }
-
-func (client *httpControlClient) Submit(context.Context, OperationRequest) (OperationRef, error) {
-	return OperationRef{}, client.unavailable()
+func (client *httpControlClient) GetOperation(ctx context.Context, id OperationID) (Operation, error) {
+	if !validOperationID(id) {
+		return Operation{}, newFailure(FailureInvalidArgument, "operation ID is invalid", RetryNever)
+	}
+	response, err := client.do(ctx, http.MethodGet, operationsRouteV1+"/"+url.PathEscape(string(id)), nil)
+	if err != nil {
+		return Operation{}, err
+	}
+	operation, err := decodeOperationResponseV1(response)
+	if err != nil || operation.Ref.ID != id {
+		return Operation{}, newFailure(FailureUnavailable, "sandbox operation response is invalid", RetryAfterReconcile)
+	}
+	return operation, nil
 }
-func (client *httpControlClient) GetOperation(context.Context, OperationID) (Operation, error) {
-	return Operation{}, client.unavailable()
+func (client *httpControlClient) WaitOperation(ctx context.Context, id OperationID) (Operation, error) {
+	if !validOperationID(id) {
+		return Operation{}, newFailure(FailureInvalidArgument, "operation ID is invalid", RetryNever)
+	}
+	response, err := client.do(ctx, http.MethodGet, operationsRouteV1+"/"+url.PathEscape(string(id))+"/wait", nil)
+	if err != nil {
+		return Operation{}, err
+	}
+	operation, err := decodeOperationResponseV1(response)
+	if err != nil || operation.Ref.ID != id || !isTerminalOperation(operation.State) {
+		return Operation{}, newFailure(FailureUnavailable, "sandbox wait response is invalid", RetryAfterReconcile)
+	}
+	return operation, nil
 }
-func (client *httpControlClient) WaitOperation(context.Context, OperationID) (Operation, error) {
-	return Operation{}, client.unavailable()
-}
-func (client *httpControlClient) WatchOperation(context.Context, OperationID, OperationCursor) (OperationStream, error) {
-	return nil, client.unavailable()
+func (client *httpControlClient) WatchOperation(ctx context.Context, id OperationID, from OperationCursor) (OperationStream, error) {
+	if !validOperationID(id) {
+		return nil, newFailure(FailureInvalidArgument, "operation ID is invalid", RetryNever)
+	}
+	target := operationsRouteV1 + "/" + url.PathEscape(string(id)) + "/events"
+	if from != "" {
+		target += "?after=" + url.QueryEscape(string(from))
+	}
+	response, err := client.do(ctx, http.MethodGet, target, nil)
+	if err != nil {
+		return nil, err
+	}
+	events, err := decodeOperationEventsV1(response)
+	if err != nil {
+		return nil, newFailure(FailureUnavailable, "sandbox operation events response is invalid", RetryAfterReconcile)
+	}
+	return &sliceOperationStream{events: events}, nil
 }
 func (client *httpControlClient) GetSandbox(context.Context, SandboxID) (SandboxInfo, error) {
-	return SandboxInfo{}, client.unavailable()
+	return SandboxInfo{}, newFailure(FailureUnavailable, "sandbox resource transport is not implemented", RetryAfterReconcile)
 }
 func (client *httpControlClient) GetProcess(context.Context, ProcessID) (ProcessInfo, error) {
-	return ProcessInfo{}, client.unavailable()
+	return ProcessInfo{}, newFailure(FailureUnavailable, "sandbox resource transport is not implemented", RetryAfterReconcile)
 }
 func (client *httpControlClient) ReplayOutput(context.Context, ProcessID, OutputCursor) (OutputStream, error) {
-	return nil, client.unavailable()
+	return nil, newFailure(FailureUnavailable, "sandbox resource transport is not implemented", RetryAfterReconcile)
 }
 func (client *httpControlClient) GetVolume(context.Context, VolumeID) (VolumeInfo, error) {
-	return VolumeInfo{}, client.unavailable()
+	return VolumeInfo{}, newFailure(FailureUnavailable, "sandbox resource transport is not implemented", RetryAfterReconcile)
 }
 func (client *httpControlClient) ListVolumes(context.Context, Page) (VolumePage, error) {
-	return VolumePage{}, client.unavailable()
+	return VolumePage{}, newFailure(FailureUnavailable, "sandbox resource transport is not implemented", RetryAfterReconcile)
 }
 func (client *httpControlClient) GetSnapshot(context.Context, SnapshotID) (SnapshotInfo, error) {
-	return SnapshotInfo{}, client.unavailable()
+	return SnapshotInfo{}, newFailure(FailureUnavailable, "sandbox resource transport is not implemented", RetryAfterReconcile)
 }
 func (client *httpControlClient) ListSnapshots(context.Context, Page) (SnapshotPage, error) {
-	return SnapshotPage{}, client.unavailable()
+	return SnapshotPage{}, newFailure(FailureUnavailable, "sandbox resource transport is not implemented", RetryAfterReconcile)
+}
+
+func (client *httpControlClient) do(ctx context.Context, method, targetPath string, body []byte) ([]byte, error) {
+	if err := contextFailure(ctx); err != nil {
+		return nil, err
+	}
+	client.mu.RLock()
+	if client.closed {
+		client.mu.RUnlock()
+		return nil, closedClientFailure()
+	}
+	assertion := client.assertion
+	expiresAt := client.expiresAt
+	client.mu.RUnlock()
+	if assertion == "" || !expiresAt.After(time.Now().UTC()) {
+		return nil, newFailure(FailureNotFoundOrDenied, "sandbox client binding is expired", RetryNever)
+	}
+	requestCtx, cancel := context.WithTimeout(ctx, client.requestTimeout)
+	defer cancel()
+	authorization, err := applyAuthorization(requestCtx, client.credentials)
+	if err != nil {
+		return nil, err
+	}
+	target := client.endpoint.ResolveReference(&url.URL{Path: targetPath})
+	if parsed, err := url.Parse(targetPath); err == nil {
+		target.RawQuery = parsed.RawQuery
+		target.Path = parsed.Path
+	}
+	request, err := http.NewRequestWithContext(requestCtx, method, target.String(), bytes.NewReader(body))
+	if err != nil {
+		return nil, newFailure(FailureUnavailable, "sandbox control request could not be created", RetryAfterReconcile)
+	}
+	request.Header.Set("Authorization", authorization)
+	request.Header.Set(bindingHeaderV1, assertion)
+	request.Header.Set("Accept", "application/json")
+	if body != nil {
+		request.Header.Set("Content-Type", "application/json")
+	}
+	response, err := client.client.Do(request)
+	request.Header.Del("Authorization")
+	request.Header.Del(bindingHeaderV1)
+	if err != nil {
+		if contextErr := contextFailure(requestCtx); contextErr != nil {
+			return nil, contextErr
+		}
+		return nil, newFailure(FailureUnavailable, "sandbox control request failed", RetryAfterReconcile)
+	}
+	data, readErr := io.ReadAll(io.LimitReader(response.Body, maxControlV1Bytes+1))
+	closeErr := response.Body.Close()
+	if readErr != nil || closeErr != nil || len(data) > maxControlV1Bytes {
+		return nil, newFailure(FailureUnavailable, "sandbox control response exceeded its finite limit", RetryAfterReconcile)
+	}
+	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
+		failure, decodeErr := decodeFailureResponseV1(data)
+		if decodeErr != nil {
+			return nil, newFailure(FailureUnavailable, "sandbox control failure response is invalid", RetryAfterReconcile)
+		}
+		return nil, &Error{failure: failure}
+	}
+	return data, nil
 }
 
 func (client *httpControlClient) Close(ctx context.Context) error {

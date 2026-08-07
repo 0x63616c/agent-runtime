@@ -1,9 +1,10 @@
 # Sandbox-control ledger and recovery
 
-Status: the PostgreSQL operation-ledger adapter and deterministic memory
-conformance fixture are implemented. The public control service, complete host
-protocol, output-store integration, and end-to-end worker/control/host failure
-suite are not yet implemented. This guide does not promote SBX-002,
+Status: the PostgreSQL operation ledger, deterministic memory conformance
+fixture, strict public operation transport, and separately runnable TLS control
+role are implemented. The complete host protocol, output-store integration,
+and end-to-end worker/control/host failure suite are not yet implemented. This
+guide does not promote SBX-002,
 SBX-005–SBX-006, or SBX-013–SBX-014.
 
 ## Authority boundary
@@ -15,7 +16,8 @@ An audited infrastructure operator applies the reviewed migration under
 `deploy/sandboxcontrol/migrations/` before starting the role.
 
 The ledger retains only bounded recovery facts: Principal scope, Operation ID,
-canonical-request and Effective-Spec digests, lifecycle state/version,
+exact input, canonical-request, Effective-Spec and capability digests; safe
+operation/target metadata; lifecycle state/version,
 acceptance and finite retention times, cleanup obligation, and current host
 lease/fence. Request bodies, output, artifacts, secrets, backend handles, and
 credentials belong in their dedicated stores and never enter these rows.
@@ -64,13 +66,15 @@ Run the explicit disposable PostgreSQL harness from the repository root:
 
 The harness generates a per-run password, launches the digest-pinned
 PostgreSQL declaration on an OS-selected loopback port, applies the reviewed
-migration explicitly, runs the adapter under the race detector, and removes
-its container, network, and volume. The tests prove restart reconnect,
+migrations explicitly, builds the TLS control binary under the race detector,
+runs adapter tests, then starts and restarts that binary as a separate OS
+process through the public pinned-TLS client. It removes its temporary binary,
+container, network, and volume. The tests prove restart reconnect,
 Principal non-enumeration, concurrent immutable acceptance, conflict,
 lease-expiry fencing, cleanup claim/confirmation, tombstone retention, and
 ordered outbox replay through the PostgreSQL seam.
 
-This is PostgreSQL adapter integration evidence, not a completed sandbox
-control-plane E2E. The remaining #16 gate requires the real control process,
-output/artifact store, host routing, restart across separate processes,
-unknown-outcome recovery, and full reaper failure injection.
+This is durable acceptance/reconnect evidence, not a completed sandbox
+execution E2E. The remaining #16 gate requires output/artifact storage, host
+routing, worker/control/host restart, unknown-outcome recovery, and full reaper
+failure injection.

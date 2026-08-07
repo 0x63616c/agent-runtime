@@ -32,6 +32,30 @@ func TestCoreAcceptsFrozenCreateOperation(t *testing.T) {
 	}
 }
 
+func TestResolveControlOperationRequestUsesStrictWireAndFinitePolicy(t *testing.T) {
+	request := validCreateRequest("op_resolve")
+	encoded, err := encodeOperationRequestV1(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	limits := testLimitPolicy()
+	acceptedAt := time.Date(2026, 8, 7, 1, 0, 0, 0, time.UTC)
+	resolved, err := ResolveControlOperationRequest(encoded, acceptedAt, acceptedAt.Add(time.Hour), OperationAdmissionPolicy{Defaults: limits.defaults, Maximum: limits.maximum})
+	if err != nil {
+		t.Fatalf("ResolveControlOperationRequest() error = %v", err)
+	}
+	if resolved.Operation.Ref.ID != request.ID || resolved.Operation.State != OperationAccepted || !validDigest(resolved.InputDigest) || !validDigest(resolved.Operation.EffectiveSpecDigest) || !resolved.CleanupRequired {
+		t.Fatalf("ResolveControlOperationRequest() = %#v", resolved)
+	}
+	request.CreateSandbox.Spec.Labels["caller"] = "changed"
+	if resolved.Operation.CanonicalDigest == canonicalRequestDigest(request) {
+		t.Fatal("resolved canonical digest changed with caller-owned request")
+	}
+	if _, err := ResolveControlOperationRequest(append(encoded, '\n'), acceptedAt, acceptedAt.Add(time.Hour), OperationAdmissionPolicy{Defaults: limits.defaults, Maximum: limits.maximum}); err == nil {
+		t.Fatal("ResolveControlOperationRequest() accepted trailing wire data")
+	}
+}
+
 func TestCoreReconnectsSameOperationIDAndRejectsChangedRequest(t *testing.T) {
 	client := newCoreClient("principal-a", time.Date(2026, 8, 6, 12, 0, 0, 0, time.UTC))
 	request := validCreateRequest("op_01")
