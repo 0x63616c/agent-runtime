@@ -155,7 +155,25 @@
     },
     {
       "id": "DOC-005",
-      "status": "in_progress"
+      "status": "completed",
+      "evidence": [
+        {
+          "revision": "2d5bcc1333d4460e87b78c03882c20a475c6a74a",
+          "utc_time": "2026-08-07T04:14:33Z",
+          "proof_level": "main_ci",
+          "command_id": "just-docs-check",
+          "artifact_ref": "gha-31146735867-docs",
+          "result": "passed"
+        },
+        {
+          "revision": "2d5bcc1333d4460e87b78c03882c20a475c6a74a",
+          "utc_time": "2026-08-07T04:18:38Z",
+          "proof_level": "independent_review",
+          "command_id": "m0-boundary-review",
+          "artifact_ref": "issue-8-boundary-review-pass",
+          "result": "passed"
+        }
+      ]
     },
     {
       "id": "DOC-006",
@@ -167,7 +185,33 @@
     },
     {
       "id": "DOC-008",
-      "status": "in_progress"
+      "status": "completed",
+      "evidence": [
+        {
+          "revision": "2d5bcc1333d4460e87b78c03882c20a475c6a74a",
+          "utc_time": "2026-08-07T04:14:33Z",
+          "proof_level": "main_ci",
+          "command_id": "just-docs-check",
+          "artifact_ref": "gha-31146735867-docs",
+          "result": "passed"
+        },
+        {
+          "revision": "2d5bcc1333d4460e87b78c03882c20a475c6a74a",
+          "utc_time": "2026-08-07T04:17:24Z",
+          "proof_level": "release",
+          "command_id": "documentation-pages-deploy",
+          "artifact_ref": "gha-pages-31146886022",
+          "result": "passed"
+        },
+        {
+          "revision": "2d5bcc1333d4460e87b78c03882c20a475c6a74a",
+          "utc_time": "2026-08-07T04:18:38Z",
+          "proof_level": "manual",
+          "command_id": "public-pages-https-smoke",
+          "artifact_ref": "pages-https-smoke-200",
+          "result": "passed"
+        }
+      ]
     },
     {
       "id": "DOM-001",
