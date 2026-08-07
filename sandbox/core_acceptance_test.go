@@ -371,6 +371,62 @@ func TestProcessOutputCursorsStayUnambiguousAcrossStreams(t *testing.T) {
 	}
 }
 
+func TestInterleavedOutputRetentionKeepsBoundedTailsAndExplicitGaps(t *testing.T) {
+	policy := testLimitPolicy()
+	policy.defaults.ProducedOutputBytes, policy.defaults.RetainedOutputBytes = 64, 3
+	policy.maximum.ProducedOutputBytes, policy.maximum.RetainedOutputBytes = 64, 3
+	client, err := newCoreClientWithPolicy("principal-a", time.Date(2026, 8, 6, 12, 0, 0, 0, time.UTC), policy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := OperationRequest{ID: "op_output_retention", Kind: OperationExecProcess, ExecProcess: &ExecProcessRequest{SandboxID: "sbx_01", Command: Command{Executable: "/bin/echo", Argv: []string{"echo"}, WorkDir: "/work"}}}
+	if _, err := client.Submit(context.Background(), request); err != nil {
+		t.Fatal(err)
+	}
+	processID := processIDFor(request.ID)
+	for _, write := range []struct {
+		stream OutputKind
+		bytes  string
+	}{
+		{OutputStdout, "old"},
+		{OutputStderr, "bad"},
+		{OutputStdout, "new"},
+		{OutputStderr, "good"},
+	} {
+		if err := client.appendProcessOutput(processID, write.stream, []byte(write.bytes)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := client.completeProcess(processID, ProcessResult{Reason: TerminationCancelled, Cleanup: TreeCleanupConfirmed}); err != nil {
+		t.Fatal(err)
+	}
+	stream, err := client.ReplayOutput(context.Background(), processID, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stream.Close()
+	var chunks []string
+	gaps := 0
+	for {
+		event, nextErr := stream.Next(context.Background())
+		if nextErr != nil {
+			break
+		}
+		if event.Chunk != nil {
+			chunks = append(chunks, string(event.Chunk.Bytes))
+		}
+		if event.Gap != nil {
+			gaps++
+		}
+	}
+	if got, want := strings.Join(chunks, ","), "new,ood"; got != want {
+		t.Fatalf("retained replay chunks = %q, want %q", got, want)
+	}
+	if gaps != 2 {
+		t.Fatalf("retention gaps = %d, want one per truncated stream", gaps)
+	}
+}
+
 func TestControlAdmissionQuotaRejectsBeforeAddingAnotherOperation(t *testing.T) {
 	policy := testLimitPolicy()
 	policy.maximumOperations = 1
@@ -405,6 +461,60 @@ func TestProcessAdmissionQuotaRejectsBeforeOperationAcceptance(t *testing.T) {
 	failureCode(t, err, FailureControlQuotaExceeded)
 	if got := client.operationCount(); got != 1 {
 		t.Fatalf("operation count = %d, want one", got)
+	}
+}
+
+func TestOperationWatchAdmissionIsFiniteAndReleasedOnLocalClose(t *testing.T) {
+	policy := testLimitPolicy()
+	policy.maximumWatches = 1
+	client, err := newCoreClientWithPolicy("principal-a", time.Date(2026, 8, 6, 12, 0, 0, 0, time.UTC), policy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := validCreateRequest("op_watch_capacity")
+	if _, err := client.Submit(context.Background(), request); err != nil {
+		t.Fatal(err)
+	}
+	first, err := client.WatchOperation(context.Background(), request.ID, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = client.WatchOperation(context.Background(), request.ID, "")
+	failureCode(t, err, FailureControlQuotaExceeded)
+	if err := first.Close(); err != nil {
+		t.Fatal(err)
+	}
+	second, err := client.WatchOperation(context.Background(), request.ID, "")
+	if err != nil {
+		t.Fatalf("WatchOperation() after Close() error = %v", err)
+	}
+	if err := second.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestClientCloseRejectsNewObservationWithoutClosingDurableOperation(t *testing.T) {
+	ledger := newCoreLedger()
+	policy := testLimitPolicy()
+	client, err := newCoreClientWithLedger("principal-a", time.Date(2026, 8, 6, 12, 0, 0, 0, time.UTC), policy, ledger)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := validCreateRequest("op_closed_client")
+	if _, err := client.Submit(context.Background(), request); err != nil {
+		t.Fatal(err)
+	}
+	if err := client.Close(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	_, err = client.GetOperation(context.Background(), request.ID)
+	failureCode(t, err, FailureUnavailable)
+	reconnected, err := newCoreClientWithLedger("principal-a", time.Date(2026, 8, 6, 12, 0, 0, 0, time.UTC), policy, ledger)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := reconnected.GetOperation(context.Background(), request.ID); err != nil {
+		t.Fatalf("operation was closed with local client: %v", err)
 	}
 }
 

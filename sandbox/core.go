@@ -24,6 +24,7 @@ type coreClient struct {
 	principal string
 	now       time.Time
 	closed    bool
+	watches   uint32
 	limits    limitPolicy
 	ledger    *coreLedger
 }
@@ -89,7 +90,7 @@ type processRecord struct {
 	info        ProcessInfo
 	stdout      *outputSpool
 	stderr      *outputSpool
-	output      []OutputEvent
+	output      []outputReference
 	nextOutput  uint64
 	cursors     map[OutputCursor]OutputCursor
 }
@@ -320,6 +321,9 @@ func (client *coreClient) GetOperation(ctx context.Context, id OperationID) (Ope
 	}
 	client.ledger.mu.RLock()
 	defer client.ledger.mu.RUnlock()
+	if client.closed {
+		return Operation{}, closedClientFailure()
+	}
 	ledger := client.ledger.principals[client.principal]
 	if ledger == nil || ledger.operations[id] == nil {
 		return Operation{}, newFailure(FailureNotFoundOrDenied, "operation was not found", RetryNever)
@@ -332,6 +336,10 @@ func (client *coreClient) WaitOperation(ctx context.Context, id OperationID) (Op
 		return Operation{}, err
 	}
 	client.ledger.mu.RLock()
+	if client.closed {
+		client.ledger.mu.RUnlock()
+		return Operation{}, closedClientFailure()
+	}
 	ledger := client.ledger.principals[client.principal]
 	if ledger == nil || ledger.operations[id] == nil {
 		client.ledger.mu.RUnlock()
@@ -357,19 +365,37 @@ func (client *coreClient) WatchOperation(ctx context.Context, id OperationID, fr
 	if err := contextFailure(ctx); err != nil {
 		return nil, err
 	}
-	client.ledger.mu.RLock()
+	client.ledger.mu.Lock()
+	if client.closed {
+		client.ledger.mu.Unlock()
+		return nil, closedClientFailure()
+	}
 	ledger := client.ledger.principals[client.principal]
 	if ledger == nil || ledger.operations[id] == nil {
-		client.ledger.mu.RUnlock()
+		client.ledger.mu.Unlock()
 		return nil, newFailure(FailureNotFoundOrDenied, "operation was not found", RetryNever)
 	}
 	entry := ledger.operations[id]
 	event := OperationEvent{Kind: OperationEventUpdate, Cursor: "1", Update: ptrOperation(copyOperation(entry.value))}
-	client.ledger.mu.RUnlock()
 	if from != "" && from != "0" && from != "1" {
+		client.ledger.mu.Unlock()
 		return nil, newFailure(FailureCursorExpired, "operation cursor is outside retained history", RetryNever)
 	}
-	return &sliceOperationStream{events: []OperationEvent{event}}, nil
+	if client.watches >= client.limits.maximumWatches {
+		client.ledger.mu.Unlock()
+		return nil, newFailure(FailureControlQuotaExceeded, "operation watch admission quota is exhausted", RetryCallerControlled)
+	}
+	client.watches++
+	client.ledger.mu.Unlock()
+	return &sliceOperationStream{events: []OperationEvent{event}, onClose: client.releaseWatch}, nil
+}
+
+func (client *coreClient) releaseWatch() {
+	client.ledger.mu.Lock()
+	defer client.ledger.mu.Unlock()
+	if client.watches > 0 {
+		client.watches--
+	}
 }
 
 func (client *coreClient) GetSandbox(ctx context.Context, id SandboxID) (SandboxInfo, error) {
@@ -378,6 +404,9 @@ func (client *coreClient) GetSandbox(ctx context.Context, id SandboxID) (Sandbox
 	}
 	client.ledger.mu.RLock()
 	defer client.ledger.mu.RUnlock()
+	if client.closed {
+		return SandboxInfo{}, closedClientFailure()
+	}
 	ledger := client.ledger.principals[client.principal]
 	if ledger == nil {
 		return SandboxInfo{}, newFailure(FailureNotFoundOrDenied, "sandbox was not found", RetryNever)
@@ -395,6 +424,9 @@ func (client *coreClient) GetProcess(ctx context.Context, id ProcessID) (Process
 	}
 	client.ledger.mu.RLock()
 	defer client.ledger.mu.RUnlock()
+	if client.closed {
+		return ProcessInfo{}, closedClientFailure()
+	}
 	ledger := client.ledger.principals[client.principal]
 	if ledger == nil || ledger.processes[id] == nil {
 		return ProcessInfo{}, newFailure(FailureNotFoundOrDenied, "process was not found", RetryNever)
@@ -407,13 +439,17 @@ func (client *coreClient) ReplayOutput(ctx context.Context, id ProcessID, from O
 		return nil, err
 	}
 	client.ledger.mu.RLock()
+	if client.closed {
+		client.ledger.mu.RUnlock()
+		return nil, closedClientFailure()
+	}
 	ledger := client.ledger.principals[client.principal]
 	if ledger == nil || ledger.processes[id] == nil {
 		client.ledger.mu.RUnlock()
 		return nil, newFailure(FailureNotFoundOrDenied, "process was not found", RetryNever)
 	}
 	record := ledger.processes[id]
-	events := append([]OutputEvent(nil), record.output...)
+	events := record.replayEvents()
 	client.ledger.mu.RUnlock()
 	return newSliceOutputStream(events, from)
 }
@@ -424,6 +460,9 @@ func (client *coreClient) GetVolume(ctx context.Context, id VolumeID) (VolumeInf
 	}
 	client.ledger.mu.RLock()
 	defer client.ledger.mu.RUnlock()
+	if client.closed {
+		return VolumeInfo{}, closedClientFailure()
+	}
 	ledger := client.ledger.principals[client.principal]
 	if ledger == nil {
 		return VolumeInfo{}, newFailure(FailureNotFoundOrDenied, "volume was not found", RetryNever)
@@ -444,6 +483,9 @@ func (client *coreClient) ListVolumes(ctx context.Context, page Page) (VolumePag
 	}
 	client.ledger.mu.RLock()
 	defer client.ledger.mu.RUnlock()
+	if client.closed {
+		return VolumePage{}, closedClientFailure()
+	}
 	ledger := client.ledger.principals[client.principal]
 	if ledger == nil {
 		return VolumePage{}, nil
@@ -457,6 +499,9 @@ func (client *coreClient) GetSnapshot(ctx context.Context, id SnapshotID) (Snaps
 	}
 	client.ledger.mu.RLock()
 	defer client.ledger.mu.RUnlock()
+	if client.closed {
+		return SnapshotInfo{}, closedClientFailure()
+	}
 	ledger := client.ledger.principals[client.principal]
 	if ledger == nil {
 		return SnapshotInfo{}, newFailure(FailureNotFoundOrDenied, "snapshot was not found", RetryNever)
@@ -477,6 +522,9 @@ func (client *coreClient) ListSnapshots(ctx context.Context, page Page) (Snapsho
 	}
 	client.ledger.mu.RLock()
 	defer client.ledger.mu.RUnlock()
+	if client.closed {
+		return SnapshotPage{}, closedClientFailure()
+	}
 	ledger := client.ledger.principals[client.principal]
 	if ledger == nil {
 		return SnapshotPage{}, nil
@@ -544,12 +592,12 @@ func (client *coreClient) startProcess(ctx context.Context, id ProcessID) error 
 func (client *coreClient) completeProcessLocked(ledger *principalLedger, record *processRecord, result ProcessResult) {
 	record.info.State = ProcessTerminal
 	record.info.Result = ptrProcessResult(copyProcessResult(result))
-	stdoutEvents := len(record.stdout.events)
 	record.stdout.Close(result)
-	client.captureOutputLocked(record, record.stdout, stdoutEvents)
-	stderrEvents := len(record.stderr.events)
+	client.dropOutputLocked(record, record.stdout.takeEvicted())
+	client.captureOutputLocked(record, record.stdout)
 	record.stderr.Close(result)
-	client.captureOutputLocked(record, record.stderr, stderrEvents)
+	client.dropOutputLocked(record, record.stderr.takeEvicted())
+	client.captureOutputLocked(record, record.stderr)
 	record.info.Stdout = record.stdout.Retention()
 	record.info.Stderr = record.stderr.Retention()
 	if entry := ledger.operations[record.operationID]; entry != nil && !isTerminalOperation(entry.value.State) {
@@ -575,7 +623,6 @@ func (client *coreClient) appendProcessOutput(id ProcessID, stream OutputKind, c
 	default:
 		return newFailure(FailureInvalidArgument, "output stream is invalid", RetryNever)
 	}
-	before := len(spool.events)
 	if err := spool.Write(chunk); err != nil {
 		failure, _ := AsFailure(err)
 		if failure.Code == FailureResourceLimitExceeded && ledger.processes[id].info.State != ProcessTerminal {
@@ -584,16 +631,20 @@ func (client *coreClient) appendProcessOutput(id ProcessID, stream OutputKind, c
 		}
 		return err
 	}
-	client.captureOutputLocked(ledger.processes[id], spool, before)
+	client.dropOutputLocked(ledger.processes[id], spool.takeEvicted())
+	client.captureOutputLocked(ledger.processes[id], spool)
 	return nil
 }
 
 // captureOutputLocked assigns one process-wide opaque cursor sequence after
 // each stream-specific spool transition. A replay therefore preserves the
 // control-plane observation order while each spool retains independent limits.
-func (client *coreClient) captureOutputLocked(record *processRecord, spool *outputSpool, from int) {
-	for index := from; index < len(spool.events); index++ {
+func (client *coreClient) captureOutputLocked(record *processRecord, spool *outputSpool) {
+	for index := range spool.events {
 		event := spool.events[index]
+		if record.hasOutputCursor(event.Cursor) {
+			continue
+		}
 		oldCursor := event.Cursor
 		record.nextOutput++
 		event.Cursor = outputCursor("output", record.nextOutput)
@@ -607,8 +658,56 @@ func (client *coreClient) captureOutputLocked(record *processRecord, spool *outp
 			}
 		}
 		spool.events[index] = event
-		record.output = append(record.output, copyOutputEvent(event))
+		record.output = append(record.output, outputReference{cursor: event.Cursor, stream: event.Stream})
 	}
+}
+
+func (record *processRecord) hasOutputCursor(cursor OutputCursor) bool {
+	for _, reference := range record.output {
+		if reference.cursor == cursor {
+			return true
+		}
+	}
+	return false
+}
+
+func (client *coreClient) dropOutputLocked(record *processRecord, cursors []OutputCursor) {
+	if len(cursors) == 0 {
+		return
+	}
+	dropped := make(map[OutputCursor]struct{}, len(cursors))
+	for _, cursor := range cursors {
+		dropped[cursor] = struct{}{}
+	}
+	kept := record.output[:0]
+	for _, reference := range record.output {
+		if _, found := dropped[reference.cursor]; !found {
+			kept = append(kept, reference)
+		}
+	}
+	record.output = kept
+}
+
+type outputReference struct {
+	cursor OutputCursor
+	stream OutputKind
+}
+
+func (record *processRecord) replayEvents() []OutputEvent {
+	events := make([]OutputEvent, 0, len(record.output))
+	for _, reference := range record.output {
+		spool := record.stdout
+		if reference.stream == OutputStderr {
+			spool = record.stderr
+		}
+		for _, event := range spool.events {
+			if event.Cursor == reference.cursor {
+				events = append(events, copyOutputEvent(event))
+				break
+			}
+		}
+	}
+	return events
 }
 
 func (client *coreClient) acceptedOperation(id OperationID) accepted {
@@ -1252,6 +1351,10 @@ func validateCanonicalStrings(value reflect.Value) error {
 }
 func newFailure(code FailureCode, message string, retry RetryClass) error {
 	return &Error{failure: Failure{Code: code, Message: message, Retry: retry}}
+}
+
+func closedClientFailure() error {
+	return newFailure(FailureUnavailable, "sandbox client is closed", RetryAfterReconcile)
 }
 func newContextFailure(code FailureCode, message string, cause error) error {
 	return &Error{failure: Failure{Code: code, Message: message, Retry: RetryNever}, contextCause: cause}

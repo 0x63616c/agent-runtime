@@ -19,6 +19,7 @@ type outputSpool struct {
 	nextCursor    uint64
 	firstCursor   OutputCursor
 	events        []OutputEvent
+	evicted       []OutputCursor
 	redactor      *literalRedactor
 }
 
@@ -50,14 +51,14 @@ func (spool *outputSpool) retain(chunk []byte, redacted bool) {
 	if len(chunk) == 0 {
 		return
 	}
-	remaining := int64(spool.retainedLimit - spool.retainedBytes)
-	if remaining <= 0 {
+	if uint64(len(chunk)) > spool.retainedLimit {
+		chunk = append([]byte(nil), chunk[uint64(len(chunk))-spool.retainedLimit:]...)
 		spool.truncated = true
-		return
 	}
-	if int64(len(chunk)) > remaining {
-		chunk = chunk[:remaining]
-		spool.truncated = true
+	for spool.retainedBytes+uint64(len(chunk)) > spool.retainedLimit {
+		if !spool.evictOldestChunk() {
+			break
+		}
 	}
 	spool.nextCursor++
 	cursor := outputCursor(spool.stream, spool.nextCursor)
@@ -66,6 +67,33 @@ func (spool *outputSpool) retain(chunk []byte, redacted bool) {
 	}
 	spool.retainedBytes += uint64(len(chunk))
 	spool.events = append(spool.events, OutputEvent{Kind: OutputEventChunk, Cursor: cursor, Stream: spool.stream, Chunk: &OutputChunk{Bytes: append([]byte(nil), chunk...), Redacted: redacted}})
+}
+
+func (spool *outputSpool) evictOldestChunk() bool {
+	for index, event := range spool.events {
+		if event.Kind != OutputEventChunk || event.Chunk == nil {
+			continue
+		}
+		spool.retainedBytes -= uint64(len(event.Chunk.Bytes))
+		spool.evicted = append(spool.evicted, event.Cursor)
+		spool.events = append(spool.events[:index], spool.events[index+1:]...)
+		spool.firstCursor = ""
+		for _, retained := range spool.events {
+			if retained.Kind == OutputEventChunk {
+				spool.firstCursor = retained.Cursor
+				break
+			}
+		}
+		spool.truncated = true
+		return true
+	}
+	return false
+}
+
+func (spool *outputSpool) takeEvicted() []OutputCursor {
+	evicted := append([]OutputCursor(nil), spool.evicted...)
+	spool.evicted = spool.evicted[:0]
+	return evicted
 }
 
 func (spool *outputSpool) Close(result ProcessResult) []OutputEvent {

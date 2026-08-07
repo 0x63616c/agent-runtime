@@ -4,6 +4,7 @@ import (
 	"context"
 	"sort"
 	"strconv"
+	"sync"
 )
 
 func sandboxIDFor(operationID OperationID) SandboxID {
@@ -212,15 +213,20 @@ func cursorStart(cursor PageCursor, values []string) int {
 }
 
 type sliceOperationStream struct {
-	events []OperationEvent
-	index  int
-	closed bool
+	events  []OperationEvent
+	index   int
+	closed  bool
+	onClose func()
+	mu      sync.Mutex
+	close   sync.Once
 }
 
 func (stream *sliceOperationStream) Next(ctx context.Context) (OperationEvent, error) {
 	if err := contextFailure(ctx); err != nil {
 		return OperationEvent{}, err
 	}
+	stream.mu.Lock()
+	defer stream.mu.Unlock()
 	if stream.closed || stream.index >= len(stream.events) {
 		return OperationEvent{}, newFailure(FailureCursorExpired, "operation stream is complete", RetryNever)
 	}
@@ -233,7 +239,14 @@ func (stream *sliceOperationStream) Next(ctx context.Context) (OperationEvent, e
 }
 
 func (stream *sliceOperationStream) Close() error {
-	stream.closed = true
+	stream.close.Do(func() {
+		stream.mu.Lock()
+		stream.closed = true
+		stream.mu.Unlock()
+		if stream.onClose != nil {
+			stream.onClose()
+		}
+	})
 	return nil
 }
 
@@ -241,6 +254,8 @@ type sliceOutputStream struct {
 	events []OutputEvent
 	index  int
 	closed bool
+	mu     sync.Mutex
+	close  sync.Once
 }
 
 func newSliceOutputStream(events []OutputEvent, from OutputCursor) (OutputStream, error) {
@@ -269,6 +284,8 @@ func (stream *sliceOutputStream) Next(ctx context.Context) (OutputEvent, error) 
 	if err := contextFailure(ctx); err != nil {
 		return OutputEvent{}, err
 	}
+	stream.mu.Lock()
+	defer stream.mu.Unlock()
 	if stream.closed || stream.index >= len(stream.events) {
 		return OutputEvent{}, newFailure(FailureCursorExpired, "output stream is complete", RetryNever)
 	}
@@ -278,7 +295,11 @@ func (stream *sliceOutputStream) Next(ctx context.Context) (OutputEvent, error) 
 }
 
 func (stream *sliceOutputStream) Close() error {
-	stream.closed = true
+	stream.close.Do(func() {
+		stream.mu.Lock()
+		stream.closed = true
+		stream.mu.Unlock()
+	})
 	return nil
 }
 
