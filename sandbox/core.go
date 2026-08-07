@@ -24,7 +24,6 @@ type coreClient struct {
 	principal string
 	now       time.Time
 	closed    bool
-	watches   uint32
 	streams   map[*sliceOperationStream]struct{}
 	limits    limitPolicy
 	ledger    *coreLedger
@@ -40,6 +39,7 @@ type coreLedger struct {
 
 type principalLedger struct {
 	operations map[OperationID]*accepted
+	watches    uint32
 	sandboxes  map[SandboxID]SandboxInfo
 	processes  map[ProcessID]*processRecord
 	volumes    map[VolumeID]VolumeInfo
@@ -377,11 +377,11 @@ func (client *coreClient) WatchOperation(ctx context.Context, id OperationID, fr
 		client.ledger.mu.Unlock()
 		return nil, newFailure(FailureCursorExpired, "operation cursor is outside retained history", RetryNever)
 	}
-	if client.watches >= client.limits.maximumWatches {
+	if ledger.watches >= client.limits.maximumWatches {
 		client.ledger.mu.Unlock()
 		return nil, newFailure(FailureControlQuotaExceeded, "operation watch admission quota is exhausted", RetryCallerControlled)
 	}
-	client.watches++
+	ledger.watches++
 	stream := &sliceOperationStream{events: []OperationEvent{event}}
 	stream.onClose = func() { client.releaseWatch(stream) }
 	client.streams[stream] = struct{}{}
@@ -392,8 +392,9 @@ func (client *coreClient) WatchOperation(ctx context.Context, id OperationID, fr
 func (client *coreClient) releaseWatch(stream *sliceOperationStream) {
 	client.ledger.mu.Lock()
 	defer client.ledger.mu.Unlock()
-	if client.watches > 0 {
-		client.watches--
+	ledger := client.ledger.principals[client.principal]
+	if ledger != nil && ledger.watches > 0 {
+		ledger.watches--
 	}
 	delete(client.streams, stream)
 }

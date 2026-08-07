@@ -536,6 +536,35 @@ func TestOperationWatchAdmissionIsFiniteAndReleasedOnLocalClose(t *testing.T) {
 	}
 }
 
+func TestOperationWatchAdmissionIsPrincipalScopedAcrossClients(t *testing.T) {
+	ledger := newCoreLedger()
+	policy := testLimitPolicy()
+	policy.maximumWatches = 1
+	first, err := newCoreClientWithLedger("principal-a", time.Date(2026, 8, 6, 12, 0, 0, 0, time.UTC), policy, ledger)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := newCoreClientWithLedger("principal-a", time.Date(2026, 8, 6, 12, 0, 0, 0, time.UTC), policy, ledger)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := validCreateRequest("op_shared_watch_capacity")
+	if _, err := first.Submit(context.Background(), request); err != nil {
+		t.Fatal(err)
+	}
+	stream, err := first.WatchOperation(context.Background(), request.ID, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if closeErr := stream.Close(); closeErr != nil {
+			t.Errorf("close operation stream: %v", closeErr)
+		}
+	})
+	_, err = second.WatchOperation(context.Background(), request.ID, "")
+	failureCode(t, err, FailureControlQuotaExceeded)
+}
+
 func TestClientCloseRejectsNewObservationWithoutClosingDurableOperation(t *testing.T) {
 	ledger := newCoreLedger()
 	policy := testLimitPolicy()
