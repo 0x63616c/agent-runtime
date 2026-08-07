@@ -3,8 +3,9 @@ package stack
 import (
 	"context"
 	"fmt"
-	"github.com/cockroachdb/errors"
 	"time"
+
+	"github.com/cockroachdb/errors"
 )
 
 // TemporalCLIAdapter reconciles namespaces through the declared Temporal deployment only.
@@ -29,7 +30,7 @@ func (adapter TemporalCLIAdapter) ReconcileOrchestration(ctx context.Context, ta
 		if r.Kind != ResourceOrchestration {
 			continue
 		}
-		args := []string{"--kubeconfig", target.Kubeconfig, "--context", target.Context, "exec", "Deployment/temporal", "--namespace", doc.Namespace, "--", "temporal", "operator", "namespace", "describe", "--namespace", r.Orchestration.Namespace, "--address", "127.0.0.1:7233"}
+		args := []string{"--kubeconfig", target.Kubeconfig, "--context", target.Context, "exec", "Deployment/temporal", "--namespace", doc.Namespace, "--", "temporal", "--address", "127.0.0.1:7233", "--command-timeout", "30s", "operator", "namespace", "describe", "--namespace", r.Orchestration.Namespace}
 		result, runErr := adapter.runner.Run(ctx, "kubectl", args, nil)
 		if runErr != nil {
 			return nil, errors.Wrap(runErr, "describe declared Temporal namespace")
@@ -39,7 +40,7 @@ func (adapter TemporalCLIAdapter) ReconcileOrchestration(ctx context.Context, ta
 				return nil, errors.New("reconcile declared Temporal namespace: retention days are invalid")
 			}
 			retention := time.Duration(r.Orchestration.RetentionDays) * 24 * time.Hour
-			create := []string{"--kubeconfig", target.Kubeconfig, "--context", target.Context, "exec", "Deployment/temporal", "--namespace", doc.Namespace, "--", "temporal", "operator", "namespace", "create", "--namespace", r.Orchestration.Namespace, "--retention", fmt.Sprintf("%dh", int64(retention/time.Hour)), "--address", "127.0.0.1:7233"}
+			create := []string{"--kubeconfig", target.Kubeconfig, "--context", target.Context, "exec", "Deployment/temporal", "--namespace", doc.Namespace, "--", "temporal", "--address", "127.0.0.1:7233", "--command-timeout", "30s", "operator", "namespace", "create", "--namespace", r.Orchestration.Namespace, "--retention", fmt.Sprintf("%dh", int64(retention/time.Hour))}
 			created, createErr := adapter.runner.Run(ctx, "kubectl", create, nil)
 			if createErr != nil || created.ExitCode != 0 {
 				return nil, errors.New("create declared Temporal namespace")
