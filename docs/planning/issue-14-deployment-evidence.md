@@ -16,6 +16,7 @@ go run ./cmd/stackctl render --stack-file deploy/production/stack.json --profile
 go run ./cmd/stackctl manifests --stack-file deploy/production/stack.json --profile production
 STATE_DATABASE_DSN=fixture TEMPORAL_AUTH_TOKEN=fixture go run ./cmd/runtime serve --config deploy/production/role-configs/orchestration.json --role orchestration --check
 go run ./cmd/egress-proxy --listen 127.0.0.1:8088 --allowed-target model-provider.example.invalid:443 --check
+docker build --file deploy/production/Dockerfile --tag agent-runtime-role-smoke:local .
 ```
 
 The migration artifacts were verified against the digests referenced by each
@@ -39,6 +40,13 @@ profile of the Stack:
   role replicas, service accounts, default-deny NetworkPolicies, explicit
   ingress routing, Temporal namespace retention, blob prefix, telemetry, and
   reversible migration artifacts.
+- The pinned-base production Dockerfile built under the local OrbStack Docker
+  engine. Its local manifest identity was
+  `sha256:5351594ba7e4c8e1cb2b12a0aeab206f825db7f572d537935f4a654274fabdab`.
+  The container ran as a read-only non-root process with dropped Linux
+  capabilities, accepted only its declared orchestration credentials, and
+  returned `{"role":"orchestration","namespace":"agent-runtime","status":"ready"}`
+  from its dynamically bound `/readyz` port before containment-safe removal.
 
 ## Remaining acceptance evidence
 
