@@ -22,7 +22,7 @@ func TestMilestoneNotify(t *testing.T) {
 }
 
 var _ = Describe("milestone-notify", func() {
-	It("retains and posts the bounded M0 completion record through injected time and HTTP", func() {
+	It("retains and posts the selected bounded milestone through injected time and HTTP", func() {
 		root, err := filepath.Abs("../..")
 		Expect(err).NotTo(HaveOccurred())
 		directory := GinkgoT().TempDir()
@@ -32,6 +32,7 @@ var _ = Describe("milestone-notify", func() {
 		var output bytes.Buffer
 
 		err = run([]string{
+			"-milestone", "M0",
 			"-catalog", filepath.Join(root, "evidence/requirements-catalog.json"),
 			"-ledger", filepath.Join(root, "evidence/requirements-ledger.json"),
 			"-record-dir", directory,
@@ -53,6 +54,33 @@ var _ = Describe("milestone-notify", func() {
 		Expect(output.String()).To(ContainSubstring(`"delivery":"sent"`))
 	})
 
+	It("retains and posts the bounded M2 completion record", func() {
+		root, err := filepath.Abs("../..")
+		Expect(err).NotTo(HaveOccurred())
+		fakeClock, err := clock.NewFake(time.Date(2026, 8, 7, 7, 0, 0, 0, time.UTC))
+		Expect(err).NotTo(HaveOccurred())
+		client := &recordingHTTPClient{statusCode: http.StatusOK}
+		var output bytes.Buffer
+
+		err = run([]string{
+			"-milestone", "M2",
+			"-catalog", filepath.Join(root, "evidence/requirements-catalog.json"),
+			"-ledger", filepath.Join(root, "evidence/requirements-ledger.json"),
+			"-record-dir", GinkgoT().TempDir(),
+			"-revision", "8c7b9ef3c61acf27959ee12fbdd51c695ffe5795",
+		}, &output, fakeClock, client, func(string) (string, bool) { return "", false })
+		Expect(err).NotTo(HaveOccurred())
+		Expect(client.requests).To(HaveLen(1))
+		var payload map[string]json.RawMessage
+		Expect(json.Unmarshal(client.bodies[0], &payload)).To(Succeed())
+		Expect(string(payload["milestone"])).To(Equal(`"M2 payload and blob infrastructure"`))
+		Expect(string(payload["next_milestone"])).To(Equal(`"M3 durable sandbox control"`))
+		var evidence []map[string]string
+		Expect(json.Unmarshal(payload["evidence_summary"], &evidence)).To(Succeed())
+		Expect(evidence).To(HaveLen(10))
+		Expect(output.String()).To(ContainSubstring(`"status":"completed"`))
+	})
+
 	It("refuses a caller-supplied terminal requirement subset", func() {
 		root, err := filepath.Abs("../..")
 		Expect(err).NotTo(HaveOccurred())
@@ -60,6 +88,7 @@ var _ = Describe("milestone-notify", func() {
 		Expect(err).NotTo(HaveOccurred())
 
 		err = run([]string{
+			"-milestone", "M0",
 			"-catalog", filepath.Join(root, "evidence/requirements-catalog.json"),
 			"-ledger", filepath.Join(root, "evidence/requirements-ledger.json"),
 			"-record-dir", GinkgoT().TempDir(),
@@ -82,12 +111,29 @@ var _ = Describe("milestone-notify", func() {
 		Expect(err).NotTo(HaveOccurred())
 
 		err = run([]string{
+			"-milestone", "M0",
 			"-catalog", catalogPath,
 			"-ledger", filepath.Join(root, "evidence/requirements-ledger.json"),
 			"-record-dir", GinkgoT().TempDir(),
 			"-revision", "4439138",
 		}, io.Discard, fakeClock, &recordingHTTPClient{statusCode: http.StatusOK}, func(string) (string, bool) { return "", false })
 		Expect(err).To(MatchError("validate M0 terminal requirements: catalog ownership mismatch"))
+	})
+
+	It("requires a supported milestone instead of accepting caller-authored report labels", func() {
+		root, err := filepath.Abs("../..")
+		Expect(err).NotTo(HaveOccurred())
+		fakeClock, err := clock.NewFake(time.Date(2026, 8, 7, 7, 0, 0, 0, time.UTC))
+		Expect(err).NotTo(HaveOccurred())
+
+		err = run([]string{
+			"-milestone", "M99",
+			"-catalog", filepath.Join(root, "evidence/requirements-catalog.json"),
+			"-ledger", filepath.Join(root, "evidence/requirements-ledger.json"),
+			"-record-dir", GinkgoT().TempDir(),
+			"-revision", "8c7b9ef3c61acf27959ee12fbdd51c695ffe5795",
+		}, io.Discard, fakeClock, &recordingHTTPClient{statusCode: http.StatusOK}, func(string) (string, bool) { return "", false })
+		Expect(err).To(MatchError("milestone notification does not support milestone M99"))
 	})
 })
 

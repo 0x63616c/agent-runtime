@@ -1,4 +1,4 @@
-// Command milestone-notify retains and sends the bounded M0 completion report.
+// Command milestone-notify retains and sends a bounded milestone completion report.
 package main
 
 import (
@@ -20,7 +20,27 @@ import (
 	"github.com/cockroachdb/errors"
 )
 
-var expectedM0TerminalRequirements = []milestone.RequirementID{"DOC-005", "DOC-008", "MON-004", "MON-005", "MON-006", "MON-007", "MON-008"}
+type milestoneDefinition struct {
+	code                 milestone.MilestoneID
+	reportName           milestone.MilestoneID
+	nextMilestone        milestone.MilestoneID
+	terminalRequirements []milestone.RequirementID
+}
+
+var milestoneDefinitions = map[milestone.MilestoneID]milestoneDefinition{
+	"M0": {
+		code:                 "M0",
+		reportName:           "M0 foundation",
+		nextMilestone:        "M1 isolated Tilt environment",
+		terminalRequirements: []milestone.RequirementID{"DOC-005", "DOC-008", "MON-004", "MON-005", "MON-006", "MON-007", "MON-008"},
+	},
+	"M2": {
+		code:                 "M2",
+		reportName:           "M2 payload and blob infrastructure",
+		nextMilestone:        "M3 durable sandbox control",
+		terminalRequirements: []milestone.RequirementID{"PAY-001", "PAY-002", "PAY-003", "PAY-004", "PAY-005", "PAY-006", "PAY-007", "PAY-008", "TMP-005", "TMP-006"},
+	},
+}
 
 func main() {
 	if err := run(os.Args[1:], os.Stdout, wallClock{}, &http.Client{Timeout: 15 * time.Second}, os.LookupEnv); err != nil {
@@ -32,8 +52,9 @@ func main() {
 func run(arguments []string, output io.Writer, source clock.Clock, client milestone.HTTPClient, lookupEnv func(string) (string, bool)) error {
 	flags := flag.NewFlagSet("milestone-notify", flag.ContinueOnError)
 	flags.SetOutput(output)
-	var catalogPath, ledgerPath, recordDirectory, revision, tokenEnvironment, uncertainty string
+	var catalogPath, ledgerPath, recordDirectory, revision, tokenEnvironment, uncertainty, milestoneCode string
 	var retry bool
+	flags.StringVar(&milestoneCode, "milestone", "", "supported milestone code to report")
 	flags.StringVar(&catalogPath, "catalog", "", "path to the complete canonical requirement catalog JSON file")
 	flags.StringVar(&ledgerPath, "ledger", "", "path to the complete canonical evidence ledger JSON file")
 	flags.StringVar(&recordDirectory, "record-dir", "", "private directory for durable milestone delivery records")
@@ -44,8 +65,8 @@ func run(arguments []string, output io.Writer, source clock.Clock, client milest
 	if err := flags.Parse(arguments); err != nil {
 		return errors.Wrap(err, "parse milestone notification arguments")
 	}
-	if catalogPath == "" || ledgerPath == "" || recordDirectory == "" || revision == "" {
-		return errors.New("milestone notification requires -catalog, -ledger, -record-dir, and -revision")
+	if milestoneCode == "" || catalogPath == "" || ledgerPath == "" || recordDirectory == "" || revision == "" {
+		return errors.New("milestone notification requires -milestone, -catalog, -ledger, -record-dir, and -revision")
 	}
 	if source == nil || client == nil || lookupEnv == nil {
 		return errors.New("milestone notification requires clock, HTTP client, and environment lookup")
@@ -66,7 +87,11 @@ func run(arguments []string, output io.Writer, source clock.Clock, client milest
 	if err != nil {
 		return errors.Wrap(err, "parse milestone ledger")
 	}
-	required, err := m0TerminalRequirements(catalog)
+	definition, ok := milestoneDefinitions[milestone.MilestoneID(milestoneCode)]
+	if !ok {
+		return errors.Newf("milestone notification does not support milestone %s", milestoneCode)
+	}
+	required, err := terminalRequirements(catalog, definition)
 	if err != nil {
 		return err
 	}
@@ -93,8 +118,8 @@ func run(arguments []string, output io.Writer, source clock.Clock, client milest
 		return err
 	}
 	input := milestone.ReportInput{
-		Milestone:              "M0 foundation",
-		NextMilestone:          "M1 isolated Tilt environment",
+		Milestone:              definition.reportName,
+		NextMilestone:          definition.nextMilestone,
 		Revision:               milestone.RevisionRef(revision),
 		TerminalRequirementIDs: required,
 		Uncertainty:            uncertainties,
@@ -116,20 +141,20 @@ func run(arguments []string, output io.Writer, source clock.Clock, client milest
 	}{Milestone: record.Report.Milestone, Status: record.Report.Status, Delivery: record.Delivery, Attempts: record.Attempts})
 }
 
-func m0TerminalRequirements(catalog milestone.Catalog) ([]milestone.RequirementID, error) {
-	actual := make([]milestone.RequirementID, 0, len(expectedM0TerminalRequirements))
+func terminalRequirements(catalog milestone.Catalog, definition milestoneDefinition) ([]milestone.RequirementID, error) {
+	actual := make([]milestone.RequirementID, 0, len(definition.terminalRequirements))
 	for _, requirement := range catalog.Requirements {
-		if requirement.Milestone == "M0" {
+		if requirement.Milestone == definition.code {
 			actual = append(actual, requirement.ID)
 		}
 	}
 	sort.Slice(actual, func(left, right int) bool { return actual[left] < actual[right] })
-	if len(actual) != len(expectedM0TerminalRequirements) {
-		return nil, errors.New("validate M0 terminal requirements: catalog ownership mismatch")
+	if len(actual) != len(definition.terminalRequirements) {
+		return nil, errors.Newf("validate %s terminal requirements: catalog ownership mismatch", definition.code)
 	}
-	for index, requirement := range expectedM0TerminalRequirements {
+	for index, requirement := range definition.terminalRequirements {
 		if actual[index] != requirement {
-			return nil, errors.New("validate M0 terminal requirements: catalog ownership mismatch")
+			return nil, errors.Newf("validate %s terminal requirements: catalog ownership mismatch", definition.code)
 		}
 	}
 	return append([]milestone.RequirementID(nil), actual...), nil
