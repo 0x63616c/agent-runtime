@@ -302,7 +302,7 @@ func (ledger *MemoryLedger) RecordAuthenticatedHostOutput(ctx context.Context, i
 		return false, err
 	}
 	_, operation, _, ok := ledger.assignmentLocked(identity, output.AssignmentID, output.FencingToken)
-	if !ok || !validHostOutputBinding(identity, operation, output, receivedAt) {
+	if !ok || !validHostOutputImmutableBinding(identity, operation, output) {
 		return false, ErrStaleFence
 	}
 	fields := outputFields(output)
@@ -312,6 +312,9 @@ func (ledger *MemoryLedger) RecordAuthenticatedHostOutput(ctx context.Context, i
 			return false, ErrHostProtocolViolation
 		}
 		return true, nil
+	}
+	if !validHostOutputLiveBinding(operation, output, receivedAt) {
+		return false, ErrStaleFence
 	}
 	var last uint64
 	for _, prior := range ledger.hostOutput {
@@ -339,7 +342,7 @@ func (ledger *MemoryLedger) RecordAuthenticatedHostResult(ctx context.Context, i
 	}
 	key := operationKey(result.Principal, result.OperationID)
 	operation, exists := ledger.operations[key]
-	if !exists || result.HostID != identity.HostID || result.HostGeneration != identity.Generation || result.AssignmentID != operation.Assignment.AssignmentID || result.LeaseEpoch != operation.Assignment.LeaseEpoch || result.FencingToken != operation.Assignment.FencingToken || result.EffectiveSpecDigest != operation.EffectiveSpecDigest || result.CapabilityDigest != operation.CapabilityDigest || !receivedAt.Before(operation.Assignment.LeaseExpiresAt) {
+	if !exists || !validHostResultImmutableBinding(identity, operation, result) {
 		return Operation{}, ErrStaleFence
 	}
 	fields := ledger.dispatches[key]
@@ -350,6 +353,15 @@ func (ledger *MemoryLedger) RecordAuthenticatedHostResult(ctx context.Context, i
 	resultDigest, err := authenticatedResultDigest(result)
 	if err != nil {
 		return Operation{}, ErrHostProtocolViolation
+	}
+	if operation.State == next && isTerminalState(next) {
+		if fields.ResultDigest == resultDigest {
+			return operation, nil
+		}
+		return Operation{}, ErrHostProtocolViolation
+	}
+	if !validHostResultLiveBinding(operation, result, receivedAt) {
+		return Operation{}, ErrStaleFence
 	}
 	if operation.State == next {
 		if fields.ResultDigest == resultDigest {
@@ -476,8 +488,20 @@ func validDeliverySeed(seed DeliverySeed, requireAssignment bool) bool {
 	return validBounded(seed.EnvelopeID, 128) && validBounded(seed.DeliveryID, 128) && validBounded(seed.Nonce, 128)
 }
 
-func validHostOutputBinding(identity HostIdentity, operation Operation, output sandboxhostprotocol.Output, receivedAt time.Time) bool {
-	return output.ProtocolVersion == sandboxhostprotocol.Version && output.HostID == identity.HostID && output.HostGeneration == identity.Generation && output.AssignmentID == operation.Assignment.AssignmentID && output.LeaseEpoch == operation.Assignment.LeaseEpoch && output.FencingToken == operation.Assignment.FencingToken && output.Principal == operation.Principal && output.OperationID == operation.ID && (operation.State == StateDispatched || operation.State == StateStarted) && receivedAt.Before(operation.Assignment.LeaseExpiresAt) && (output.Stream == "stdout" || output.Stream == "stderr") && output.Sequence > 0 && validBounded(output.OutputID, 128) && validBounded(output.ChunkDigest, maxDigestBytes) && output.SizeBytes > 0 && output.SizeBytes <= 256<<10 && !output.ObservedAt.IsZero() && !output.ObservedAt.After(receivedAt)
+func validHostOutputImmutableBinding(identity HostIdentity, operation Operation, output sandboxhostprotocol.Output) bool {
+	return output.ProtocolVersion == sandboxhostprotocol.Version && output.HostID == identity.HostID && output.HostGeneration == identity.Generation && output.AssignmentID == operation.Assignment.AssignmentID && output.LeaseEpoch == operation.Assignment.LeaseEpoch && output.FencingToken == operation.Assignment.FencingToken && output.Principal == operation.Principal && output.OperationID == operation.ID && (output.Stream == "stdout" || output.Stream == "stderr") && output.Sequence > 0 && validBounded(output.OutputID, 128) && validBounded(output.ChunkDigest, maxDigestBytes) && output.SizeBytes > 0 && output.SizeBytes <= 256<<10 && !output.ObservedAt.IsZero()
+}
+
+func validHostOutputLiveBinding(operation Operation, output sandboxhostprotocol.Output, receivedAt time.Time) bool {
+	return (operation.State == StateDispatched || operation.State == StateStarted) && receivedAt.Before(operation.Assignment.LeaseExpiresAt) && !output.ObservedAt.After(receivedAt)
+}
+
+func validHostResultImmutableBinding(identity HostIdentity, operation Operation, result sandboxhostprotocol.Result) bool {
+	return result.HostID == identity.HostID && result.HostGeneration == identity.Generation && result.AssignmentID == operation.Assignment.AssignmentID && result.LeaseEpoch == operation.Assignment.LeaseEpoch && result.FencingToken == operation.Assignment.FencingToken && result.Principal == operation.Principal && result.OperationID == operation.ID && result.EffectiveSpecDigest == operation.EffectiveSpecDigest && result.CapabilityDigest == operation.CapabilityDigest && !result.ObservedAt.IsZero()
+}
+
+func validHostResultLiveBinding(operation Operation, result sandboxhostprotocol.Result, receivedAt time.Time) bool {
+	return receivedAt.Before(operation.Assignment.LeaseExpiresAt) && !result.ObservedAt.After(receivedAt)
 }
 
 func outputFields(output sandboxhostprotocol.Output) hostOutputFields {

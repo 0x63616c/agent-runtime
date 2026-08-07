@@ -96,6 +96,51 @@ func TestMemoryHostControlLostAckRestartFenceAndQuarantine(t *testing.T) {
 	}
 }
 
+func TestMemoryHostControlRecoversTerminalOutputAndResultAcksAfterLeaseExpiry(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 8, 7, 13, 0, 0, 0, time.UTC)
+	ledger := NewMemoryLedger()
+	_, hostPrivate, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	host := HostEnrollment{HostID: "host_ack_recovery", Tenant: "tenant_01", Pool: "pool_01", Generation: 1, ProtocolVersion: sandboxhostprotocol.Version, CertificateDigest: digest("1"), SigningPublicKey: hostPrivate.Public().(ed25519.PublicKey), CapabilityDigest: digest("2"), Status: HostActive, ExpiresAt: now.Add(time.Hour)}
+	if err := ledger.ProvisionHost(context.Background(), host); err != nil {
+		t.Fatal(err)
+	}
+	operation := Operation{Principal: "tenant_01:subject_01", Tenant: host.Tenant, ID: "op_ack_recovery", Kind: "close-sandbox", TargetKind: "sandbox", TargetID: "sbx_ack_recovery", InputDigest: digest("3"), CanonicalDigest: digest("4"), EffectiveSpecDigest: digest("5"), CapabilityDigest: host.CapabilityDigest, DispatchBody: `{"version":"sandbox.control/v1"}`, AcceptedAt: now, RetentionExpiresAt: now.Add(time.Hour), CleanupRequired: true}
+	if _, _, err := ledger.Accept(context.Background(), operation); err != nil {
+		t.Fatal(err)
+	}
+	identity := HostIdentity{HostID: host.HostID, Generation: host.Generation, CertificateDigest: host.CertificateDigest}
+	dispatch, err := ledger.PullHostAssignment(context.Background(), identity, now, now.Add(time.Minute), DeliverySeed{AssignmentID: "assignment_ack_recovery", EnvelopeID: "envelope_ack_recovery", DeliveryID: "delivery_ack_recovery", Nonce: "nonce_ack_recovery"}, testEnvelopeSigner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ledger.AcknowledgeHostAssignment(context.Background(), identity, dispatch.Operation.Assignment.AssignmentID, dispatch.Operation.Assignment.FencingToken, digest("6"), now.Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	output := sandboxhostprotocol.Output{ProtocolVersion: sandboxhostprotocol.Version, OutputID: "output_ack_recovery", HostID: host.HostID, HostGeneration: host.Generation, AssignmentID: dispatch.Operation.Assignment.AssignmentID, LeaseEpoch: dispatch.Operation.Assignment.LeaseEpoch, FencingToken: dispatch.Operation.Assignment.FencingToken, Principal: operation.Principal, OperationID: operation.ID, Stream: "stdout", Sequence: 1, ChunkDigest: digest("7"), SizeBytes: 12, ObservedAt: now.Add(2 * time.Second)}
+	if duplicate, err := ledger.RecordAuthenticatedHostOutput(context.Background(), identity, output, now.Add(2*time.Second)); err != nil || duplicate {
+		t.Fatalf("RecordAuthenticatedHostOutput(first) = %t, %v", duplicate, err)
+	}
+	result := sandboxhostprotocol.Result{ProtocolVersion: sandboxhostprotocol.Version, ResultID: "result_ack_recovery", HostID: host.HostID, HostGeneration: host.Generation, AssignmentID: dispatch.Operation.Assignment.AssignmentID, LeaseEpoch: dispatch.Operation.Assignment.LeaseEpoch, FencingToken: dispatch.Operation.Assignment.FencingToken, Principal: operation.Principal, OperationID: operation.ID, EffectiveSpecDigest: operation.EffectiveSpecDigest, CapabilityDigest: operation.CapabilityDigest, State: "succeeded", ObservedAt: now.Add(3 * time.Second)}
+	if completed, err := ledger.RecordAuthenticatedHostResult(context.Background(), identity, result, now.Add(3*time.Second)); err != nil || completed.State != StateSucceeded {
+		t.Fatalf("RecordAuthenticatedHostResult(first) = %#v, %v", completed, err)
+	}
+	retryAt := now.Add(2 * time.Minute)
+	if duplicate, err := ledger.RecordAuthenticatedHostOutput(context.Background(), identity, output, retryAt); err != nil || !duplicate {
+		t.Fatalf("RecordAuthenticatedHostOutput(after lease expiry) = %t, %v", duplicate, err)
+	}
+	if completed, err := ledger.RecordAuthenticatedHostResult(context.Background(), identity, result, retryAt); err != nil || completed.State != StateSucceeded {
+		t.Fatalf("RecordAuthenticatedHostResult(after lease expiry) = %#v, %v", completed, err)
+	}
+	if _, err := ledger.AuthenticateHost(context.Background(), identity, retryAt); err != nil {
+		t.Fatalf("host was quarantined after exact ACK recovery: %v", err)
+	}
+}
+
 func TestMemoryHostControlRefusesWrongTenantRevokedAndRogueIdentity(t *testing.T) {
 	t.Parallel()
 
