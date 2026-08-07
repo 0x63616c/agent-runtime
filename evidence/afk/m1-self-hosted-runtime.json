@@ -1,0 +1,73 @@
+{
+  "version": 1,
+  "milestone": "M1 self-hosted roles and deployment",
+  "proof_level": "local_kubernetes_integration",
+  "utc_time": "2026-08-07T06:44:06Z",
+  "implementation_revision": "6e5c5c18e89baa3b4941bc2fc1c151b7d8ea76b7",
+  "stack": {
+    "path": "deploy/production/stack.json",
+    "profile": "production",
+    "name": "agent-runtime",
+    "render_digest": "sha256:4b9e22ecb07cabff81dc72aacf6e9c08362a1fe1a228697f5ca4e783be4085ab"
+  },
+  "runtime_image": {
+    "reference": "ghcr.io/0x63616c/agent-runtime@sha256:7c60d4d6078da20db1f3c4e19cec03d033f9a37e4f7ec98fe5b1858f806ee1b3",
+    "source_revision": "a3729772cdd50d66c75da572afbc8290be64154b",
+    "platforms": [
+      "linux/amd64",
+      "linux/arm64"
+    ],
+    "publication_workflow_run": "31152555763",
+    "publication_workflow_url": "https://github.com/0x63616c/agent-runtime/actions/runs/31152555763",
+    "signed_attestation_verified": true,
+    "attestation_repository": "0x63616c/agent-runtime"
+  },
+  "command": {
+    "path": "deploy/production/run-kubernetes-smoke.sh",
+    "kubernetes_context": "orbstack",
+    "result": "passed"
+  },
+  "results": {
+    "operator_audit": {
+      "result": "applied",
+      "stack_render_digest": "sha256:4b9e22ecb07cabff81dc72aacf6e9c08362a1fe1a228697f5ca4e783be4085ab",
+      "declared_kubernetes_resource_ids": 50,
+      "observed_kubernetes_resource_ids": 50,
+      "exact_set_match": true
+    },
+    "kubernetes": {
+      "declared_deployments": 14,
+      "ready_deployments": 14,
+      "expected_pods": 17,
+      "running_ready_pods": 17
+    },
+    "migration": {
+      "database_resource": "runtime-database",
+      "version": 1,
+      "upgrade_digest": "sha256:9e2ebf76c416f3d3da19e1601a71a3b9742ff4641b2a31999774f32e0a9aea3f",
+      "result": "applied"
+    },
+    "temporal": {
+      "namespace": "agent-runtime",
+      "retention": "2592000s",
+      "declared_days": 30,
+      "structured_describe_match": true
+    },
+    "blob": {
+      "bucket": "issue14-smoke",
+      "object": "proof",
+      "content": "smoke",
+      "write_read_delete_round_trip": true,
+      "bucket_removed": true
+    },
+    "cleanup": {
+      "kubernetes_namespace": "agent-runtime",
+      "namespace_absent_after_run": true
+    }
+  },
+  "limitations": [
+    "local OrbStack integration is not production-cluster mutation evidence",
+    "backup and restore recovery is not proved by this artifact",
+    "production egress perimeter and observability exporter recovery remain separate evidence"
+  ]
+}
