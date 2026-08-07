@@ -8,28 +8,42 @@ set -euo pipefail
 
 smoke_image="${AGENT_RUNTIME_SMOKE_IMAGE:-agent-runtime-role-smoke:local}"
 repository_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-config_root="${repository_root}/deploy/production/role-configs"
+role_configs="$(go run "${repository_root}/cmd/stackctl" role-configs --stack-file "${repository_root}/deploy/production/stack.json" --profile production)"
+smoke_secret="$(od -An -N32 -tx1 /dev/urandom | tr -d ' \n')"
+
+export STATE_DATABASE_DSN="${smoke_secret}"
+export TEMPORAL_AUTH_TOKEN="${smoke_secret}"
+export CONVERSATION_ACCESS_TOKEN="${smoke_secret}"
+export MODEL_API_KEY="${smoke_secret}"
+export SANDBOX_CONTROL_TOKEN="${smoke_secret}"
+export TOOL_BROKER_TOKEN="${smoke_secret}"
+export BLOB_STORAGE_CREDENTIAL="${smoke_secret}"
+export CODEC_BLOB_CREDENTIAL="${smoke_secret}"
+export SANDBOX_HOST_CA="${smoke_secret}"
+export SANDBOX_STATE_DSN="${smoke_secret}"
+export SANDBOX_HOST_IDENTITY="${smoke_secret}"
 
 docker build --file "${repository_root}/deploy/production/Dockerfile" --tag "${smoke_image}" "${repository_root}"
 
 run_role() {
   local role="$1"
-  local config="$2"
-  shift 2
+  local config
+  config="$(printf '%s' "${role_configs}" | jq -cer --arg role "${role}" '.[$role]')"
+  shift
   docker run --rm --read-only --cap-drop ALL --security-opt no-new-privileges \
     "$@" \
-    -v "${config_root}/${config}:/config/role.json:ro" \
-    "${smoke_image}" serve --config /config/role.json --role "${role}" --check
+    -e RUNTIME_ROLE_CONFIG="${config}" \
+    "${smoke_image}" serve --config-env RUNTIME_ROLE_CONFIG --role "${role}" --check
 }
 
-run_role api api.json
-run_role orchestration orchestration.json -e STATE_DATABASE_DSN=fixture -e TEMPORAL_AUTH_TOKEN=fixture
-run_role model model.json -e CONVERSATION_ACCESS_TOKEN=fixture -e MODEL_API_KEY=fixture
-run_role tool tool.json -e SANDBOX_CONTROL_TOKEN=fixture -e TOOL_BROKER_TOKEN=fixture
-run_role blob blob.json -e BLOB_STORAGE_CREDENTIAL=fixture
-run_role codec codec.json -e CODEC_BLOB_CREDENTIAL=fixture
-run_role sandbox-control sandbox-control.json -e SANDBOX_HOST_CA=fixture -e SANDBOX_STATE_DSN=fixture
-run_role sandbox-host sandbox-host.json -e SANDBOX_HOST_IDENTITY=fixture -e SANDBOX_CONTROL_TOKEN=fixture
+run_role api
+run_role orchestration -e STATE_DATABASE_DSN -e TEMPORAL_AUTH_TOKEN
+run_role model -e CONVERSATION_ACCESS_TOKEN -e MODEL_API_KEY
+run_role tool -e SANDBOX_CONTROL_TOKEN -e TOOL_BROKER_TOKEN
+run_role blob -e BLOB_STORAGE_CREDENTIAL
+run_role codec -e CODEC_BLOB_CREDENTIAL
+run_role sandbox-control -e SANDBOX_HOST_CA -e SANDBOX_STATE_DSN
+run_role sandbox-host -e SANDBOX_HOST_IDENTITY -e SANDBOX_CONTROL_TOKEN
 
 docker run --rm --read-only --cap-drop ALL --security-opt no-new-privileges \
   --entrypoint /egress-proxy "${smoke_image}" \

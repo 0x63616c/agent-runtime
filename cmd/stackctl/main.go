@@ -2,6 +2,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"flag"
@@ -14,6 +15,7 @@ import (
 	"strings"
 	"syscall"
 
+	"github.com/0x63616c/agent-runtime/internal/roles"
 	"github.com/0x63616c/agent-runtime/internal/stack"
 	"github.com/cockroachdb/errors"
 )
@@ -34,7 +36,7 @@ func runWithProbe(ctx context.Context, arguments []string, output io.Writer, pro
 		return errors.Wrap(err, "run stack operator command")
 	}
 	if len(arguments) == 0 {
-		return errors.New("run stack operator command: render, manifests, check, diff, preflight, apply, observe, reconcile, rollback, or teardown is required")
+		return errors.New("run stack operator command: render, manifests, role-configs, check, diff, preflight, apply, observe, reconcile, rollback, or teardown is required")
 	}
 	switch arguments[0] {
 	case "render":
@@ -80,6 +82,23 @@ func runWithProbe(ctx context.Context, arguments []string, output io.Writer, pro
 		}
 		if _, err := output.Write(manifests.JSON()); err != nil {
 			return errors.Wrap(err, "write rendered Kubernetes manifests")
+		}
+		return nil
+	case "role-configs":
+		stackPath, profile, _, err := parseArguments("role-configs", arguments[1:], false)
+		if err != nil {
+			return err
+		}
+		rendered, err := loadAndRender(stackPath, profile)
+		if err != nil {
+			return err
+		}
+		configurations, err := extractRoleConfigurations(rendered.Resources())
+		if err != nil {
+			return err
+		}
+		if err := json.NewEncoder(output).Encode(configurations); err != nil {
+			return errors.Wrap(err, "write rendered runtime role configurations")
 		}
 		return nil
 	case "diff":
@@ -190,6 +209,37 @@ func runWithProbe(ctx context.Context, arguments []string, output io.Writer, pro
 	default:
 		return errors.Newf("run stack operator command: unknown command %q", arguments[0])
 	}
+}
+
+func extractRoleConfigurations(resources []stack.Resource) (map[string]json.RawMessage, error) {
+	configurations := make(map[string]json.RawMessage)
+	for _, resource := range resources {
+		if resource.Kubernetes == nil {
+			continue
+		}
+		for _, variable := range resource.Kubernetes.Environment {
+			if variable.Name != "RUNTIME_ROLE_CONFIG" {
+				continue
+			}
+			configuration, err := roles.Parse(strings.NewReader(variable.Value))
+			if err != nil {
+				return nil, errors.Wrapf(err, "extract runtime role configuration from resource %s", resource.ID)
+			}
+			role := string(configuration.Role())
+			if _, duplicate := configurations[role]; duplicate {
+				return nil, errors.Newf("extract runtime role configurations: role %s is declared more than once", role)
+			}
+			var canonical bytes.Buffer
+			if err := json.Compact(&canonical, []byte(variable.Value)); err != nil {
+				return nil, errors.Wrapf(err, "canonicalize runtime role configuration %s", role)
+			}
+			configurations[role] = append(json.RawMessage(nil), canonical.Bytes()...)
+		}
+	}
+	if len(configurations) == 0 {
+		return nil, errors.New("extract runtime role configurations: Stack declares no runtime roles")
+	}
+	return configurations, nil
 }
 
 func parsePreflightArguments(arguments []string) (string, stack.Profile, stack.OperatorTarget, error) {
