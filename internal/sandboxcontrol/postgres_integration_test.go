@@ -221,6 +221,58 @@ func TestPostgresHostControlPersistsLostAckAndQuarantineAcrossRestart(t *testing
 	}
 }
 
+func TestPostgresHostControlRecoversTerminalOutputAndResultAcksAfterLeaseExpiry(t *testing.T) {
+	dsn := os.Getenv("AR_SANDBOXCONTROL_POSTGRES_DSN")
+	if dsn == "" {
+		t.Fatal("AR_SANDBOXCONTROL_POSTGRES_DSN is required for the integration suite")
+	}
+	ctx := context.Background()
+	pool := openIntegrationPool(t, ctx, dsn)
+	t.Cleanup(pool.Close)
+	if _, err := pool.Exec(ctx, `TRUNCATE runtime.sandbox_host_outputs, runtime.sandbox_host_dispatches, runtime.sandbox_host_enrollments, runtime.sandbox_operation_outbox, runtime.sandbox_operations RESTART IDENTITY`); err != nil {
+		t.Fatalf("truncate host ACK recovery ledger: %v", err)
+	}
+	ledger, err := NewPostgresLedger(pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 8, 7, 4, 0, 0, 0, time.UTC)
+	host := HostEnrollment{HostID: "host_pg_ack", Tenant: "tenant-pg", Pool: "pool-pg", Generation: 1, ProtocolVersion: sandboxhostprotocol.Version, CertificateDigest: digest("1"), SigningPublicKey: make(ed25519.PublicKey, ed25519.PublicKeySize), CapabilityDigest: digest("2"), Status: HostActive, ExpiresAt: now.Add(time.Hour)}
+	if err := ledger.ProvisionHost(ctx, host); err != nil {
+		t.Fatal(err)
+	}
+	operation := Operation{Principal: "tenant-pg:subject-pg", Tenant: host.Tenant, ID: "op_pg_ack", Kind: "close-sandbox", TargetKind: "sandbox", TargetID: "sbx_pg_ack", InputDigest: digest("3"), CanonicalDigest: digest("4"), EffectiveSpecDigest: digest("5"), CapabilityDigest: host.CapabilityDigest, DispatchBody: `{"version":"sandbox.control/v1"}`, AcceptedAt: now, RetentionExpiresAt: now.Add(time.Hour), CleanupRequired: true}
+	if _, _, err := ledger.Accept(ctx, operation); err != nil {
+		t.Fatal(err)
+	}
+	identity := HostIdentity{HostID: host.HostID, Generation: host.Generation, CertificateDigest: host.CertificateDigest}
+	dispatch, err := ledger.PullHostAssignment(ctx, identity, now, now.Add(time.Minute), DeliverySeed{AssignmentID: "assignment_pg_ack", EnvelopeID: "envelope_pg_ack", DeliveryID: "delivery_pg_ack", Nonce: "nonce_pg_ack"}, testEnvelopeSigner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ledger.AcknowledgeHostAssignment(ctx, identity, dispatch.Operation.Assignment.AssignmentID, dispatch.Operation.Assignment.FencingToken, digest("6"), now.Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	output := sandboxhostprotocol.Output{ProtocolVersion: sandboxhostprotocol.Version, OutputID: "output_pg_ack", HostID: host.HostID, HostGeneration: host.Generation, AssignmentID: dispatch.Operation.Assignment.AssignmentID, LeaseEpoch: dispatch.Operation.Assignment.LeaseEpoch, FencingToken: dispatch.Operation.Assignment.FencingToken, Principal: operation.Principal, OperationID: operation.ID, Stream: "stderr", Sequence: 1, ChunkDigest: digest("7"), SizeBytes: 8, ObservedAt: now.Add(2 * time.Second)}
+	if duplicate, err := ledger.RecordAuthenticatedHostOutput(ctx, identity, output, now.Add(2*time.Second)); err != nil || duplicate {
+		t.Fatalf("RecordAuthenticatedHostOutput(first) = %t, %v", duplicate, err)
+	}
+	result := sandboxhostprotocol.Result{ProtocolVersion: sandboxhostprotocol.Version, ResultID: "result_pg_ack", HostID: host.HostID, HostGeneration: host.Generation, AssignmentID: dispatch.Operation.Assignment.AssignmentID, LeaseEpoch: dispatch.Operation.Assignment.LeaseEpoch, FencingToken: dispatch.Operation.Assignment.FencingToken, Principal: operation.Principal, OperationID: operation.ID, EffectiveSpecDigest: operation.EffectiveSpecDigest, CapabilityDigest: operation.CapabilityDigest, State: "succeeded", ObservedAt: now.Add(3 * time.Second)}
+	if completed, err := ledger.RecordAuthenticatedHostResult(ctx, identity, result, now.Add(3*time.Second)); err != nil || completed.State != StateSucceeded {
+		t.Fatalf("RecordAuthenticatedHostResult(first) = %#v, %v", completed, err)
+	}
+	retryAt := now.Add(2 * time.Minute)
+	if duplicate, err := ledger.RecordAuthenticatedHostOutput(ctx, identity, output, retryAt); err != nil || !duplicate {
+		t.Fatalf("RecordAuthenticatedHostOutput(after lease expiry) = %t, %v", duplicate, err)
+	}
+	if completed, err := ledger.RecordAuthenticatedHostResult(ctx, identity, result, retryAt); err != nil || completed.State != StateSucceeded {
+		t.Fatalf("RecordAuthenticatedHostResult(after lease expiry) = %#v, %v", completed, err)
+	}
+	if _, err := ledger.AuthenticateHost(ctx, identity, retryAt); err != nil {
+		t.Fatalf("host was quarantined after exact ACK recovery: %v", err)
+	}
+}
+
 func openIntegrationPool(t *testing.T, ctx context.Context, dsn string) *pgxpool.Pool {
 	t.Helper()
 	config, err := pgxpool.ParseConfig(dsn)

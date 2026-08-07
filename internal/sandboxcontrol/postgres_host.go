@@ -229,7 +229,7 @@ func (ledger *PostgresLedger) RecordAuthenticatedHostOutput(ctx context.Context,
 			return err
 		}
 		operation, _, err := postgresAssignment(ctx, tx, identity, output.AssignmentID)
-		if err != nil || !validHostOutputBinding(identity, operation, output, receivedAt) {
+		if err != nil || !validHostOutputImmutableBinding(identity, operation, output) {
 			return ErrStaleFence
 		}
 		var prior hostOutputFields
@@ -248,6 +248,9 @@ func (ledger *PostgresLedger) RecordAuthenticatedHostOutput(ctx context.Context,
 		}
 		if !errors.Is(err, pgx.ErrNoRows) {
 			return errors.Wrap(err, "read sandbox host output sequence")
+		}
+		if !validHostOutputLiveBinding(operation, output, receivedAt) {
+			return ErrStaleFence
 		}
 		var last int64
 		if err := tx.QueryRow(ctx, `SELECT COALESCE(MAX(sequence),0) FROM runtime.sandbox_host_outputs WHERE assignment_id=$1 AND stream=$2`, output.AssignmentID, output.Stream).Scan(&last); err != nil {
@@ -272,7 +275,7 @@ func (ledger *PostgresLedger) RecordAuthenticatedHostResult(ctx context.Context,
 			return err
 		}
 		operation, fields, err := postgresAssignment(ctx, tx, identity, result.AssignmentID)
-		if err != nil || result.HostID != identity.HostID || result.HostGeneration != identity.Generation || result.Principal != operation.Principal || result.OperationID != operation.ID || result.LeaseEpoch != operation.Assignment.LeaseEpoch || result.FencingToken != operation.Assignment.FencingToken || result.EffectiveSpecDigest != operation.EffectiveSpecDigest || result.CapabilityDigest != operation.CapabilityDigest || !receivedAt.Before(operation.Assignment.LeaseExpiresAt) {
+		if err != nil || !validHostResultImmutableBinding(identity, operation, result) {
 			return ErrStaleFence
 		}
 		if fields.ReceiptDigest == "" {
@@ -282,6 +285,16 @@ func (ledger *PostgresLedger) RecordAuthenticatedHostResult(ctx context.Context,
 		resultDigest, err := authenticatedResultDigest(result)
 		if err != nil {
 			return ErrHostProtocolViolation
+		}
+		if operation.State == next && isTerminalState(next) {
+			if fields.ResultDigest == resultDigest {
+				updated = operation
+				return nil
+			}
+			return ErrHostProtocolViolation
+		}
+		if !validHostResultLiveBinding(operation, result, receivedAt) {
+			return ErrStaleFence
 		}
 		if operation.State == next {
 			if fields.ResultDigest == resultDigest {

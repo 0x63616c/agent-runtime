@@ -82,6 +82,14 @@ func TestHostHandlerPullLostAckReceiptRenewAndResult(t *testing.T) {
 	if renewedReceipt.Code != http.StatusOK {
 		t.Fatalf("renewed receipt status=%d body=%s", renewedReceipt.Code, renewedReceipt.Body.String())
 	}
+	terminalOutputBytes, err := sandboxhostprotocol.SignOutput(sandboxhostprotocol.Output{ProtocolVersion: sandboxhostprotocol.Version, OutputID: "output_02", HostID: host.HostID, HostGeneration: host.Generation, AssignmentID: renewed.AssignmentID, LeaseEpoch: renewed.LeaseEpoch, FencingToken: renewed.FencingToken, Principal: operation.Principal, OperationID: operation.ID, Stream: "stdout", Sequence: 2, ChunkDigest: testDigest('a'), SizeBytes: 6, ObservedAt: now}, hostPrivate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	terminalOutput := performBytes(t, handler, certificate, http.MethodPost, outputPath, terminalOutputBytes)
+	if terminalOutput.Code != http.StatusOK {
+		t.Fatalf("terminal output status=%d body=%s", terminalOutput.Code, terminalOutput.Body.String())
+	}
 	resultBytes, err := sandboxhostprotocol.SignResult(sandboxhostprotocol.Result{ProtocolVersion: sandboxhostprotocol.Version, ResultID: "result_01", HostID: host.HostID, HostGeneration: host.Generation, AssignmentID: renewed.AssignmentID, LeaseEpoch: renewed.LeaseEpoch, FencingToken: renewed.FencingToken, Principal: operation.Principal, OperationID: operation.ID, EffectiveSpecDigest: operation.EffectiveSpecDigest, CapabilityDigest: operation.CapabilityDigest, State: "succeeded", ObservedAt: now}, hostPrivate)
 	if err != nil {
 		t.Fatal(err)
@@ -93,6 +101,18 @@ func TestHostHandlerPullLostAckReceiptRenewAndResult(t *testing.T) {
 	resultRetry := performBytes(t, handler, certificate, http.MethodPost, resultPath, resultBytes)
 	if resultRetry.Code != http.StatusOK {
 		t.Fatalf("result retry status=%d body=%s", resultRetry.Code, resultRetry.Body.String())
+	}
+	if err := fakeClock.Advance(2 * time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	lateOutputRetry := performBytes(t, handler, certificate, http.MethodPost, outputPath, terminalOutputBytes)
+	lateResultRetry := performBytes(t, handler, certificate, http.MethodPost, resultPath, resultBytes)
+	if lateOutputRetry.Code != http.StatusOK || !bytes.Contains(lateOutputRetry.Body.Bytes(), []byte(`"duplicate":true`)) || lateResultRetry.Code != http.StatusOK {
+		t.Fatalf("post-lease ACK recovery output=%d/%s result=%d/%s", lateOutputRetry.Code, lateOutputRetry.Body.String(), lateResultRetry.Code, lateResultRetry.Body.String())
+	}
+	identity := sandboxcontrol.HostIdentity{HostID: host.HostID, Generation: host.Generation, CertificateDigest: host.CertificateDigest}
+	if _, err := store.AuthenticateHost(context.Background(), identity, fakeClock.Now()); err != nil {
+		t.Fatalf("host was quarantined after exact ACK recovery: %v", err)
 	}
 	got, err := store.Get(context.Background(), operation.Principal, operation.ID)
 	if err != nil || got.State != sandboxcontrol.StateSucceeded {
