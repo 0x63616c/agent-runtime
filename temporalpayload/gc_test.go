@@ -69,24 +69,14 @@ func TestGarbageCollectorDoesNotDeleteWhenAReferenceIsCreatedAfterListing(t *tes
 	now := time.Date(2026, 8, 7, 12, 0, 0, 0, time.UTC)
 	key := BlobKey("tenant/temporal-payload/v1/sha256/reference-race")
 	coordinator := &referenceRaceCoordinator{
-		object:       BlobObject{Key: key, CreatedAt: now.Add(-48 * time.Hour)},
-		listed:       make(chan struct{}),
-		continueList: make(chan struct{}),
+		object: BlobObject{Key: key, CreatedAt: now.Add(-48 * time.Hour)},
 	}
 	collector, err := NewGarbageCollector(coordinator, "tenant", 24*time.Hour)
 	if err != nil {
 		t.Fatalf("NewGarbageCollector() error = %v", err)
 	}
 
-	result := make(chan error, 1)
-	go func() {
-		_, collectErr := collector.Collect(context.Background(), now)
-		result <- collectErr
-	}()
-	<-coordinator.listed
-	coordinator.CreateAuthoritativeReference(key)
-	close(coordinator.continueList)
-	if collectErr := <-result; collectErr != nil {
+	if _, collectErr := collector.Collect(context.Background(), now); collectErr != nil {
 		t.Fatalf("Collect() error = %v", collectErr)
 	}
 	if coordinator.wasDeleted() {
@@ -144,18 +134,16 @@ func (coordinator *concurrentRetentionCoordinator) deleteCount() int {
 }
 
 type referenceRaceCoordinator struct {
-	mu           sync.Mutex
-	object       BlobObject
-	refs         map[BlobKey]bool
-	deleted      bool
-	listed       chan struct{}
-	continueList chan struct{}
+	mu      sync.Mutex
+	object  BlobObject
+	refs    map[BlobKey]bool
+	deleted bool
 }
 
 func (coordinator *referenceRaceCoordinator) List(context.Context, string) ([]BlobObject, error) {
-	close(coordinator.listed)
-	<-coordinator.continueList
-	return []BlobObject{coordinator.object}, nil
+	candidates := []BlobObject{coordinator.object}
+	coordinator.CreateAuthoritativeReference(coordinator.object.Key)
+	return candidates, nil
 }
 
 func (coordinator *referenceRaceCoordinator) CreateAuthoritativeReference(key BlobKey) {

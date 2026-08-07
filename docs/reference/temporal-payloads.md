@@ -44,9 +44,10 @@ pre-codec Temporal payloads unchanged and decodes v1 zstd and remote forms.
 Frozen inline, zstd, and remote complete-wire vectors are part of the test
 suite; the remote vector includes its frozen stored-inner payload. Before a
 runtime-owned Temporal client is created, the factory decodes those retained
-vectors and separately verifies current emission against them. A version
-outside this window is rejected; changing the format needs retained-history,
-golden, UI, and two-consumer compatibility evidence.
+vectors and separately verifies current emission against them. The factory
+does not expose its converter as a startup-gate bypass. A version outside this
+window is rejected; changing the format needs retained-history, golden, UI,
+and two-consumer compatibility evidence.
 Seeding the frozen remote vector uses the codec's configured finite I/O timeout,
 the same bound used by ordinary remote encode/decode I/O.
 
@@ -113,6 +114,11 @@ Focused deterministic proof:
 go test -race ./temporalpayload/... ./internal/temporalpayloadruntime
 go test -tags=integration ./temporalpayload/... ./internal/temporalpayloadruntime
 ```
+
+The integration suite starts a real Temporal development server and proves
+that a startup-gated Factory client and worker write inline, zstd, and remote
+results which a separately constructed public codec consumer and the
+authorized UI handler can inspect.
 
 The real disposable MinIO proof requires Docker and runs the S3-compatible
 adapter against the declared pinned container:

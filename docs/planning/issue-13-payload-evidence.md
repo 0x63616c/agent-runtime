@@ -15,8 +15,8 @@ the exact checked revision and the acceptance proof for each row.
 | PAY-005 | Missing, corrupt, oversized, incompatible, and malformed content fail visibly; `GarbageCollector` delegates deletion to one durable `RetentionCoordinator` operation that fences authoritative reference creation and conditions object identity. A reference-created-after-listing race returns not-deleted. This is not a cross-store atomicity claim: an incomplete external delete remains a durable tombstone/reconciliation outcome. |
 | PAY-006 | The architecture guard rejects raw Temporal client/worker construction and caller-owned payload-size branching outside the one runtime factory and codec package. |
 | PAY-007 | Source and documentation guards reject encryption configuration or claims; the codec promises compression, integrity, and indirection only. |
-| PAY-008 | A runtime Factory-owned converter sends frozen-shape inline, zstd, and remote representations to an independent public-package consumer; the authorized UI handler inspects and returns the corresponding plain payload for each. |
-| TMP-005/TMP-006 | The one runtime factory gates client creation on retained compatibility vectors and creates workers only from that checked client; an AST guard rejects all current raw Temporal client constructors (including aliased imports) outside the factory. |
+| PAY-008 | A startup-gated runtime Factory client and actual Temporal worker exchange inline, zstd, and remote representations through server history. An independent public-package consumer decodes each stored result, and the authorized UI handler returns the corresponding plain payload. |
+| TMP-005/TMP-006 | The one runtime factory gates client creation on retained compatibility vectors and creates workers only from that checked client; no raw converter accessor bypass exists. An AST guard rejects all current raw Temporal client constructors, including `NewNamespaceClient`, import aliases, dot imports, and constructor symbols assigned as function values, outside the factory. |
 
 ## Compatibility sources checked
 

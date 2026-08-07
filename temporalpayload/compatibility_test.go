@@ -13,19 +13,14 @@ import (
 func TestCompatibilitySeedUsesTheConfiguredIOTimeout(t *testing.T) {
 	t.Parallel()
 
-	codec, err := NewCodec(blockingCompatibilityStore{}, WithBlobPrefix("test/payloads"), WithIOTimeout(10*time.Millisecond))
+	configuredTimeout := 10 * time.Second
+	codec, err := NewCodec(deadlineInspectingCompatibilityStore{maximumRemaining: configuredTimeout}, WithBlobPrefix("test/payloads"), WithIOTimeout(configuredTimeout))
 	if err != nil {
 		t.Fatalf("NewCodec() error = %v", err)
 	}
-	result := make(chan error, 1)
-	go func() { result <- codec.CheckCompatibility(context.Background()) }()
-	select {
-	case err := <-result:
-		if !stderrors.Is(err, context.DeadlineExceeded) {
-			t.Fatalf("CheckCompatibility() error = %v, want deadline exceeded", err)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("CheckCompatibility() did not bound frozen remote-vector seed I/O")
+	err = codec.CheckCompatibility(context.Background())
+	if !stderrors.Is(err, errCompatibilitySeedObserved) {
+		t.Fatalf("CheckCompatibility() error = %v, want observed bounded seed I/O", err)
 	}
 }
 
@@ -50,13 +45,23 @@ func TestV1SelectionVectorsRemainFrozen(t *testing.T) {
 	}
 }
 
-type blockingCompatibilityStore struct{}
+var (
+	errCompatibilitySeedObserved = stderrors.New("compatibility seed received a bounded context")
+	errCompatibilitySeedUnbound  = stderrors.New("compatibility seed context has no finite configured deadline")
+)
 
-func (blockingCompatibilityStore) Put(ctx context.Context, _ BlobKey, _ []byte) error {
-	<-ctx.Done()
-	return ctx.Err()
+type deadlineInspectingCompatibilityStore struct {
+	maximumRemaining time.Duration
 }
 
-func (blockingCompatibilityStore) Get(context.Context, BlobKey, int) ([]byte, error) {
+func (store deadlineInspectingCompatibilityStore) Put(ctx context.Context, _ BlobKey, _ []byte) error {
+	deadline, ok := ctx.Deadline()
+	if !ok || time.Until(deadline) > store.maximumRemaining {
+		return errCompatibilitySeedUnbound
+	}
+	return errCompatibilitySeedObserved
+}
+
+func (deadlineInspectingCompatibilityStore) Get(context.Context, BlobKey, int) ([]byte, error) {
 	return nil, ErrBlobNotFound
 }

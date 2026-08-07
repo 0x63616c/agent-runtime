@@ -31,11 +31,6 @@ func NewFactory(codec *temporalpayload.Codec) (*Factory, error) {
 	return &Factory{codec: codec, dataConverter: codec.DataConverter()}, nil
 }
 
-// DataConverter returns the Factory-owned converter for runtime adapter composition.
-func (factory *Factory) DataConverter() converter.DataConverter {
-	return factory.dataConverter
-}
-
 func (factory *Factory) clientOptions(options client.Options) client.Options {
 	options.DataConverter = factory.dataConverter
 	return options

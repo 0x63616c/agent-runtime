@@ -26,8 +26,12 @@ size before decoding.
 Runtime-owned client creation first decodes frozen inline, zstd, and remote
 vectors (including the remote stored-inner bytes), then checks that current
 encoding still emits those complete wires. A worker can only be constructed
-from that successfully checked client. Frozen remote-vector seeding uses the
-same configured finite I/O timeout as ordinary remote codec I/O.
+from that successfully checked client, and the factory does not expose its
+converter as a startup-gate bypass. Frozen remote-vector seeding uses the same
+configured finite I/O timeout as ordinary remote codec I/O. Integration proof
+runs an actual Temporal client and worker for inline, zstd, and remote results,
+then inspects server history through an independent public codec consumer and
+the authorized UI handler.
 
 ## Local workers; UI-only HTTP
 

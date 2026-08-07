@@ -7,12 +7,17 @@ import (
 )
 
 func rawTemporalClientConstructors() {
-	temporalclient.Dial()
+	dial := temporalclient.Dial
+	dial()
 	temporalclient.DialContext()
-	temporalclient.NewLazyClient()
-	temporalclient.NewClient()
+	newLazyClient := temporalclient.NewLazyClient
+	newLazyClient()
+	NewClient()
 	temporalclient.NewClientFromExisting()
-	temporalclient.NewClientFromExistingWithContext()
-	Dial()
-	temporalworker.New()
+	newClientFromExistingWithContext := temporalclient.NewClientFromExistingWithContext
+	newClientFromExistingWithContext()
+	newNamespaceClient := temporalclient.NewNamespaceClient
+	newNamespaceClient()
+	newWorker := temporalworker.New
+	newWorker()
 }

@@ -44,12 +44,12 @@ var _ = Describe("Temporal payload composition", func() {
 		Expect(err).NotTo(HaveOccurred())
 		Expect(constructors).To(ConsistOf(
 			"client.Dial",
-			"client.Dial",
 			"client.DialContext",
 			"client.NewClient",
 			"client.NewClientFromExisting",
 			"client.NewClientFromExistingWithContext",
 			"client.NewLazyClient",
+			"client.NewNamespaceClient",
 			"worker.New",
 		))
 	})
@@ -153,14 +153,11 @@ func rawTemporalConstructors(path string) ([]string, error) {
 	clientConstructors := map[string]bool{
 		"Dial": true, "DialContext": true, "NewLazyClient": true, "NewClient": true,
 		"NewClientFromExisting": true, "NewClientFromExistingWithContext": true,
+		"NewNamespaceClient": true,
 	}
 	var constructors []string
 	ast.Inspect(file, func(node ast.Node) bool {
-		call, ok := node.(*ast.CallExpr)
-		if !ok {
-			return true
-		}
-		switch function := call.Fun.(type) {
+		switch function := node.(type) {
 		case *ast.SelectorExpr:
 			packageName, ok := function.X.(*ast.Ident)
 			if !ok {
@@ -176,6 +173,7 @@ func rawTemporalConstructors(path string) ([]string, error) {
 					constructors = append(constructors, "worker.New")
 				}
 			}
+			return false
 		case *ast.Ident:
 			if imports["."] == "go.temporal.io/sdk/client" && clientConstructors[function.Name] {
 				constructors = append(constructors, "client."+function.Name)
