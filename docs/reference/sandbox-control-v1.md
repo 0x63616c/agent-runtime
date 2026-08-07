@@ -14,10 +14,12 @@ roots, refuses redirects and ambient system trust, applies a request-scoped
 credential, and completes the strict `/sandbox.control/v1/bind` handshake
 before returning. `Submit`, `GetOperation`, `WaitOperation`, and
 `WatchOperation` use canonical, bounded `sandbox.control/v1` envelopes. The
-role durably accepts those operations in PostgreSQL and reconnects after a
-separate-process restart. Resource queries, host dispatch, output/artifact
-storage, a local process adapter, and Firecracker are not implemented. This is
-durable control evidence, not evidence of guest isolation or host execution.
+role durably accepts those operations in PostgreSQL, reconnects after a
+separate-process restart, and optionally exposes a distinct mutually
+authenticated listener to durably enrolled reference hosts. Resource queries,
+output/artifact content storage, a real process adapter, and Firecracker are
+not implemented. This is durable control and host-protocol evidence, not
+evidence of guest isolation or VM execution.
 
 ## Client and identity
 
@@ -106,12 +108,14 @@ replace ledger, grant, lifecycle, redaction, or error semantics.
 ## Operator process
 
 `cmd/sandbox-control` consumes one strict JSON document, mounted TLS identity,
-and three explicitly named secret environment values: PostgreSQL DSN, static
-development authorization, and a 32–128 byte hex assertion key. It serves TLS
-1.3 only on the private M3 port `9443`, never creates or migrates
-infrastructure, and exposes `/healthz` and
+and explicitly named secret environment values for PostgreSQL, public
+development authentication, bind assertions, and optional host-envelope
+signing. The public listener is server-authenticated TLS; the distinct private
+listener is TLS 1.3 with required client certificates from its declared CA.
+The role never creates or migrates infrastructure and exposes `/healthz` and
 `/readyz`. The declaration rejects unknown fields, relative TLS paths,
-implicit secret names, unbounded lifetimes, and invalid listen addresses. See
+implicit secret names, unbounded lifetimes, overlapping listeners, and invalid
+addresses. See
 [`deploy/sandboxcontrol/control.example.json`](../../deploy/sandboxcontrol/control.example.json).
 
 This M3 endpoint is intentionally distinct from the M1 health-only runtime-role
@@ -129,6 +133,10 @@ operation identity, freeze and canonicalization, finite defaults/admission,
 strict HTTPS acceptance/read/watch, durable restart reconnect, and bounded
 outbox observation. Exact input identity is stored separately from resolved
 policy digests, so a retry reconnects to the previously accepted Effective
-Spec after operator defaults change. Host dispatch, authenticated host
-envelopes, output/artifact stores, reconciliation, and Linux/KVM enforcement
-remain separate delivery work and require their own evidence lanes.
+Spec after operator defaults change. Private host dispatch now includes
+durable mTLS enrollment, control-signed assignment envelopes, lease/fence
+renewal, host-signed result and output-sequence metadata, quarantine, explicit
+cleanup, and reassignment. See
+[`sandbox.host-control/v1`](sandbox-host-control-v1.md). Output/artifact content
+stores, production execution, and Linux/KVM enforcement remain separate work
+and require their own evidence lanes.

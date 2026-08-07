@@ -1,11 +1,11 @@
 # Sandbox-control ledger and recovery
 
 Status: the PostgreSQL operation ledger, deterministic memory conformance
-fixture, strict public operation transport, and separately runnable TLS control
-role are implemented. The complete host protocol, output-store integration,
-and end-to-end worker/control/host failure suite are not yet implemented. This
-guide does not promote SBX-002,
-SBX-005–SBX-006, or SBX-013–SBX-014.
+fixture, strict public operation transport, separately runnable TLS control
+role, private enrolled-host protocol, and one-shot reference host are
+implemented. Output/artifact content storage and Linux/KVM execution are not.
+This guide does not promote a milestone ledger row without retained evidence
+and independent M3 review.
 
 ## Authority boundary
 
@@ -15,12 +15,14 @@ The role never creates a database, schema, table, credential, or migration.
 An audited infrastructure operator applies the reviewed migration under
 `deploy/sandboxcontrol/migrations/` before starting the role.
 
-The ledger retains only bounded recovery facts: Principal scope, Operation ID,
-exact input, canonical-request, Effective-Spec and capability digests; safe
-operation/target metadata; lifecycle state/version,
-acceptance and finite retention times, cleanup obligation, and current host
-lease/fence. Request bodies, output, artifacts, secrets, backend handles, and
-credentials belong in their dedicated stores and never enter these rows.
+The ledger retains bounded recovery facts: Principal and tenant scope,
+Operation ID, the exact bounded canonical dispatch request, canonical-request,
+Effective-Spec and capability digests; safe operation/target metadata;
+lifecycle state/version, acceptance and finite retention times, cleanup
+obligation, current host generation/assignment/lease/fence, exact signed
+envelope and receipt, and output integrity sequence headers. Output content,
+artifacts, secrets, backend handles, private keys, and certificate bodies
+belong elsewhere and never enter these rows.
 
 ## Commit and reconnect rules
 
@@ -66,15 +68,17 @@ Run the explicit disposable PostgreSQL harness from the repository root:
 
 The harness generates a per-run password, launches the digest-pinned
 PostgreSQL declaration on an OS-selected loopback port, applies the reviewed
-migrations explicitly, builds the TLS control binary under the race detector,
-runs adapter tests, then starts and restarts that binary as a separate OS
-process through the public pinned-TLS client. It removes its temporary binary,
-container, network, and volume. The tests prove restart reconnect,
+migrations explicitly, builds both TLS roles under the race detector, runs
+adapter tests, then starts and restarts them as separate OS processes through
+the public pinned-TLS client and private mTLS host listener. It removes its
+temporary binaries, container, network, and volume. The tests prove restart reconnect,
 Principal non-enumeration, concurrent immutable acceptance, conflict,
 lease-expiry fencing, cleanup claim/confirmation, tombstone retention, and
-ordered outbox replay through the PostgreSQL seam.
+ordered outbox replay plus host enrollment, signed envelopes, stable receipts,
+lost-result recovery, quarantine, rotation, cleanup, and reassignment through
+the PostgreSQL seam.
 
-This is durable acceptance/reconnect evidence, not a completed sandbox
-execution E2E. The remaining #16 gate requires output/artifact storage, host
-routing, worker/control/host restart, unknown-outcome recovery, and full reaper
-failure injection.
+This is durable acceptance/reconnect and reference host-protocol evidence, not
+a completed sandbox execution E2E. Output/artifact content storage, real guest
+execution, Linux/KVM isolation, and full production reaper failure injection
+remain separately gated.

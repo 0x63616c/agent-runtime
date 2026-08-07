@@ -1,0 +1,139 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agent-runtime.dev/schemas/sandbox.host-control-v1.schema.json",
+  "title": "Sandbox host-control v1 canonical messages",
+  "oneOf": [
+    {"$ref": "#/$defs/pull"},
+    {"$ref": "#/$defs/receipt"},
+    {"$ref": "#/$defs/heartbeat"},
+    {"$ref": "#/$defs/envelope"},
+    {"$ref": "#/$defs/output"},
+    {"$ref": "#/$defs/result"},
+    {"$ref": "#/$defs/acknowledgement"}
+  ],
+  "$defs": {
+    "id": {"type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[^\\u0000]+$"},
+    "principal": {"type": "string", "minLength": 1, "maxLength": 512, "pattern": "^[^\\u0000]+$"},
+    "digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "signature": {"type": "string", "minLength": 86, "maxLength": 128, "pattern": "^[A-Za-z0-9_-]+$"},
+    "pull": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["protocol_version", "kind", "host_id", "host_generation"],
+      "properties": {
+        "protocol_version": {"const": "sandbox.host-control/v1"},
+        "kind": {"const": "pull"},
+        "host_id": {"$ref": "#/$defs/id"},
+        "host_generation": {"type": "integer", "minimum": 1}
+      }
+    },
+    "receipt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["protocol_version", "kind", "assignment_id", "fencing_token", "receipt_digest"],
+      "properties": {
+        "protocol_version": {"const": "sandbox.host-control/v1"},
+        "kind": {"const": "receipt"},
+        "assignment_id": {"$ref": "#/$defs/id"},
+        "fencing_token": {"type": "integer", "minimum": 1},
+        "receipt_digest": {"$ref": "#/$defs/digest"}
+      }
+    },
+    "heartbeat": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["protocol_version", "kind", "assignment_id", "fencing_token"],
+      "properties": {
+        "protocol_version": {"const": "sandbox.host-control/v1"},
+        "kind": {"const": "heartbeat"},
+        "assignment_id": {"$ref": "#/$defs/id"},
+        "fencing_token": {"type": "integer", "minimum": 1}
+      }
+    },
+    "envelope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["protocol_version", "envelope_id", "delivery_id", "nonce", "issued_at", "expires_at", "control_key_id", "host_id", "host_generation", "assignment_id", "lease_epoch", "fencing_token", "tenant", "principal", "sandbox_id", "process_id", "operation_id", "operation_kind", "effective_spec_digest", "capability_digest", "canonical_request_digest", "sequence_contract", "payload_digest", "payload", "signature"],
+      "properties": {
+        "protocol_version": {"const": "sandbox.host-control/v1"},
+        "envelope_id": {"$ref": "#/$defs/id"},
+        "delivery_id": {"$ref": "#/$defs/id"},
+        "nonce": {"$ref": "#/$defs/id"},
+        "issued_at": {"type": "string", "format": "date-time"},
+        "expires_at": {"type": "string", "format": "date-time"},
+        "control_key_id": {"$ref": "#/$defs/id"},
+        "host_id": {"$ref": "#/$defs/id"},
+        "host_generation": {"type": "integer", "minimum": 1},
+        "assignment_id": {"$ref": "#/$defs/id"},
+        "lease_epoch": {"type": "integer", "minimum": 1},
+        "fencing_token": {"type": "integer", "minimum": 1},
+        "tenant": {"type": "string", "minLength": 1, "maxLength": 256},
+        "principal": {"$ref": "#/$defs/principal"},
+        "sandbox_id": {"type": "string", "maxLength": 128},
+        "process_id": {"type": "string", "maxLength": 128},
+        "operation_id": {"$ref": "#/$defs/id"},
+        "operation_kind": {"type": "string", "minLength": 1, "maxLength": 64},
+        "effective_spec_digest": {"$ref": "#/$defs/digest"},
+        "capability_digest": {"$ref": "#/$defs/digest"},
+        "canonical_request_digest": {"$ref": "#/$defs/digest"},
+        "sequence_contract": {"const": "host-proposed/control-owned-v1"},
+        "payload_digest": {"$ref": "#/$defs/digest"},
+        "payload": {"type": "string", "contentEncoding": "base64", "maxLength": 1048576},
+        "signature": {"$ref": "#/$defs/signature"}
+      }
+    },
+    "output": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["protocol_version", "output_id", "host_id", "host_generation", "assignment_id", "lease_epoch", "fencing_token", "principal", "operation_id", "stream", "sequence", "chunk_digest", "size_bytes", "observed_at", "signature"],
+      "properties": {
+        "protocol_version": {"const": "sandbox.host-control/v1"},
+        "output_id": {"$ref": "#/$defs/id"},
+        "host_id": {"$ref": "#/$defs/id"},
+        "host_generation": {"type": "integer", "minimum": 1},
+        "assignment_id": {"$ref": "#/$defs/id"},
+        "lease_epoch": {"type": "integer", "minimum": 1},
+        "fencing_token": {"type": "integer", "minimum": 1},
+        "principal": {"$ref": "#/$defs/principal"},
+        "operation_id": {"$ref": "#/$defs/id"},
+        "stream": {"enum": ["stdout", "stderr"]},
+        "sequence": {"type": "integer", "minimum": 1},
+        "chunk_digest": {"$ref": "#/$defs/digest"},
+        "size_bytes": {"type": "integer", "minimum": 1, "maximum": 262144},
+        "observed_at": {"type": "string", "format": "date-time"},
+        "signature": {"$ref": "#/$defs/signature"}
+      }
+    },
+    "result": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["protocol_version", "result_id", "host_id", "host_generation", "assignment_id", "lease_epoch", "fencing_token", "principal", "operation_id", "effective_spec_digest", "capability_digest", "state", "observed_at", "signature"],
+      "properties": {
+        "protocol_version": {"const": "sandbox.host-control/v1"},
+        "result_id": {"$ref": "#/$defs/id"},
+        "host_id": {"$ref": "#/$defs/id"},
+        "host_generation": {"type": "integer", "minimum": 1},
+        "assignment_id": {"$ref": "#/$defs/id"},
+        "lease_epoch": {"type": "integer", "minimum": 1},
+        "fencing_token": {"type": "integer", "minimum": 1},
+        "principal": {"$ref": "#/$defs/principal"},
+        "operation_id": {"$ref": "#/$defs/id"},
+        "effective_spec_digest": {"$ref": "#/$defs/digest"},
+        "capability_digest": {"$ref": "#/$defs/digest"},
+        "state": {"enum": ["started", "succeeded", "failed", "uncertain"]},
+        "observed_at": {"type": "string", "format": "date-time"},
+        "signature": {"$ref": "#/$defs/signature"}
+      }
+    },
+    "acknowledgement": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["protocol_version", "kind", "duplicate"],
+      "properties": {
+        "protocol_version": {"const": "sandbox.host-control/v1"},
+        "kind": {"enum": ["receipt-ack", "output-ack", "result-ack"]},
+        "duplicate": {"type": "boolean"}
+      }
+    }
+  }
+}

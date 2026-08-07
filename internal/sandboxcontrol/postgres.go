@@ -31,6 +31,7 @@ func NewPostgresLedger(pool *pgxpool.Pool) (*PostgresLedger, error) {
 // Accept records an immutable operation and its publication fact in one
 // serializable transaction, or reconnects to the prior identical record.
 func (ledger *PostgresLedger) Accept(ctx context.Context, operation Operation) (Operation, bool, error) {
+	operation = normalizeOperationForPersistence(operation)
 	if err := validateOperation(operation); err != nil {
 		return Operation{}, false, err
 	}
@@ -39,19 +40,22 @@ func (ledger *PostgresLedger) Accept(ctx context.Context, operation Operation) (
 	err := ledger.transaction(ctx, "accept sandbox operation", func(tx pgx.Tx) error {
 		row := tx.QueryRow(ctx, `
 			INSERT INTO runtime.sandbox_operations (
-				principal, operation_id, kind, target_kind, target_id,
+				principal, tenant, operation_id, kind, target_kind, target_id,
 				input_digest, canonical_digest, effective_spec_digest, capability_digest,
+				dispatch_body,
 				state, version, accepted_at, retention_expires_at, cleanup_required,
 				assignment_fencing_token
-			) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 1, $11, $12, $13, 0)
+			) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, 1, $13, $14, $15, 0)
 			ON CONFLICT DO NOTHING
-			RETURNING principal, operation_id, kind, target_kind, target_id,
+			RETURNING principal, tenant, operation_id, kind, target_kind, target_id,
 				input_digest, canonical_digest, effective_spec_digest, capability_digest,
+				dispatch_body,
 				state, version, accepted_at, retention_expires_at, cleanup_required,
-				assignment_host_id, assignment_fencing_token, assignment_lease_expires_at`,
-			operation.Principal, operation.ID, operation.Kind, operation.TargetKind,
+				assignment_host_id, assignment_host_generation, assignment_id,
+				assignment_lease_epoch, assignment_fencing_token, assignment_lease_expires_at`,
+			operation.Principal, operation.Tenant, operation.ID, operation.Kind, operation.TargetKind,
 			operation.TargetID, operationInputDigest(operation), operation.CanonicalDigest, operation.EffectiveSpecDigest,
-			operation.CapabilityDigest, StateAccepted, operation.AcceptedAt.UTC(),
+			operation.CapabilityDigest, operation.DispatchBody, StateAccepted, operation.AcceptedAt.UTC(),
 			operation.RetentionExpiresAt.UTC(), operation.CleanupRequired)
 		inserted, err := scanOperation(row)
 		switch {
@@ -376,10 +380,12 @@ func retryablePostgres(err error) bool {
 	return errors.As(err, &postgresError) && (postgresError.Code == "40001" || postgresError.Code == "40P01")
 }
 
-const selectOperationColumns = `principal, operation_id, kind, target_kind, target_id,
+const selectOperationColumns = `principal, tenant, operation_id, kind, target_kind, target_id,
 	input_digest, canonical_digest, effective_spec_digest, capability_digest,
+	dispatch_body,
 	state, version, accepted_at, retention_expires_at, cleanup_required,
-	assignment_host_id, assignment_fencing_token, assignment_lease_expires_at`
+	assignment_host_id, assignment_host_generation, assignment_id,
+	assignment_lease_epoch, assignment_fencing_token, assignment_lease_expires_at`
 
 const selectOperationSQL = `SELECT ` + selectOperationColumns + `
 	FROM runtime.sandbox_operations WHERE principal = $1 AND operation_id = $2`
@@ -417,20 +423,22 @@ type rowScanner interface {
 
 func scanOperation(row rowScanner) (Operation, error) {
 	var operation Operation
-	var version, fence int64
+	var version, hostGeneration, leaseEpoch, fence int64
 	var hostID *string
+	var assignmentID *string
 	var leaseExpiresAt *time.Time
 	err := row.Scan(
-		&operation.Principal, &operation.ID, &operation.Kind, &operation.TargetKind,
+		&operation.Principal, &operation.Tenant, &operation.ID, &operation.Kind, &operation.TargetKind,
 		&operation.TargetID, &operation.InputDigest, &operation.CanonicalDigest, &operation.EffectiveSpecDigest,
-		&operation.CapabilityDigest, &operation.State, &version,
+		&operation.CapabilityDigest, &operation.DispatchBody, &operation.State, &version,
 		&operation.AcceptedAt, &operation.RetentionExpiresAt,
-		&operation.CleanupRequired, &hostID, &fence, &leaseExpiresAt,
+		&operation.CleanupRequired, &hostID, &hostGeneration, &assignmentID,
+		&leaseEpoch, &fence, &leaseExpiresAt,
 	)
 	if err != nil {
 		return Operation{}, err
 	}
-	if version <= 0 || fence < 0 {
+	if version <= 0 || hostGeneration < 0 || leaseEpoch < 0 || fence < 0 {
 		return Operation{}, errors.New("scan sandbox operation: invalid persisted version or fence")
 	}
 	operation.Version = uint64(version)
@@ -440,6 +448,11 @@ func scanOperation(row rowScanner) (Operation, error) {
 	if hostID != nil {
 		operation.Assignment.HostID = *hostID
 	}
+	operation.Assignment.HostGeneration = uint64(hostGeneration)
+	if assignmentID != nil {
+		operation.Assignment.AssignmentID = *assignmentID
+	}
+	operation.Assignment.LeaseEpoch = uint64(leaseEpoch)
 	if leaseExpiresAt != nil {
 		operation.Assignment.LeaseExpiresAt = leaseExpiresAt.UTC()
 	}
@@ -496,13 +509,17 @@ func lockedOperation(ctx context.Context, tx pgx.Tx, principal, id string) (Oper
 }
 
 func updateOperation(ctx context.Context, tx pgx.Tx, operation Operation) error {
-	if operation.Version > math.MaxInt64 || operation.Assignment.FencingToken > math.MaxInt64 {
+	if operation.Version > math.MaxInt64 || operation.Assignment.HostGeneration > math.MaxInt64 || operation.Assignment.LeaseEpoch > math.MaxInt64 || operation.Assignment.FencingToken > math.MaxInt64 {
 		return errors.New("update sandbox operation: persisted counter exhausted")
 	}
 	var hostID any
+	var assignmentID any
 	var leaseExpiresAt any
 	if operation.Assignment.HostID != "" {
 		hostID = operation.Assignment.HostID
+	}
+	if operation.Assignment.AssignmentID != "" {
+		assignmentID = operation.Assignment.AssignmentID
 	}
 	if !operation.Assignment.LeaseExpiresAt.IsZero() {
 		leaseExpiresAt = operation.Assignment.LeaseExpiresAt.UTC()
@@ -510,10 +527,13 @@ func updateOperation(ctx context.Context, tx pgx.Tx, operation Operation) error 
 	command, err := tx.Exec(ctx, `
 		UPDATE runtime.sandbox_operations
 		SET state = $3, version = $4, assignment_host_id = $5,
-			assignment_fencing_token = $6, assignment_lease_expires_at = $7
+			assignment_host_generation = $6, assignment_id = $7,
+			assignment_lease_epoch = $8, assignment_fencing_token = $9,
+			assignment_lease_expires_at = $10
 		WHERE principal = $1 AND operation_id = $2`,
 		operation.Principal, operation.ID, operation.State, int64(operation.Version),
-		hostID, int64(operation.Assignment.FencingToken), leaseExpiresAt)
+		hostID, int64(operation.Assignment.HostGeneration), assignmentID,
+		int64(operation.Assignment.LeaseEpoch), int64(operation.Assignment.FencingToken), leaseExpiresAt)
 	if err != nil {
 		return errors.Wrap(err, "update sandbox operation")
 	}
