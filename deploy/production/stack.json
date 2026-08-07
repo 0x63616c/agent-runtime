@@ -1548,7 +1548,7 @@
           "kubernetes": {
             "api_version": "v1",
             "kind": "Service",
-            "name": "api-service",
+            "name": "api",
             "selector": "api",
             "ports": [
               {
@@ -1577,7 +1577,7 @@
           "kubernetes": {
             "api_version": "v1",
             "kind": "Service",
-            "name": "temporal-service",
+            "name": "temporal",
             "selector": "temporal",
             "ports": [
               {
@@ -1606,7 +1606,7 @@
           "kubernetes": {
             "api_version": "v1",
             "kind": "Service",
-            "name": "blob-service",
+            "name": "blob",
             "selector": "blob",
             "ports": [
               {
@@ -1635,7 +1635,7 @@
           "kubernetes": {
             "api_version": "v1",
             "kind": "Service",
-            "name": "telemetry-service",
+            "name": "telemetry",
             "selector": "telemetry",
             "ports": [
               {
@@ -1664,7 +1664,7 @@
           "kubernetes": {
             "api_version": "v1",
             "kind": "Service",
-            "name": "egress-proxy-service",
+            "name": "egress-proxy",
             "selector": "egress-proxy",
             "ports": [
               {
@@ -1693,7 +1693,7 @@
           "kubernetes": {
             "api_version": "v1",
             "kind": "Service",
-            "name": "sandbox-control-service",
+            "name": "sandbox-control",
             "selector": "sandbox-control",
             "ports": [
               {
@@ -1722,7 +1722,7 @@
           "kubernetes": {
             "api_version": "v1",
             "kind": "Service",
-            "name": "codec-service",
+            "name": "codec",
             "selector": "codec",
             "ports": [
               {
@@ -1751,7 +1751,7 @@
           "kubernetes": {
             "api_version": "v1",
             "kind": "Service",
-            "name": "state-service",
+            "name": "state",
             "selector": "state",
             "ports": [
               {
@@ -3829,7 +3829,7 @@
           "kubernetes": {
             "api_version": "v1",
             "kind": "Service",
-            "name": "api-service",
+            "name": "api",
             "selector": "api",
             "ports": [
               {
@@ -3858,7 +3858,7 @@
           "kubernetes": {
             "api_version": "v1",
             "kind": "Service",
-            "name": "temporal-service",
+            "name": "temporal",
             "selector": "temporal",
             "ports": [
               {
@@ -3887,7 +3887,7 @@
           "kubernetes": {
             "api_version": "v1",
             "kind": "Service",
-            "name": "blob-service",
+            "name": "blob",
             "selector": "blob",
             "ports": [
               {
@@ -3916,7 +3916,7 @@
           "kubernetes": {
             "api_version": "v1",
             "kind": "Service",
-            "name": "telemetry-service",
+            "name": "telemetry",
             "selector": "telemetry",
             "ports": [
               {
@@ -3945,7 +3945,7 @@
           "kubernetes": {
             "api_version": "v1",
             "kind": "Service",
-            "name": "egress-proxy-service",
+            "name": "egress-proxy",
             "selector": "egress-proxy",
             "ports": [
               {
@@ -3974,7 +3974,7 @@
           "kubernetes": {
             "api_version": "v1",
             "kind": "Service",
-            "name": "sandbox-control-service",
+            "name": "sandbox-control",
             "selector": "sandbox-control",
             "ports": [
               {
@@ -4003,7 +4003,7 @@
           "kubernetes": {
             "api_version": "v1",
             "kind": "Service",
-            "name": "codec-service",
+            "name": "codec",
             "selector": "codec",
             "ports": [
               {
@@ -4032,7 +4032,7 @@
           "kubernetes": {
             "api_version": "v1",
             "kind": "Service",
-            "name": "state-service",
+            "name": "state",
             "selector": "state",
             "ports": [
               {
@@ -6110,7 +6110,7 @@
           "kubernetes": {
             "api_version": "v1",
             "kind": "Service",
-            "name": "api-service",
+            "name": "api",
             "selector": "api",
             "ports": [
               {
@@ -6139,7 +6139,7 @@
           "kubernetes": {
             "api_version": "v1",
             "kind": "Service",
-            "name": "temporal-service",
+            "name": "temporal",
             "selector": "temporal",
             "ports": [
               {
@@ -6168,7 +6168,7 @@
           "kubernetes": {
             "api_version": "v1",
             "kind": "Service",
-            "name": "blob-service",
+            "name": "blob",
             "selector": "blob",
             "ports": [
               {
@@ -6197,7 +6197,7 @@
           "kubernetes": {
             "api_version": "v1",
             "kind": "Service",
-            "name": "telemetry-service",
+            "name": "telemetry",
             "selector": "telemetry",
             "ports": [
               {
@@ -6226,7 +6226,7 @@
           "kubernetes": {
             "api_version": "v1",
             "kind": "Service",
-            "name": "egress-proxy-service",
+            "name": "egress-proxy",
             "selector": "egress-proxy",
             "ports": [
               {
@@ -6255,7 +6255,7 @@
           "kubernetes": {
             "api_version": "v1",
             "kind": "Service",
-            "name": "sandbox-control-service",
+            "name": "sandbox-control",
             "selector": "sandbox-control",
             "ports": [
               {
@@ -6284,7 +6284,7 @@
           "kubernetes": {
             "api_version": "v1",
             "kind": "Service",
-            "name": "codec-service",
+            "name": "codec",
             "selector": "codec",
             "ports": [
               {
@@ -6313,7 +6313,7 @@
           "kubernetes": {
             "api_version": "v1",
             "kind": "Service",
-            "name": "state-service",
+            "name": "state",
             "selector": "state",
             "ports": [
               {
