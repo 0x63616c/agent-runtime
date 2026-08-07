@@ -367,23 +367,73 @@
     },
     {
       "id": "MON-004",
-      "status": "in_progress"
+      "status": "completed",
+      "evidence": [
+        {
+          "revision": "7397958a33aeee3081d9c86d2d0ebeade70bb8eb",
+          "utc_time": "2026-08-07T03:42:08Z",
+          "proof_level": "main_ci",
+          "command_id": "just-check",
+          "artifact_ref": "gha-31145083614-1",
+          "result": "passed"
+        }
+      ]
     },
     {
       "id": "MON-005",
-      "status": "in_progress"
+      "status": "completed",
+      "evidence": [
+        {
+          "revision": "7397958a33aeee3081d9c86d2d0ebeade70bb8eb",
+          "utc_time": "2026-08-07T03:42:08Z",
+          "proof_level": "main_ci",
+          "command_id": "just-check",
+          "artifact_ref": "gha-31145083614-1",
+          "result": "passed"
+        }
+      ]
     },
     {
       "id": "MON-006",
-      "status": "in_progress"
+      "status": "completed",
+      "evidence": [
+        {
+          "revision": "7397958a33aeee3081d9c86d2d0ebeade70bb8eb",
+          "utc_time": "2026-08-07T03:42:08Z",
+          "proof_level": "main_ci",
+          "command_id": "just-check",
+          "artifact_ref": "gha-31145083614-1",
+          "result": "passed"
+        }
+      ]
     },
     {
       "id": "MON-007",
-      "status": "in_progress"
+      "status": "completed",
+      "evidence": [
+        {
+          "revision": "7397958a33aeee3081d9c86d2d0ebeade70bb8eb",
+          "utc_time": "2026-08-07T03:42:08Z",
+          "proof_level": "main_ci",
+          "command_id": "just-check",
+          "artifact_ref": "gha-31145083614-1",
+          "result": "passed"
+        }
+      ]
     },
     {
       "id": "MON-008",
-      "status": "in_progress"
+      "status": "completed",
+      "evidence": [
+        {
+          "revision": "7397958a33aeee3081d9c86d2d0ebeade70bb8eb",
+          "utc_time": "2026-08-07T03:42:08Z",
+          "proof_level": "main_ci",
+          "command_id": "just-check",
+          "artifact_ref": "gha-31145083614-1",
+          "result": "passed"
+        }
+      ]
     },
     {
       "id": "MON-009",

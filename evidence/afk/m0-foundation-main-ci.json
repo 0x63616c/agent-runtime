@@ -1,0 +1,37 @@
+{
+  "version": 1,
+  "records": [
+    {
+      "event": "main_ci",
+      "requirement_ids": [
+        "MON-004",
+        "MON-005",
+        "MON-006",
+        "MON-007",
+        "MON-008"
+      ],
+      "seams": [
+        "S2",
+        "S11",
+        "S12"
+      ],
+      "documentation": [
+        "AGENTS.md",
+        "CONTEXT.md",
+        "docs/architecture/system.md",
+        "docs/operations/direct-main.md"
+      ],
+      "revision": "7397958a33aeee3081d9c86d2d0ebeade70bb8eb",
+      "source_ref": "refs/heads/main",
+      "utc_time": "2026-08-07T03:42:08Z",
+      "proof_level": "main_ci",
+      "command_id": "just-check",
+      "artifact_ref": "gha-31145083614-1",
+      "result": "passed",
+      "limitations": [
+        "immutable-main-ci-only-no-release-proof"
+      ]
+    }
+  ]
+}
+
