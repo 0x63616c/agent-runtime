@@ -240,8 +240,15 @@ func (adapter KubectlDeclaredProviderAdapter) verifyDatabase(ctx context.Context
 	if err := adapter.waitForWorkload(ctx, target, namespace, workload.Kubernetes); err != nil {
 		return err
 	}
+	user := "postgres"
+	for _, variable := range workload.Kubernetes.Environment {
+		if variable.Name == "POSTGRES_USER" {
+			user = variable.Value
+			break
+		}
+	}
 	query := fmt.Sprintf("SELECT 1 FROM information_schema.schemata WHERE schema_name = '%s'", resource.Database.Schema)
-	arguments := []string{"exec", workload.Kubernetes.Kind + "/" + workload.Kubernetes.Name, "--namespace", namespace, "--", "psql", "-At", "-U", "postgres", "-d", resource.Database.Database, "-c", query}
+	arguments := []string{"exec", workload.Kubernetes.Kind + "/" + workload.Kubernetes.Name, "--namespace", namespace, "--", "psql", "-At", "-U", user, "-d", resource.Database.Database, "-c", query}
 	result, err := adapter.run(ctx, target, arguments, nil)
 	if err != nil {
 		return err
