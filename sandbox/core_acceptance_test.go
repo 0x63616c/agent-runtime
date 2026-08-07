@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -151,6 +152,17 @@ func TestControlV1OperationCodecRoundTripsOnlyExactCanonicalBytes(t *testing.T) 
 	}
 }
 
+func TestControlV1CodecRejectsOversizedAndExcessivelyNestedInput(t *testing.T) {
+	oversized := bytes.Repeat([]byte{' '}, maxControlV1Bytes+1)
+	if _, err := decodeOperationRequestV1(oversized); err == nil {
+		t.Fatal("oversized sandbox.control/v1 input was accepted")
+	}
+	nested := append(bytes.Repeat([]byte{'['}, maxControlV1Nesting+1), bytes.Repeat([]byte{']'}, maxControlV1Nesting+1)...)
+	if err := validateStrictJSON(nested); err == nil {
+		t.Fatal("excessively nested sandbox.control/v1 input was accepted")
+	}
+}
+
 func TestCoreRetriesWithPersistedEffectiveSpecAndRejectsIncompatiblePolicy(t *testing.T) {
 	ledger := newCoreLedger()
 	initial := testLimitPolicy()
@@ -185,6 +197,60 @@ func TestCoreRetriesWithPersistedEffectiveSpecAndRejectsIncompatiblePolicy(t *te
 	}
 	_, err = blocked.Submit(context.Background(), request)
 	failureCode(t, err, FailureIncompatiblePersistedPolicy)
+}
+
+func TestCoreRetryRejectsChangedImageCompatibilityForSameDigest(t *testing.T) {
+	ledger := newCoreLedger()
+	request := validCreateRequest("op_image_retry")
+	image := request.CreateSandbox.Spec.Image.Digest
+	initial := testLimitPolicy()
+	initial.admittedImages = map[Digest]ImageInfo{image: {
+		Digest: image, Architecture: "linux/amd64", Identity: NumericIdentity{UID: 1000, GID: 1000}, GuestProtocol: "guest/v1",
+	}}
+	client, err := newCoreClientWithLedger("principal-a", time.Date(2026, 8, 6, 12, 0, 0, 0, time.UTC), initial, ledger)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.Submit(context.Background(), request); err != nil {
+		t.Fatal(err)
+	}
+	changed := initial
+	changed.admittedImages = map[Digest]ImageInfo{image: {
+		Digest: image, Architecture: "linux/amd64", Identity: NumericIdentity{UID: 1000, GID: 1000}, GuestProtocol: "guest/v2",
+	}}
+	retrier, err := newCoreClientWithLedger("principal-a", time.Date(2026, 8, 6, 12, 1, 0, 0, time.UTC), changed, ledger)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = retrier.Submit(context.Background(), request)
+	failureCode(t, err, FailureIncompatiblePersistedPolicy)
+}
+
+func TestCoreFreezesInjectedImageAdmissionMetadata(t *testing.T) {
+	request := validCreateRequest("op_frozen_image_policy")
+	image := request.CreateSandbox.Spec.Image.Digest
+	policy := testLimitPolicy()
+	policy.admittedImages = map[Digest]ImageInfo{image: {
+		Digest: image, Architecture: "linux/amd64", Identity: NumericIdentity{UID: 1000, GID: 1000, Groups: []uint32{1000}}, GuestProtocol: "guest/v1",
+	}}
+	client, err := newCoreClientWithPolicy("principal-a", time.Date(2026, 8, 6, 12, 0, 0, 0, time.UTC), policy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mutated := policy.admittedImages[image]
+	mutated.GuestProtocol = "guest/attacker"
+	mutated.Identity.Groups[0] = 0
+	policy.admittedImages[image] = mutated
+	if _, err := client.Submit(context.Background(), request); err != nil {
+		t.Fatal(err)
+	}
+	info, err := client.GetSandbox(context.Background(), sandboxIDFor(request.ID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Image.GuestProtocol != "guest/v1" || !reflect.DeepEqual(info.Image.Identity.Groups, []uint32{1000}) {
+		t.Fatalf("accepted image metadata = %#v, want constructor-frozen admission", info.Image)
+	}
 }
 
 func TestProcessWaitCancellationAbandonsObservationAndFirstTerminalOutcomeWins(t *testing.T) {

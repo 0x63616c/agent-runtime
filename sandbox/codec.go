@@ -10,6 +10,12 @@ import (
 
 const operationRequestKind = "operation-request"
 
+const (
+	maxControlV1Bytes      = 1 << 20
+	maxControlV1Nesting    = 64
+	maxControlV1Collection = 4096
+)
+
 type operationRequestEnvelope struct {
 	Version string           `json:"version"`
 	Kind    string           `json:"kind"`
@@ -23,6 +29,9 @@ func encodeOperationRequestV1(request OperationRequest) ([]byte, error) {
 	encoded, err := json.Marshal(operationRequestEnvelope{Version: controlV1, Kind: operationRequestKind, Request: copyRequest(request)})
 	if err != nil {
 		return nil, newFailure(FailureInvalidArgument, "operation request cannot be encoded", RetryNever)
+	}
+	if len(encoded) > maxControlV1Bytes {
+		return nil, newFailure(FailureResourceLimitExceeded, "operation request exceeds the finite wire limit", RetryNever)
 	}
 	return encoded, nil
 }
@@ -51,9 +60,12 @@ func decodeOperationRequestV1(data []byte) (OperationRequest, error) {
 // quietly normalize: duplicate keys, trailing values, float/exponent numbers,
 // and aliases that do not round-trip to canonical bytes.
 func validateStrictJSON(data []byte) error {
+	if len(data) == 0 || len(data) > maxControlV1Bytes {
+		return newFailure(FailureResourceLimitExceeded, "sandbox.control/v1 exceeds the finite wire limit", RetryNever)
+	}
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.UseNumber()
-	if err := scanJSONValue(decoder); err != nil {
+	if err := scanJSONValue(decoder, 0); err != nil {
 		return err
 	}
 	if _, err := decoder.Token(); err != io.EOF {
@@ -62,7 +74,10 @@ func validateStrictJSON(data []byte) error {
 	return nil
 }
 
-func scanJSONValue(decoder *json.Decoder) error {
+func scanJSONValue(decoder *json.Decoder, depth int) error {
+	if depth >= maxControlV1Nesting {
+		return newFailure(FailureResourceLimitExceeded, "sandbox.control/v1 nesting exceeds the finite limit", RetryNever)
+	}
 	token, err := decoder.Token()
 	if err != nil {
 		return newFailure(FailureInvalidArgument, "sandbox.control/v1 contains invalid JSON", RetryNever)
@@ -72,7 +87,12 @@ func scanJSONValue(decoder *json.Decoder) error {
 		switch value {
 		case '{':
 			seen := make(map[string]struct{})
+			entries := 0
 			for decoder.More() {
+				entries++
+				if entries > maxControlV1Collection {
+					return newFailure(FailureResourceLimitExceeded, "sandbox.control/v1 object exceeds the finite entry limit", RetryNever)
+				}
 				key, err := decoder.Token()
 				if err != nil {
 					return newFailure(FailureInvalidArgument, "sandbox.control/v1 object key is invalid", RetryNever)
@@ -85,7 +105,7 @@ func scanJSONValue(decoder *json.Decoder) error {
 					return newFailure(FailureInvalidArgument, "sandbox.control/v1 contains a duplicate key", RetryNever)
 				}
 				seen[name] = struct{}{}
-				if err := scanJSONValue(decoder); err != nil {
+				if err := scanJSONValue(decoder, depth+1); err != nil {
 					return err
 				}
 			}
@@ -93,8 +113,13 @@ func scanJSONValue(decoder *json.Decoder) error {
 				return newFailure(FailureInvalidArgument, "sandbox.control/v1 object is incomplete", RetryNever)
 			}
 		case '[':
+			entries := 0
 			for decoder.More() {
-				if err := scanJSONValue(decoder); err != nil {
+				entries++
+				if entries > maxControlV1Collection {
+					return newFailure(FailureResourceLimitExceeded, "sandbox.control/v1 array exceeds the finite entry limit", RetryNever)
+				}
+				if err := scanJSONValue(decoder, depth+1); err != nil {
 					return err
 				}
 			}

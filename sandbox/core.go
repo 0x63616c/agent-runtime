@@ -105,11 +105,24 @@ func newCoreClientWithPolicy(principal string, now time.Time, limits limitPolicy
 }
 
 func newCoreClientWithLedger(principal string, now time.Time, limits limitPolicy, ledger *coreLedger) (*coreClient, error) {
-	limits = normalizedLimitPolicy(limits)
+	limits = freezeLimitPolicy(normalizedLimitPolicy(limits))
 	if principal == "" || now.IsZero() || ledger == nil || !validLimitPolicy(limits) {
 		return nil, newFailure(FailureInvalidArgument, "sandbox core requires finite limit policy", RetryNever)
 	}
 	return &coreClient{principal: principal, now: now.UTC(), limits: limits, ledger: ledger, streams: make(map[*sliceOperationStream]struct{})}, nil
+}
+
+func freezeLimitPolicy(policy limitPolicy) limitPolicy {
+	frozen := policy
+	frozen.capabilities = copyCapabilitySnapshot(policy.capabilities)
+	if policy.admittedImages != nil {
+		frozen.admittedImages = make(map[Digest]ImageInfo, len(policy.admittedImages))
+		for digest, image := range policy.admittedImages {
+			image.Identity.Groups = append([]uint32(nil), image.Identity.Groups...)
+			frozen.admittedImages[digest] = image
+		}
+	}
+	return frozen
 }
 
 func newCoreLedger() *coreLedger {
@@ -229,12 +242,25 @@ func compatiblePersistedSpec(spec effectiveSpec, policy limitPolicy) bool {
 	if !withinLimits(spec.limits, policy.maximum) {
 		return false
 	}
-	if policy.admittedImages != nil {
-		if _, ok := policy.admittedImages[spec.image.Digest]; !ok {
+	if spec.canonicalizerVersion != policy.canonicalizerVersion {
+		return false
+	}
+	if spec.image.Digest != "" {
+		current, err := admitImage(ImageRef{Digest: spec.image.Digest}, policy)
+		if err != nil || !sameImageCompatibility(spec.image, current) {
 			return false
 		}
 	}
 	return true
+}
+
+func sameImageCompatibility(left, right ImageInfo) bool {
+	return left.Digest == right.Digest &&
+		left.Architecture == right.Architecture &&
+		left.Identity.UID == right.Identity.UID &&
+		left.Identity.GID == right.Identity.GID &&
+		reflect.DeepEqual(left.Identity.Groups, right.Identity.Groups) &&
+		left.GuestProtocol == right.GuestProtocol
 }
 
 func (client *coreClient) reserveAcceptedResourcesLocked(ledger *principalLedger, entry *accepted) {
