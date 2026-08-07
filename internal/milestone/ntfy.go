@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
+	stderrors "errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -40,7 +41,7 @@ func (notifier *NtfyNotifier) SetBearerToken(token string) {
 }
 
 // Deliver posts the exact seven-field report to the fixed ntfy topic.
-func (notifier *NtfyNotifier) Deliver(ctx context.Context, notification Notification) error {
+func (notifier *NtfyNotifier) Deliver(ctx context.Context, notification Notification) (resultErr error) {
 	if err := ctx.Err(); err != nil {
 		return errors.Wrap(err, "deliver ntfy notification")
 	}
@@ -71,7 +72,11 @@ func (notifier *NtfyNotifier) Deliver(ctx context.Context, notification Notifica
 		return NewDeliveryFailure(FailureUnavailable)
 	}
 	if response.Body != nil {
-		defer response.Body.Close()
+		defer func() {
+			if err := response.Body.Close(); err != nil {
+				resultErr = stderrors.Join(resultErr, errors.Wrap(err, "close ntfy notification response"))
+			}
+		}()
 		_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, 1024))
 	}
 	if response.StatusCode >= http.StatusOK && response.StatusCode < http.StatusMultipleChoices {

@@ -2,6 +2,7 @@ package milestone
 
 import (
 	"context"
+	stderrors "errors"
 
 	"github.com/0x63616c/agent-runtime/internal/clock"
 	"github.com/0x63616c/agent-runtime/internal/runtimeconfig"
@@ -85,13 +86,17 @@ func (service *Service) Publish(ctx context.Context, catalog Catalog, ledger Led
 }
 
 // Retry retries delivery only for retained failed evidence.
-func (service *Service) Retry(ctx context.Context, milestone MilestoneID) (Record, error) {
+func (service *Service) Retry(ctx context.Context, milestone MilestoneID) (record Record, resultErr error) {
 	if claims, ok := service.store.(deliveryClaimStore); ok {
 		release, err := claims.claimDelivery(ctx, milestone)
 		if err != nil {
 			return Record{}, errors.Wrap(err, "claim milestone delivery")
 		}
-		defer release()
+		defer func() {
+			if err := release(); err != nil {
+				resultErr = stderrors.Join(resultErr, errors.Wrap(err, "release milestone delivery claim"))
+			}
+		}()
 	}
 	record, err := service.store.Lookup(ctx, milestone)
 	if err != nil {

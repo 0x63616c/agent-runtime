@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	stderrors "errors"
 	"os"
 	"path/filepath"
 	"sync"
@@ -133,18 +134,15 @@ func (store *FileStore) write(record Record, replace bool) error {
 		return errors.Wrap(err, "create retained milestone evidence")
 	}
 	temporaryPath := temporary.Name()
-	defer os.Remove(temporaryPath)
+	defer removeTemporary(temporaryPath)
 	if err := temporary.Chmod(0o600); err != nil {
-		temporary.Close()
-		return errors.Wrap(err, "harden retained milestone evidence")
+		return closeTemporary(temporary, errors.Wrap(err, "harden retained milestone evidence"))
 	}
 	if _, err := temporary.Write(append(encoded, '\n')); err != nil {
-		temporary.Close()
-		return errors.Wrap(err, "write retained milestone evidence")
+		return closeTemporary(temporary, errors.Wrap(err, "write retained milestone evidence"))
 	}
 	if err := temporary.Sync(); err != nil {
-		temporary.Close()
-		return errors.Wrap(err, "sync retained milestone evidence")
+		return closeTemporary(temporary, errors.Wrap(err, "sync retained milestone evidence"))
 	}
 	if err := temporary.Close(); err != nil {
 		return errors.Wrap(err, "close retained milestone evidence")
@@ -164,16 +162,32 @@ func (store *FileStore) write(record Record, replace bool) error {
 	return store.syncDirectory()
 }
 
-func (store *FileStore) syncDirectory() error {
+func (store *FileStore) syncDirectory() (resultErr error) {
 	directory, err := os.Open(store.directory)
 	if err != nil {
 		return errors.Wrap(err, "open milestone evidence directory for sync")
 	}
-	defer directory.Close()
+	defer func() {
+		if err := directory.Close(); err != nil {
+			resultErr = stderrors.Join(resultErr, errors.Wrap(err, "close milestone evidence directory after sync"))
+		}
+	}()
 	if err := directory.Sync(); err != nil {
 		return errors.Wrap(err, "sync milestone evidence directory")
 	}
 	return nil
+}
+
+func closeTemporary(temporary *os.File, failure error) error {
+	if err := temporary.Close(); err != nil {
+		return stderrors.Join(failure, errors.Wrap(err, "close retained milestone evidence"))
+	}
+	return failure
+}
+
+func removeTemporary(path string) {
+	// A leftover temporary file cannot replace retained evidence; removal is hygiene only.
+	_ = os.Remove(path)
 }
 
 func (store *FileStore) path(milestone MilestoneID) string {
@@ -190,15 +204,13 @@ func (store *FileStore) claimDelivery(ctx context.Context, milestone MilestoneID
 		return nil, errors.Wrap(err, "open file milestone delivery claim")
 	}
 	if err := claim.Chmod(0o600); err != nil {
-		claim.Close()
-		return nil, errors.Wrap(err, "harden file milestone delivery claim")
+		return nil, closeClaim(claim, errors.Wrap(err, "harden file milestone delivery claim"))
 	}
 	if err := syscall.Flock(int(claim.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
-		claim.Close()
 		if err == syscall.EWOULDBLOCK || err == syscall.EAGAIN {
-			return nil, errors.New("file milestone delivery is already claimed")
+			return nil, closeClaim(claim, errors.New("file milestone delivery is already claimed"))
 		}
-		return nil, errors.Wrap(err, "lock file milestone delivery claim")
+		return nil, closeClaim(claim, errors.Wrap(err, "lock file milestone delivery claim"))
 	}
 	return func() error {
 		unlockErr := syscall.Flock(int(claim.Fd()), syscall.LOCK_UN)
@@ -211,4 +223,11 @@ func (store *FileStore) claimDelivery(ctx context.Context, milestone MilestoneID
 		}
 		return nil
 	}, nil
+}
+
+func closeClaim(claim *os.File, failure error) error {
+	if err := claim.Close(); err != nil {
+		return stderrors.Join(failure, errors.Wrap(err, "close file milestone delivery claim"))
+	}
+	return failure
 }

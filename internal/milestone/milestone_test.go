@@ -284,6 +284,17 @@ var _ = Describe("Milestone evidence", func() {
 		Expect(string(client.bodies[0])).To(Equal(expected))
 	})
 
+	It("does not accept an ntfy response whose close fails", func() {
+		client := &recordingHTTPClient{statusCode: http.StatusOK, responseBody: failingCloseBody{Reader: strings.NewReader("ok")}}
+		notifier, err := milestone.NewNtfyNotifier(client)
+		Expect(err).NotTo(HaveOccurred())
+		record, err := milestone.BuildRecord(catalog(), fullLedger(), reportInput())
+		Expect(err).NotTo(HaveOccurred())
+		record.Report.UTCTime = time.Date(2026, 8, 6, 20, 0, 0, 0, time.UTC)
+		err = notifier.Deliver(context.Background(), milestone.Notification{Topic: runtimeconfig.NtfyTopic, Report: record.Report})
+		Expect(err).To(MatchError(ContainSubstring("close ntfy notification response")))
+	})
+
 	It("persists a failed delivery on disk before a later retry succeeds", func() {
 		directory := GinkgoT().TempDir()
 		store, err := milestone.NewFileStore(directory)
@@ -452,10 +463,11 @@ func isM0Requirement(id milestone.RequirementID) bool {
 }
 
 type recordingHTTPClient struct {
-	statusCode int
-	failures   []error
-	requests   []*http.Request
-	bodies     [][]byte
+	statusCode   int
+	failures     []error
+	responseBody io.ReadCloser
+	requests     []*http.Request
+	bodies       [][]byte
 }
 
 type failOnceMarkSentStore struct {
@@ -513,5 +525,13 @@ func (client *recordingHTTPClient) Do(request *http.Request) (*http.Response, er
 		client.failures = client.failures[1:]
 		return nil, failure
 	}
-	return &http.Response{StatusCode: client.statusCode, Body: io.NopCloser(strings.NewReader("unavailable")), Header: make(http.Header)}, nil
+	responseBody := client.responseBody
+	if responseBody == nil {
+		responseBody = io.NopCloser(strings.NewReader("unavailable"))
+	}
+	return &http.Response{StatusCode: client.statusCode, Body: responseBody, Header: make(http.Header)}, nil
 }
+
+type failingCloseBody struct{ io.Reader }
+
+func (failingCloseBody) Close() error { return stderrors.New("response close failure") }
