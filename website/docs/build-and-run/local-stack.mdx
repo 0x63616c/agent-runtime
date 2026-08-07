@@ -86,5 +86,7 @@ It refuses a missing, relabelled, or foreign namespace. It never targets
 `default`, another Stack, or a cluster-scoped object.
 
 This is local container/Kubernetes infrastructure, not Firecracker evidence or
-hostile-tenant sandbox isolation. The real Agent Runtime, payload pipeline,
-public SDK, and examples remain separate implementation milestones.
+hostile-tenant sandbox isolation. A compile-tested public Go contract and
+deterministic in-memory Agent kernel now exist, but their HTTP, PostgreSQL, and
+Temporal production adapters—and all three examples—remain separate
+implementation milestones.

@@ -11,12 +11,18 @@
         "README.md",
         "cmd/sandbox-control/main.go",
         "deploy/sandboxcontrol/control.example.json",
-        "docs/reference/sandbox-control-v1.md",
-        "docs/reference/temporal-payloads.md",
         "docs/operations/sandbox-control-ledger.md",
-        "sandbox/control_v1.schema.json",
+        "docs/reference/sandbox-control-v1.md",
+        "docs/reference/runtime-go-contract.md",
+        "docs/reference/temporal-payloads.md",
         "sandbox/api.go",
         "sandbox/api_example_test.go",
+        "sandbox/control_v1.schema.json",
+        "sdk/go/client.go",
+        "sdk/go/doc.go",
+        "sdk/go/error.go",
+        "sdk/go/ids.go",
+        "sdk/go/types.go",
         "skills/refresh-agent-runtime-docs/SKILL.md",
         "website/docs/build-and-run/local-foundation.mdx",
         "website/docs/build-and-run/local-stack.mdx",
@@ -24,6 +30,7 @@
         "website/docs/examples/index.mdx",
         "website/docs/help/publication-operations.mdx",
         "website/docs/reference/overview.mdx",
+        "website/docs/reference/runtime-go-contract.mdx",
         "website/docs/reference/temporal-payloads.mdx",
         "website/docs/reference/sandbox-control-ledger.mdx",
         "website/docs/security/verified-boundaries.mdx",
@@ -34,7 +41,7 @@
         "website/sidebars.ts"
       ],
       "artifactKind": "source-inventory",
-      "publicStatus": "M0 and M2 complete; M1/M3 implementation active"
+      "publicStatus": "M0 and M2 complete; M1/M3/M5 implementation active"
     }
   ],
   "curated": [
@@ -44,6 +51,7 @@
     "website/docs/examples/index.mdx",
     "website/docs/help/publication-operations.mdx",
     "website/docs/reference/overview.mdx",
+    "website/docs/reference/runtime-go-contract.mdx",
     "website/docs/reference/temporal-payloads.mdx",
     "website/docs/reference/sandbox-control-ledger.mdx",
     "website/docs/security/verified-boundaries.mdx",

@@ -26,5 +26,12 @@ immutable blob-reference payloads. The Temporal UI handler reuses that chain
 only for inspection; workers retain no remote-codec dependency. This is a
 library slice, not yet a deployed runtime role or production blob deployment.
 
+The active M5 work now provides a Temporal-free public
+[Go contract and deterministic kernel](./runtime-go-contract.mdx). It defines
+typed IDs, immutable revision/session snapshots, idempotent bounded Input,
+serialized Turn state, explicit cancellation, and ordered cursor replay. The
+HTTP/OpenAPI transport, PostgreSQL authority, and Temporal adapter remain
+unimplemented and are not implied by this contract slice.
+
 Generated files live only under `website/docs/reference/generated/`. Curated
 pages explain semantics and ownership without duplicating unverified schemas.

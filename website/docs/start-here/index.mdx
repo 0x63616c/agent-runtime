@@ -17,10 +17,12 @@ M0 and the M2 reusable Temporal payload-library milestone are complete.
 Declarative infrastructure and the sandbox control contract are under
 implementation. The repository now ships a runnable isolated Tilt
 infrastructure Stack with trust-scoped API/orchestration/codec runtime roles,
-but it does not yet ship the public runtime API, SDK, three examples,
-production payload deployment, or verified Firecracker isolation. See the
-[local Stack guide](../build-and-run/local-stack.mdx) for exactly what that
-environment proves.
+and the first Temporal-free public Go contract plus deterministic Agent kernel.
+It does not yet ship the HTTP transport, PostgreSQL runtime authority, private
+Temporal orchestration, three examples, production payload deployment, or
+verified Firecracker isolation. See the [runtime Go contract](../reference/runtime-go-contract.mdx)
+and [local Stack guide](../build-and-run/local-stack.mdx) for the exact current
+boundaries.
 :::
 
 Start with [the domain language](../concepts/runtime-language.mdx), then read

@@ -10,6 +10,7 @@ Before raising the Go floor or changing a public contract, record the
 compatibility decision, update the module and documentation together, run a
 clean external-consumer check once public packages exist, and include the
 change in release notes. Deprecations remain supported for a documented
-window; removals require the next allowed semantic-version boundary. M0 has no
-public SDK or `temporalpayload` package yet, so external-consumer/release proof
-remains downstream and non-green.
+window; removals require the next allowed semantic-version boundary. The
+`sdk/go` contract and `temporalpayload` package both have clean
+external-consumer compile tests. No stable release has been cut yet, so those
+tests prove module independence rather than a semver compatibility guarantee.

@@ -1,0 +1,48 @@
+---
+title: Runtime Go contract
+description: The implemented Temporal-free Go models and deterministic kernel boundary.
+slug: /reference/runtime-go-contract
+---
+
+# Runtime Go contract and deterministic kernel
+
+Import the first public contract from
+`github.com/0x63616c/agent-runtime/sdk/go`; its package name is
+`agentruntime`. It belongs to the single root module and its transitive import
+graph contains no Temporal, PostgreSQL, provider, sandbox-backend, blob-client,
+or telemetry implementation.
+
+## What exists
+
+The package defines strict opaque IDs; immutable Agent revision and
+revision-pinned Session snapshots; bounded text and Artifact-reference Input;
+serialized Turn states; stable safe Failure codes; ordered bounded Product
+events; opaque Cursors and explicit Gaps; and a small `Client` command/query
+interface.
+
+The internal deterministic kernel currently proves these transitions:
+
+```text
+create immutable Agent revision
+  -> create Session pinned to that exact revision
+  -> admit canonical idempotent Input
+  -> run one Turn and durably queue later Turns
+  -> succeed, fail, or explicitly cancel exactly once
+  -> advance the next queued Turn
+  -> close admission, drain, and complete
+```
+
+Input and result collections are deep-copied. Concurrent admission is atomic
+per ownership scope. Public Product events contain typed references and bounded
+state vocabulary, never raw Input text or backend identifiers. Replay resumes
+after an opaque Cursor; a removed or unavailable position produces an explicit
+Gap that directs the caller to inspect current Session state.
+
+## Current boundary
+
+The in-memory repository is deterministic unit/concurrency evidence only. It
+does not prove process-restart durability. There is not yet an HTTP client or
+server, OpenAPI document, authentication transport, PostgreSQL adapter/outbox,
+Temporal workflow, model/tool/approval execution path, Artifact download, or
+runnable example. No M5 milestone requirement is complete on the strength of
+this slice alone.

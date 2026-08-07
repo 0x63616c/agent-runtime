@@ -8,6 +8,13 @@ package, but it does not yet expose the public agent runtime service, working
 examples, production runtime image composition, or verified Firecracker
 isolation.
 
+The first M5 slice now publishes the Temporal-free Go contract at
+`github.com/0x63616c/agent-runtime/sdk/go` plus a deterministic internal kernel
+for immutable Agent revisions, revision-pinned Sessions, idempotent Input,
+serialized Turns, cancellation, and cursor-addressed Product events. The
+contract compiles from an independent module. It is not yet backed by the
+public HTTP service, PostgreSQL, or Temporal orchestration.
+
 The current Tilt foundation uses small health-only API/worker/codec images to
 prove isolated infrastructure, image builds, readiness, reset, and teardown.
 It is not yet the public Agent Runtime. See the
