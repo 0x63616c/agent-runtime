@@ -85,3 +85,22 @@ func (source *EnvironmentSecretSource) Lookup(_ context.Context, environment str
 	value, found := source.lookup(environment)
 	return value, found, nil
 }
+
+// KnownCredentialEnvironmentNames enumerates present reviewed credential keys
+// without disclosing their values.
+func (source *EnvironmentSecretSource) KnownCredentialEnvironmentNames(ctx context.Context) ([]string, error) {
+	if source == nil || source.lookup == nil {
+		return nil, errors.New("enumerate environment credentials: source is not configured")
+	}
+	names := make([]string, 0)
+	for _, environment := range KnownCredentialEnvironmentNames() {
+		value, found, err := source.Lookup(ctx, environment)
+		if err != nil {
+			return nil, errors.Wrapf(err, "enumerate environment credential %s", environment)
+		}
+		if found && value != "" {
+			names = append(names, environment)
+		}
+	}
+	return names, nil
+}

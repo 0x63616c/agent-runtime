@@ -45,6 +45,57 @@ run_role codec -e CODEC_BLOB_CREDENTIAL
 run_role sandbox-control -e SANDBOX_HOST_CA -e SANDBOX_STATE_DSN
 run_role sandbox-host -e SANDBOX_HOST_IDENTITY -e SANDBOX_CONTROL_TOKEN
 
+negative_count=0
+run_role_rejecting_foreign_credential() {
+  local role="$1"
+  local foreign="$2"
+  local config
+  local output
+  local -a allowed_environment=()
+  config="$(printf '%s' "${role_configs}" | jq -cer --arg role "${role}" '.[$role]')"
+  while IFS= read -r credential; do
+    [[ -n "$credential" ]] && allowed_environment+=("-e" "$credential")
+  done < <(printf '%s' "${role_configs}" | jq -r --arg role "${role}" '.[$role].dependencies[]?.secret_environment? // empty')
+  if output="$(docker run --rm --read-only --cap-drop ALL --security-opt no-new-privileges \
+    "${allowed_environment[@]}" \
+    -e RUNTIME_ROLE_CONFIG="${config}" \
+    -e "${foreign}" \
+    "${smoke_image}" serve --config-env RUNTIME_ROLE_CONFIG --role "${role}" --check 2>&1)"; then
+    echo "role ${role} admitted foreign known credential ${foreign}" >&2
+    exit 1
+  fi
+  expected="prepare runtime role: known credential ${foreign} is not entitled to role ${role}"
+  if [[ "$output" != *"$expected"* ]]; then
+    echo "role ${role} rejected ${foreign}, but not at the credential entitlement boundary" >&2
+    exit 1
+  fi
+  if [[ "$output" == *"$smoke_secret"* ]]; then
+    echo "role ${role} leaked credential material while rejecting ${foreign}" >&2
+    exit 1
+  fi
+  negative_count=$((negative_count + 1))
+}
+
+# The positive starts above prove every entitlement works. For every role, a
+# real container receives each known credential outside its entitlement, while
+# retaining all allowed credentials so another missing dependency cannot cause
+# a false-positive failure. Captured diagnostics are checked but never printed.
+for role in api orchestration model tool blob codec sandbox-control sandbox-host; do
+  while IFS= read -r foreign; do
+    if ! printf '%s' "${role_configs}" | jq -e --arg role "$role" --arg foreign "$foreign" \
+      'any(.[$role].dependencies[]?; .secret_environment == $foreign)' >/dev/null; then
+      run_role_rejecting_foreign_credential "$role" "$foreign"
+    fi
+  done < <(printf '%s' "${role_configs}" | jq -r '
+    [to_entries[].value.dependencies[]?.secret_environment? | select(type == "string" and length > 0)] | unique | .[]
+  ')
+done
+if [[ "$negative_count" -ne 76 ]]; then
+  echo "credential rejection matrix executed $negative_count cases, want 76" >&2
+  exit 1
+fi
+echo "all 76 foreign known credential containers were rejected without secret leakage"
+
 docker run --rm --read-only --cap-drop ALL --security-opt no-new-privileges \
   --entrypoint /egress-proxy "${smoke_image}" \
   --listen 127.0.0.1:8088 --allowed-target model-provider.example.invalid:443 --check

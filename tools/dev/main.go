@@ -4,6 +4,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
@@ -17,7 +18,10 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
+
+	"github.com/0x63616c/agent-runtime/internal/stack"
 )
 
 const quotaPolicy = `{"defaults":{"milli_cpu":500,"memory_bytes":536870912,"root_disk_bytes":4294967296,"tmpfs_bytes":268435456,"pids":128,"process_count":64,"open_files":1024,"inodes":100000,"files":50000,"lifetime_seconds":3600,"produced_output_bytes":67108864,"retained_output_bytes":16777216,"transfer_bytes":1073741824,"network_connections":64,"volume_bytes":10737418240,"snapshot_bytes":10737418240},"maximums":{"milli_cpu":4000,"memory_bytes":4294967296,"root_disk_bytes":34359738368,"tmpfs_bytes":2147483648,"pids":1024,"process_count":512,"open_files":8192,"inodes":1000000,"files":500000,"lifetime_seconds":86400,"produced_output_bytes":1073741824,"retained_output_bytes":268435456,"transfer_bytes":10737418240,"network_connections":1024,"volume_bytes":107374182400,"snapshot_bytes":107374182400}}`
@@ -157,21 +161,16 @@ func renderStack(stack, profile string) ([]byte, error) {
 	if err := validateStack(stack); err != nil {
 		return nil, err
 	}
-	template, err := readResourcesTemplate()
+	resources, err := reviewedLocalResources(stack)
 	if err != nil {
 		return nil, err
-	}
-	var resources []json.RawMessage
-	if err := json.Unmarshal(template, &resources); err != nil {
-		return nil, fmt.Errorf("read local Stack resource template: %w", err)
 	}
 	profiles := make(map[string]any, 3)
 	for _, candidate := range []string{"local", "ci", "production"} {
 		namespace := profileNamespace(stack, candidate)
 		resolved := make([]json.RawMessage, len(resources))
 		for index, resource := range resources {
-			value := strings.ReplaceAll(string(resource), "__STACK__", stack)
-			value = strings.ReplaceAll(value, "__NAMESPACE__", namespace)
+			value := strings.ReplaceAll(string(resource), "ar-agent-runtime", namespace)
 			resolved[index] = json.RawMessage(value)
 		}
 		prerequisites := []any{}
@@ -192,22 +191,83 @@ func renderStack(stack, profile string) ([]byte, error) {
 	return append(encoded, '\n'), nil
 }
 
-func readResourcesTemplate() ([]byte, error) {
+func reviewedLocalResources(stackName string) ([]json.RawMessage, error) {
 	directory, err := os.Getwd()
 	if err != nil {
-		return nil, fmt.Errorf("locate local Stack resource template: %w", err)
+		return nil, fmt.Errorf("locate reviewed local Stack profile: %w", err)
 	}
 	for {
-		path := filepath.Join(directory, "deploy", "dev", "resources.json")
+		path := filepath.Join(directory, "deploy", "production", "stack.json")
 		if data, readErr := os.ReadFile(path); readErr == nil {
-			return data, nil
+			reviewed, parseErr := stack.Parse(bytes.NewReader(data))
+			if parseErr != nil {
+				return nil, fmt.Errorf("parse reviewed local Stack profile: %w", parseErr)
+			}
+			_ = reviewed
+			var document struct {
+				Profiles struct {
+					Local struct {
+						Resources []json.RawMessage `json:"resources"`
+					} `json:"local"`
+				} `json:"profiles"`
+			}
+			if err := json.Unmarshal(data, &document); err != nil {
+				return nil, fmt.Errorf("decode reviewed local Stack profile: %w", err)
+			}
+			resources := document.Profiles.Local.Resources
+			for index, resource := range resources {
+				var object map[string]json.RawMessage
+				if err := json.Unmarshal(resource, &object); err != nil {
+					return nil, fmt.Errorf("decode reviewed local Stack resource: %w", err)
+				}
+				var id stack.ResourceID
+				if err := json.Unmarshal(object["id"], &id); err != nil {
+					return nil, fmt.Errorf("read reviewed local Stack resource identity: %w", err)
+				}
+				if !tiltBuiltResource(id) {
+					continue
+				}
+				var kubernetes map[string]json.RawMessage
+				if err := json.Unmarshal(object["kubernetes"], &kubernetes); err != nil {
+					return nil, fmt.Errorf("decode reviewed local Stack workload: %w", err)
+				}
+				image, err := json.Marshal(devImage(stackName, id))
+				if err != nil {
+					return nil, fmt.Errorf("encode local Tilt image reference: %w", err)
+				}
+				kubernetes["image"] = image
+				encodedKubernetes, err := json.Marshal(kubernetes)
+				if err != nil {
+					return nil, fmt.Errorf("encode reviewed local Stack workload: %w", err)
+				}
+				object["kubernetes"] = encodedKubernetes
+				encodedResource, err := json.Marshal(object)
+				if err != nil {
+					return nil, fmt.Errorf("encode reviewed local Stack resource: %w", err)
+				}
+				resources[index] = encodedResource
+			}
+			return resources, nil
 		}
 		parent := filepath.Dir(directory)
 		if parent == directory {
-			return nil, fmt.Errorf("locate local Stack resource template: deploy/dev/resources.json was not found")
+			return nil, fmt.Errorf("locate reviewed local Stack profile: deploy/production/stack.json was not found")
 		}
 		directory = parent
 	}
+}
+
+func tiltBuiltResource(id stack.ResourceID) bool {
+	switch id {
+	case "api", "orchestration", "model", "tool", "blob-role", "codec", "sandbox-control", "sandbox-host", "egress-proxy":
+		return true
+	default:
+		return false
+	}
+}
+
+func devImage(stack string, id stack.ResourceID) string {
+	return "agent-runtime-dev/" + stack + "/" + string(id) + "@sha256:" + strings.Repeat("d", 64)
 }
 
 func profileNamespace(stack, profile string) string {
@@ -243,45 +303,114 @@ type localState struct {
 }
 
 func materializeSecrets(stack, root string, reader io.Reader) ([]byte, error) {
+	references, err := localSecretReferences(stack)
+	if err != nil {
+		return nil, err
+	}
 	path := filepath.Join(root, ".runtime", "dev", stack+".secrets.json")
 	state := localSecrets{}
 	if data, err := os.ReadFile(path); err == nil {
-		if err := json.Unmarshal(data, &state); err != nil || state.Stack != stack || state.Values == nil {
+		if err := json.Unmarshal(data, &state); err != nil || state.Stack != stack || !matchesSecretReferences(state.Values, references) {
 			return nil, fmt.Errorf("read local development secret state: refuse malformed or foreign Stack state")
 		}
 	} else if !os.IsNotExist(err) {
 		return nil, fmt.Errorf("read local development secret state: %w", err)
 	}
 	if state.Values == nil {
-		databasePassword := randomValue(reader)
-		temporalToken := randomValue(reader)
-		codecCredential := randomValue(reader)
-		state = localSecrets{Stack: stack, Values: map[string]map[string]string{
-			"database-credentials": {"POSTGRES_USER": "agentruntime", "POSTGRES_PASSWORD": databasePassword},
-			"blob-credentials":     {"MINIO_ROOT_USER": "agentruntime", "MINIO_ROOT_PASSWORD": randomValue(reader)},
-			"runtime-role-credentials": {
-				"STATE_DATABASE_DSN":    "postgres://agentruntime:" + databasePassword + "@postgres:5432/agent_runtime",
-				"TEMPORAL_AUTH_TOKEN":   temporalToken,
-				"CODEC_BLOB_CREDENTIAL": codecCredential,
-			},
-		}}
-		encoded, err := json.Marshal(state)
-		if err != nil {
-			return nil, fmt.Errorf("encode local development secret state: %w", err)
+		state = localSecrets{Stack: stack, Values: make(map[string]map[string]string, len(references))}
+		for _, reference := range references {
+			values := make(map[string]string, len(reference.keys))
+			for _, key := range reference.keys {
+				values[key] = randomValue(reader)
+			}
+			state.Values[reference.name] = values
+		}
+		stateReference, stateFound := secretReferenceByID(references, "state-db-secret")
+		sandboxReference, sandboxFound := secretReferenceByID(references, "sandbox-state-secret")
+		if !stateFound || !sandboxFound {
+			return nil, fmt.Errorf("materialize local development secrets: reviewed Stack is missing required state credential references")
+		}
+		statePassword := state.Values[stateReference.name]["POSTGRES_PASSWORD"]
+		stateDSN := "postgres://postgres:" + statePassword + "@state:5432/agent_runtime?sslmode=disable"
+		state.Values[stateReference.name]["STATE_DATABASE_DSN"] = stateDSN
+		state.Values[sandboxReference.name]["SANDBOX_STATE_DSN"] = stateDSN
+		encoded, marshalErr := json.Marshal(state)
+		if marshalErr != nil {
+			return nil, fmt.Errorf("encode local development secret state: %w", marshalErr)
 		}
 		if err := writePrivate(path, append(encoded, '\n')); err != nil {
 			return nil, err
 		}
 	}
-	items := make([]map[string]any, 0, len(state.Values))
-	for _, name := range []string{"blob-credentials", "database-credentials", "runtime-role-credentials"} {
-		items = append(items, map[string]any{"apiVersion": "v1", "kind": "Secret", "metadata": map[string]any{"name": name, "labels": map[string]string{"app.kubernetes.io/part-of": "agent-runtime", "agent-runtime.dev/stack": stack, "agent-runtime.dev/profile": "local", "agent-runtime.dev/resource": name}}, "type": "Opaque", "stringData": state.Values[name]})
+	items := make([]map[string]any, 0, len(references))
+	for _, reference := range references {
+		items = append(items, map[string]any{"apiVersion": "v1", "kind": "Secret", "metadata": map[string]any{"name": reference.name, "labels": map[string]string{"app.kubernetes.io/part-of": "agent-runtime", "agent-runtime.dev/stack": stack, "agent-runtime.dev/profile": "local", "agent-runtime.dev/resource": string(reference.id)}}, "type": "Opaque", "stringData": state.Values[reference.name]})
 	}
 	encoded, err := json.Marshal(map[string]any{"apiVersion": "v1", "kind": "List", "items": items})
 	if err != nil {
 		return nil, fmt.Errorf("encode local development Secret manifests: %w", err)
 	}
 	return encoded, nil
+}
+
+type localSecretReference struct {
+	id   stack.ResourceID
+	name string
+	keys []string
+}
+
+func localSecretReferences(stackName string) ([]localSecretReference, error) {
+	document, err := renderStack(stackName, "local")
+	if err != nil {
+		return nil, err
+	}
+	spec, err := stack.Parse(bytes.NewReader(document))
+	if err != nil {
+		return nil, fmt.Errorf("parse local Stack for Secret inventory: %w", err)
+	}
+	rendered, err := stack.Render(spec, stack.ProfileLocal)
+	if err != nil {
+		return nil, fmt.Errorf("render local Stack Secret inventory: %w", err)
+	}
+	references := make([]localSecretReference, 0)
+	for _, resource := range rendered.Resources() {
+		if resource.Kind != stack.ResourceSecretReference {
+			continue
+		}
+		references = append(references, localSecretReference{id: resource.ID, name: resource.SecretReference.Reference, keys: append([]string(nil), resource.SecretReference.Keys...)})
+	}
+	sort.Slice(references, func(left, right int) bool { return references[left].name < references[right].name })
+	if len(references) == 0 {
+		return nil, fmt.Errorf("render local Stack Secret inventory: no local-generated Secret references were declared")
+	}
+	return references, nil
+}
+
+func secretReferenceByID(references []localSecretReference, id stack.ResourceID) (localSecretReference, bool) {
+	for _, reference := range references {
+		if reference.id == id {
+			return reference, true
+		}
+	}
+	return localSecretReference{}, false
+}
+
+func matchesSecretReferences(values map[string]map[string]string, references []localSecretReference) bool {
+	if len(values) != len(references) {
+		return false
+	}
+	for _, reference := range references {
+		provided, exists := values[reference.name]
+		if !exists || len(provided) != len(reference.keys) {
+			return false
+		}
+		for _, key := range reference.keys {
+			if provided[key] == "" {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 func randomValue(reader io.Reader) string {
@@ -393,7 +522,11 @@ func reset(ctx context.Context, stack, root string, output io.Writer) error {
 	if err := verifyNamespace(ctx, state); err != nil {
 		return err
 	}
-	command := exec.CommandContext(ctx, "kubectl", "--context", "orbstack", "--namespace", state.Namespace, "rollout", "restart", "deployment/api", "deployment/worker", "deployment/codec")
+	arguments := []string{"--context", "orbstack", "--namespace", state.Namespace, "rollout", "restart"}
+	for _, role := range []string{"api", "orchestration", "model", "tool", "blob-role", "codec", "sandbox-control", "sandbox-host"} {
+		arguments = append(arguments, "deployment/"+role)
+	}
+	command := exec.CommandContext(ctx, "kubectl", arguments...)
 	command.Dir, command.Stdout, command.Stderr = root, output, output
 	if err := command.Run(); err != nil {
 		return fmt.Errorf("reset only declared local Stack roles: %w", err)

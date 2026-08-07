@@ -55,7 +55,7 @@ dev-status stack="":
 dev-api stack="":
     go run ./tools/dev api --stack "{{stack}}" --root .
 
-# Restarts only the three declared local role Deployments after label/UID checks.
+# Restarts all eight declared local runtime-role Deployments after label/UID checks.
 dev-reset stack="":
     go run ./tools/dev reset --stack "{{stack}}" --root .
 

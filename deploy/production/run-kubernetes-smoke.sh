@@ -5,6 +5,47 @@ set -euo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$root"
+
+role_pod_manifest() {
+  local name="$1"
+  local image="$2"
+  local account="$3"
+  local role="$4"
+  local foreign="$5"
+  local environment="$6"
+  jq -n \
+    --arg name "$name" --arg image "$image" --arg account "$account" \
+    --arg role "$role" --arg foreign "$foreign" --argjson environment "$environment" \
+    '{apiVersion:"v1",kind:"Pod",metadata:{name:$name},spec:{restartPolicy:"Never",serviceAccountName:$account,automountServiceAccountToken:false,containers:[{name:"runtime",image:$image,imagePullPolicy:"Never",command:["/runtime"],args:["serve","--config-env","RUNTIME_ROLE_CONFIG","--role",$role,"--check"],env:($environment + (if $foreign == "" then [] else [{name:$foreign,value:"synthetic-negative"}] end)),resources:{requests:{cpu:"100m",memory:"128Mi"},limits:{cpu:"500m",memory:"512Mi"}}}]}}'
+}
+
+self_test_role_pod_constructor() {
+  fixture_environment='[{"name":"RUNTIME_ROLE_CONFIG","value":"fixture"},{"name":"MODEL_API_KEY","valueFrom":{"secretKeyRef":{"name":"fixture-model","key":"MODEL_API_KEY"}}}]'
+  role_pod_manifest fixture-negative fixture.invalid/runtime fixture-account api STATE_DATABASE_DSN "$fixture_environment" |
+    jq -e '
+      .kind == "Pod" and .metadata.name == "fixture-negative" and
+      .spec.serviceAccountName == "fixture-account" and .spec.automountServiceAccountToken == false and
+      (.spec.containers | length) == 1 and
+      .spec.containers[0].imagePullPolicy == "Never" and
+      .spec.containers[0].args == ["serve","--config-env","RUNTIME_ROLE_CONFIG","--role","api","--check"] and
+      (.spec.containers[0].env | length) == 3 and
+      .spec.containers[0].env[1].valueFrom.secretKeyRef.name == "fixture-model" and
+      .spec.containers[0].env[2] == {name:"STATE_DATABASE_DSN",value:"synthetic-negative"}
+    ' >/dev/null
+  role_pod_manifest fixture-positive fixture.invalid/runtime fixture-account model "" "$fixture_environment" |
+    jq -e '.spec.containers[0].env | length == 2' >/dev/null
+}
+
+if [[ "${1:-}" == "--self-test-negative-pod-constructor" ]]; then
+  command -v jq >/dev/null || {
+    echo "jq is required for Pod constructor self-test" >&2
+    exit 1
+  }
+  self_test_role_pod_constructor
+  echo "role Pod constructor preserves allowed references and appends exactly one foreign key only for negative cases"
+  exit 0
+fi
+
 stack_file="$root/deploy/production/stack.json"
 stack_name="agent-runtime"
 profile="local"
@@ -13,17 +54,31 @@ kubeconfig="${AGENT_RUNTIME_SMOKE_KUBECONFIG:?set an explicit absolute kubeconfi
 context="${AGENT_RUNTIME_SMOKE_CONTEXT:?set an explicit Kubernetes context}"
 audit_file="${AGENT_RUNTIME_SMOKE_AUDIT:?set an explicit absolute audit file path}"
 evidence_file="${AGENT_RUNTIME_SMOKE_EVIDENCE:?set an explicit absolute evidence file path}"
+role_smoke_image="${AGENT_RUNTIME_SMOKE_ROLE_IMAGE:-agent-runtime-role-smoke:kubernetes-local}"
 
 if [[ "$kubeconfig" != /* || "$audit_file" != /* || "$evidence_file" != /* ]]; then
   echo "smoke kubeconfig, audit, and evidence file paths must be absolute" >&2
   exit 1
 fi
-for executable in git jq kubectl openssl shasum; do
+for executable in docker git jq kubectl openssl shasum; do
   command -v "$executable" >/dev/null || {
     echo "required smoke executable is unavailable: $executable" >&2
     exit 1
   }
 done
+self_test_role_pod_constructor
+implementation_revision="$(git rev-parse HEAD)"
+docker build \
+  --file "$root/deploy/production/Dockerfile" \
+  --label "agent-runtime.dev/revision=$implementation_revision" \
+  --tag "$role_smoke_image" "$root" >/dev/null
+role_smoke_image_id="$(docker image inspect "$role_smoke_image" --format '{{.Id}}')"
+role_smoke_revision="$(docker image inspect "$role_smoke_image" --format '{{index .Config.Labels "agent-runtime.dev/revision"}}')"
+if [[ "$role_smoke_image_id" != sha256:* || "$role_smoke_revision" != "$implementation_revision" ]]; then
+  echo "current-revision role smoke image identity or revision label differs" >&2
+  exit 1
+fi
+echo "current role smoke image $role_smoke_image_id is labelled with revision $implementation_revision"
 
 secret_dir="$(mktemp -d)"
 bootstrap_capability_file="${audit_file}.bootstrap-capability.json"
@@ -165,6 +220,83 @@ for role in api orchestration model tool blob-role codec sandbox-control sandbox
 done
 echo "all 8 independently configured runtime roles are Ready"
 
+# Existing role Pods prove their declared credentials work. Compare the live
+# credential-key inventory to the reviewed manifest without reading values.
+# Then start one disposable negative Pod for every role/foreign-known-key pair.
+# Each negative Pod retains the role's allowed credentials so only the foreign
+# credential can cause the expected composition-boundary rejection.
+known_credentials="$(printf '%s' "$manifests" | jq -r --argjson roles "$runtime_roles" '
+  [.items[] | select(.kind == "Deployment" and (.metadata.labels["agent-runtime.dev/resource"] as $id | $roles | index($id) != null)) |
+   .spec.template.spec.containers[0].env[]? |
+   select(.valueFrom.secretKeyRef != null) | .name] | unique | .[]
+')"
+negative_count=0
+for role in api orchestration model tool blob-role codec sandbox-control sandbox-host; do
+  expected_credentials="$(printf '%s' "$manifests" | jq -c --arg role "$role" '
+    .items[] | select(.kind == "Deployment" and .metadata.name == $role) |
+    [.spec.template.spec.containers[0].env[]? | select(.valueFrom.secretKeyRef != null) | .name] | sort
+  ')"
+  actual_credentials="$(kubectl --kubeconfig "$kubeconfig" --context "$context" --namespace "$namespace" \
+    get "deployment/$role" -o json | jq -c '
+      [.spec.template.spec.containers[0].env[]? | select(.valueFrom.secretKeyRef != null) | .name] | sort
+    ')"
+  if [[ "$actual_credentials" != "$expected_credentials" ]]; then
+    echo "live credential-key inventory differs for $role" >&2
+    exit 1
+  fi
+
+  runtime_role="${role/blob-role/blob}"
+  allowed_environment="$(printf '%s' "$manifests" | jq -cer --arg role "$role" '
+    .items[] | select(.kind == "Deployment" and .metadata.name == $role) |
+    .spec.template.spec.containers[0].env
+  ')"
+  service_account="$(printf '%s' "$manifests" | jq -cer --arg role "$role" '
+    .items[] | select(.kind == "Deployment" and .metadata.name == $role) |
+    .spec.template.spec.serviceAccountName
+  ')"
+  positive_pod="credential-positive-$role"
+  role_pod_manifest "$positive_pod" "$role_smoke_image" "$service_account" "$runtime_role" "" "$allowed_environment" |
+    kubectl --kubeconfig "$kubeconfig" --context "$context" --namespace "$namespace" create -f - >/dev/null
+  kubectl --kubeconfig "$kubeconfig" --context "$context" --namespace "$namespace" \
+    wait --for=jsonpath='{.status.phase}'=Succeeded "pod/$positive_pod" --timeout=60s >/dev/null
+  positive_output="$(kubectl --kubeconfig "$kubeconfig" --context "$context" --namespace "$namespace" logs "pod/$positive_pod" 2>&1)"
+  if [[ -n "$positive_output" ]]; then
+    echo "$role emitted unexpected output while accepting its entitled credentials" >&2
+    exit 1
+  fi
+  kubectl --kubeconfig "$kubeconfig" --context "$context" --namespace "$namespace" \
+    delete "pod/$positive_pod" --wait=true >/dev/null
+  while IFS= read -r foreign_credential; do
+    [[ -n "$foreign_credential" ]] || continue
+    if printf '%s' "$expected_credentials" | jq -e --arg foreign "$foreign_credential" 'index($foreign) != null' >/dev/null; then
+      continue
+    fi
+    negative_count=$((negative_count + 1))
+    negative_pod="credential-negative-$role-$negative_count"
+    role_pod_manifest "$negative_pod" "$role_smoke_image" "$service_account" "$runtime_role" "$foreign_credential" "$allowed_environment" |
+      kubectl --kubeconfig "$kubeconfig" --context "$context" --namespace "$namespace" create -f - >/dev/null
+    kubectl --kubeconfig "$kubeconfig" --context "$context" --namespace "$namespace" \
+      wait --for=jsonpath='{.status.phase}'=Failed "pod/$negative_pod" --timeout=60s >/dev/null
+    negative_output="$(kubectl --kubeconfig "$kubeconfig" --context "$context" --namespace "$namespace" logs "pod/$negative_pod" 2>&1)"
+    expected_rejection="prepare runtime role: known credential $foreign_credential is not entitled to role $runtime_role"
+    if [[ "$negative_output" != *"$expected_rejection"* ]]; then
+      echo "$role rejected $foreign_credential, but not at the credential entitlement boundary" >&2
+      exit 1
+    fi
+    if [[ "$negative_output" == *"synthetic-negative"* ]]; then
+      echo "$role leaked credential material while rejecting $foreign_credential" >&2
+      exit 1
+    fi
+    kubectl --kubeconfig "$kubeconfig" --context "$context" --namespace "$namespace" \
+      delete "pod/$negative_pod" --wait=true >/dev/null
+  done <<<"$known_credentials"
+done
+if [[ "$negative_count" -ne 76 ]]; then
+  echo "credential rejection matrix executed $negative_count Pods, want 76" >&2
+  exit 1
+fi
+echo "all live role credential inventories matched and all $negative_count foreign-credential Pods were rejected"
+
 temporal_namespace="$(printf '%s' "$rendered" | jq -er '.resources[] | select(.kind == "orchestration") | .orchestration.namespace')"
 retention_days="$(printf '%s' "$rendered" | jq -er '.resources[] | select(.kind == "orchestration") | .orchestration.retention_days')"
 expected_retention_seconds=$((retention_days * 24 * 60 * 60))
@@ -302,7 +434,6 @@ if [[ "$audit_summary" != "true" ]]; then
   exit 1
 fi
 
-implementation_revision="$(git rev-parse HEAD)"
 audit_digest="sha256:$(shasum -a 256 "$audit_file" | awk '{print $1}')"
 declared_provider_count="$(printf '%s' "$rendered" | jq '[.resources[] | select(.kind != "kubernetes")] | length')"
 jq -n \

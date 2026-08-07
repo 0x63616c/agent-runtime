@@ -1,8 +1,9 @@
 # Declarative Stack reference
 
-Status: M1 typed contract, Kubernetes manifest projection, and audited
-operator boundary implemented; local Tilt application remains owned by issue
-#12 and is not yet a runnable quickstart.
+Status: M1 typed contract, Kubernetes manifest projection, audited operator
+boundary, and isolated local Tilt application are implemented. The local path
+is a health-only composition proof, not a claim that the public runtime API,
+workflows, examples, or Firecracker isolation are complete.
 
 `internal/stack` is the sole typed desired-state contract for operator-owned
 infrastructure. It is intentionally private to the repository composition and
@@ -13,8 +14,8 @@ storage-provider, or backend identifiers.
 
 One schema-version `1` document declares one lowercase DNS-label-safe `name`
 and the closed profile set `local`, `ci`, and `production`. The operator tool
-accepts its path as `--stack-file`; the planned Tilt surface accepts that exact
-validated `name` as `--stack=<name>`. There is no competing `instance` identity.
+accepts its path as `--stack-file`; Tilt accepts that exact validated `name` as
+`--stack=<name>`. There is no competing `instance` identity.
 Each profile explicitly declares its namespace:
 
 | Profile | Namespace binding |
@@ -122,8 +123,15 @@ schedule sets; a non-empty set fails visibly rather than being silently
 ignored. Task-queue prefixes are consumed by the later worker composition and
 are not provider namespace state.
 
-`tilt up -- --stack=<name>` remains the planned canonical local application
-command until issue #12 checks in and proves it.
+`tilt up -- --stack=<name>` is the canonical local application command. The
+`just dev` wrapper derives or validates the same name, renders the reviewed
+`local` profile from `deploy/production/stack.json`, substitutes only
+stack-scoped development image references, and applies the resulting typed
+manifest through Tilt. It does not retain a second three-role resource source.
+Each invocation uses the explicit OrbStack context, an `ar-<stack>` namespace,
+and an OS-selected Tilt dashboard port; it never writes the current kubeconfig
+context. `just dev-reset` addresses the eight declared runtime-role Deployments
+only after the stored namespace identity and containment labels are verified.
 
 ## Disposable NetworkPolicy harness
 
