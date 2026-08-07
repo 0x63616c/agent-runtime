@@ -27,6 +27,10 @@ labels, and rendered digest. The declared `local-generated` Secret controller
 may then populate exactly the declared key inventories before full apply.
 Secret values are generated per run, remain in mode-0600 temporary files, flow
 through stdin rather than argv or logs, and are never retained as evidence.
+The disposable proof requires absolute audit and evidence paths. It creates
+generated Secrets exactly once rather than adopting or applying over existing
+objects, and strips generator line endings before their values reach the
+provider.
 
 ## Reconcile and rollback procedure
 

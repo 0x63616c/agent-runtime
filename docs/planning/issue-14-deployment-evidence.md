@@ -19,29 +19,43 @@ runtime behavior.
 
 ## Disposable Kubernetes integration proof
 
-On 2026-08-07, `deploy/production/run-kubernetes-smoke.sh` applied the
-production profile through the audited operator to the explicit OrbStack
-context. The retained audit digest was
-`sha256:4b9e22ecb07cabff81dc72aacf6e9c08362a1fe1a228697f5ca4e783be4085ab`
-and recorded `result: applied` with the complete bounded set of 50 declared
-Kubernetes resource IDs. All 14 rendered Deployments reached Ready (17 pods because
-`egress-proxy` has two replicas and `orchestration` has three). The operator
-verified the migration digest and applied schema
-version 1 through the declared Postgres workload. It awaited the declared
-Temporal health probe, created the `agent-runtime` namespace, and structured
-describe reported exactly `2592000s` (30 days) retention. The pinned MinIO
-client then created a disposable bucket, wrote and read the exact `smoke`
-content, removed the object and bucket, and the harness deleted the exact
-Kubernetes namespace. A following read confirmed the namespace no longer
-existed.
+On 2026-08-07, revision
+`8d15f19abacceb38d76ee138b58cb2c70d4ceb51` ran
+`deploy/production/run-kubernetes-smoke.sh` from a clean checkout against the
+explicit absolute kubeconfig and `orbstack` context. It used the disposable
+`local` profile, not production, because the proof must own and remove its
+complete namespace. The retained render digest is
+`sha256:a05ea7461ae88d2bf6ea26e6b56aae8703c683ad04d526c4f7f86a7d907c8860`.
+The four-record audit proves `bootstrap -> apply -> reconcile -> teardown`;
+apply and teardown each account for all 78 resources (60 Kubernetes and 18
+provider resources), while zero-drift reconcile accounts for all 18 providers.
 
-The same run exposed and fixed a dual-stack portability error: the pinned
-Temporal entrypoint derived an IPv6 pod bind address while its probe and
-operator used IPv4 loopback. All profiles now explicitly declare
-`BIND_ON_IP=0.0.0.0`, and a production contract test locks the bind/probe
-alignment. The namespace adapter parses structured describe output, updates
-retention drift, distinguishes namespace absence from transport failure,
-handles concurrent creation idempotently, and bounds/redacts diagnostics.
+All 16 rendered Deployments reached Ready, all 19 expected pods were Running
+and Ready, and the eight independently configured runtime roles were present.
+The operator digest-verified and applied runtime migration version 1. Temporal
+structured describe matched 30-day retention, and direct database inventory
+proved separate `temporal` and `temporal_visibility` databases. All 12 generated
+Secret references had exact key inventories, non-empty UIDs, containment and
+controller labels, and annotations binding the bootstrap Namespace UID and
+render digest. No secret value is retained in evidence.
+
+The exact declared MinIO bucket/prefix completed a write/read/delete round
+trip and retained only its provider marker before teardown. The live Jaeger
+Deployment matched the declared `720h` TTL and accepted an OTLP span that was
+then queried by its trace ID. Audited reconcile reported no Kubernetes drift
+while re-verifying every provider. Audited teardown removed provider resources,
+generated Secrets, workloads, volumes, bucket and Namespace; a cluster-wide
+label query found zero residual resources.
+
+The real runs exposed and fixed four portability/operability defects before
+this retained proof: newline-bearing generated credential files, deprecated
+Endpoints warnings contaminating combined JSON output, a hard-coded PostgreSQL
+verification user that did not match Temporal's declared owner, and insufficient
+MinIO client reconciliation capacity. Secret creation is now create-only and
+newline-free, telemetry health uses EndpointSlice, database verification uses
+the workload's declared `POSTGRES_USER`, and idempotent blob reconciliation has
+finite capacity plus a bounded retry. The earlier dual-stack Temporal bind
+correction remains locked by the production contract test.
 
 ## Retained local proof
 
@@ -95,9 +109,9 @@ profile of the Stack:
 
 ## Remaining acceptance evidence
 
-- Backup/restore and observability-export recovery remain unproved; the live
-  proof covers Kubernetes apply/readiness, migration, Temporal namespace
-  retention, blob write/read/delete, audit, and containment-safe cleanup.
+- Backup/restore and observability-export recovery after collector loss remain
+  unproved; the live proof covers a healthy OTLP export/query round trip, not
+  disaster recovery.
 - The final production egress perimeter and DNS/CA policy requires a real
   operator environment; Kubernetes NetworkPolicy alone is not cited as FQDN
   enforcement.

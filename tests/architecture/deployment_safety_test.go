@@ -1,8 +1,10 @@
 package architecture_test
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/0x63616c/agent-runtime/internal/afkevidence"
 	. "github.com/onsi/ginkgo/v2"
@@ -56,6 +58,33 @@ var _ = Describe("M1 deployment safety boundaries", func() {
 		_, err = os.Stat(filepath.Join("..", "..", "evidence", "afk", "m1-self-hosted-runtime.json"))
 		Expect(os.IsNotExist(err)).To(BeTrue())
 		Expect(read("evidence/issue-14-deployment-e2e.json")).To(ContainSubstring(`"milestone": "M1 self-hosted roles and deployment"`))
+		var proof struct {
+			ImplementationRevision string `json:"implementation_revision"`
+			Cleanup                struct {
+				NamespaceAbsent bool `json:"namespace_absent_after_run"`
+				Residuals       int  `json:"labelled_residual_resources"`
+			} `json:"cleanup"`
+		}
+		Expect(json.Unmarshal([]byte(read("evidence/issue-14-deployment-e2e.json")), &proof)).To(Succeed())
+		Expect(proof.ImplementationRevision).To(HaveLen(40))
+		Expect(proof.Cleanup.NamespaceAbsent).To(BeTrue())
+		Expect(proof.Cleanup.Residuals).To(BeZero())
+
+		auditLines := strings.Split(strings.TrimSpace(read("evidence/issue-14-deployment-audit.jsonl")), "\n")
+		Expect(auditLines).To(HaveLen(4))
+		expected := []struct {
+			action string
+			result string
+		}{{"bootstrap", "bootstrapped"}, {"apply", "applied"}, {"reconcile", "reconciled"}, {"teardown", "torn_down"}}
+		for index, line := range auditLines {
+			var record struct {
+				Action string `json:"action"`
+				Result string `json:"result"`
+			}
+			Expect(json.Unmarshal([]byte(line), &record)).To(Succeed())
+			Expect(record.Action).To(Equal(expected[index].action))
+			Expect(record.Result).To(Equal(expected[index].result))
+		}
 		Expect(read("Justfile")).To(ContainSubstring(`for evidence_file in evidence/afk/*.json`))
 	})
 
