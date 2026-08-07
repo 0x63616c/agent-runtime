@@ -131,11 +131,39 @@
     },
     {
       "id": "DEP-008",
-      "status": "not_started"
+      "status": "completed",
+      "evidence": [
+        {
+          "revision": "042b192988b3ebd706f73668fb5c0ccbef49533c",
+          "utc_time": "2026-08-07T04:51:17Z",
+          "proof_level": "main_ci",
+          "command_id": "just-check",
+          "artifact_ref": "gha-31148671560-check",
+          "result": "passed"
+        }
+      ]
     },
     {
       "id": "DEP-009",
-      "status": "not_started"
+      "status": "completed",
+      "evidence": [
+        {
+          "revision": "042b192988b3ebd706f73668fb5c0ccbef49533c",
+          "utc_time": "2026-08-07T04:51:17Z",
+          "proof_level": "main_ci",
+          "command_id": "just-check",
+          "artifact_ref": "gha-31148671560-check",
+          "result": "passed"
+        },
+        {
+          "revision": "042b192988b3ebd706f73668fb5c0ccbef49533c",
+          "utc_time": "2026-08-07T04:51:17Z",
+          "proof_level": "integration",
+          "command_id": "stackctl-teardown",
+          "artifact_ref": "issue10-orbstack-operator-audit",
+          "result": "passed"
+        }
+      ]
     },
     {
       "id": "DOC-001",
@@ -359,23 +387,105 @@
     },
     {
       "id": "INF-001",
-      "status": "not_started"
+      "status": "completed",
+      "evidence": [
+        {
+          "revision": "042b192988b3ebd706f73668fb5c0ccbef49533c",
+          "utc_time": "2026-08-07T04:51:17Z",
+          "proof_level": "main_ci",
+          "command_id": "just-check",
+          "artifact_ref": "gha-31148671560-check",
+          "result": "passed"
+        }
+      ]
     },
     {
       "id": "INF-002",
-      "status": "not_started"
+      "status": "completed",
+      "evidence": [
+        {
+          "revision": "042b192988b3ebd706f73668fb5c0ccbef49533c",
+          "utc_time": "2026-08-07T04:51:17Z",
+          "proof_level": "main_ci",
+          "command_id": "just-check",
+          "artifact_ref": "gha-31148671560-check",
+          "result": "passed"
+        }
+      ]
     },
     {
       "id": "INF-003",
-      "status": "not_started"
+      "status": "completed",
+      "evidence": [
+        {
+          "revision": "042b192988b3ebd706f73668fb5c0ccbef49533c",
+          "utc_time": "2026-08-07T04:51:17Z",
+          "proof_level": "main_ci",
+          "command_id": "just-check",
+          "artifact_ref": "gha-31148671560-check",
+          "result": "passed"
+        },
+        {
+          "revision": "042b192988b3ebd706f73668fb5c0ccbef49533c",
+          "utc_time": "2026-08-07T04:51:17Z",
+          "proof_level": "integration",
+          "command_id": "stackctl-rbac-negative",
+          "artifact_ref": "issue10-orbstack-operator-audit",
+          "result": "passed"
+        }
+      ]
     },
     {
       "id": "INF-004",
-      "status": "not_started"
+      "status": "completed",
+      "evidence": [
+        {
+          "revision": "042b192988b3ebd706f73668fb5c0ccbef49533c",
+          "utc_time": "2026-08-07T04:51:17Z",
+          "proof_level": "main_ci",
+          "command_id": "just-check",
+          "artifact_ref": "gha-31148671560-check",
+          "result": "passed"
+        },
+        {
+          "revision": "042b192988b3ebd706f73668fb5c0ccbef49533c",
+          "utc_time": "2026-08-07T04:51:17Z",
+          "proof_level": "integration",
+          "command_id": "stackctl-diff-reconcile-rollback",
+          "artifact_ref": "issue10-orbstack-operator-audit",
+          "result": "passed"
+        }
+      ]
     },
     {
       "id": "INF-005",
-      "status": "not_started"
+      "status": "completed",
+      "evidence": [
+        {
+          "revision": "042b192988b3ebd706f73668fb5c0ccbef49533c",
+          "utc_time": "2026-08-07T04:51:17Z",
+          "proof_level": "main_ci",
+          "command_id": "just-check",
+          "artifact_ref": "gha-31148671560-check",
+          "result": "passed"
+        },
+        {
+          "revision": "042b192988b3ebd706f73668fb5c0ccbef49533c",
+          "utc_time": "2026-08-07T04:51:17Z",
+          "proof_level": "integration",
+          "command_id": "issue10-orbstack-profile-suite",
+          "artifact_ref": "issue10-orbstack-operator-audit",
+          "result": "passed"
+        },
+        {
+          "revision": "042b192988b3ebd706f73668fb5c0ccbef49533c",
+          "utc_time": "2026-08-07T04:51:17Z",
+          "proof_level": "integration",
+          "command_id": "issue10-k3s-networkpolicy-suite",
+          "artifact_ref": "issue10-k3s-networkpolicy-result",
+          "result": "passed"
+        }
+      ]
     },
     {
       "id": "MOD-001",
