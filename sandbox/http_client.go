@@ -22,7 +22,7 @@ const (
 var bindRequestV1 = []byte(`{"version":"sandbox.control/v1","kind":"bind-request"}`)
 
 type httpControlClient struct {
-	mu             sync.RWMutex
+	mu             sync.Mutex
 	endpoint       *url.URL
 	client         *http.Client
 	transport      *http.Transport
@@ -31,6 +31,11 @@ type httpControlClient struct {
 	assertion      string
 	expiresAt      time.Time
 	closed         bool
+	lifetime       context.Context
+	cancelLifetime context.CancelFunc
+	inFlight       uint64
+	drained        chan struct{}
+	drainedOnce    sync.Once
 }
 
 func newHTTPControlClient(ctx context.Context, config ClientConfig) (*httpControlClient, error) {
@@ -53,7 +58,8 @@ func newHTTPControlClient(ctx context.Context, config ClientConfig) (*httpContro
 	client := &http.Client{Transport: transport, CheckRedirect: func(*http.Request, []*http.Request) error {
 		return newFailure(FailureUnavailable, "sandbox control redirect was refused", RetryNever)
 	}}
-	control := &httpControlClient{endpoint: endpoint, client: client, transport: transport, credentials: config.Credentials, requestTimeout: config.RequestTimeout}
+	lifetime, cancelLifetime := context.WithCancel(context.Background())
+	control := &httpControlClient{endpoint: endpoint, client: client, transport: transport, credentials: config.Credentials, requestTimeout: config.RequestTimeout, lifetime: lifetime, cancelLifetime: cancelLifetime, drained: make(chan struct{})}
 	if err := control.bind(ctx); err != nil {
 		transport.CloseIdleConnections()
 		return nil, err
@@ -205,19 +211,24 @@ func (client *httpControlClient) do(ctx context.Context, method, targetPath stri
 	if err := contextFailure(ctx); err != nil {
 		return nil, err
 	}
-	client.mu.RLock()
+	client.mu.Lock()
 	if client.closed {
-		client.mu.RUnlock()
+		client.mu.Unlock()
 		return nil, closedClientFailure()
 	}
 	assertion := client.assertion
 	expiresAt := client.expiresAt
-	client.mu.RUnlock()
+	client.inFlight++
+	lifetime := client.lifetime
+	client.mu.Unlock()
+	defer client.finishAttempt()
 	if assertion == "" || !expiresAt.After(time.Now().UTC()) {
 		return nil, newFailure(FailureNotFoundOrDenied, "sandbox client binding is expired", RetryNever)
 	}
 	requestCtx, cancel := context.WithTimeout(ctx, client.requestTimeout)
 	defer cancel()
+	stopLifetimeCancellation := context.AfterFunc(lifetime, cancel)
+	defer stopLifetimeCancellation()
 	authorization, err := applyAuthorization(requestCtx, client.credentials)
 	if err != nil {
 		return nil, err
@@ -270,10 +281,32 @@ func (client *httpControlClient) Close(ctx context.Context) error {
 		client.closed = true
 		client.assertion = ""
 		client.expiresAt = time.Time{}
+		client.cancelLifetime()
 		client.transport.CloseIdleConnections()
+		if client.inFlight == 0 {
+			client.drainedOnce.Do(func() { close(client.drained) })
+		}
 	}
+	drained := client.drained
 	client.mu.Unlock()
-	return nil
+	select {
+	case <-drained:
+		return nil
+	case <-ctx.Done():
+		return contextFailure(ctx)
+	}
+
+	// The return above is deliberately the only successful close path: Close
+	// publishes no state until every started request has observed cancellation.
+}
+
+func (client *httpControlClient) finishAttempt() {
+	client.mu.Lock()
+	defer client.mu.Unlock()
+	client.inFlight--
+	if client.closed && client.inFlight == 0 {
+		client.drainedOnce.Do(func() { close(client.drained) })
+	}
 }
 
 var _ Client = (*httpControlClient)(nil)

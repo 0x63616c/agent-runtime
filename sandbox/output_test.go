@@ -59,3 +59,29 @@ func TestProcessOutputSpoolMarksOnlyChunksWhoseBytesWereRedacted(t *testing.T) {
 		t.Fatalf("ordinary output event = %#v, must not inherit a prior chunk's redaction flag", events[1])
 	}
 }
+
+func TestProcessOutputSpoolRetainsEachStreamIndependently(t *testing.T) {
+	spool, err := newProcessOutputSpool(64, 4, nil)
+	if err != nil {
+		t.Fatalf("newProcessOutputSpool() error = %v", err)
+	}
+	if err := spool.Write(OutputStderr, []byte("err!")); err != nil {
+		t.Fatalf("stderr Write() error = %v", err)
+	}
+	if err := spool.Write(OutputStdout, []byte("out!")); err != nil {
+		t.Fatalf("stdout Write() error = %v", err)
+	}
+	spool.Close(ProcessResult{Reason: TerminationCancelled})
+	var stderr string
+	for _, event := range spool.Events() {
+		if event.Kind == OutputEventChunk && event.Stream == OutputStderr {
+			stderr += string(event.Chunk.Bytes)
+		}
+	}
+	if stderr != "err!" {
+		t.Fatalf("stderr retained bytes = %q, want independent tail", stderr)
+	}
+	if spool.Retention(OutputStderr).Truncated {
+		t.Fatalf("stderr retention = %#v, must not be truncated by stdout", spool.Retention(OutputStderr))
+	}
+}

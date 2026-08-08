@@ -107,7 +107,6 @@ type processOutputSpool struct {
 	producedLimit uint64
 	retainedLimit uint64
 	produced      uint64
-	retained      uint64
 	nextCursor    uint64
 	closed        bool
 	events        []OutputEvent
@@ -180,9 +179,10 @@ func (spool *processOutputSpool) retain(stream OutputKind, chunk []byte, redacte
 	if uint64(len(chunk)) > spool.retainedLimit {
 		chunk = append([]byte(nil), chunk[uint64(len(chunk))-spool.retainedLimit:]...)
 		retention.Truncated = true
+		spool.retentions[stream] = retention
 	}
-	for spool.retained+uint64(len(chunk)) > spool.retainedLimit {
-		if !spool.evictOldestChunk() {
+	for spool.retentions[stream].RetainedBytes+uint64(len(chunk)) > spool.retainedLimit {
+		if !spool.evictOldestChunk(stream) {
 			break
 		}
 	}
@@ -194,16 +194,21 @@ func (spool *processOutputSpool) retain(stream OutputKind, chunk []byte, redacte
 		retention.EarliestCursor = spool.events[len(spool.events)-1].Cursor
 	}
 	spool.retentions[stream] = retention
-	spool.retained += uint64(len(chunk))
 }
 
-func (spool *processOutputSpool) evictOldestChunk() bool {
-	if len(spool.events) == 0 || spool.events[0].Kind != OutputEventChunk || spool.events[0].Chunk == nil {
+func (spool *processOutputSpool) evictOldestChunk(stream OutputKind) bool {
+	index := -1
+	for candidate, event := range spool.events {
+		if event.Kind == OutputEventChunk && event.Stream == stream && event.Chunk != nil {
+			index = candidate
+			break
+		}
+	}
+	if index < 0 {
 		return false
 	}
-	event := spool.events[0]
-	spool.events = spool.events[1:]
-	spool.retained -= uint64(len(event.Chunk.Bytes))
+	event := spool.events[index]
+	spool.events = append(spool.events[:index], spool.events[index+1:]...)
 	retention := spool.retentions[event.Stream]
 	retention.RetainedBytes -= uint64(len(event.Chunk.Bytes))
 	retention.Truncated = true

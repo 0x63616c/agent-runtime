@@ -513,15 +513,15 @@ func TestInterleavedOutputRetentionKeepsBoundedTailsAndExplicitGaps(t *testing.T
 			gaps++
 		}
 	}
-	if got, want := strings.Join(chunks, ","), "ood"; got != want {
+	if got, want := strings.Join(chunks, ","), "new,ood"; got != want {
 		t.Fatalf("retained replay chunks = %q, want %q", got, want)
 	}
 	retainedBytes := 0
 	for _, chunk := range chunks {
 		retainedBytes += len(chunk)
 	}
-	if retainedBytes > 3 {
-		t.Fatalf("retained replay bytes = %d, want process-wide limit of 3", retainedBytes)
+	if retainedBytes > 6 {
+		t.Fatalf("retained replay bytes = %d, want independent three-byte stream tails", retainedBytes)
 	}
 	if gaps != 2 {
 		t.Fatalf("retention gaps = %d, want one per truncated stream", gaps)

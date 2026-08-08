@@ -148,6 +148,47 @@ func TestHTTPClientMapsSafeFailureAndCancellationWithoutTransportCause(t *testin
 	}
 }
 
+func TestHTTPClientCloseCancelsAndWaitsForAnAttemptBeforeItCanReachTheServer(t *testing.T) {
+	enteredCredentials := make(chan struct{})
+	requests := make(chan string, 2)
+	server := httptest.NewTLSServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		requests <- request.URL.Path
+		if request.URL.Path == bindRouteV1 {
+			writeTestJSON(t, writer, bindResponse{Version: controlV1, Kind: bindResponseKind, Assertion: "opaque-binding", ExpiresAt: time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC)})
+			return
+		}
+		writer.WriteHeader(http.StatusInternalServerError)
+	}))
+	t.Cleanup(server.Close)
+	var credentialCalls atomic.Int64
+	client := newTestHTTPClient(t, server, func(ctx context.Context, sink CredentialSink) error {
+		if credentialCalls.Add(1) == 1 {
+			return sink.SetAuthorization("Bearer", "bind")
+		}
+		close(enteredCredentials)
+		<-ctx.Done()
+		return ctx.Err()
+	})
+	result := make(chan error, 1)
+	go func() { _, err := client.GetOperation(context.Background(), "op_close"); result <- err }()
+	<-enteredCredentials
+	if err := client.Close(context.Background()); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	if err := <-result; err == nil {
+		t.Fatal("GetOperation() = nil, want cancelled failure")
+	} else if failure, ok := AsFailure(err); !ok || failure.Code != FailureCancelled {
+		t.Fatalf("GetOperation() = %v, want cancelled failure", err)
+	}
+	select {
+	case path := <-requests:
+		if path != bindRouteV1 {
+			t.Fatalf("post-close request reached server: %s", path)
+		}
+	default:
+	}
+}
+
 func TestHTTPClientRejectsNonCanonicalOrOversizedOperationResponse(t *testing.T) {
 	acceptedAt := time.Date(2026, 8, 7, 1, 0, 0, 0, time.UTC)
 	valid := Operation{Ref: OperationRef{ID: "op_response", AcceptedAt: acceptedAt}, Kind: OperationCloseSandbox, State: OperationAccepted, Target: OperationTarget{Kind: TargetSandbox, SandboxID: "sbx_response"}, CanonicalDigest: "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", EffectiveSpecDigest: "sha256:abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789", CapabilityDigest: "sha256:1111111111111111111111111111111111111111111111111111111111111111", RetentionExpiresAt: acceptedAt.Add(time.Hour), LatestCursor: "operation:1"}
