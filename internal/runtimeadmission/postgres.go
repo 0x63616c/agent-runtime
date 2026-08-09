@@ -16,8 +16,10 @@ const defaultEventRetention = 24 * time.Hour
 
 // PostgresRepository is the normalized runtime-v3 durable SendInput authority.
 type PostgresRepository struct {
-	pool           *pgxpool.Pool
-	eventRetention time.Duration
+	pool                  *pgxpool.Pool
+	eventRetention        time.Duration
+	beforeIdempotencyLock func(context.Context) error
+	afterIdempotencyLock  func(context.Context) error
 }
 
 // NewPostgresRepository constructs the existing-session admission repository.
@@ -39,27 +41,36 @@ func (repository *PostgresRepository) Admit(ctx context.Context, owner Owner, pr
 			_ = tx.Rollback(context.Background())
 		}
 	}()
+	if err := runAdmissionBoundary(ctx, repository.beforeIdempotencyLock); err != nil {
+		return AdmissionResult{}, errors.Wrap(ErrUnavailable, "reach input idempotency boundary")
+	}
 	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, idempotencyLockKey(owner, prepared.IdempotencyKey)); err != nil {
 		return AdmissionResult{}, errors.Wrap(ErrUnavailable, "lock input idempotency key")
 	}
-	var version int64
-	var state string
-	err = tx.QueryRow(ctx, `SELECT version, state FROM runtime.sessions WHERE tenant_id=$1 AND principal_id=$2 AND session_id=$3 FOR UPDATE`, owner.TenantID, owner.PrincipalID, prepared.SessionID.String()).Scan(&version, &state)
-	if stderrors.Is(err, pgx.ErrNoRows) {
-		return AdmissionResult{}, ErrNotFoundOrDenied
+	if err := runAdmissionBoundary(ctx, repository.afterIdempotencyLock); err != nil {
+		return AdmissionResult{}, errors.Wrap(ErrUnavailable, "hold input idempotency lock")
 	}
-	if err != nil {
-		return AdmissionResult{}, errors.Wrap(ErrUnavailable, "lock runtime session")
-	}
+	var priorSessionID string
 	var priorID string
 	var priorDigest string
 	var priorAccepted time.Time
-	err = tx.QueryRow(ctx, `SELECT input_id, request_digest, accepted_at FROM runtime.inputs WHERE tenant_id=$1 AND principal_id=$2 AND idempotency_key=$3`, owner.TenantID, owner.PrincipalID, prepared.IdempotencyKey).Scan(&priorID, &priorDigest, &priorAccepted)
+	err = tx.QueryRow(ctx, `SELECT session_id, input_id, request_digest, accepted_at FROM runtime.inputs WHERE tenant_id=$1 AND principal_id=$2 AND idempotency_key=$3`, owner.TenantID, owner.PrincipalID, prepared.IdempotencyKey).Scan(&priorSessionID, &priorID, &priorDigest, &priorAccepted)
 	if err == nil {
-		if priorDigest != prepared.RequestDigest {
+		if priorSessionID != prepared.SessionID.String() || priorDigest != prepared.RequestDigest {
 			return AdmissionResult{}, ErrConflict
 		}
-		turn, queryErr := readTurn(ctx, tx, owner, prepared.SessionID, agentruntime.InputID(priorID))
+		storedSessionID, parseErr := agentruntime.ParseSessionID(priorSessionID)
+		if parseErr != nil {
+			return AdmissionResult{}, ErrIntegrity
+		}
+		sessionErr := tx.QueryRow(ctx, `SELECT 1 FROM runtime.sessions WHERE tenant_id=$1 AND principal_id=$2 AND session_id=$3 FOR UPDATE`, owner.TenantID, owner.PrincipalID, storedSessionID.String()).Scan(new(int))
+		if stderrors.Is(sessionErr, pgx.ErrNoRows) {
+			return AdmissionResult{}, ErrIntegrity
+		}
+		if sessionErr != nil {
+			return AdmissionResult{}, errors.Wrap(ErrUnavailable, "authorize idempotent input session")
+		}
+		turn, queryErr := readTurn(ctx, tx, owner, storedSessionID, agentruntime.InputID(priorID))
 		if queryErr != nil {
 			return AdmissionResult{}, queryErr
 		}
@@ -70,6 +81,15 @@ func (repository *PostgresRepository) Admit(ctx context.Context, owner Owner, pr
 	}
 	if !stderrors.Is(err, pgx.ErrNoRows) {
 		return AdmissionResult{}, errors.Wrap(ErrUnavailable, "read input idempotency")
+	}
+	var version int64
+	var state string
+	err = tx.QueryRow(ctx, `SELECT version, state FROM runtime.sessions WHERE tenant_id=$1 AND principal_id=$2 AND session_id=$3 FOR UPDATE`, owner.TenantID, owner.PrincipalID, prepared.SessionID.String()).Scan(&version, &state)
+	if stderrors.Is(err, pgx.ErrNoRows) {
+		return AdmissionResult{}, ErrNotFoundOrDenied
+	}
+	if err != nil {
+		return AdmissionResult{}, errors.Wrap(ErrUnavailable, "lock runtime session")
 	}
 	if state != string(agentruntime.SessionOpen) {
 		return AdmissionResult{}, ErrConflict
@@ -185,4 +205,11 @@ func nextEventSequence(ctx context.Context, tx pgx.Tx, owner Owner, sessionID ag
 
 func idempotencyLockKey(owner Owner, key string) string {
 	return "agent-runtime/input-idempotency/v1/" + strconv.Itoa(len(owner.TenantID)) + ":" + owner.TenantID + "/" + strconv.Itoa(len(owner.PrincipalID)) + ":" + owner.PrincipalID + "/" + strconv.Itoa(len(key)) + ":" + key
+}
+
+func runAdmissionBoundary(ctx context.Context, hook func(context.Context) error) error {
+	if hook == nil {
+		return nil
+	}
+	return hook(ctx)
 }

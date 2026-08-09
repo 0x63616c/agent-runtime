@@ -48,10 +48,11 @@ M5 currently contains an internal first-admission adapter used only by direct
 application composition and real PostgreSQL integration tests. It accepts an
 already-authorized, pre-existing Session; validates artifact references for
 that exact owner before staging; persists immutable content references rather
-than raw Input parts; and atomically records the Input, queued Turn, bounded
-facts, audit record, and outbox record. Its narrow transaction also serializes
-identical owner/idempotency-key admissions so a conflicting Session is refused
-rather than surfacing a database uniqueness failure.
+than raw Input parts; and atomically records the Input, Turn, bounded facts,
+audit record, and outbox record. The first Turn for an idle Session is marked
+`running`; later Turns are marked `queued`. Its narrow transaction also
+serializes identical owner/idempotency-key admissions so a conflicting Session
+is refused rather than surfacing a database uniqueness failure.
 
 This is not a public HTTP or Go SDK route, and it does not change the public
 runtime's `memory-unsafe` store. The current content store in this seam is a

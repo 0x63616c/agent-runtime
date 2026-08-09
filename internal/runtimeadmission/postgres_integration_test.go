@@ -177,6 +177,40 @@ func TestPostgresAdmissionRefusesUnauthorizedArtifactReferencesBeforeStaging(t *
 	}
 }
 
+func TestPostgresAdmissionClassifiesExistingIdempotencyBeforeMissingTargetSession(t *testing.T) {
+	pool := openAdmissionPool(t)
+	ctx := context.Background()
+	resetAdmissionSchema(t, ctx, pool)
+	applyAdmissionMigrations(t, ctx, pool)
+	now := time.Date(2026, 8, 10, 0, 0, 0, 0, time.UTC)
+	seedAdmissionSession(t, ctx, pool, "tenant_a", "alice", "sess_0000000000000001", now)
+
+	repository, err := NewPostgresRepository(pool)
+	if err != nil {
+		t.Fatalf("new repository: %v", err)
+	}
+	service, err := NewService(NewMemoryContentStore(), NewMemoryArtifactCatalog(), repository, fixedClock{now: now}, &integrationIDs{})
+	if err != nil {
+		t.Fatalf("new service: %v", err)
+	}
+	owner := Owner{TenantID: "tenant_a", PrincipalID: "alice"}
+	first, err := service.SendInput(ctx, owner, agentruntime.SendInputRequest{SessionID: "sess_0000000000000001", IdempotencyKey: "reused-key", Parts: []agentruntime.ContentPart{{Kind: agentruntime.ContentText, Text: "accepted"}}})
+	if err != nil {
+		t.Fatalf("send accepted input: %v", err)
+	}
+	replay, err := service.SendInput(ctx, owner, agentruntime.SendInputRequest{SessionID: "sess_0000000000000001", IdempotencyKey: "reused-key", Parts: []agentruntime.ContentPart{{Kind: agentruntime.ContentText, Text: "accepted"}}})
+	if err != nil {
+		t.Fatalf("replay stored input: %v", err)
+	}
+	if replay.Input.ID != first.Input.ID || replay.Turn.ID != first.Turn.ID {
+		t.Fatalf("replay did not read stored session result: %#v, want %#v", replay, first)
+	}
+	_, err = service.SendInput(ctx, owner, agentruntime.SendInputRequest{SessionID: "sess_0000000000000009", IdempotencyKey: "reused-key", Parts: []agentruntime.ContentPart{{Kind: agentruntime.ContentText, Text: "different and missing"}}})
+	if !errors.Is(err, ErrConflict) {
+		t.Fatalf("same key for missing target session error = %v, want ErrConflict", err)
+	}
+}
+
 func TestPostgresAdmissionSerializesOnePrincipalIdempotencyKeyAcrossTwoSessionConnections(t *testing.T) {
 	pool := openAdmissionPool(t)
 	ctx := context.Background()
@@ -184,7 +218,6 @@ func TestPostgresAdmissionSerializesOnePrincipalIdempotencyKeyAcrossTwoSessionCo
 	applyAdmissionMigrations(t, ctx, pool)
 	now := time.Date(2026, 8, 10, 0, 0, 0, 0, time.UTC)
 	seedAdmissionSession(t, ctx, pool, "tenant_a", "alice", "sess_0000000000000001", now)
-	seedAdmissionSession(t, ctx, pool, "tenant_a", "alice", "sess_0000000000000002", now)
 
 	firstPool := openAdmissionPool(t)
 	secondPool := openAdmissionPool(t)
@@ -195,6 +228,20 @@ func TestPostgresAdmissionSerializesOnePrincipalIdempotencyKeyAcrossTwoSessionCo
 	secondRepository, err := NewPostgresRepository(secondPool)
 	if err != nil {
 		t.Fatalf("new second repository: %v", err)
+	}
+	firstLockHeld := make(chan struct{})
+	releaseFirst := make(chan struct{})
+	firstRepository.afterIdempotencyLock = func(context.Context) error {
+		close(firstLockHeld)
+		<-releaseFirst
+		return nil
+	}
+	secondAtIdempotencyBoundary := make(chan struct{})
+	releaseSecond := make(chan struct{})
+	secondRepository.beforeIdempotencyLock = func(context.Context) error {
+		close(secondAtIdempotencyBoundary)
+		<-releaseSecond
+		return nil
 	}
 	content := NewMemoryContentStore()
 	firstService, err := NewService(content, NewMemoryArtifactCatalog(), firstRepository, fixedClock{now: now}, &integrationIDs{})
@@ -208,27 +255,28 @@ func TestPostgresAdmissionSerializesOnePrincipalIdempotencyKeyAcrossTwoSessionCo
 	owner := Owner{TenantID: "tenant_a", PrincipalID: "alice"}
 	requests := []agentruntime.SendInputRequest{
 		{SessionID: "sess_0000000000000001", IdempotencyKey: "cross-session-key", Parts: []agentruntime.ContentPart{{Kind: agentruntime.ContentText, Text: "one"}}},
-		{SessionID: "sess_0000000000000002", IdempotencyKey: "cross-session-key", Parts: []agentruntime.ContentPart{{Kind: agentruntime.ContentText, Text: "two"}}},
+		{SessionID: "sess_0000000000000009", IdempotencyKey: "cross-session-key", Parts: []agentruntime.ContentPart{{Kind: agentruntime.ContentText, Text: "two"}}},
 	}
 	type outcome struct {
 		result agentruntime.SendInputResult
 		err    error
 	}
-	outcomes := make(chan outcome, 2)
-	start := make(chan struct{})
+	firstOutcome := make(chan outcome, 1)
+	secondOutcome := make(chan outcome, 1)
 	go func() {
-		<-start
 		result, callErr := firstService.SendInput(ctx, owner, requests[0])
-		outcomes <- outcome{result, callErr}
+		firstOutcome <- outcome{result, callErr}
 	}()
+	<-firstLockHeld
 	go func() {
-		<-start
 		result, callErr := secondService.SendInput(ctx, owner, requests[1])
-		outcomes <- outcome{result, callErr}
+		secondOutcome <- outcome{result, callErr}
 	}()
-	close(start)
-	first := <-outcomes
-	second := <-outcomes
+	<-secondAtIdempotencyBoundary
+	close(releaseFirst)
+	first := <-firstOutcome
+	close(releaseSecond)
+	second := <-secondOutcome
 	accepted, conflicts := 0, 0
 	for _, outcome := range []outcome{first, second} {
 		if outcome.err == nil {
