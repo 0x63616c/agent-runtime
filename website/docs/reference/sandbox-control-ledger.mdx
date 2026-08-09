@@ -32,6 +32,13 @@ dispatch request plus digests, signed envelope/receipt facts, and output
 sequence metadata. They do not contain output bytes, artifacts, secrets,
 credentials, private keys, certificate bodies, or live backend handles.
 
+Ordinary non-sensitive environment metadata may be durable. Secret access is
+durable only as an indirect binding reference; the resolved value remains in
+its ephemeral channel. Acceptance refuses secret-shaped environment names and
+recognizable direct secret material such as bearer tokens, provider key
+prefixes, and PEM private keys. This boundary does not claim that arbitrary
+strings can be proven secret-free.
+
 :::caution Partial M3 evidence
 
 This proves durable public operation acceptance and the reference host-control

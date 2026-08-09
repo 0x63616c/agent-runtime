@@ -24,6 +24,16 @@ envelope and receipt, and output integrity sequence headers. Output content,
 artifacts, secrets, backend handles, private keys, and certificate bodies
 belong elsewhere and never enter these rows.
 
+The bounded dispatch JSON may retain ordinary non-sensitive environment data,
+for example `{"environment":{"MODE":"test"}}`. A secret binding is retained
+only as an indirect reference such as
+`{"secret_bindings":[{"name":"model","purpose":"command"}]}`; resolution and
+the value itself belong to the ephemeral secret channel. Acceptance refuses
+secret-shaped environment names and recognizable direct secret material such
+as bearer tokens, provider key prefixes, or PEM private keys. This is a strict
+boundary check, not a claim that arbitrary caller strings can be proven
+secret-free.
+
 ## Commit and reconnect rules
 
 Acceptance and its outbox fact commit in one serializable transaction.
