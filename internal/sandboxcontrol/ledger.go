@@ -437,6 +437,9 @@ func validateOperation(operation Operation) error {
 	if !validBounded(operation.Principal, maxPrincipalBytes) || (operation.Tenant != "" && !validBounded(operation.Tenant, 256)) || len(operation.DispatchBody) > 1<<20 || !validBounded(operation.ID, maxOperationIDBytes) || !validBounded(operationInputDigest(operation), maxDigestBytes) || !validBounded(operation.CanonicalDigest, maxDigestBytes) || !validBounded(operation.EffectiveSpecDigest, maxDigestBytes) || operation.AcceptedAt.IsZero() || operation.RetentionExpiresAt.IsZero() || !operation.RetentionExpiresAt.After(operation.AcceptedAt) {
 		return errors.New("accept sandbox operation: principal, id, digests and ordered retention are required")
 	}
+	if err := validateDispatchBody(operation.DispatchBody); err != nil {
+		return err
+	}
 	return nil
 }
 
