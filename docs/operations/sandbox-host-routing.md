@@ -85,9 +85,10 @@ The following is the required operator procedure for a future deployed
 rotation controller; it is not evidence that M3's one-poll reference host or
 the multi-process harness performs a certificate or control-trust rotation.
 M3 unit coverage exercises complete in-memory control-trust replacement and
-refusal of a retired key. It does not exercise a watched configuration reload,
-control signing-key change, overlapping host certificates, or a live
-certificate-generation rotation.
+refusal of a retired key within one running `AtomicTrust` instance. It does not
+persist or authenticate retirement history across a host restart, and it does
+not exercise a watched configuration reload, control signing-key change,
+overlapping host certificates, or a live certificate-generation rotation.
 
 1. Publish the next control verification key to hosts while current remains
    accepted; atomically reload the complete higher trust-bundle version.
