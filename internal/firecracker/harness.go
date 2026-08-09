@@ -5,10 +5,12 @@ import (
 	"compress/gzip"
 	"context"
 	"crypto/sha256"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"math"
+	"net/url"
 	"os"
 	"path"
 	"path/filepath"
@@ -53,9 +55,28 @@ const (
 	FixtureSourceTarGzip FixtureSourceFormat = "tar.gz"
 )
 
+// FixtureSourceKind identifies the immutable identity scheme used by one source.
+type FixtureSourceKind string
+
+const (
+	// FixtureSourceReleaseArchive identifies a versioned upstream release archive.
+	FixtureSourceReleaseArchive FixtureSourceKind = "release-archive"
+	// FixtureSourceVersionedObject identifies an immutable object-store object version.
+	FixtureSourceVersionedObject FixtureSourceKind = "versioned-object"
+	// FixtureSourceProjectBuild identifies an output rebuilt from one project commit.
+	FixtureSourceProjectBuild FixtureSourceKind = "project-build"
+)
+
+// FixturePlatform records the operating-system and processor identity of a bootable fixture.
+type FixturePlatform struct {
+	OS           string `json:"os"`
+	Architecture string `json:"architecture"`
+}
+
 // LockedSource records a single immutable non-executable fixture source.
 type LockedSource struct {
 	ID        string              `json:"id"`
+	Kind      FixtureSourceKind   `json:"kind"`
 	URL       string              `json:"url"`
 	Reference string              `json:"immutable_reference"`
 	Format    FixtureSourceFormat `json:"format"`
@@ -66,13 +87,14 @@ type LockedSource struct {
 
 // BuildProvenance records the checked-in, reproducible inputs of a project-owned fixture output.
 type BuildProvenance struct {
-	RecipePath       string         `json:"recipe_path"`
-	SourceRevision   string         `json:"source_revision"`
-	Toolchain        string         `json:"toolchain"`
-	InputsDigest     sandbox.Digest `json:"inputs_sha256"`
-	SBOMDigest       sandbox.Digest `json:"sbom_sha256"`
-	Static           bool           `json:"static"`
-	GuestAgentDigest sandbox.Digest `json:"guest_agent_sha256,omitempty"`
+	RecipePath        string         `json:"recipe_path"`
+	SourceRevision    string         `json:"source_revision"`
+	Toolchain         string         `json:"toolchain"`
+	InputsDigest      sandbox.Digest `json:"inputs_sha256"`
+	SBOMDigest        sandbox.Digest `json:"sbom_sha256"`
+	Static            bool           `json:"static"`
+	GuestAgentDigest  sandbox.Digest `json:"guest_agent_sha256,omitempty"`
+	AttestationMember string         `json:"attestation_member,omitempty"`
 }
 
 // LockedArtifact records immutable provenance required before an artifact may be used.
@@ -83,20 +105,34 @@ type LockedArtifact struct {
 	Digest    sandbox.Digest   `json:"sha256"`
 	SizeBytes uint64           `json:"size_bytes"`
 	License   string           `json:"license"`
+	Platform  FixturePlatform  `json:"platform"`
 	Build     *BuildProvenance `json:"build,omitempty"`
+}
+
+// RootFSAttestation is the rootfs-build sidecar that binds the installed init to the guest-agent artifact.
+type RootFSAttestation struct {
+	SchemaVersion string          `json:"schema_version"`
+	RootFSDigest  sandbox.Digest  `json:"rootfs_sha256"`
+	RootFSSize    uint64          `json:"rootfs_size_bytes"`
+	InitPath      string          `json:"init_path"`
+	InitDigest    sandbox.Digest  `json:"init_sha256"`
+	InitSize      uint64          `json:"init_size_bytes"`
+	Platform      FixturePlatform `json:"platform"`
+	Static        bool            `json:"static"`
 }
 
 // FixtureLock is a reviewed, complete fixture identity lock.
 type FixtureLock struct {
-	Version   string           `json:"version"`
-	Sources   []LockedSource   `json:"sources"`
-	Artifacts []LockedArtifact `json:"artifacts"`
+	Version        string           `json:"version"`
+	FixtureVersion string           `json:"fixture_version"`
+	Sources        []LockedSource   `json:"sources"`
+	Artifacts      []LockedArtifact `json:"artifacts"`
 }
 
 // Validate rejects partial, mutable, duplicate, or unlicensed fixture locks.
 func (lock FixtureLock) Validate() error {
-	if lock.Version != "firecracker.fixtures/v2" || len(lock.Artifacts) != 5 {
-		return fmt.Errorf("%w: version and exactly five artifacts are required", ErrFixtureLock)
+	if lock.Version != "firecracker.fixtures/v2" || !validFixtureVersion(lock.FixtureVersion) || len(lock.Artifacts) != 5 {
+		return fmt.Errorf("%w: schema version, immutable fixture version, and exactly five artifacts are required", ErrFixtureLock)
 	}
 	sources := make(map[string]LockedSource, len(lock.Sources))
 	for _, source := range lock.Sources {
@@ -142,11 +178,30 @@ func (lock FixtureLock) Validate() error {
 }
 
 func validFixtureSource(source LockedSource) bool {
-	return validFixtureID(source.ID) && strings.HasPrefix(source.URL, "https://") && strings.TrimSpace(source.Reference) != "" && source.Format != "" && validSHA256(source.Digest) && source.SizeBytes > 0 && source.SizeBytes < math.MaxInt64 && strings.TrimSpace(source.License) != ""
+	parsed, err := url.Parse(source.URL)
+	if err != nil || parsed.Scheme != "https" || parsed.Host == "" {
+		return false
+	}
+	if !validFixtureID(source.ID) || source.Format == "" || !validSHA256(source.Digest) || source.SizeBytes == 0 || source.SizeBytes >= math.MaxInt64 || strings.TrimSpace(source.License) == "" {
+		return false
+	}
+	switch source.Kind {
+	case FixtureSourceReleaseArchive:
+		version, ok := strings.CutPrefix(source.Reference, "release:")
+		return ok && validReleaseVersion(version) && source.Format == FixtureSourceTarGzip && parsed.Host == "github.com" && strings.Contains(parsed.Path, "/releases/download/"+version+"/")
+	case FixtureSourceVersionedObject:
+		versionID, ok := strings.CutPrefix(source.Reference, "version-id:")
+		return ok && validObjectVersionID(versionID) && source.Format == FixtureSourceFile && parsed.Query().Get("versionId") == versionID
+	case FixtureSourceProjectBuild:
+		revision, ok := strings.CutPrefix(source.Reference, "commit:")
+		return ok && validRevision(revision) && (source.Format == FixtureSourceFile || source.Format == FixtureSourceTarGzip)
+	default:
+		return false
+	}
 }
 
 func validArtifactIdentity(artifact LockedArtifact) bool {
-	return validSHA256(artifact.Digest) && artifact.SizeBytes > 0 && artifact.SizeBytes < math.MaxInt64 && strings.TrimSpace(artifact.License) != ""
+	return validSHA256(artifact.Digest) && artifact.SizeBytes > 0 && artifact.SizeBytes < math.MaxInt64 && strings.TrimSpace(artifact.License) != "" && validFixturePlatform(artifact.Platform)
 }
 
 func validArtifactDerivation(artifact LockedArtifact, source LockedSource) bool {
@@ -164,20 +219,61 @@ func validArtifactDerivation(artifact LockedArtifact, source LockedSource) bool 
 	}
 	switch artifact.Name {
 	case FixtureFirecracker, FixtureJailer:
-		return source.Format == FixtureSourceTarGzip && artifact.Build == nil
+		return source.Kind == FixtureSourceReleaseArchive && source.Format == FixtureSourceTarGzip && artifact.Build == nil
 	case FixtureKernel:
-		return source.Format == FixtureSourceFile && artifact.Build == nil
+		return source.Kind == FixtureSourceVersionedObject && source.Format == FixtureSourceFile && artifact.Build == nil
 	case FixtureRootFS:
-		return source.Format == FixtureSourceFile && validBuildProvenance(artifact.Build, false)
+		return source.Kind == FixtureSourceProjectBuild && source.Format == FixtureSourceTarGzip && validBuildProvenance(artifact.Build, false) && provenanceMatchesSource(artifact.Build, source) && validBundleMember(artifact.Build.AttestationMember)
 	case FixtureGuestAgent:
-		return source.Format == FixtureSourceFile && validBuildProvenance(artifact.Build, true)
+		return source.Kind == FixtureSourceProjectBuild && source.Format == FixtureSourceFile && validBuildProvenance(artifact.Build, true) && provenanceMatchesSource(artifact.Build, source) && artifact.Build.AttestationMember == ""
 	default:
 		return false
 	}
 }
 
+func validFixturePlatform(platform FixturePlatform) bool {
+	return platform.OS == "linux" && platform.Architecture == "amd64"
+}
+
+func validReleaseVersion(value string) bool {
+	if len(value) < 6 || value[0] != 'v' {
+		return false
+	}
+	components := strings.Split(value[1:], ".")
+	if len(components) != 3 {
+		return false
+	}
+	for _, component := range components {
+		if component == "" {
+			return false
+		}
+		for _, character := range component {
+			if character < '0' || character > '9' {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+func validObjectVersionID(value string) bool {
+	if value == "" || value == "latest" || value == "main" {
+		return false
+	}
+	for _, character := range value {
+		if !(character >= 'a' && character <= 'z' || character >= 'A' && character <= 'Z' || character >= '0' && character <= '9' || strings.ContainsRune("._~-", character)) {
+			return false
+		}
+	}
+	return true
+}
+
 func validFixtureID(value string) bool {
 	return validVMID(value)
+}
+
+func validFixtureVersion(value string) bool {
+	return validFixtureID(value) && value != "latest" && value != "main"
 }
 
 func validBundleMember(value string) bool {
@@ -189,6 +285,11 @@ func validBuildProvenance(provenance *BuildProvenance, requireStatic bool) bool 
 		return false
 	}
 	return !requireStatic || provenance.GuestAgentDigest == ""
+}
+
+func provenanceMatchesSource(provenance *BuildProvenance, source LockedSource) bool {
+	revision, ok := strings.CutPrefix(source.Reference, "commit:")
+	return ok && provenance != nil && provenance.SourceRevision == revision
 }
 
 func validRevision(value string) bool {
@@ -224,13 +325,17 @@ func (f fixtureStoreFunc) Open(ctx context.Context, source string) (FixtureRespo
 
 // FixtureSet contains fixtures that have been downloaded and completely verified.
 type FixtureSet struct {
-	directory string
-	artifacts map[FixtureName]PinnedArtifact
-	verified  bool
+	directory      string
+	fixtureVersion string
+	artifacts      map[FixtureName]PinnedArtifact
+	verified       bool
 }
 
 // Directory returns the private staging directory containing verified fixtures.
 func (set FixtureSet) Directory() string { return set.directory }
+
+// FixtureVersion returns the immutable fixture identity that the guest must report at boot.
+func (set FixtureSet) FixtureVersion() string { return set.fixtureVersion }
 
 // Names returns the complete fixture set in deterministic order.
 func (set FixtureSet) Names() []FixtureName {
@@ -276,7 +381,10 @@ func ProvisionFixtures(ctx context.Context, lock FixtureLock, fetcher FixtureFet
 	if err != nil {
 		return FixtureSet{}, err
 	}
-	set := FixtureSet{directory: destination, artifacts: make(map[FixtureName]PinnedArtifact, len(lock.Artifacts))}
+	if err := verifyRootFSAgentBinding(lock, stagedSources); err != nil {
+		return FixtureSet{}, err
+	}
+	set := FixtureSet{directory: destination, fixtureVersion: lock.FixtureVersion, artifacts: make(map[FixtureName]PinnedArtifact, len(lock.Artifacts))}
 	for _, artifact := range lock.Artifacts {
 		source, found := findFixtureSource(lock.Sources, artifact.SourceID)
 		if !found {
@@ -295,6 +403,83 @@ func ProvisionFixtures(ctx context.Context, lock FixtureLock, fetcher FixtureFet
 	set.verified = true
 	cleanup = false
 	return set, nil
+}
+
+func verifyRootFSAgentBinding(lock FixtureLock, stagedSources map[string]string) error {
+	var rootFS, guestAgent *LockedArtifact
+	for index := range lock.Artifacts {
+		artifact := &lock.Artifacts[index]
+		switch artifact.Name {
+		case FixtureRootFS:
+			rootFS = artifact
+		case FixtureGuestAgent:
+			guestAgent = artifact
+		}
+	}
+	if rootFS == nil || guestAgent == nil || rootFS.Build == nil {
+		return fmt.Errorf("%w: rootfs and guest-agent identities are required", ErrArtifactIntegrity)
+	}
+	source, found := findFixtureSource(lock.Sources, rootFS.SourceID)
+	if !found {
+		return fmt.Errorf("%w: rootfs source is absent", ErrArtifactIntegrity)
+	}
+	sourcePath, found := stagedSources[source.ID]
+	if !found {
+		return fmt.Errorf("%w: staged rootfs source is absent", ErrArtifactIntegrity)
+	}
+	contents, err := readVerifiedBundleMember(sourcePath, source.ID, rootFS.Build.AttestationMember, 64<<10)
+	if err != nil {
+		return fmt.Errorf("%w: read rootfs attestation: %v", ErrArtifactIntegrity, err)
+	}
+	var attestation RootFSAttestation
+	decoder := json.NewDecoder(strings.NewReader(string(contents)))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&attestation); err != nil || decoder.More() || !validRootFSAttestation(attestation, *rootFS, *guestAgent) {
+		return fmt.Errorf("%w: rootfs attestation does not bind /sbin/init to the verified guest agent", ErrArtifactIntegrity)
+	}
+	return nil
+}
+
+func validRootFSAttestation(attestation RootFSAttestation, rootFS, guestAgent LockedArtifact) bool {
+	return attestation.SchemaVersion == "agent-runtime.firecracker.rootfs-attestation/v1" && attestation.RootFSDigest == rootFS.Digest && attestation.RootFSSize == rootFS.SizeBytes && attestation.InitPath == "/sbin/init" && attestation.InitDigest == guestAgent.Digest && attestation.InitSize == guestAgent.SizeBytes && attestation.Platform == guestAgent.Platform && validFixturePlatform(attestation.Platform) && attestation.Static
+}
+
+func readVerifiedBundleMember(sourcePath, sourceID, member string, maximumSize uint64) ([]byte, error) {
+	file, err := os.Open(sourcePath)
+	if err != nil {
+		return nil, fmt.Errorf("open staged bundle %s: %w", sourceID, err)
+	}
+	defer file.Close()
+	reader, err := gzip.NewReader(file)
+	if err != nil {
+		return nil, fmt.Errorf("open gzip bundle %s: %w", sourceID, err)
+	}
+	defer reader.Close()
+	tarReader := tar.NewReader(reader)
+	var contents []byte
+	for {
+		header, nextErr := tarReader.Next()
+		if errors.Is(nextErr, io.EOF) {
+			break
+		}
+		if nextErr != nil {
+			return nil, fmt.Errorf("read bundle %s: %w", sourceID, nextErr)
+		}
+		if header.Name != member {
+			continue
+		}
+		if header.Typeflag != tar.TypeReg || header.Size < 0 || uint64(header.Size) > maximumSize || contents != nil {
+			return nil, fmt.Errorf("invalid bundle member %s", member)
+		}
+		contents, err = io.ReadAll(io.LimitReader(tarReader, int64(maximumSize)+1))
+		if err != nil || uint64(len(contents)) > maximumSize {
+			return nil, fmt.Errorf("read bounded bundle member %s", member)
+		}
+	}
+	if contents == nil {
+		return nil, fmt.Errorf("bundle member %s is absent", member)
+	}
+	return contents, nil
 }
 
 func stageFixtureSources(ctx context.Context, sources []LockedSource, fetcher FixtureFetcher, destination string) (map[string]string, error) {
@@ -403,6 +588,25 @@ func findFixtureSource(sources []LockedSource, id string) (LockedSource, bool) {
 	return LockedSource{}, false
 }
 
+// BootInput is the validated immutable argument pair passed to rootfs /sbin/init.
+type BootInput struct {
+	VMID           string
+	FixtureVersion string
+}
+
+// KernelArguments returns the closed kernel command-line argument sequence for this boot input.
+func (input BootInput) KernelArguments() []string {
+	return []string{"console=ttyS0", "reboot=k", "panic=1", "init=/sbin/init", "--", input.VMID, input.FixtureVersion}
+}
+
+func validBootInput(input BootInput) bool {
+	return validVMID(input.VMID) && validFixtureVersion(input.FixtureVersion)
+}
+
+func (input BootInput) serialMarker() string {
+	return "AGENT_RUNTIME_FC_SMOKE " + input.VMID + " " + input.FixtureVersion + " agent-runtime-firecracker-guest/v1"
+}
+
 // LaunchRequest is the complete no-NIC Jailer request passed to a protected host implementation.
 type LaunchRequest struct {
 	JailerPath        string
@@ -411,12 +615,14 @@ type LaunchRequest struct {
 	CgroupVersion     uint8
 	NetworkInterfaces uint8
 	SerialMarker      string
+	Boot              BootInput
+	KernelArguments   []string
 }
 
 // NewLaunchRequest freezes the exact Jailer argv and deny-all launch configuration for one verified rootfs copy.
-func NewLaunchRequest(plan Plan, rootFSCopyPath, serialMarker string) (LaunchRequest, error) {
-	if !validCompiledPlan(plan) || !safeAbsolutePath(rootFSCopyPath) || serialMarker == "" {
-		return LaunchRequest{}, fmt.Errorf("%w: compiled plan, private rootfs copy, and serial marker are required", ErrSmokeUnavailable)
+func NewLaunchRequest(plan Plan, rootFSCopyPath string, boot BootInput) (LaunchRequest, error) {
+	if !validCompiledPlan(plan) || !safeAbsolutePath(rootFSCopyPath) || !validBootInput(boot) || boot.VMID != plan.VMID() {
+		return LaunchRequest{}, fmt.Errorf("%w: compiled plan, private rootfs copy, and plan-bound boot input are required", ErrSmokeUnavailable)
 	}
 	return LaunchRequest{
 		JailerPath:        plan.Jailer().Path,
@@ -424,7 +630,9 @@ func NewLaunchRequest(plan Plan, rootFSCopyPath, serialMarker string) (LaunchReq
 		RootFSCopyPath:    rootFSCopyPath,
 		CgroupVersion:     2,
 		NetworkInterfaces: 0,
-		SerialMarker:      serialMarker,
+		SerialMarker:      boot.serialMarker(),
+		Boot:              boot,
+		KernelArguments:   boot.KernelArguments(),
 	}, nil
 }
 
@@ -545,7 +753,7 @@ func (harness SmokeHarness) Run(ctx context.Context, plan Plan, fixtures Fixture
 	if err != nil {
 		return SmokeEvidence{}, fmt.Errorf("prepare jailed rootfs: %w", err)
 	}
-	if !safeAbsolutePath(request.JailerPath) || len(request.JailerArguments) == 0 || request.CgroupVersion != 2 || request.NetworkInterfaces != 0 || request.RootFSCopyPath == "" || request.SerialMarker == "" {
+	if !safeAbsolutePath(request.JailerPath) || len(request.JailerArguments) == 0 || request.CgroupVersion != 2 || request.NetworkInterfaces != 0 || request.RootFSCopyPath == "" || !validBootInput(request.Boot) || request.Boot.VMID != plan.VMID() || request.Boot.FixtureVersion != fixtures.FixtureVersion() || request.SerialMarker != request.Boot.serialMarker() || !sameStrings(request.KernelArguments, request.Boot.KernelArguments()) {
 		return SmokeEvidence{}, fmt.Errorf("%w: incomplete no-NIC jailed request", ErrSmokeUnavailable)
 	}
 	if err := harness.Host.Launch(ctx, request); err != nil {
@@ -560,6 +768,18 @@ func (harness SmokeHarness) Run(ctx context.Context, plan Plan, fixtures Fixture
 	return SmokeEvidence{SchemaVersion: "firecracker.smoke-evidence/v1", ProofLevel: ProofLevelLinuxKVME2E, Result: EvidencePassed, SerialMarker: request.SerialMarker}, nil
 }
 
+func sameStrings(left, right []string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for index := range left {
+		if left[index] != right[index] {
+			return false
+		}
+	}
+	return true
+}
+
 func fixturesMatchPlan(set FixtureSet, plan Plan) bool {
 	for name, want := range planArtifacts(plan) {
 		got, ok := set.artifacts[name]
@@ -567,7 +787,7 @@ func fixturesMatchPlan(set FixtureSet, plan Plan) bool {
 			return false
 		}
 	}
-	return set.verified && len(set.artifacts) == 5 && safeAbsolutePath(set.directory)
+	return set.verified && validFixtureVersion(set.fixtureVersion) && len(set.artifacts) == 5 && safeAbsolutePath(set.directory)
 }
 
 func planArtifacts(plan Plan) map[FixtureName]PinnedArtifact {
