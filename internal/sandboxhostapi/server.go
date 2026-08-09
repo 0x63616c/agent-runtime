@@ -288,6 +288,11 @@ func decodeCanonical(writer http.ResponseWriter, request *http.Request, destinat
 		writeDenied(writer)
 		return false
 	}
+	var trailing any
+	if err := decoder.Decode(&trailing); err != io.EOF {
+		writeDenied(writer)
+		return false
+	}
 	canonical, err := json.Marshal(destination)
 	if err != nil || !bytes.Equal(canonical, wire) {
 		writeDenied(writer)
