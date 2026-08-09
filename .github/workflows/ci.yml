@@ -136,8 +136,8 @@ jobs:
           cluster=agent-runtime-isolated
           registry=agent-runtime-registry.localhost
           ownership_record="$RUNNER_TEMP/k3d-ownership.json"
-          cluster_creation_started=false
-          registry_creation_started=false
+          cluster_create_succeeded=false
+          registry_create_succeeded=false
           test ! -e "$ownership_record"
           test ! -e "$RUNNER_TEMP/agent-runtime-isolated.kubeconfig"
           if k3d cluster list -o json | jq -e --arg name "$cluster" 'any(.[]; .name == $name)' >/dev/null; then
@@ -150,17 +150,17 @@ jobs:
           fi
           write_ownership_record() {
             jq -n --arg cluster "$cluster" --arg registry "$registry" \
-              --argjson cluster_creation_started "$cluster_creation_started" --argjson registry_creation_started "$registry_creation_started" \
-              '{version:1,cluster:$cluster,registry:$registry,cluster_creation_started:$cluster_creation_started,registry_creation_started:$registry_creation_started}' \
+              --argjson cluster_create_succeeded "$cluster_create_succeeded" --argjson registry_create_succeeded "$registry_create_succeeded" \
+              '{version:1,cluster:$cluster,registry:$registry,cluster_create_succeeded:$cluster_create_succeeded,registry_create_succeeded:$registry_create_succeeded}' \
               > "$ownership_record"
           }
           cleanup_owned_resources() {
             status=$?
             set +e
-            if [[ "$cluster_creation_started" == true ]] && k3d cluster list -o json | jq -e --arg name "$cluster" 'any(.[]; .name == $name)' >/dev/null; then
+            if [[ "$cluster_create_succeeded" == true ]] && k3d cluster list -o json | jq -e --arg name "$cluster" 'any(.[]; .name == $name)' >/dev/null; then
               k3d cluster delete "$cluster"
             fi
-            if [[ "$registry_creation_started" == true ]] && k3d registry list -o json | jq -e --arg name "$registry" 'any(.[]; .name == $name)' >/dev/null; then
+            if [[ "$registry_create_succeeded" == true ]] && k3d registry list -o json | jq -e --arg name "$registry" 'any(.[]; .name == $name)' >/dev/null; then
               k3d registry delete "$registry"
             fi
             trap - EXIT
@@ -176,14 +176,19 @@ jobs:
             exit 1
           fi
           export KUBECONFIG="$RUNNER_TEMP/agent-runtime-isolated.kubeconfig"
-          registry_creation_started=true
           write_ownership_record
-          k3d registry create "$registry" \
+          if k3d registry create "$registry" \
             --image registry:2.8.3@sha256:a3d8aaa63ed8681a604f1dea0aa03f100d5895b6a58ace528858a7b332415373 \
-            --port 127.0.0.1:5111 --enforce-port-match
-          cluster_creation_started=true
+            --port 127.0.0.1:5111 --enforce-port-match; then
+            registry_create_succeeded=true
+            write_ownership_record
+          else
+            write_ownership_record
+            echo "failed k3d registry creation is retained for diagnosis without deletion" >&2
+            exit 1
+          fi
           write_ownership_record
-          k3d cluster create "$cluster" \
+          if k3d cluster create "$cluster" \
             --image rancher/k3s:v1.33.9-k3s1@sha256:f17e43023cce2b9c613e198f26e73637bf734b5156d37c9f44819d97bac4d655 \
             --api-port 127.0.0.1:6447 \
             --registry-use k3d-agent-runtime-registry.localhost:5111 \
@@ -191,7 +196,14 @@ jobs:
             --kubeconfig-switch-context=false \
             --k3s-arg '--disable=traefik@server:0' \
             --k3s-arg '--disable=servicelb@server:0' \
-            --wait --timeout 5m
+            --wait --timeout 5m; then
+            cluster_create_succeeded=true
+            write_ownership_record
+          else
+            write_ownership_record
+            echo "failed k3d cluster creation is retained for diagnosis without deletion" >&2
+            exit 1
+          fi
           k3d kubeconfig get "$cluster" > "$KUBECONFIG"
           api_endpoint="$(kubectl config view --raw --minify -o jsonpath='{.clusters[0].cluster.server}')"
           api_port="${api_endpoint##*:}"
@@ -351,6 +363,7 @@ jobs:
             ${{ runner.temp }}/two-stack-evidence.json
             ${{ runner.temp }}/local-path-helper-evidence.json
             ${{ runner.temp }}/two-stack-diagnostics/*.summary.json
+            ${{ runner.temp }}/k3d-ownership.json
           if-no-files-found: error
           retention-days: 30
       - name: Delete disposable cluster
@@ -362,11 +375,11 @@ jobs:
           [[ -f "$ownership_record" ]] || exit 0
           cluster="$(jq -er '.cluster | select(. == "agent-runtime-isolated")' "$ownership_record")"
           registry="$(jq -er '.registry | select(. == "agent-runtime-registry.localhost")' "$ownership_record")"
-          cluster_creation_started="$(jq -er '.cluster_creation_started | if type == "boolean" then . else error("cluster_creation_started must be boolean") end' "$ownership_record")"
-          registry_creation_started="$(jq -er '.registry_creation_started | if type == "boolean" then . else error("registry_creation_started must be boolean") end' "$ownership_record")"
-          if [[ "$cluster_creation_started" == true ]] && k3d cluster list -o json | jq -e --arg name "$cluster" 'any(.[]; .name == $name)' >/dev/null; then
+          cluster_create_succeeded="$(jq -er '.cluster_create_succeeded | if type == "boolean" then . else error("cluster_create_succeeded must be boolean") end' "$ownership_record")"
+          registry_create_succeeded="$(jq -er '.registry_create_succeeded | if type == "boolean" then . else error("registry_create_succeeded must be boolean") end' "$ownership_record")"
+          if [[ "$cluster_create_succeeded" == true ]] && k3d cluster list -o json | jq -e --arg name "$cluster" 'any(.[]; .name == $name)' >/dev/null; then
             k3d cluster delete "$cluster"
           fi
-          if [[ "$registry_creation_started" == true ]] && k3d registry list -o json | jq -e --arg name "$registry" 'any(.[]; .name == $name)' >/dev/null; then
+          if [[ "$registry_create_succeeded" == true ]] && k3d registry list -o json | jq -e --arg name "$registry" 'any(.[]; .name == $name)' >/dev/null; then
             k3d registry delete "$registry"
           fi

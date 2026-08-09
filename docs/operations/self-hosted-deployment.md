@@ -189,10 +189,12 @@ historical retained artifact. This is provenance, not a claim that the local
 proof ran on the retention commit or on the current checkout.
 
 The two-Stack CI lane refuses existing k3d cluster and registry names before
-it starts creation. It records that each exact resource's creation has started
-before invoking k3d, and cleanup deletes only a resource with that recorded
-ownership and exact name. CI retains only schema-validated diagnostic summaries
-(identity, bounded readiness counts, and Tilt exit code); it never publishes
-workload logs, raw Tilt snapshots, arbitrary Kubernetes object dumps, or K3s
-server logs. A hosted run of this exact revised lane remains required before
-M1 isolation acceptance can be claimed.
+it starts creation. It records ownership only after each exact k3d create
+returns successfully, and cleanup deletes only a resource with that successful
+ownership record and exact name. A failed or raced create retains its bounded
+ownership record and does not authorize deletion of a same-named resource. CI
+retains only schema-validated diagnostic summaries (identity, bounded readiness
+counts, and Tilt exit code); it never publishes workload logs, raw Tilt
+snapshots, arbitrary Kubernetes object dumps, or K3s server logs. A hosted run
+of this exact revised lane remains required before M1 isolation acceptance can
+be claimed.

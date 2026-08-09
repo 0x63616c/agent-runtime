@@ -120,8 +120,8 @@ var _ = Describe("M1 deployment safety boundaries", func() {
 			"k3d registry list -o json",
 			"refusing to reuse pre-existing k3d cluster agent-runtime-isolated",
 			"refusing to reuse pre-existing k3d registry agent-runtime-registry.localhost",
-			"cluster_creation_started=false",
-			"registry_creation_started=false",
+			"cluster_create_succeeded=false",
+			"registry_create_succeeded=false",
 			"k3d-ownership.json",
 			"k3d cluster create \"$cluster\"",
 			"--api-port 127.0.0.1:6447",
@@ -238,6 +238,40 @@ var _ = Describe("M1 deployment safety boundaries", func() {
 		Expect(proof.NetworkPolicy.Denied).To(Equal(3))
 		Expect(proof.Cleanup.NamespacesAbsent).To(BeTrue())
 		Expect(proof.Cleanup.LocalStateAbsent).To(BeTrue())
+	})
+
+	It("never treats a failed or raced k3d create as authority to delete", func() {
+		workflow := read(".github/workflows/ci.yml")
+		for _, required := range []string{
+			"registry_create_succeeded=false",
+			"cluster_create_succeeded=false",
+			`if k3d registry create "$registry"`,
+			`if k3d cluster create "$cluster"`,
+			"registry_create_succeeded=true",
+			"cluster_create_succeeded=true",
+			`if [[ "$cluster_create_succeeded" == true ]]`,
+			`if [[ "$registry_create_succeeded" == true ]]`,
+			"failed k3d registry creation is retained for diagnosis without deletion",
+			"failed k3d cluster creation is retained for diagnosis without deletion",
+			"${{ runner.temp }}/k3d-ownership.json",
+		} {
+			Expect(workflow).To(ContainSubstring(required))
+		}
+		for _, forbidden := range []string{
+			"cluster_creation_started",
+			"registry_creation_started",
+		} {
+			Expect(workflow).NotTo(ContainSubstring(forbidden))
+		}
+
+		registryCreate := strings.Index(workflow, `if k3d registry create "$registry"`)
+		registrySuccess := strings.Index(workflow, "registry_create_succeeded=true")
+		clusterCreate := strings.Index(workflow, `if k3d cluster create "$cluster"`)
+		clusterSuccess := strings.Index(workflow, "cluster_create_succeeded=true")
+		Expect(registryCreate).To(BeNumerically(">=", 0))
+		Expect(registrySuccess).To(BeNumerically(">", registryCreate))
+		Expect(clusterCreate).To(BeNumerically(">=", 0))
+		Expect(clusterSuccess).To(BeNumerically(">", clusterCreate))
 	})
 
 	It("keeps repository-reading deployment assertions out of product package tests", func() {
