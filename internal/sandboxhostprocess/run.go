@@ -61,17 +61,13 @@ func RunOnce(ctx context.Context, config Config, lookup SecretLookup, source clo
 	if ctx == nil || lookup == nil || source == nil {
 		return errors.New("run sandbox reference host: context, secret lookup and clock are required")
 	}
-	controlPublicEncoded, err := requiredSecret(lookup, config.controlPublicKeyEnvironment)
-	if err != nil {
-		return err
-	}
 	hostPrivateEncoded, err := requiredSecret(lookup, config.hostSigningKeyEnvironment)
 	if err != nil {
 		return err
 	}
-	controlPublic, err := base64.RawStdEncoding.DecodeString(controlPublicEncoded)
-	if err != nil || len(controlPublic) != ed25519.PublicKeySize {
-		return errors.New("run sandbox reference host: control public key is invalid")
+	controlTrust, err := LoadControlTrust(config.controlTrust, lookup)
+	if err != nil {
+		return err
 	}
 	hostPrivate, err := base64.RawStdEncoding.DecodeString(hostPrivateEncoded)
 	if err != nil || len(hostPrivate) != ed25519.PrivateKeySize {
@@ -107,7 +103,7 @@ func RunOnce(ctx context.Context, config Config, lookup SecretLookup, source clo
 		return errors.New("run sandbox reference host: pull denied or unavailable")
 	}
 	now := source.Now().UTC()
-	envelope, err := sandboxhostprotocol.VerifyEnvelope(response.body, config.hostID, config.hostGeneration, now, map[string]ed25519.PublicKey{config.controlKeyID: ed25519.PublicKey(controlPublic)})
+	envelope, err := sandboxhostprotocol.VerifyEnvelopeWithTrust(response.body, config.hostID, config.hostGeneration, now, controlTrust.Snapshot())
 	if err != nil {
 		return errors.New("run sandbox reference host: assignment refused")
 	}

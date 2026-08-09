@@ -39,7 +39,8 @@ func TestHostHandlerPullLostAckReceiptRenewAndResult(t *testing.T) {
 	if _, _, err := store.Accept(context.Background(), operation); err != nil {
 		t.Fatal(err)
 	}
-	handler, err := NewHandler(Config{Store: store, ControlKeyID: "control_01", ControlSigningKey: controlPrivate, Entropy: bytes.NewReader(bytes.Repeat([]byte{0x42}, 4096)), Clock: fakeClock, LeaseDuration: time.Minute})
+	controlTrust := testControlTrust(now, controlPublic)
+	handler, err := NewHandler(Config{Store: store, ControlTrust: controlTrust, ControlSigningKey: controlPrivate, Entropy: bytes.NewReader(bytes.Repeat([]byte{0x42}, 4096)), Clock: fakeClock, LeaseDuration: time.Minute})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -48,8 +49,8 @@ func TestHostHandlerPullLostAckReceiptRenewAndResult(t *testing.T) {
 	if first.Code != http.StatusOK {
 		t.Fatalf("first pull status=%d body=%s", first.Code, first.Body.String())
 	}
-	envelope, err := sandboxhostprotocol.VerifyEnvelope(first.Body.Bytes(), host.HostID, host.Generation, now, map[string]ed25519.PublicKey{"control_01": controlPublic})
-	if err != nil {
+	envelope, err := sandboxhostprotocol.VerifyEnvelopeWithTrust(first.Body.Bytes(), host.HostID, host.Generation, now, controlTrust)
+	if err != nil || envelope.ControlKeyVersion != 4 || envelope.ControlRevocationEpoch != 9 {
 		t.Fatal(err)
 	}
 	duplicate := perform(t, handler, certificate, http.MethodPost, pullPath, pullRequest{ProtocolVersion: sandboxhostprotocol.Version, Kind: "pull", HostID: host.HostID, HostGeneration: host.Generation})
@@ -74,7 +75,7 @@ func TestHostHandlerPullLostAckReceiptRenewAndResult(t *testing.T) {
 	if renew.Code != http.StatusOK {
 		t.Fatalf("heartbeat status=%d body=%s", renew.Code, renew.Body.String())
 	}
-	renewed, err := sandboxhostprotocol.VerifyEnvelope(renew.Body.Bytes(), host.HostID, host.Generation, now, map[string]ed25519.PublicKey{"control_01": controlPublic})
+	renewed, err := sandboxhostprotocol.VerifyEnvelopeWithTrust(renew.Body.Bytes(), host.HostID, host.Generation, now, controlTrust)
 	if err != nil || renewed.FencingToken != envelope.FencingToken+1 {
 		t.Fatalf("renewed envelope=%#v error=%v", renewed, err)
 	}
@@ -133,7 +134,7 @@ func TestHostHandlerRejectsRogueTLSAndQuarantinesBadSignature(t *testing.T) {
 	if err := store.ProvisionHost(context.Background(), host); err != nil {
 		t.Fatal(err)
 	}
-	handler, _ := NewHandler(Config{Store: store, ControlKeyID: "control_01", ControlSigningKey: controlPrivate, Entropy: bytes.NewReader(bytes.Repeat([]byte{0x44}, 4096)), Clock: fakeClock, LeaseDuration: time.Minute})
+	handler, _ := NewHandler(Config{Store: store, ControlTrust: testControlTrust(now, controlPrivate.Public().(ed25519.PublicKey)), ControlSigningKey: controlPrivate, Entropy: bytes.NewReader(bytes.Repeat([]byte{0x44}, 4096)), Clock: fakeClock, LeaseDuration: time.Minute})
 	rogue := testPeerCertificate(t, "host_rogue", 1)
 	response := perform(t, handler, rogue, http.MethodPost, pullPath, pullRequest{ProtocolVersion: sandboxhostprotocol.Version, Kind: "pull", HostID: "host_rogue", HostGeneration: 1})
 	if response.Code != http.StatusForbidden {
@@ -148,6 +149,10 @@ func TestHostHandlerRejectsRogueTLSAndQuarantinesBadSignature(t *testing.T) {
 	if _, err := store.AuthenticateHost(context.Background(), identity, now); err == nil {
 		t.Fatal("bad signature did not quarantine enrolled host")
 	}
+}
+
+func testControlTrust(now time.Time, publicKey ed25519.PublicKey) sandboxhostprotocol.TrustBundle {
+	return sandboxhostprotocol.TrustBundle{Version: 3, RevocationEpoch: 9, Current: sandboxhostprotocol.SigningKey{ID: "control_01", Version: 4, PublicKey: publicKey, NotBefore: now.Add(-time.Hour), NotAfter: now.Add(time.Hour)}}
 }
 
 func perform(t *testing.T, handler http.Handler, certificate *x509.Certificate, method, path string, body any) *httptest.ResponseRecorder {

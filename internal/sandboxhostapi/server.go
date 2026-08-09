@@ -35,7 +35,7 @@ const (
 // the control-process composition root.
 type Config struct {
 	Store             sandboxcontrol.HostControlStore
-	ControlKeyID      string
+	ControlTrust      sandboxhostprotocol.TrustBundle
 	ControlSigningKey ed25519.PrivateKey
 	Entropy           io.Reader
 	Clock             clock.Clock
@@ -75,7 +75,8 @@ type acknowledgement struct {
 // NewHandler constructs the bounded host API without opening listeners or
 // provisioning enrollment, database, certificates or signing keys.
 func NewHandler(config Config) (http.Handler, error) {
-	if config.Store == nil || config.Entropy == nil || config.Clock == nil || len(config.ControlSigningKey) != ed25519.PrivateKeySize || !bounded(config.ControlKeyID, 128) || config.LeaseDuration <= 0 || config.LeaseDuration > time.Hour {
+	_, trustErr := sandboxhostprotocol.NewAtomicTrust(config.ControlTrust)
+	if config.Store == nil || config.Entropy == nil || config.Clock == nil || trustErr != nil || len(config.ControlSigningKey) != ed25519.PrivateKeySize || !bytes.Equal(config.ControlSigningKey.Public().(ed25519.PublicKey), config.ControlTrust.Current.PublicKey) || config.LeaseDuration <= 0 || config.LeaseDuration > time.Hour {
 		return nil, errors.New("construct sandbox host handler: explicit finite authority is required")
 	}
 	server := &server{config: config}
@@ -260,7 +261,7 @@ func (server *server) deliverySeed(includeAssignment bool) (sandboxcontrol.Deliv
 }
 
 func (server *server) sign(envelope sandboxhostprotocol.Envelope) ([]byte, error) {
-	return sandboxhostprotocol.SignEnvelope(envelope, server.config.ControlKeyID, server.config.ControlSigningKey)
+	return sandboxhostprotocol.SignEnvelopeWithTrust(envelope, server.config.ControlTrust, server.config.ControlSigningKey)
 }
 
 func (server *server) protocolStoreError(writer http.ResponseWriter, ctx context.Context, identity sandboxcontrol.HostIdentity, err error, reason string) {

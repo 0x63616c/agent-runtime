@@ -17,6 +17,7 @@ import (
 	"github.com/0x63616c/agent-runtime/internal/sandboxcontrol"
 	"github.com/0x63616c/agent-runtime/internal/sandboxcontrolapi"
 	"github.com/0x63616c/agent-runtime/internal/sandboxhostapi"
+	"github.com/0x63616c/agent-runtime/internal/sandboxhostprotocol"
 	"github.com/cockroachdb/errors"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -148,7 +149,9 @@ func newHostControlServer(config *hostControlConfig, lookup SecretLookup, store 
 	if !clientCAs.AppendCertsFromPEM(clientPEM) {
 		return runningServer{}, errors.New("run sandbox-control process: host client CA is invalid")
 	}
-	handler, err := sandboxhostapi.NewHandler(sandboxhostapi.Config{Store: store, ControlKeyID: config.controlKeyID, ControlSigningKey: ed25519.PrivateKey(privateKey), Entropy: rand.Reader, Clock: systemClock{}, LeaseDuration: config.lease})
+	publicKey := ed25519.PrivateKey(privateKey).Public().(ed25519.PublicKey)
+	trust := sandboxhostprotocol.TrustBundle{Version: config.trustVersion, RevocationEpoch: config.revocationEpoch, Current: sandboxhostprotocol.SigningKey{ID: config.controlKeyID, Version: config.keyVersion, PublicKey: publicKey, NotBefore: config.keyNotBefore, NotAfter: config.keyNotAfter}}
+	handler, err := sandboxhostapi.NewHandler(sandboxhostapi.Config{Store: store, ControlTrust: trust, ControlSigningKey: ed25519.PrivateKey(privateKey), Entropy: rand.Reader, Clock: systemClock{}, LeaseDuration: config.lease})
 	if err != nil {
 		return runningServer{}, err
 	}

@@ -50,13 +50,18 @@ type document struct {
 }
 
 type hostControlDocument struct {
-	ListenAddress                string `json:"listen_address"`
-	TLSCertificateFile           string `json:"tls_certificate_file"`
-	TLSPrivateKeyFile            string `json:"tls_private_key_file"`
-	ClientCAFile                 string `json:"client_ca_file"`
-	ControlKeyID                 string `json:"control_key_id"`
-	ControlSigningKeyEnvironment string `json:"control_signing_key_environment"`
-	LeaseSeconds                 uint32 `json:"lease_seconds"`
+	ListenAddress                string    `json:"listen_address"`
+	TLSCertificateFile           string    `json:"tls_certificate_file"`
+	TLSPrivateKeyFile            string    `json:"tls_private_key_file"`
+	ClientCAFile                 string    `json:"client_ca_file"`
+	ControlTrustVersion          uint64    `json:"control_trust_version"`
+	ControlRevocationEpoch       uint64    `json:"control_revocation_epoch"`
+	ControlKeyID                 string    `json:"control_key_id"`
+	ControlKeyVersion            uint64    `json:"control_key_version"`
+	ControlKeyNotBefore          time.Time `json:"control_key_not_before"`
+	ControlKeyNotAfter           time.Time `json:"control_key_not_after"`
+	ControlSigningKeyEnvironment string    `json:"control_signing_key_environment"`
+	LeaseSeconds                 uint32    `json:"lease_seconds"`
 }
 
 type hostControlConfig struct {
@@ -64,7 +69,12 @@ type hostControlConfig struct {
 	tlsCertificateFile           string
 	tlsPrivateKeyFile            string
 	clientCAFile                 string
+	trustVersion                 uint64
+	revocationEpoch              uint64
 	controlKeyID                 string
+	keyVersion                   uint64
+	keyNotBefore                 time.Time
+	keyNotAfter                  time.Time
 	controlSigningKeyEnvironment string
 	lease                        time.Duration
 }
@@ -188,12 +198,12 @@ func parseHostControl(decoded *hostControlDocument, publicAddress, publicCertifi
 			return nil, errors.New("validate sandbox-control configuration: host_control requires absolute TLS paths")
 		}
 	}
-	if decoded.TLSCertificateFile == decoded.TLSPrivateKeyFile || decoded.TLSCertificateFile == publicCertificate || decoded.TLSPrivateKeyFile == publicKey || !environmentName.MatchString(decoded.ControlSigningKeyEnvironment) || decoded.ControlKeyID == "" || len(decoded.ControlKeyID) > 128 {
+	if decoded.TLSCertificateFile == decoded.TLSPrivateKeyFile || decoded.TLSCertificateFile == publicCertificate || decoded.TLSPrivateKeyFile == publicKey || !environmentName.MatchString(decoded.ControlSigningKeyEnvironment) || decoded.ControlKeyID == "" || len(decoded.ControlKeyID) > 128 || decoded.ControlTrustVersion == 0 || decoded.ControlRevocationEpoch == 0 || decoded.ControlKeyVersion == 0 || decoded.ControlKeyNotBefore.Location() != time.UTC || decoded.ControlKeyNotAfter.Location() != time.UTC || !decoded.ControlKeyNotAfter.After(decoded.ControlKeyNotBefore) {
 		return nil, errors.New("validate sandbox-control configuration: host_control identity and signing authority are invalid")
 	}
 	lease := time.Duration(decoded.LeaseSeconds) * time.Second
 	if lease <= 0 || lease > time.Hour {
 		return nil, errors.New("validate sandbox-control configuration: host_control lease must be finite")
 	}
-	return &hostControlConfig{listenAddress: decoded.ListenAddress, tlsCertificateFile: decoded.TLSCertificateFile, tlsPrivateKeyFile: decoded.TLSPrivateKeyFile, clientCAFile: decoded.ClientCAFile, controlKeyID: decoded.ControlKeyID, controlSigningKeyEnvironment: decoded.ControlSigningKeyEnvironment, lease: lease}, nil
+	return &hostControlConfig{listenAddress: decoded.ListenAddress, tlsCertificateFile: decoded.TLSCertificateFile, tlsPrivateKeyFile: decoded.TLSPrivateKeyFile, clientCAFile: decoded.ClientCAFile, trustVersion: decoded.ControlTrustVersion, revocationEpoch: decoded.ControlRevocationEpoch, controlKeyID: decoded.ControlKeyID, keyVersion: decoded.ControlKeyVersion, keyNotBefore: decoded.ControlKeyNotBefore, keyNotAfter: decoded.ControlKeyNotAfter, controlSigningKeyEnvironment: decoded.ControlSigningKeyEnvironment, lease: lease}, nil
 }
