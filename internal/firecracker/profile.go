@@ -74,6 +74,7 @@ type MachineConfig struct {
 type ResourceEnforcement struct {
 	CgroupVersion       uint8
 	RootDiskBytes       uint64
+	TmpfsBytes          uint64
 	PIDs                uint32
 	ProcessCount        uint32
 	OpenFiles           uint32
@@ -86,18 +87,75 @@ type ResourceEnforcement struct {
 
 // Plan is a resolved, immutable launch plan. The host agent verifies fixture digests before launch.
 type Plan struct {
-	VMID            string
-	JailerArguments []string
-	Machine         MachineConfig
-	Resources       ResourceEnforcement
-	Network         NetworkPolicy
-	Capabilities    sandbox.CapabilitySnapshot
-	Firecracker     PinnedArtifact
-	Jailer          PinnedArtifact
-	Kernel          PinnedArtifact
-	RootFS          PinnedArtifact
+	vmID            string
+	jailerArguments []string
+	machine         MachineConfig
+	resources       ResourceEnforcement
+	network         NetworkPolicy
+	capabilities    sandbox.CapabilitySnapshot
+	firecracker     PinnedArtifact
+	jailer          PinnedArtifact
+	kernel          PinnedArtifact
+	rootFS          PinnedArtifact
 	compiled        bool
 }
+
+// VMID returns the Jailer-safe identity of this launch plan.
+func (plan Plan) VMID() string { return plan.vmID }
+
+// JailerArguments returns a defensive copy of the exact Jailer argument vector.
+func (plan Plan) JailerArguments() []string {
+	return append([]string(nil), plan.jailerArguments...)
+}
+
+// Machine returns the exact Firecracker machine configuration.
+func (plan Plan) Machine() MachineConfig { return plan.machine }
+
+// Resources returns the exact finite host enforcement configuration.
+func (plan Plan) Resources() ResourceEnforcement { return plan.resources }
+
+// Network returns a defensive copy of the host network policy.
+func (plan Plan) Network() NetworkPolicy {
+	network := plan.network
+	network.Allowlist = append([]string(nil), plan.network.Allowlist...)
+	return network
+}
+
+// Capabilities returns a defensive copy of the uncertified capability snapshot.
+func (plan Plan) Capabilities() sandbox.CapabilitySnapshot {
+	capabilities := plan.capabilities
+	for _, descriptor := range []*sandbox.CapabilityDescriptor{
+		&capabilities.ControlProtocol,
+		&capabilities.Isolation,
+		&capabilities.Guest,
+		&capabilities.Resources,
+		&capabilities.Reconnect,
+		&capabilities.ImageAdmission,
+		&capabilities.Output,
+		&capabilities.Transfer,
+		&capabilities.Mounts,
+		&capabilities.Volumes,
+		&capabilities.Snapshots,
+		&capabilities.Egress,
+		&capabilities.Secrets,
+	} {
+		descriptor.LimitPrecision = append([]string(nil), descriptor.LimitPrecision...)
+	}
+	capabilities.Signals = append([]sandbox.Signal(nil), plan.capabilities.Signals...)
+	return capabilities
+}
+
+// Firecracker returns the pinned VMM artifact.
+func (plan Plan) Firecracker() PinnedArtifact { return plan.firecracker }
+
+// Jailer returns the pinned Jailer artifact.
+func (plan Plan) Jailer() PinnedArtifact { return plan.jailer }
+
+// Kernel returns the pinned guest kernel artifact.
+func (plan Plan) Kernel() PinnedArtifact { return plan.kernel }
+
+// RootFS returns the pinned guest root filesystem artifact.
+func (plan Plan) RootFS() PinnedArtifact { return plan.rootFS }
 
 // Compile rejects profile widening and produces the deterministic foundation launch plan.
 func Compile(profile Profile) (Plan, error) {
@@ -123,12 +181,13 @@ func Compile(profile Profile) (Plan, error) {
 		return Plan{}, err
 	}
 	return Plan{
-		VMID:            profile.VMID,
-		JailerArguments: []string{"--id", profile.VMID, "--exec-file", profile.Firecracker.Path, "--uid", strconv.FormatUint(uint64(profile.UID), 10), "--gid", strconv.FormatUint(uint64(profile.GID), 10), "--chroot-base-dir", profile.ChrootBaseDir, "--cgroup-version", "2", "--", "--api-sock", "/run/firecracker.socket"},
-		Machine:         machine,
-		Resources: ResourceEnforcement{
+		vmID:            profile.VMID,
+		jailerArguments: []string{"--id", profile.VMID, "--exec-file", profile.Firecracker.Path, "--uid", strconv.FormatUint(uint64(profile.UID), 10), "--gid", strconv.FormatUint(uint64(profile.GID), 10), "--chroot-base-dir", profile.ChrootBaseDir, "--cgroup-version", "2", "--", "--api-sock", "/run/firecracker.socket"},
+		machine:         machine,
+		resources: ResourceEnforcement{
 			CgroupVersion:       2,
 			RootDiskBytes:       profile.Resources.RootDiskBytes,
+			TmpfsBytes:          profile.Resources.TmpfsBytes,
 			PIDs:                profile.Resources.PIDs,
 			ProcessCount:        profile.Resources.ProcessCount,
 			OpenFiles:           profile.Resources.OpenFiles,
@@ -138,22 +197,24 @@ func Compile(profile Profile) (Plan, error) {
 			ProducedOutputBytes: profile.Resources.ProducedOutputBytes,
 			RetainedOutputBytes: profile.Resources.RetainedOutputBytes,
 		},
-		Network:      NetworkPolicy{Mode: NetworkDenyAll},
-		Capabilities: foundationCapabilities(),
-		Firecracker:  profile.Firecracker,
-		Jailer:       profile.Jailer,
-		Kernel:       profile.Kernel,
-		RootFS:       profile.RootFS,
+		network:      NetworkPolicy{Mode: NetworkDenyAll},
+		capabilities: foundationCapabilities(),
+		firecracker:  profile.Firecracker,
+		jailer:       profile.Jailer,
+		kernel:       profile.Kernel,
+		rootFS:       profile.RootFS,
 		compiled:     true,
 	}, nil
 }
 
 func machineConfig(limits sandbox.ResourceLimits) (MachineConfig, error) {
 	const mib = uint64(1 << 20)
-	if limits.MilliCPU == 0 || limits.MilliCPU%1000 != 0 || limits.MemoryBytes < 128*mib || limits.MemoryBytes%mib != 0 || limits.RootDiskBytes == 0 || limits.PIDs == 0 || limits.ProcessCount == 0 || limits.OpenFiles == 0 || limits.Inodes == 0 || limits.Files == 0 || limits.Lifetime <= 0 || limits.ProducedOutputBytes == 0 || limits.RetainedOutputBytes == 0 || limits.RetainedOutputBytes > limits.ProducedOutputBytes {
+	const maxMachineMemoryMiB = uint64(1<<32 - 1)
+	memoryMiB := limits.MemoryBytes / mib
+	if limits.MilliCPU == 0 || limits.MilliCPU%1000 != 0 || limits.MemoryBytes < 128*mib || limits.MemoryBytes%mib != 0 || memoryMiB > maxMachineMemoryMiB || limits.RootDiskBytes == 0 || limits.TmpfsBytes == 0 || limits.PIDs == 0 || limits.ProcessCount == 0 || limits.OpenFiles == 0 || limits.Inodes == 0 || limits.Files == 0 || limits.Lifetime <= 0 || limits.ProducedOutputBytes == 0 || limits.RetainedOutputBytes == 0 || limits.RetainedOutputBytes > limits.ProducedOutputBytes {
 		return MachineConfig{}, fmt.Errorf("%w: Firecracker requires exact vCPU, MiB memory and finite resource limits", ErrInvalidProfile)
 	}
-	return MachineConfig{VCPUCount: limits.MilliCPU / 1000, MemoryMiB: uint32(limits.MemoryBytes / mib)}, nil
+	return MachineConfig{VCPUCount: limits.MilliCPU / 1000, MemoryMiB: uint32(memoryMiB)}, nil
 }
 
 func foundationCapabilities() sandbox.CapabilitySnapshot {
@@ -212,7 +273,7 @@ func VerifyPlanArtifacts(plan Plan, opener artifactOpener) error {
 	if opener == nil {
 		return fmt.Errorf("%w: opener is required", ErrArtifactIntegrity)
 	}
-	for _, artifact := range []PinnedArtifact{plan.Firecracker, plan.Jailer, plan.Kernel, plan.RootFS} {
+	for _, artifact := range []PinnedArtifact{plan.firecracker, plan.jailer, plan.kernel, plan.rootFS} {
 		file, err := opener.Open(artifact.Path)
 		if err != nil {
 			return fmt.Errorf("%w: open %s: %v", ErrArtifactIntegrity, artifact.Path, err)
@@ -317,11 +378,11 @@ func hasPinnedLaunchPlan(plan Plan) bool {
 }
 
 func validCompiledPlan(plan Plan) bool {
-	return plan.compiled && validVMID(plan.VMID) && validArtifact(plan.Firecracker) && validArtifact(plan.Jailer) && validArtifact(plan.Kernel) && validArtifact(plan.RootFS) && len(plan.JailerArguments) > 0 && plan.Machine.VCPUCount > 0 && plan.Machine.MemoryMiB >= 128 && validResourceEnforcement(plan.Resources) && plan.Network.Mode == NetworkDenyAll && len(plan.Network.Allowlist) == 0
+	return plan.compiled && validVMID(plan.vmID) && validArtifact(plan.firecracker) && validArtifact(plan.jailer) && validArtifact(plan.kernel) && validArtifact(plan.rootFS) && len(plan.jailerArguments) > 0 && plan.machine.VCPUCount > 0 && plan.machine.MemoryMiB >= 128 && validResourceEnforcement(plan.resources) && plan.network.Mode == NetworkDenyAll && len(plan.network.Allowlist) == 0
 }
 
 func validResourceEnforcement(resources ResourceEnforcement) bool {
-	return resources.CgroupVersion == 2 && resources.RootDiskBytes > 0 && resources.PIDs > 0 && resources.ProcessCount > 0 && resources.OpenFiles > 0 && resources.Inodes > 0 && resources.Files > 0 && resources.Lifetime > 0 && resources.ProducedOutputBytes > 0 && resources.RetainedOutputBytes > 0 && resources.RetainedOutputBytes <= resources.ProducedOutputBytes
+	return resources.CgroupVersion == 2 && resources.RootDiskBytes > 0 && resources.TmpfsBytes > 0 && resources.PIDs > 0 && resources.ProcessCount > 0 && resources.OpenFiles > 0 && resources.Inodes > 0 && resources.Files > 0 && resources.Lifetime > 0 && resources.ProducedOutputBytes > 0 && resources.RetainedOutputBytes > 0 && resources.RetainedOutputBytes <= resources.ProducedOutputBytes
 }
 
 type localEnvironment struct{ check func(string) error }
