@@ -31,6 +31,21 @@ var _ = Describe("Typed Kubernetes manifests", func() {
 		Expect(compact.String()).To(ContainSubstring(`"automountServiceAccountToken":false`))
 	})
 
+	It("renders DNS egress only to kube-system CoreDNS over UDP and TCP port 53", func() {
+		resources := strings.Replace(kubernetesManifestResources, `"default_deny":true,"subject":"api","allowed_egress":[]`, `"default_deny":true,"subject":"api","allow_dns":true,"allowed_egress":[]`, 1)
+		spec, err := stack.Parse(strings.NewReader(stackDocument(resources, resources, resources)))
+		Expect(err).NotTo(HaveOccurred())
+		rendered, err := stack.Render(spec, stack.ProfileLocal)
+		Expect(err).NotTo(HaveOccurred())
+		manifests, err := stack.RenderKubernetes(rendered)
+		Expect(err).NotTo(HaveOccurred())
+
+		var compact bytes.Buffer
+		Expect(json.Compact(&compact, manifests.JSON())).To(Succeed())
+		Expect(compact.String()).To(ContainSubstring(`"egress":[{"to":[{"podSelector":{"matchLabels":{"k8s-app":"kube-dns"}},"namespaceSelector":{"matchLabels":{"kubernetes.io/metadata.name":"kube-system"}}}],"ports":[{"protocol":"UDP","port":53},{"protocol":"TCP","port":53}]}]`))
+		Expect(compact.String()).NotTo(ContainSubstring(`"ipBlock"`))
+	})
+
 	It("projects declared secret references and persistent claims without serializing secret values", func() {
 		resources := `[
   {"id":"database-credentials","kind":"secret_reference","owner":"platform-operator","scope":"namespace","dependencies":[],"retention":{"policy":"external","days":0},"backup_restore_owner":"platform-operator","delete_behavior":"retain","external_controller":true,"secret_reference":{"provider":"local-generated","reference":"database-credentials","version":"v1","keys":["POSTGRES_PASSWORD"]}},

@@ -220,6 +220,28 @@ for role in api orchestration model tool blob-role codec sandbox-control sandbox
 done
 echo "all 8 independently configured runtime roles are Ready"
 
+# Prove the M1 dependency address is not merely schema-consistent: a Job with
+# the tool role's exact egress labels must reach the declared HTTP Service on
+# 8086. The later M3 private TLS protocol remains a separate 9443 endpoint.
+connectivity_image="$(printf '%s' "$manifests" | jq -cer '
+  .items[] | select(.kind == "Deployment" and .metadata.name == "telemetry") |
+  .spec.template.spec.containers[0].image
+')"
+jq -n \
+  --arg image "$connectivity_image" --arg stack "$stack_name" --arg profile "$profile" \
+  '{apiVersion:"batch/v1",kind:"Job",metadata:{name:"sandbox-control-connectivity"},spec:{backoffLimit:0,activeDeadlineSeconds:60,template:{metadata:{labels:{"app.kubernetes.io/part-of":"agent-runtime","agent-runtime.dev/stack":$stack,"agent-runtime.dev/profile":$profile,"agent-runtime.dev/resource":"tool"}},spec:{restartPolicy:"Never",serviceAccountName:"tool-account",automountServiceAccountToken:false,containers:[{name:"probe",image:$image,command:["/bin/sh","-c"],args:["wget -qO- http://sandbox-control:8086/readyz"],resources:{requests:{cpu:"25m",memory:"32Mi"},limits:{cpu:"100m",memory:"128Mi"}}}]}}}}' |
+  kubectl --kubeconfig "$kubeconfig" --context "$context" --namespace "$namespace" create -f - >/dev/null
+kubectl --kubeconfig "$kubeconfig" --context "$context" --namespace "$namespace" \
+  wait --for=condition=complete job/sandbox-control-connectivity --timeout=60s >/dev/null
+connectivity_output="$(kubectl --kubeconfig "$kubeconfig" --context "$context" --namespace "$namespace" logs job/sandbox-control-connectivity 2>&1)"
+if [[ "$connectivity_output" != *'"role":"sandbox-control"'* || "$connectivity_output" != *'"status":"ready"'* ]]; then
+  echo "tool-labelled dependency probe did not reach sandbox-control over declared HTTP port 8086" >&2
+  exit 1
+fi
+kubectl --kubeconfig "$kubeconfig" --context "$context" --namespace "$namespace" \
+  delete job/sandbox-control-connectivity --wait=true >/dev/null
+echo "tool dependency reached sandbox-control over the declared M1 HTTP port 8086"
+
 # Existing role Pods prove their declared credentials work. Compare the live
 # credential-key inventory to the reviewed manifest without reading values.
 # Then start one disposable negative Pod for every role/foreign-known-key pair.
@@ -231,6 +253,7 @@ known_credentials="$(printf '%s' "$manifests" | jq -r --argjson roles "$runtime_
    select(.valueFrom.secretKeyRef != null) | .name] | unique | .[]
 ')"
 negative_count=0
+positive_count=0
 for role in api orchestration model tool blob-role codec sandbox-control sandbox-host; do
   expected_credentials="$(printf '%s' "$manifests" | jq -c --arg role "$role" '
     .items[] | select(.kind == "Deployment" and .metadata.name == $role) |
@@ -266,6 +289,7 @@ for role in api orchestration model tool blob-role codec sandbox-control sandbox
   fi
   kubectl --kubeconfig "$kubeconfig" --context "$context" --namespace "$namespace" \
     delete "pod/$positive_pod" --wait=true >/dev/null
+  positive_count=$((positive_count + 1))
   while IFS= read -r foreign_credential; do
     [[ -n "$foreign_credential" ]] || continue
     if printf '%s' "$expected_credentials" | jq -e --arg foreign "$foreign_credential" 'index($foreign) != null' >/dev/null; then
@@ -293,6 +317,10 @@ for role in api orchestration model tool blob-role codec sandbox-control sandbox
 done
 if [[ "$negative_count" -ne 76 ]]; then
   echo "credential rejection matrix executed $negative_count Pods, want 76" >&2
+  exit 1
+fi
+if [[ "$positive_count" -ne 8 ]]; then
+  echo "credential allowed-path matrix executed $positive_count Pods, want 8" >&2
   exit 1
 fi
 echo "all live role credential inventories matched and all $negative_count foreign-credential Pods were rejected"
@@ -448,6 +476,9 @@ jq -n \
   --arg blob_bucket "$blob_bucket" \
   --arg blob_prefix "$blob_prefix" \
   --arg telemetry_ttl "$actual_telemetry_ttl" \
+  --argjson expected_rejections 76 \
+  --argjson rejected "$negative_count" \
+  --argjson allowed_paths "$positive_count" \
   --argjson kubernetes_resources "$(printf '%s' "$expected_ids" | jq 'length')" \
   --argjson provider_resources "$declared_provider_count" \
   --argjson deployments "$deployment_count" \
@@ -463,6 +494,7 @@ jq -n \
     command:{path:"deploy/production/run-kubernetes-smoke.sh",kubernetes_context:$context,result:"passed"},
     operator:{audit_sha256:$audit_digest,bootstrap:true,apply:true,reconcile_zero_kubernetes_drift:true,audited_teardown:true,declared_kubernetes_resources:$kubernetes_resources,declared_provider_resources:$provider_resources},
     runtime:{declared_deployments:$deployments,running_ready_pods:$pods,independent_roles_ready:8},
+    credential_matrix:{expected_rejections:$expected_rejections,rejected:$rejected,allowed_paths:$allowed_paths,secret_values_redacted:true},
     secrets:{local_generated_references:$secrets,exact_key_inventory:true,uid_and_containment_labels:true,bootstrap_uid_and_render_digest_binding:true,values_retained:false},
     temporal:{namespace:$temporal_namespace,retention:$temporal_retention,primary_database:"temporal",visibility_database:"temporal_visibility",both_present:true},
     blob:{bucket:$blob_bucket,prefix:$blob_prefix,write_read_delete_round_trip:true,only_provider_marker_remained_before_teardown:true,bucket_removed_by_audited_teardown:true},

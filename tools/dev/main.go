@@ -57,11 +57,11 @@ func run(ctx context.Context, arguments []string, output io.Writer) error {
 		_, err = output.Write(document)
 		return err
 	case "secrets":
-		stack, root, err := parseStackAndRoot("secrets", arguments[1:])
+		stack, profile, root, err := parseSecretsArguments(arguments[1:])
 		if err != nil {
 			return err
 		}
-		manifest, err := materializeSecrets(stack, root, rand.Reader)
+		manifest, err := materializeSecretsForProfile(stack, profile, root, rand.Reader)
 		if err != nil {
 			return err
 		}
@@ -106,6 +106,34 @@ func run(ctx context.Context, arguments []string, output io.Writer) error {
 	default:
 		return fmt.Errorf("run local development command: unknown command %q", arguments[0])
 	}
+}
+
+func parseSecretsArguments(arguments []string) (string, string, string, error) {
+	flags := flag.NewFlagSet("secrets", flag.ContinueOnError)
+	flags.SetOutput(io.Discard)
+	stackName := flags.String("stack", "", "sole validated Stack identity")
+	profile := flags.String("profile", "local", "local or ci")
+	root := flags.String("root", ".", "repository root")
+	if err := flags.Parse(arguments); err != nil || flags.NArg() != 0 {
+		return "", "", "", fmt.Errorf("parse local development secrets arguments: --stack is required")
+	}
+	absRoot, err := filepath.Abs(*root)
+	if err != nil {
+		return "", "", "", fmt.Errorf("resolve local development root: %w", err)
+	}
+	if *stackName == "" {
+		*stackName, err = derivedStack(absRoot)
+		if err != nil {
+			return "", "", "", err
+		}
+	}
+	if err := validateStack(*stackName); err != nil {
+		return "", "", "", err
+	}
+	if *profile != "local" && *profile != "ci" {
+		return "", "", "", fmt.Errorf("parse local development secrets arguments: --profile must be local or ci")
+	}
+	return *stackName, *profile, absRoot, nil
 }
 
 func parseRenderArguments(arguments []string) (string, string, string, error) {
@@ -303,21 +331,25 @@ type localState struct {
 }
 
 func materializeSecrets(stack, root string, reader io.Reader) ([]byte, error) {
-	references, err := localSecretReferences(stack)
+	return materializeSecretsForProfile(stack, "local", root, reader)
+}
+
+func materializeSecretsForProfile(stackName, profile, root string, reader io.Reader) ([]byte, error) {
+	references, err := localSecretReferences(stackName, profile)
 	if err != nil {
 		return nil, err
 	}
-	path := filepath.Join(root, ".runtime", "dev", stack+".secrets.json")
+	path := secretStatePath(root, stackName, profile)
 	state := localSecrets{}
 	if data, err := os.ReadFile(path); err == nil {
-		if err := json.Unmarshal(data, &state); err != nil || state.Stack != stack || !matchesSecretReferences(state.Values, references) {
+		if err := json.Unmarshal(data, &state); err != nil || state.Stack != stackName || !matchesSecretReferences(state.Values, references) {
 			return nil, fmt.Errorf("read local development secret state: refuse malformed or foreign Stack state")
 		}
 	} else if !os.IsNotExist(err) {
 		return nil, fmt.Errorf("read local development secret state: %w", err)
 	}
 	if state.Values == nil {
-		state = localSecrets{Stack: stack, Values: make(map[string]map[string]string, len(references))}
+		state = localSecrets{Stack: stackName, Values: make(map[string]map[string]string, len(references))}
 		for _, reference := range references {
 			values := make(map[string]string, len(reference.keys))
 			for _, key := range reference.keys {
@@ -344,7 +376,7 @@ func materializeSecrets(stack, root string, reader io.Reader) ([]byte, error) {
 	}
 	items := make([]map[string]any, 0, len(references))
 	for _, reference := range references {
-		items = append(items, map[string]any{"apiVersion": "v1", "kind": "Secret", "metadata": map[string]any{"name": reference.name, "labels": map[string]string{"app.kubernetes.io/part-of": "agent-runtime", "agent-runtime.dev/stack": stack, "agent-runtime.dev/profile": "local", "agent-runtime.dev/resource": string(reference.id)}}, "type": "Opaque", "stringData": state.Values[reference.name]})
+		items = append(items, map[string]any{"apiVersion": "v1", "kind": "Secret", "metadata": map[string]any{"name": reference.name, "labels": map[string]string{"app.kubernetes.io/part-of": "agent-runtime", "agent-runtime.dev/stack": stackName, "agent-runtime.dev/profile": profile, "agent-runtime.dev/resource": string(reference.id)}}, "type": "Opaque", "stringData": state.Values[reference.name]})
 	}
 	encoded, err := json.Marshal(map[string]any{"apiVersion": "v1", "kind": "List", "items": items})
 	if err != nil {
@@ -353,14 +385,21 @@ func materializeSecrets(stack, root string, reader io.Reader) ([]byte, error) {
 	return encoded, nil
 }
 
+func secretStatePath(root, stackName, profile string) string {
+	if profile == "local" {
+		return filepath.Join(root, ".runtime", "dev", stackName+".secrets.json")
+	}
+	return filepath.Join(root, ".runtime", "dev", stackName+"."+profile+".secrets.json")
+}
+
 type localSecretReference struct {
 	id   stack.ResourceID
 	name string
 	keys []string
 }
 
-func localSecretReferences(stackName string) ([]localSecretReference, error) {
-	document, err := renderStack(stackName, "local")
+func localSecretReferences(stackName, profile string) ([]localSecretReference, error) {
+	document, err := renderStack(stackName, profile)
 	if err != nil {
 		return nil, err
 	}
@@ -368,7 +407,7 @@ func localSecretReferences(stackName string) ([]localSecretReference, error) {
 	if err != nil {
 		return nil, fmt.Errorf("parse local Stack for Secret inventory: %w", err)
 	}
-	rendered, err := stack.Render(spec, stack.ProfileLocal)
+	rendered, err := stack.Render(spec, stack.Profile(profile))
 	if err != nil {
 		return nil, fmt.Errorf("render local Stack Secret inventory: %w", err)
 	}

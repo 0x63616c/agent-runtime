@@ -46,6 +46,11 @@ required.
 | `secret_reference` | Provider-owned reference and version only. Literal secret material is not a schema field. Local/CI generated references are ephemeral/delete; production external-provider references are retained. |
 | `telemetry` | Declared collector-service reference, port name, and finite retention. Provider verification binds collector TTL to that declaration. |
 
+Kubernetes NetworkPolicy resources may set `allow_dns` only for a selected
+workload. The renderer translates that typed exception into UDP and TCP port
+53 access solely to `kube-system` pods labelled `k8s-app=kube-dns`; other DNS
+and all undeclared egress remain denied.
+
 The renderer emits canonical ResourceID order, canonical nested lists, an
 ownership/lifecycle catalog, per-resource SHA-256 digests, Stack/profile labels,
 and one whole-render digest. `RenderKubernetes` projects typed Kubernetes

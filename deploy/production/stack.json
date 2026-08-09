@@ -832,7 +832,7 @@
             "environment": [
               {
                 "name": "RUNTIME_ROLE_CONFIG",
-                "value": "{\"version\":1,\"role\":\"tool\",\"namespace\":\"ar-agent-runtime\",\"listen_address\":\"0.0.0.0:8083\",\"dependencies\":[{\"name\":\"sandbox-control\",\"endpoint\":\"https://sandbox-control.ar-agent-runtime.svc:8443\",\"secret_environment\":\"SANDBOX_CONTROL_TOKEN\"},{\"name\":\"telemetry\",\"endpoint\":\"http://telemetry.ar-agent-runtime.svc:4318\"},{\"name\":\"tool-broker\",\"endpoint\":\"http://api.ar-agent-runtime.svc:8080\",\"secret_environment\":\"TOOL_BROKER_TOKEN\"}]}"
+                "value": "{\"version\":1,\"role\":\"tool\",\"namespace\":\"ar-agent-runtime\",\"listen_address\":\"0.0.0.0:8083\",\"dependencies\":[{\"name\":\"sandbox-control\",\"endpoint\":\"http://sandbox-control.ar-agent-runtime.svc:8086\",\"secret_environment\":\"SANDBOX_CONTROL_TOKEN\"},{\"name\":\"telemetry\",\"endpoint\":\"http://telemetry.ar-agent-runtime.svc:4318\"},{\"name\":\"tool-broker\",\"endpoint\":\"http://api.ar-agent-runtime.svc:8080\",\"secret_environment\":\"TOOL_BROKER_TOKEN\"}]}"
               }
             ],
             "secret_environment": [
@@ -1144,7 +1144,7 @@
             "environment": [
               {
                 "name": "RUNTIME_ROLE_CONFIG",
-                "value": "{\"version\":1,\"role\":\"sandbox-host\",\"namespace\":\"ar-agent-runtime\",\"listen_address\":\"0.0.0.0:8087\",\"dependencies\":[{\"name\":\"host-identity\",\"endpoint\":\"https://host-identity.example.invalid\",\"secret_environment\":\"SANDBOX_HOST_IDENTITY\"},{\"name\":\"sandbox-control\",\"endpoint\":\"https://sandbox-control.ar-agent-runtime.svc:8443\",\"secret_environment\":\"SANDBOX_CONTROL_TOKEN\"},{\"name\":\"telemetry\",\"endpoint\":\"http://telemetry.ar-agent-runtime.svc:4318\"}]}"
+                "value": "{\"version\":1,\"role\":\"sandbox-host\",\"namespace\":\"ar-agent-runtime\",\"listen_address\":\"0.0.0.0:8087\",\"dependencies\":[{\"name\":\"host-identity\",\"endpoint\":\"https://host-identity.example.invalid\",\"secret_environment\":\"SANDBOX_HOST_IDENTITY\"},{\"name\":\"sandbox-control\",\"endpoint\":\"http://sandbox-control.ar-agent-runtime.svc:8086\",\"secret_environment\":\"SANDBOX_CONTROL_TOKEN\"},{\"name\":\"telemetry\",\"endpoint\":\"http://telemetry.ar-agent-runtime.svc:4318\"}]}"
               }
             ],
             "secret_environment": [
@@ -1880,7 +1880,8 @@
               "allowed_egress": [
                 "state",
                 "telemetry"
-              ]
+              ],
+              "allow_dns": true
             },
             "environment": []
           }
@@ -1914,7 +1915,8 @@
                 "state",
                 "telemetry",
                 "temporal"
-              ]
+              ],
+              "allow_dns": true
             },
             "environment": []
           }
@@ -1948,7 +1950,8 @@
                 "api",
                 "egress-proxy",
                 "telemetry"
-              ]
+              ],
+              "allow_dns": true
             },
             "environment": []
           }
@@ -1982,7 +1985,8 @@
                 "api",
                 "sandbox-control",
                 "telemetry"
-              ]
+              ],
+              "allow_dns": true
             },
             "environment": []
           }
@@ -2014,7 +2018,8 @@
               "allowed_egress": [
                 "blob",
                 "telemetry"
-              ]
+              ],
+              "allow_dns": true
             },
             "environment": []
           }
@@ -2046,7 +2051,8 @@
               "allowed_egress": [
                 "blob",
                 "telemetry"
-              ]
+              ],
+              "allow_dns": true
             },
             "environment": []
           }
@@ -2078,7 +2084,8 @@
               "allowed_egress": [
                 "state",
                 "telemetry"
-              ]
+              ],
+              "allow_dns": true
             },
             "environment": []
           }
@@ -2110,7 +2117,8 @@
               "allowed_egress": [
                 "sandbox-control",
                 "telemetry"
-              ]
+              ],
+              "allow_dns": true
             },
             "environment": []
           }
@@ -2167,7 +2175,8 @@
               "subject": "temporal",
               "allowed_egress": [
                 "temporal-state"
-              ]
+              ],
+              "allow_dns": true
             },
             "environment": []
           }
@@ -2251,7 +2260,8 @@
               "subject": "migration-runner",
               "allowed_egress": [
                 "state"
-              ]
+              ],
+              "allow_dns": true
             },
             "environment": []
           }
@@ -2742,6 +2752,7 @@
             "network": {
               "default_deny": true,
               "subject": "blob-reconciler",
+              "allow_dns": true,
               "allowed_egress": [
                 "blob"
               ]
@@ -3630,7 +3641,7 @@
             "environment": [
               {
                 "name": "RUNTIME_ROLE_CONFIG",
-                "value": "{\"version\":1,\"role\":\"tool\",\"namespace\":\"ar-ci-agent-runtime\",\"listen_address\":\"0.0.0.0:8083\",\"dependencies\":[{\"name\":\"sandbox-control\",\"endpoint\":\"https://sandbox-control.ar-ci-agent-runtime.svc:8443\",\"secret_environment\":\"SANDBOX_CONTROL_TOKEN\"},{\"name\":\"telemetry\",\"endpoint\":\"http://telemetry.ar-ci-agent-runtime.svc:4318\"},{\"name\":\"tool-broker\",\"endpoint\":\"http://api.ar-ci-agent-runtime.svc:8080\",\"secret_environment\":\"TOOL_BROKER_TOKEN\"}]}"
+                "value": "{\"version\":1,\"role\":\"tool\",\"namespace\":\"ar-ci-agent-runtime\",\"listen_address\":\"0.0.0.0:8083\",\"dependencies\":[{\"name\":\"sandbox-control\",\"endpoint\":\"http://sandbox-control.ar-ci-agent-runtime.svc:8086\",\"secret_environment\":\"SANDBOX_CONTROL_TOKEN\"},{\"name\":\"telemetry\",\"endpoint\":\"http://telemetry.ar-ci-agent-runtime.svc:4318\"},{\"name\":\"tool-broker\",\"endpoint\":\"http://api.ar-ci-agent-runtime.svc:8080\",\"secret_environment\":\"TOOL_BROKER_TOKEN\"}]}"
               }
             ],
             "secret_environment": [
@@ -3942,7 +3953,7 @@
             "environment": [
               {
                 "name": "RUNTIME_ROLE_CONFIG",
-                "value": "{\"version\":1,\"role\":\"sandbox-host\",\"namespace\":\"ar-ci-agent-runtime\",\"listen_address\":\"0.0.0.0:8087\",\"dependencies\":[{\"name\":\"host-identity\",\"endpoint\":\"https://host-identity.example.invalid\",\"secret_environment\":\"SANDBOX_HOST_IDENTITY\"},{\"name\":\"sandbox-control\",\"endpoint\":\"https://sandbox-control.ar-ci-agent-runtime.svc:8443\",\"secret_environment\":\"SANDBOX_CONTROL_TOKEN\"},{\"name\":\"telemetry\",\"endpoint\":\"http://telemetry.ar-ci-agent-runtime.svc:4318\"}]}"
+                "value": "{\"version\":1,\"role\":\"sandbox-host\",\"namespace\":\"ar-ci-agent-runtime\",\"listen_address\":\"0.0.0.0:8087\",\"dependencies\":[{\"name\":\"host-identity\",\"endpoint\":\"https://host-identity.example.invalid\",\"secret_environment\":\"SANDBOX_HOST_IDENTITY\"},{\"name\":\"sandbox-control\",\"endpoint\":\"http://sandbox-control.ar-ci-agent-runtime.svc:8086\",\"secret_environment\":\"SANDBOX_CONTROL_TOKEN\"},{\"name\":\"telemetry\",\"endpoint\":\"http://telemetry.ar-ci-agent-runtime.svc:4318\"}]}"
               }
             ],
             "secret_environment": [
@@ -4678,7 +4689,8 @@
               "allowed_egress": [
                 "state",
                 "telemetry"
-              ]
+              ],
+              "allow_dns": true
             },
             "environment": []
           }
@@ -4712,7 +4724,8 @@
                 "state",
                 "telemetry",
                 "temporal"
-              ]
+              ],
+              "allow_dns": true
             },
             "environment": []
           }
@@ -4746,7 +4759,8 @@
                 "api",
                 "egress-proxy",
                 "telemetry"
-              ]
+              ],
+              "allow_dns": true
             },
             "environment": []
           }
@@ -4780,7 +4794,8 @@
                 "api",
                 "sandbox-control",
                 "telemetry"
-              ]
+              ],
+              "allow_dns": true
             },
             "environment": []
           }
@@ -4812,7 +4827,8 @@
               "allowed_egress": [
                 "blob",
                 "telemetry"
-              ]
+              ],
+              "allow_dns": true
             },
             "environment": []
           }
@@ -4844,7 +4860,8 @@
               "allowed_egress": [
                 "blob",
                 "telemetry"
-              ]
+              ],
+              "allow_dns": true
             },
             "environment": []
           }
@@ -4876,7 +4893,8 @@
               "allowed_egress": [
                 "state",
                 "telemetry"
-              ]
+              ],
+              "allow_dns": true
             },
             "environment": []
           }
@@ -4908,7 +4926,8 @@
               "allowed_egress": [
                 "sandbox-control",
                 "telemetry"
-              ]
+              ],
+              "allow_dns": true
             },
             "environment": []
           }
@@ -4965,7 +4984,8 @@
               "subject": "temporal",
               "allowed_egress": [
                 "temporal-state"
-              ]
+              ],
+              "allow_dns": true
             },
             "environment": []
           }
@@ -5049,7 +5069,8 @@
               "subject": "migration-runner",
               "allowed_egress": [
                 "state"
-              ]
+              ],
+              "allow_dns": true
             },
             "environment": []
           }
@@ -5540,6 +5561,7 @@
             "network": {
               "default_deny": true,
               "subject": "blob-reconciler",
+              "allow_dns": true,
               "allowed_egress": [
                 "blob"
               ]
@@ -6428,7 +6450,7 @@
             "environment": [
               {
                 "name": "RUNTIME_ROLE_CONFIG",
-                "value": "{\"version\":1,\"role\":\"tool\",\"namespace\":\"agent-runtime\",\"listen_address\":\"0.0.0.0:8083\",\"dependencies\":[{\"name\":\"sandbox-control\",\"endpoint\":\"https://sandbox-control.agent-runtime.svc:8443\",\"secret_environment\":\"SANDBOX_CONTROL_TOKEN\"},{\"name\":\"telemetry\",\"endpoint\":\"http://telemetry.agent-runtime.svc:4318\"},{\"name\":\"tool-broker\",\"endpoint\":\"http://api.agent-runtime.svc:8080\",\"secret_environment\":\"TOOL_BROKER_TOKEN\"}]}"
+                "value": "{\"version\":1,\"role\":\"tool\",\"namespace\":\"agent-runtime\",\"listen_address\":\"0.0.0.0:8083\",\"dependencies\":[{\"name\":\"sandbox-control\",\"endpoint\":\"http://sandbox-control.agent-runtime.svc:8086\",\"secret_environment\":\"SANDBOX_CONTROL_TOKEN\"},{\"name\":\"telemetry\",\"endpoint\":\"http://telemetry.agent-runtime.svc:4318\"},{\"name\":\"tool-broker\",\"endpoint\":\"http://api.agent-runtime.svc:8080\",\"secret_environment\":\"TOOL_BROKER_TOKEN\"}]}"
               }
             ],
             "secret_environment": [
@@ -6740,7 +6762,7 @@
             "environment": [
               {
                 "name": "RUNTIME_ROLE_CONFIG",
-                "value": "{\"version\":1,\"role\":\"sandbox-host\",\"namespace\":\"agent-runtime\",\"listen_address\":\"0.0.0.0:8087\",\"dependencies\":[{\"name\":\"host-identity\",\"endpoint\":\"https://host-identity.example.invalid\",\"secret_environment\":\"SANDBOX_HOST_IDENTITY\"},{\"name\":\"sandbox-control\",\"endpoint\":\"https://sandbox-control.agent-runtime.svc:8443\",\"secret_environment\":\"SANDBOX_CONTROL_TOKEN\"},{\"name\":\"telemetry\",\"endpoint\":\"http://telemetry.agent-runtime.svc:4318\"}]}"
+                "value": "{\"version\":1,\"role\":\"sandbox-host\",\"namespace\":\"agent-runtime\",\"listen_address\":\"0.0.0.0:8087\",\"dependencies\":[{\"name\":\"host-identity\",\"endpoint\":\"https://host-identity.example.invalid\",\"secret_environment\":\"SANDBOX_HOST_IDENTITY\"},{\"name\":\"sandbox-control\",\"endpoint\":\"http://sandbox-control.agent-runtime.svc:8086\",\"secret_environment\":\"SANDBOX_CONTROL_TOKEN\"},{\"name\":\"telemetry\",\"endpoint\":\"http://telemetry.agent-runtime.svc:4318\"}]}"
               }
             ],
             "secret_environment": [
@@ -7476,7 +7498,8 @@
               "allowed_egress": [
                 "state",
                 "telemetry"
-              ]
+              ],
+              "allow_dns": true
             },
             "environment": []
           }
@@ -7510,7 +7533,8 @@
                 "state",
                 "telemetry",
                 "temporal"
-              ]
+              ],
+              "allow_dns": true
             },
             "environment": []
           }
@@ -7544,7 +7568,8 @@
                 "api",
                 "egress-proxy",
                 "telemetry"
-              ]
+              ],
+              "allow_dns": true
             },
             "environment": []
           }
@@ -7578,7 +7603,8 @@
                 "api",
                 "sandbox-control",
                 "telemetry"
-              ]
+              ],
+              "allow_dns": true
             },
             "environment": []
           }
@@ -7610,7 +7636,8 @@
               "allowed_egress": [
                 "blob",
                 "telemetry"
-              ]
+              ],
+              "allow_dns": true
             },
             "environment": []
           }
@@ -7642,7 +7669,8 @@
               "allowed_egress": [
                 "blob",
                 "telemetry"
-              ]
+              ],
+              "allow_dns": true
             },
             "environment": []
           }
@@ -7674,7 +7702,8 @@
               "allowed_egress": [
                 "state",
                 "telemetry"
-              ]
+              ],
+              "allow_dns": true
             },
             "environment": []
           }
@@ -7706,7 +7735,8 @@
               "allowed_egress": [
                 "sandbox-control",
                 "telemetry"
-              ]
+              ],
+              "allow_dns": true
             },
             "environment": []
           }
@@ -7763,7 +7793,8 @@
               "subject": "temporal",
               "allowed_egress": [
                 "temporal-state"
-              ]
+              ],
+              "allow_dns": true
             },
             "environment": []
           }
@@ -7847,7 +7878,8 @@
               "subject": "migration-runner",
               "allowed_egress": [
                 "state"
-              ]
+              ],
+              "allow_dns": true
             },
             "environment": []
           }
@@ -8338,6 +8370,7 @@
             "network": {
               "default_deny": true,
               "subject": "blob-reconciler",
+              "allow_dns": true,
               "allowed_egress": [
                 "blob"
               ]

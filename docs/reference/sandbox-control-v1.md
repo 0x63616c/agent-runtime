@@ -108,10 +108,15 @@ replace ledger, grant, lifecycle, redaction, or error semantics.
 `cmd/sandbox-control` consumes one strict JSON document, mounted TLS identity,
 and three explicitly named secret environment values: PostgreSQL DSN, static
 development authorization, and a 32–128 byte hex assertion key. It serves TLS
-1.3 only, never creates or migrates infrastructure, and exposes `/healthz` and
+1.3 only on the private M3 port `9443`, never creates or migrates
+infrastructure, and exposes `/healthz` and
 `/readyz`. The declaration rejects unknown fields, relative TLS paths,
 implicit secret names, unbounded lifetimes, and invalid listen addresses. See
 [`deploy/sandboxcontrol/control.example.json`](../../deploy/sandboxcontrol/control.example.json).
+
+This M3 endpoint is intentionally distinct from the M1 health-only runtime-role
+placeholder, which is plain HTTP on port `8086`; callers must not infer TLS or
+host-protocol guarantees from the M1 placeholder.
 
 The static authenticator is for an isolated development or single-service
 identity and requires a high-entropy credential. Multi-principal issuer

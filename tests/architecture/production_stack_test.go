@@ -72,6 +72,13 @@ var _ = Describe("Self-hosted production Stack", func() {
 			Expect(resource.Kubernetes.Network).To(BeNil(), "network authority is declared by a separate NetworkPolicy resource")
 			policy := findResource(resources, stack.ResourceID(string(role)+"-egress"))
 			Expect(policy.Kubernetes.Network.DefaultDeny).To(BeTrue(), role)
+			Expect(policy.Kubernetes.Network.AllowDNS).To(BeTrue(), "%s resolves declared service dependencies", role)
+		}
+		for _, policyID := range []stack.ResourceID{"state-egress", "blob-egress", "telemetry-egress", "temporal-state-egress"} {
+			Expect(findResource(resources, policyID).Kubernetes.Network.AllowDNS).To(BeFalse(), "%s has no service-name dependency", policyID)
+		}
+		for _, policyID := range []stack.ResourceID{"temporal-egress", "migration-runner-egress", "blob-reconciler-egress"} {
+			Expect(findResource(resources, policyID).Kubernetes.Network.AllowDNS).To(BeTrue(), "%s resolves a declared service dependency", policyID)
 		}
 
 		Expect(secretEnvironmentNames(findResource(resources, "orchestration"))).To(ContainElement("TEMPORAL_AUTH_TOKEN"))
@@ -100,11 +107,11 @@ var _ = Describe("Self-hosted production Stack", func() {
 			"api":             `{"version":1,"role":"api","namespace":"agent-runtime","listen_address":"0.0.0.0:8080","dependencies":[{"name":"state","endpoint":"http://state.agent-runtime.svc:8080"},{"name":"telemetry","endpoint":"http://telemetry.agent-runtime.svc:4318"}]}`,
 			"orchestration":   `{"version":1,"role":"orchestration","namespace":"agent-runtime","listen_address":"0.0.0.0:8081","dependencies":[{"name":"state","endpoint":"postgres://state.agent-runtime.svc:5432/agent_runtime","secret_environment":"STATE_DATABASE_DSN"},{"name":"telemetry","endpoint":"http://telemetry.agent-runtime.svc:4318"},{"name":"temporal","endpoint":"temporal.agent-runtime.svc:7233","secret_environment":"TEMPORAL_AUTH_TOKEN"}]}`,
 			"model":           `{"version":1,"role":"model","namespace":"agent-runtime","listen_address":"0.0.0.0:8082","dependencies":[{"name":"conversation","endpoint":"http://api.agent-runtime.svc:8080","secret_environment":"CONVERSATION_ACCESS_TOKEN"},{"name":"egress-proxy","endpoint":"http://egress-proxy.agent-runtime.svc:8088"},{"name":"model","endpoint":"https://model-provider.example.invalid","secret_environment":"MODEL_API_KEY"},{"name":"telemetry","endpoint":"http://telemetry.agent-runtime.svc:4318"}]}`,
-			"tool":            `{"version":1,"role":"tool","namespace":"agent-runtime","listen_address":"0.0.0.0:8083","dependencies":[{"name":"sandbox-control","endpoint":"https://sandbox-control.agent-runtime.svc:8443","secret_environment":"SANDBOX_CONTROL_TOKEN"},{"name":"telemetry","endpoint":"http://telemetry.agent-runtime.svc:4318"},{"name":"tool-broker","endpoint":"http://api.agent-runtime.svc:8080","secret_environment":"TOOL_BROKER_TOKEN"}]}`,
+			"tool":            `{"version":1,"role":"tool","namespace":"agent-runtime","listen_address":"0.0.0.0:8083","dependencies":[{"name":"sandbox-control","endpoint":"http://sandbox-control.agent-runtime.svc:8086","secret_environment":"SANDBOX_CONTROL_TOKEN"},{"name":"telemetry","endpoint":"http://telemetry.agent-runtime.svc:4318"},{"name":"tool-broker","endpoint":"http://api.agent-runtime.svc:8080","secret_environment":"TOOL_BROKER_TOKEN"}]}`,
 			"blob-role":       `{"version":1,"role":"blob","namespace":"agent-runtime","listen_address":"0.0.0.0:8084","dependencies":[{"name":"storage","endpoint":"http://blob.agent-runtime.svc:9000","secret_environment":"BLOB_STORAGE_CREDENTIAL"},{"name":"telemetry","endpoint":"http://telemetry.agent-runtime.svc:4318"}]}`,
 			"codec":           `{"version":1,"role":"codec","namespace":"agent-runtime","listen_address":"0.0.0.0:8085","dependencies":[{"name":"blob","endpoint":"http://blob.agent-runtime.svc:9000","secret_environment":"CODEC_BLOB_CREDENTIAL"},{"name":"telemetry","endpoint":"http://telemetry.agent-runtime.svc:4318"}]}`,
 			"sandbox-control": `{"version":1,"role":"sandbox-control","namespace":"agent-runtime","listen_address":"0.0.0.0:8086","dependencies":[{"name":"host-ca","endpoint":"https://host-ca.example.invalid","secret_environment":"SANDBOX_HOST_CA"},{"name":"sandbox-state","endpoint":"postgres://state.agent-runtime.svc:5432/sandbox","secret_environment":"SANDBOX_STATE_DSN"},{"name":"telemetry","endpoint":"http://telemetry.agent-runtime.svc:4318"}]}`,
-			"sandbox-host":    `{"version":1,"role":"sandbox-host","namespace":"agent-runtime","listen_address":"0.0.0.0:8087","dependencies":[{"name":"host-identity","endpoint":"https://host-identity.example.invalid","secret_environment":"SANDBOX_HOST_IDENTITY"},{"name":"sandbox-control","endpoint":"https://sandbox-control.agent-runtime.svc:8443","secret_environment":"SANDBOX_CONTROL_TOKEN"},{"name":"telemetry","endpoint":"http://telemetry.agent-runtime.svc:4318"}]}`,
+			"sandbox-host":    `{"version":1,"role":"sandbox-host","namespace":"agent-runtime","listen_address":"0.0.0.0:8087","dependencies":[{"name":"host-identity","endpoint":"https://host-identity.example.invalid","secret_environment":"SANDBOX_HOST_IDENTITY"},{"name":"sandbox-control","endpoint":"http://sandbox-control.agent-runtime.svc:8086","secret_environment":"SANDBOX_CONTROL_TOKEN"},{"name":"telemetry","endpoint":"http://telemetry.agent-runtime.svc:4318"}]}`,
 		}
 		for role, expectedConfig := range expectedRoleConfigs {
 			stackConfig, found := environmentValue(findResource(resources, role), "RUNTIME_ROLE_CONFIG")
@@ -117,6 +124,22 @@ var _ = Describe("Self-hosted production Stack", func() {
 			Expect(secretEnvironmentNames(findResource(resources, role))).To(ConsistOf(plan.SecretEnvironmentNames()), "resource %s", role)
 		}
 		Expect(expectedRoleConfigs).To(HaveLen(8))
+
+		controlService := findResource(resources, "sandbox-control-service")
+		Expect(controlService.Kubernetes.Ports).To(ConsistOf(stack.Port{Name: "http", Number: 8086, Protocol: "TCP"}))
+		for _, role := range []stack.ResourceID{"tool", "sandbox-host"} {
+			configuration, found := environmentValue(findResource(resources, role), "RUNTIME_ROLE_CONFIG")
+			Expect(found).To(BeTrue())
+			var document struct {
+				Dependencies []roles.Dependency `json:"dependencies"`
+			}
+			Expect(json.Unmarshal([]byte(configuration), &document)).To(Succeed())
+			Expect(document.Dependencies).To(ContainElement(roles.Dependency{
+				Name:              "sandbox-control",
+				Endpoint:          "http://sandbox-control.agent-runtime.svc:8086",
+				SecretEnvironment: "SANDBOX_CONTROL_TOKEN",
+			}), role)
+		}
 	})
 })
 

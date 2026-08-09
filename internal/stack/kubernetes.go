@@ -425,11 +425,18 @@ type kubernetesNetworkPolicySpec struct {
 }
 
 type kubernetesNetworkPolicyEgress struct {
-	To []kubernetesNetworkPolicyPeer `json:"to"`
+	To    []kubernetesNetworkPolicyPeer `json:"to"`
+	Ports []kubernetesNetworkPolicyPort `json:"ports,omitempty"`
 }
 
 type kubernetesNetworkPolicyPeer struct {
-	PodSelector kubernetesSelector `json:"podSelector"`
+	PodSelector       kubernetesSelector  `json:"podSelector"`
+	NamespaceSelector *kubernetesSelector `json:"namespaceSelector,omitempty"`
+}
+
+type kubernetesNetworkPolicyPort struct {
+	Protocol string `json:"protocol"`
+	Port     int    `json:"port"`
 }
 
 func networkPolicySpec(rules *NetworkRules) kubernetesNetworkPolicySpec {
@@ -438,6 +445,16 @@ func networkPolicySpec(rules *NetworkRules) kubernetesNetworkPolicySpec {
 		selector.MatchLabels[resourceLabel] = string(rules.Subject)
 	}
 	spec := kubernetesNetworkPolicySpec{PodSelector: selector, PolicyTypes: []string{"Egress"}}
+	if rules.AllowDNS {
+		namespaceSelector := kubernetesSelector{MatchLabels: map[string]string{"kubernetes.io/metadata.name": "kube-system"}}
+		spec.Egress = append(spec.Egress, kubernetesNetworkPolicyEgress{
+			To: []kubernetesNetworkPolicyPeer{{
+				PodSelector:       kubernetesSelector{MatchLabels: map[string]string{"k8s-app": "kube-dns"}},
+				NamespaceSelector: &namespaceSelector,
+			}},
+			Ports: []kubernetesNetworkPolicyPort{{Protocol: "UDP", Port: 53}, {Protocol: "TCP", Port: 53}},
+		})
+	}
 	for _, target := range rules.AllowedEgress {
 		spec.Egress = append(spec.Egress, kubernetesNetworkPolicyEgress{To: []kubernetesNetworkPolicyPeer{{PodSelector: kubernetesSelector{MatchLabels: map[string]string{resourceLabel: string(target)}}}}})
 	}

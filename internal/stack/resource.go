@@ -255,6 +255,8 @@ type NetworkRules struct {
 	DefaultDeny bool `json:"default_deny"`
 	// Subject selects the declared workload restricted by this policy; empty selects the namespace.
 	Subject ResourceID `json:"subject,omitempty"`
+	// AllowDNS permits only UDP and TCP port 53 to kube-system CoreDNS pods.
+	AllowDNS bool `json:"allow_dns,omitempty"`
 	// AllowedEgress names explicit service resource dependencies.
 	AllowedEgress []ResourceID `json:"allowed_egress"`
 }
@@ -534,7 +536,7 @@ func validateKubernetes(resource Resource, namespace string, profile Profile) er
 		if object.Network == nil || !object.Network.DefaultDeny || object.Network.AllowedEgress == nil {
 			return errors.Newf("resource %s NetworkPolicy must explicitly default deny", resource.ID)
 		}
-		if len(object.Network.AllowedEgress) > 0 && object.Network.Subject == "" {
+		if (len(object.Network.AllowedEgress) > 0 || object.Network.AllowDNS) && object.Network.Subject == "" {
 			return errors.Newf("resource %s NetworkPolicy egress exceptions must select one declared workload", resource.ID)
 		}
 	case "Role":

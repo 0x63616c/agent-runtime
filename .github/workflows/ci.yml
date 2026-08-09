@@ -94,3 +94,233 @@ jobs:
           just-version: 1.58.0
       - name: Validate public documentation
         run: just docs-check
+
+  two-stack-isolation:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Check out immutable revision
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install pinned Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Install pinned just
+        uses: extractions/setup-just@53165ef7e734c5c07cb06b3c8e7b647c5aa16db3 # v4
+        with:
+          just-version: 1.58.0
+      - name: Install checksum-verified cluster tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/bin"
+          curl -fsSLo "$RUNNER_TEMP/bin/k3d" https://github.com/k3d-io/k3d/releases/download/v5.9.0/k3d-linux-amd64
+          echo "06d8f25bc3a971c4eb29e0ff08429b180402db0f4dec838c9eac427e296800a0  $RUNNER_TEMP/bin/k3d" | sha256sum -c -
+          curl -fsSLo "$RUNNER_TEMP/bin/kubectl" https://dl.k8s.io/release/v1.33.9/bin/linux/amd64/kubectl
+          echo "9e33e3234c0842cd44a12c13e334b4ce930145ea84b855ce7cc0a7b6bc670c22  $RUNNER_TEMP/bin/kubectl" | sha256sum -c -
+          curl -fsSLo "$RUNNER_TEMP/tilt.tar.gz" https://github.com/tilt-dev/tilt/releases/download/v0.37.6/tilt.0.37.6.linux.x86_64.tar.gz
+          echo "e9672b8a18d43501f35dcfe98465969a7db0e436b36cf0c50c7e6f8d40de5fe6  $RUNNER_TEMP/tilt.tar.gz" | sha256sum -c -
+          tar -xzf "$RUNNER_TEMP/tilt.tar.gz" -C "$RUNNER_TEMP/bin" tilt
+          chmod 0755 "$RUNNER_TEMP/bin/k3d" "$RUNNER_TEMP/bin/kubectl" "$RUNNER_TEMP/bin/tilt"
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+      - name: Create pinned disposable cluster
+        shell: bash
+        run: |
+          set -euo pipefail
+          test ! -e "$RUNNER_TEMP/agent-runtime-isolated.kubeconfig"
+          if (exec 3<>/dev/tcp/127.0.0.1/6447) 2>/dev/null; then
+            echo "refusing to reuse occupied loopback API port 6447" >&2
+            exit 1
+          fi
+          if (exec 3<>/dev/tcp/127.0.0.1/5111) 2>/dev/null; then
+            echo "refusing to reuse occupied loopback registry port 5111" >&2
+            exit 1
+          fi
+          export KUBECONFIG="$RUNNER_TEMP/agent-runtime-isolated.kubeconfig"
+          k3d registry create agent-runtime-registry.localhost \
+            --image registry:2.8.3@sha256:a3d8aaa63ed8681a604f1dea0aa03f100d5895b6a58ace528858a7b332415373 \
+            --port 127.0.0.1:5111 --enforce-port-match
+          k3d cluster create agent-runtime-isolated \
+            --image rancher/k3s:v1.33.9-k3s1@sha256:f17e43023cce2b9c613e198f26e73637bf734b5156d37c9f44819d97bac4d655 \
+            --api-port 127.0.0.1:6447 \
+            --registry-use k3d-agent-runtime-registry.localhost:5111 \
+            --kubeconfig-update-default=false \
+            --kubeconfig-switch-context=false \
+            --k3s-arg '--disable=traefik@server:0' \
+            --k3s-arg '--disable=servicelb@server:0' \
+            --wait --timeout 5m
+          k3d kubeconfig get agent-runtime-isolated > "$KUBECONFIG"
+          api_endpoint="$(kubectl config view --raw --minify -o jsonpath='{.clusters[0].cluster.server}')"
+          api_port="${api_endpoint##*:}"
+          [[ "$api_endpoint" == https://127.0.0.1:6447 ]]
+          [[ "$api_port" =~ ^[1-9][0-9]{0,4}$ ]]
+          (( api_port <= 65535 ))
+          kubectl --context k3d-agent-runtime-isolated wait --for=condition=Ready node --all --timeout=5m
+          echo "KUBECONFIG=$KUBECONFIG" >> "$GITHUB_ENV"
+      - name: Preload and prove the local-path helper image
+        shell: bash
+        run: |
+          set -euo pipefail
+          cluster=agent-runtime-isolated
+          context=k3d-agent-runtime-isolated
+          provisioner_namespace=kube-system
+          preflight_namespace=agent-runtime-local-path-preflight
+          helper_image=rancher/mirrored-library-busybox:1.37.0
+          helper_digest_ref=rancher/mirrored-library-busybox@sha256:101b4afd76732482eff9b95cae5f94bcf295e521fbec4e01b69c5421f3f3f3e5
+          helper_record="$RUNNER_TEMP/local-path-helper-evidence.json"
+          test ! -e "$helper_record"
+          if kubectl --context "$context" get "namespace/$preflight_namespace" >/dev/null 2>&1; then
+            echo "refusing to adopt pre-existing helper preflight namespace $preflight_namespace" >&2
+            exit 1
+          fi
+          cleanup() {
+            local status=$?
+            set +e
+            kubectl --context "$context" delete "namespace/$preflight_namespace" --wait=true --timeout=120s >/dev/null 2>&1 || true
+            trap - EXIT
+            exit "$status"
+          }
+          trap cleanup EXIT
+
+          helper_pod_yaml="$(kubectl --context "$context" --namespace "$provisioner_namespace" get configmap local-path-config -o json | jq -er '.data["helperPod.yaml"]')"
+          configured_helper_image="$(printf '%s\n' "$helper_pod_yaml" | sed -nE 's/^[[:space:]]*image:[[:space:]]*([^[:space:]#]+).*$/\1/p' | head -n 1)"
+          configured_pull_policy="$(printf '%s\n' "$helper_pod_yaml" | sed -nE 's/^[[:space:]]*imagePullPolicy:[[:space:]]*([^[:space:]#]+).*$/\1/p' | head -n 1)"
+          [[ "$configured_helper_image" == "$helper_image" ]]
+          [[ "$configured_pull_policy" == IfNotPresent ]]
+
+          timeout 60s docker buildx imagetools inspect --raw "$helper_digest_ref" > "$RUNNER_TEMP/local-path-helper-index.json"
+          jq -e '
+            .manifests != null and
+            ([.manifests[] | select(.platform.os == "linux") | .platform.architecture] | contains(["amd64", "arm64"]))
+          ' "$RUNNER_TEMP/local-path-helper-index.json" >/dev/null
+          timeout 120s docker pull "$helper_digest_ref"
+          helper_repo_digests="$(docker image inspect "$helper_digest_ref" --format '{{range .RepoDigests}}{{println .}}{{end}}')"
+          if [[ "$helper_repo_digests" != *"$helper_digest_ref"* && "$helper_repo_digests" != *"docker.io/$helper_digest_ref"* ]]; then
+            echo "host helper image did not retain the reviewed immutable digest" >&2
+            exit 1
+          fi
+          node_arch="$(kubectl --context "$context" get node --no-headers -o json | jq -er '.items | if length == 1 then .[0].status.nodeInfo.architecture else error("expected exactly one isolated K3s node") end')"
+          helper_platform_digest="$(jq -er --arg architecture "$node_arch" '
+            [.manifests[] | select(.platform.os == "linux" and .platform.architecture == $architecture) | .digest] |
+            if length == 1 then .[0] else error("reviewed helper index does not contain exactly one node platform manifest") end
+          ' "$RUNNER_TEMP/local-path-helper-index.json")"
+          helper_platform_ref="rancher/mirrored-library-busybox@$helper_platform_digest"
+          timeout 120s docker pull --platform "linux/$node_arch" "$helper_platform_ref"
+          helper_platform_repo_digests="$(docker image inspect "$helper_platform_ref" --format '{{range .RepoDigests}}{{println .}}{{end}}')"
+          if [[ "$helper_platform_repo_digests" != *"$helper_platform_ref"* && "$helper_platform_repo_digests" != *"docker.io/$helper_platform_ref"* ]]; then
+            echo "host helper image did not retain the reviewed node-platform manifest digest" >&2
+            exit 1
+          fi
+          docker tag "$helper_platform_ref" "$helper_image"
+          k3d image import "$helper_image" --cluster "$cluster" --mode direct
+          timeout 120s docker exec "k3d-${cluster}-server-0" crictl pull "$helper_digest_ref"
+
+          for attempt in $(seq 1 30); do
+            if docker exec "k3d-${cluster}-server-0" crictl images -o json | jq -e --arg tag "$helper_image" --arg digest "$helper_digest_ref" '
+              any(.images[];
+                (.repoTags // [] | any(. == $tag or . == ("docker.io/" + $tag))) and
+                (.repoDigests // [] | any(. == $digest or . == ("docker.io/" + $digest)))
+              )
+            ' >/dev/null; then
+              break
+            fi
+            if [[ "$attempt" == 30 ]]; then
+              echo "imported local-path helper image was not present in the K3s container runtime" >&2
+              exit 1
+            fi
+            sleep 2
+          done
+          kubectl --context "$context" --namespace "$provisioner_namespace" rollout status deployment/local-path-provisioner --timeout=60s
+          kubectl --context "$context" create namespace "$preflight_namespace"
+          kubectl --context "$context" --namespace "$preflight_namespace" create -f - <<'EOF'
+          apiVersion: v1
+          kind: PersistentVolumeClaim
+          metadata:
+            name: local-path-helper-readiness
+          spec:
+            accessModes:
+              - ReadWriteOnce
+            storageClassName: local-path
+            resources:
+              requests:
+                storage: 1Mi
+          EOF
+          kubectl --context "$context" --namespace "$preflight_namespace" create -f - <<EOF
+          apiVersion: v1
+          kind: Pod
+          metadata:
+            name: local-path-helper-consumer
+          spec:
+            restartPolicy: Never
+            automountServiceAccountToken: false
+            containers:
+              - name: consumer
+                image: $helper_image
+                imagePullPolicy: IfNotPresent
+                command: ["/bin/sh", "-c", "sleep 90"]
+                volumeMounts:
+                  - name: local-path
+                    mountPath: /mnt/local-path
+                resources:
+                  requests:
+                    cpu: 10m
+                    memory: 16Mi
+                  limits:
+                    cpu: 100m
+                    memory: 64Mi
+            volumes:
+              - name: local-path
+                persistentVolumeClaim:
+                  claimName: local-path-helper-readiness
+          EOF
+          kubectl --context "$context" --namespace "$preflight_namespace" wait --for=jsonpath='{.status.phase}'=Running pod/local-path-helper-consumer --timeout=120s
+          kubectl --context "$context" --namespace "$preflight_namespace" wait --for=jsonpath='{.status.phase}'=Bound persistentvolumeclaim/local-path-helper-readiness --timeout=120s
+          kubectl --context "$context" delete "namespace/$preflight_namespace" --wait=true --timeout=120s
+          trap - EXIT
+          jq -n \
+            --arg configured_image "$configured_helper_image" \
+            --arg immutable_digest_ref "$helper_digest_ref" \
+            --arg node_architecture "$node_arch" \
+            --arg platform_manifest_digest "$helper_platform_digest" \
+            --arg pull_policy "$configured_pull_policy" \
+            '{version:1,configured_image:$configured_image,immutable_digest_ref:$immutable_digest_ref,node_architecture:$node_architecture,platform_manifest_digest:$platform_manifest_digest,pull_policy:$pull_policy,multi_architecture_index:true,host_pull:{count:2,bound_seconds:120},k3d_platform_import:true,k3s_runtime_digest_pull:true,k3s_runtime_image_present:true,provisioner_ready:true,helper_pvc_bound:true,cleanup:{preflight_namespace_absent:true}}' > "$helper_record"
+      - name: Prove two isolated full Stack instances
+        env:
+          AGENT_RUNTIME_DEV_CONTEXT: k3d-agent-runtime-isolated
+          AGENT_RUNTIME_DEV_PROFILE: ci
+          AGENT_RUNTIME_DEV_STACK_A: ci-isolation-a
+          AGENT_RUNTIME_DEV_STACK_B: ci-isolation-b
+          AGENT_RUNTIME_TWO_STACK_EVIDENCE: ${{ runner.temp }}/two-stack-evidence.json
+          AGENT_RUNTIME_CLUSTER_RUNTIME: k3d-v5.9.0
+          AGENT_RUNTIME_CLUSTER_IMAGE: rancher/k3s:v1.33.9-k3s1@sha256:f17e43023cce2b9c613e198f26e73637bf734b5156d37c9f44819d97bac4d655
+          AGENT_RUNTIME_REGISTRY_IMAGE: registry:2.8.3@sha256:a3d8aaa63ed8681a604f1dea0aa03f100d5895b6a58ace528858a7b332415373
+          AGENT_RUNTIME_KUBECTL_VERSION: v1.33.9
+          AGENT_RUNTIME_TILT_VERSION: v0.37.6
+        run: just two-stack-smoke ci k3d-agent-runtime-isolated "$RUNNER_TEMP/two-stack-evidence.json"
+      - name: Export bounded cluster diagnostics
+        if: always()
+        shell: bash
+        run: |
+          set +e
+          kubectl get nodes,namespaces,pods,persistentvolumeclaims --all-namespaces -o wide > "$RUNNER_TEMP/kubernetes-diagnostics.txt" 2>&1
+          docker logs k3d-agent-runtime-isolated-server-0 > "$RUNNER_TEMP/k3s-server.log" 2>&1
+      - name: Upload two-Stack evidence and diagnostics
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: two-stack-isolation-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/two-stack-evidence.json
+            ${{ runner.temp }}/local-path-helper-evidence.json
+            ${{ runner.temp }}/kubernetes-diagnostics.txt
+            ${{ runner.temp }}/k3s-server.log
+          if-no-files-found: error
+          retention-days: 30
+      - name: Delete disposable cluster
+        if: always()
+        run: |
+          k3d cluster delete agent-runtime-isolated
+          k3d registry delete agent-runtime-registry.localhost

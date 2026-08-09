@@ -40,11 +40,22 @@ credentials would destroy the trust boundary.
 | `sandbox-control` | host CA, sandbox state, telemetry | `SANDBOX_HOST_CA`, `SANDBOX_STATE_DSN` | Model, tool, Temporal and storage credentials |
 | `sandbox-host` | host identity, sandbox control, telemetry | `SANDBOX_HOST_IDENTITY`, `SANDBOX_CONTROL_TOKEN` | Model, tool, Temporal, DB and blob credentials |
 
+The M1 health-only `sandbox-control` role is explicitly plain HTTP on Service
+port `8086`; the tool and sandbox-host placeholders use that exact address, and
+the Kubernetes smoke proves the tool egress identity can reach `/readyz` there.
+It is not the M3 private control protocol. M3 owns a separate TLS 1.3 endpoint
+on port `9443`, with its own trust, enrollment, and Linux/KVM evidence.
+
 The production Stack fixture is required to give each role its own Kubernetes
 ServiceAccount, only the narrowly declared RBAC binding (or no Kubernetes API
 permission), a default-deny NetworkPolicy, finite resource limits, Secret
 references and Deployment. The role-composition package does not manufacture
 those resources; it refuses configurations that attempt to merge authority.
+Policies whose workload resolves a declared Service dependency opt into the
+typed `allow_dns` capability. That capability renders only UDP and TCP port 53
+to pods labelled `k8s-app=kube-dns` in the `kube-system` namespace; it does not
+grant arbitrary namespace, address, or Internet egress. Workloads with no
+declared service dependency keep DNS denied.
 Credentials are never written in a Stack, rendered manifest, role JSON,
 Temporal history, log, health response, or retained evidence. Values arrive
 only through the declared external Secret provider and runtime process
@@ -139,3 +150,30 @@ never changes the Stack, and Stack-only promotions do not rebuild an image:
 the operator verifies the source revision label and GitHub provenance for an
 immutable digest, then makes a reviewed Stack revision that pins it. Never
 hand-convert this desired state into untracked manifests.
+
+Main CI creates a disposable k3d `v5.9.0` cluster with the multi-architecture
+K3s image pinned as
+`rancher/k3s:v1.33.9-k3s1@sha256:f17e43023cce2b9c613e198f26e73637bf734b5156d37c9f44819d97bac4d655`.
+The downloaded Linux amd64 k3d binary is verified against
+`06d8f25bc3a971c4eb29e0ff08429b180402db0f4dec838c9eac427e296800a0`;
+the local Darwin arm64 proof uses
+`fe106541d5d0a3f18debcd4d432a16f8c0ce3e6ddc06f8fbb6f696a122313e00`.
+Development images pass only through a loopback k3d registry pinned as
+`registry:2.8.3@sha256:a3d8aaa63ed8681a604f1dea0aa03f100d5895b6a58ace528858a7b332415373`;
+the pre-apply Tilt plan rejects Docker Hub runtime-image references and binds
+the host and in-cluster registry names explicitly.
+The lane uses a private temporary kubeconfig, a fixed twelve-minute startup
+bound. This accommodates a clean node's bounded immutable dependency-image
+pulls without prewarming an unreviewed dependency set; both Stack starts remain
+individually bounded inside the 45-minute CI job. It then runs live
+declared-egress/default-deny connectivity probes. Before Tilt
+starts either Stack, it reads K3s's `local-path-config` helper declaration and
+requires `rancher/mirrored-library-busybox:1.37.0` with `IfNotPresent`. It
+resolves the pinned multi-architecture index
+`rancher/mirrored-library-busybox@sha256:101b4afd76732482eff9b95cae5f94bcf295e521fbec4e01b69c5421f3f3f3e5`,
+allows exactly one 120-second host-index pull and one platform-manifest pull,
+imports that exact node-platform image into the named k3d cluster, then has the
+node CRI resolve the reviewed index digest before checking its tag and digest
+reference. A mounted disposable consumer makes the `WaitForFirstConsumer`
+local-path PVC bind; the namespace and volume are then removed. Its evidence is explicitly
+K3s-in-container evidence and makes no KVM claim.

@@ -17,6 +17,16 @@ binary build, configuration validation, secret-reference injection, readiness,
 and lifecycle—not the complete public Agent Runtime API, Temporal payload codec
 behavior, or any example app.
 
+Main CI invokes the same two-Stack isolation harness against a checksum-pinned,
+disposable k3d/K3s cluster using the typed `ci` profile. Its twelve-minute
+readiness bound includes a clean node's immutable dependency-image pulls and
+Temporal startup. The lane must bring both full stacks
+Ready concurrently, observe three allowed declared-egress connections and
+three blocked default-deny connections, prove the second stack is unchanged
+after the first teardown, retain bounded evidence/diagnostics, and delete the
+cluster. It is Kubernetes-in-container lifecycle and NetworkPolicy evidence,
+not Linux/KVM or Firecracker evidence.
+
 ## Start
 
 ```text
@@ -43,6 +53,12 @@ The `just` wrapper additionally selects `orbstack`, the explicit
 `ar-<stack>` namespace, and an OS-selected dashboard port. It writes private
 per-worktree state beneath ignored `.runtime/dev/`; it never changes your
 Kubernetes current context.
+
+To rerun the containment proof locally against OrbStack and retain evidence:
+
+```text
+just two-stack-smoke local orbstack /absolute/path/to/two-stack-evidence.json
+```
 
 ## Inspect and connect
 
@@ -71,7 +87,10 @@ time.
 
 Every runtime role has its own explicit ServiceAccount with token automounting
 disabled and a default-deny, role-scoped egress NetworkPolicy. The local role
-images do not call the Kubernetes API.
+images do not call the Kubernetes API. Policies for workloads that resolve a
+declared Service opt into a narrow DNS rule: UDP and TCP port 53 only to
+CoreDNS pods in `kube-system`. It grants no general namespace or Internet
+egress.
 
 Runtime PostgreSQL, Temporal PostgreSQL, and blob storage each use finite
 per-Stack persistent claims. Temporal task-queue routing, the Temporal

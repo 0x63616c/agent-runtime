@@ -21,9 +21,17 @@ def role_config_namespace($namespace):
       else . end))
   else . end;
 
+def dns_capability:
+  if .kind == "kubernetes" and .kubernetes.kind == "NetworkPolicy" and ((.kubernetes.network.allowed_egress | length) > 0) then
+    .kubernetes.network.allow_dns = true
+  else
+    del(.kubernetes.network.allow_dns)
+  end;
+
 def profile_resource($namespace; $profile):
   lifecycle($profile) |
   role_config_namespace($namespace) |
+  dns_capability |
   if .kind == "secret_reference" then
     .secret_reference.provider = (if $profile == "production" then "external-secrets" else "local-generated" end) |
     .secret_reference.reference |= sub("^agent-runtime-"; $namespace + "-")
@@ -109,7 +117,7 @@ def extras($namespace; $profile):
       secret_environment:[{name:"MINIO_ROOT_USER",secret:"blob-storage-secret",key:"MINIO_ROOT_USER"},{name:"MINIO_ROOT_PASSWORD",secret:"blob-storage-secret",key:"MINIO_ROOT_PASSWORD"}],
       ports:[],compute:{request_milli_cpu:25,limit_milli_cpu:100,request_memory_bytes:67108864,limit_memory_bytes:268435456},storage:[]
     }}) | .dependencies=["blob-account","blob-storage-secret","blob-service"]),
-    (common("blob-reconciler-egress";"kubernetes";"security-operator";$profile;{kubernetes:{api_version:"networking.k8s.io/v1",kind:"NetworkPolicy",name:"blob-reconciler-egress",network:{default_deny:true,subject:"blob-reconciler",allowed_egress:["blob"]}}}) | .dependencies=["blob-reconciler","blob"]),
+    (common("blob-reconciler-egress";"kubernetes";"security-operator";$profile;{kubernetes:{api_version:"networking.k8s.io/v1",kind:"NetworkPolicy",name:"blob-reconciler-egress",network:{default_deny:true,subject:"blob-reconciler",allow_dns:true,allowed_egress:["blob"]}}}) | .dependencies=["blob-reconciler","blob"]),
     ({
       id:"temporal-persistence",kind:"database",owner:"database-operator",scope:"namespace",dependencies:["temporal","temporal-db-secret","temporal-state"],
       retention:(if $profile == "production" then {policy:"persistent",days:30} else {policy:"ephemeral",days:0} end),

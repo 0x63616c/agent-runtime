@@ -334,6 +334,23 @@ func TestMaterializeSecretsKeepsValuesPrivateAndStablePerStack(t *testing.T) {
 	}
 }
 
+func TestMaterializeCISecretsUsesTheCIProfileIdentity(t *testing.T) {
+	root := t.TempDir()
+	manifest, err := materializeSecretsForProfile("ci-stack", "ci", root, strings.NewReader(strings.Repeat("c", 4096)))
+	if err != nil {
+		t.Fatalf("materialize CI secrets: %v", err)
+	}
+	if !bytes.Contains(manifest, []byte(`"agent-runtime.dev/profile":"ci"`)) {
+		t.Fatalf("CI Secret manifest does not use CI profile label: %s", manifest)
+	}
+	if !bytes.Contains(manifest, []byte(`"name":"ar-ci-ci-stack-state-db-secret"`)) {
+		t.Fatalf("CI Secret manifest does not use CI reference identity: %s", manifest)
+	}
+	if _, err := os.Stat(filepath.Join(root, ".runtime", "dev", "ci-stack.ci.secrets.json")); err != nil {
+		t.Fatalf("stat profile-scoped CI secret state: %v", err)
+	}
+}
+
 func TestRenderRejectsUnsafeStackIdentity(t *testing.T) {
 	if _, err := renderStack("production; rm", "local"); err == nil {
 		t.Fatal("expected unsafe Stack identity to be rejected")

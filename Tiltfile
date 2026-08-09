@@ -1,9 +1,11 @@
 # The only local topology starts from the typed Stack renderer. This file owns
 # no infrastructure schema and is intentionally locked to OrbStack.
-allow_k8s_contexts('orbstack')
+allow_k8s_contexts(['orbstack', 'k3d-agent-runtime-isolated'])
 config.define_string('stack', usage='sole local Stack identity')
+config.define_string('profile', usage='explicit local or CI Stack profile')
 cfg = config.parse()
 stack = cfg.get('stack', '')
+profile = cfg.get('profile', 'local')
 
 if not stack:
     fail('pass -- --stack=<lowercase-dns-label>')
@@ -14,13 +16,21 @@ for allowed in ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j', 'k', 'l', 'm',
     stack_remainder = stack_remainder.replace(allowed, '')
 if stack_remainder:
     fail('--stack must be a lowercase DNS label up to 40 characters')
-if k8s_context() != 'orbstack':
-    fail('agent-runtime local development only permits the explicit orbstack context')
+if profile not in ['local', 'ci']:
+    fail('--profile must be local or ci')
+ci_readiness_timeout = '12m' if profile == 'ci' else '10m'
+ci_settings(readiness_timeout=ci_readiness_timeout)
+if k8s_context() == 'orbstack' and profile != 'local':
+    fail('the explicit orbstack context only permits the local profile')
+if k8s_context() == 'k3d-agent-runtime-isolated' and profile != 'ci':
+    fail('the isolated CI k3d context only permits the ci profile')
+if k8s_context() == 'k3d-agent-runtime-isolated':
+    default_registry('localhost:5111', host_from_cluster='k3d-agent-runtime-registry.localhost:5111')
 
 stack_file = '.runtime/dev/' + stack + '.stack.json'
 local('go run ./tools/dev render --stack=' + stack + ' --output=' + stack_file, quiet=True)
-stack_manifests = local('go run ./cmd/stackctl manifests --stack-file ' + stack_file + ' --profile local', quiet=True)
-secret_manifests = local('go run ./tools/dev secrets --stack=' + stack + ' --root=.', quiet=True)
+stack_manifests = local('go run ./cmd/stackctl manifests --stack-file ' + stack_file + ' --profile ' + profile, quiet=True)
+secret_manifests = local('go run ./tools/dev secrets --stack=' + stack + ' --profile=' + profile + ' --root=.', quiet=True)
 k8s_yaml([stack_manifests, secret_manifests])
 
 for workload in ['api', 'orchestration', 'model', 'tool', 'blob-role', 'codec', 'sandbox-control', 'sandbox-host', 'egress-proxy']:

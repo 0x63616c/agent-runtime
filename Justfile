@@ -62,3 +62,7 @@ dev-reset stack="":
 # Deletes only a verified labelled Stack namespace and its declared local objects.
 dev-down stack="":
     go run ./tools/dev down --stack "{{stack}}" --root .
+
+# Proves two full Stack instances coexist and teardown remains contained.
+two-stack-smoke profile="local" context="orbstack" evidence="":
+    AGENT_RUNTIME_DEV_PROFILE="{{profile}}" AGENT_RUNTIME_DEV_CONTEXT="{{context}}" AGENT_RUNTIME_TWO_STACK_EVIDENCE="{{evidence}}" deploy/dev/run-two-stack-smoke.sh
