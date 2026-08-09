@@ -32,6 +32,8 @@ type Envelope struct {
 	IssuedAt               time.Time `json:"issued_at"`
 	ExpiresAt              time.Time `json:"expires_at"`
 	ControlKeyID           string    `json:"control_key_id"`
+	ControlKeyVersion      uint64    `json:"control_key_version"`
+	ControlRevocationEpoch uint64    `json:"control_revocation_epoch"`
 	HostID                 string    `json:"host_id"`
 	HostGeneration         uint64    `json:"host_generation"`
 	AssignmentID           string    `json:"assignment_id"`
@@ -265,7 +267,14 @@ func encodeSignedOutput(output Output) ([]byte, error) {
 }
 
 func validEnvelope(envelope Envelope) bool {
-	return envelope.ProtocolVersion == Version && boundedID(envelope.EnvelopeID, 128) && boundedID(envelope.DeliveryID, 128) && boundedID(envelope.Nonce, 128) && !envelope.IssuedAt.IsZero() && envelope.IssuedAt.Location() == time.UTC && envelope.ExpiresAt.Location() == time.UTC && envelope.ExpiresAt.After(envelope.IssuedAt) && envelope.ExpiresAt.Sub(envelope.IssuedAt) <= time.Hour && boundedID(envelope.HostID, 128) && envelope.HostGeneration > 0 && boundedID(envelope.AssignmentID, 128) && envelope.LeaseEpoch > 0 && envelope.FencingToken > 0 && boundedID(envelope.Tenant, 256) && boundedID(envelope.Principal, 512) && strings.HasPrefix(envelope.Principal, envelope.Tenant+":") && boundedID(envelope.OperationID, 128) && boundedID(envelope.OperationKind, 64) && validDigest(envelope.EffectiveSpecDigest) && validDigest(envelope.CapabilityDigest) && validDigest(envelope.CanonicalRequestDigest) && envelope.SequenceContract == "host-proposed/control-owned-v1" && validDigest(envelope.PayloadDigest) && len(envelope.Payload) > 0 && len(envelope.Payload) <= maxPayloadLen && Digest(envelope.Payload) == envelope.PayloadDigest && (envelope.Signature == "" || len(envelope.Signature) <= 128)
+	return envelope.ProtocolVersion == Version && boundedID(envelope.EnvelopeID, 128) && boundedID(envelope.DeliveryID, 128) && boundedID(envelope.Nonce, 128) && !envelope.IssuedAt.IsZero() && envelope.IssuedAt.Location() == time.UTC && envelope.ExpiresAt.Location() == time.UTC && envelope.ExpiresAt.After(envelope.IssuedAt) && envelope.ExpiresAt.Sub(envelope.IssuedAt) <= time.Hour && validControlKeyBinding(envelope) && boundedID(envelope.HostID, 128) && envelope.HostGeneration > 0 && boundedID(envelope.AssignmentID, 128) && envelope.LeaseEpoch > 0 && envelope.FencingToken > 0 && boundedID(envelope.Tenant, 256) && boundedID(envelope.Principal, 512) && strings.HasPrefix(envelope.Principal, envelope.Tenant+":") && boundedID(envelope.OperationID, 128) && boundedID(envelope.OperationKind, 64) && validDigest(envelope.EffectiveSpecDigest) && validDigest(envelope.CapabilityDigest) && validDigest(envelope.CanonicalRequestDigest) && envelope.SequenceContract == "host-proposed/control-owned-v1" && validDigest(envelope.PayloadDigest) && len(envelope.Payload) > 0 && len(envelope.Payload) <= maxPayloadLen && Digest(envelope.Payload) == envelope.PayloadDigest && (envelope.Signature == "" || len(envelope.Signature) <= 128)
+}
+
+func validControlKeyBinding(envelope Envelope) bool {
+	if !boundedID(envelope.ControlKeyID, 128) {
+		return false
+	}
+	return (envelope.ControlKeyVersion == 0 && envelope.ControlRevocationEpoch == 0) || (envelope.ControlKeyVersion > 0 && envelope.ControlRevocationEpoch > 0)
 }
 
 func validResult(result Result) bool {
