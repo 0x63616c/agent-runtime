@@ -293,6 +293,37 @@ func TestRuntimeV2SchemaRejectsForgedRelationshipsAndMalformedDigestReferences(t
 	assertPostgresCode(t, err, "23514")
 }
 
+func TestRuntimeV2MigrationRejectsCompetingAdvisoryLockThenReconcilesAfterRelease(t *testing.T) {
+	pool := openRuntimePool(t)
+	ctx := context.Background()
+	resetRuntimeV2(t, ctx, pool)
+	applyRuntimeMigrations(t, ctx, pool)
+
+	firstPool := openRuntimePool(t)
+	secondPool := openRuntimePool(t)
+	firstTransaction, err := firstPool.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin first migration transaction: %v", err)
+	}
+	defer func() { _ = firstTransaction.Rollback(context.Background()) }()
+	if _, err := firstTransaction.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended('agent-runtime/runtime-v2', 0))`); err != nil {
+		t.Fatalf("acquire first migration advisory lock: %v", err)
+	}
+	var acquired bool
+	if err := secondPool.QueryRow(ctx, `SELECT pg_try_advisory_xact_lock(hashtextextended('agent-runtime/runtime-v2', 0))`).Scan(&acquired); err != nil {
+		t.Fatalf("attempt competing migration advisory lock: %v", err)
+	}
+	if acquired {
+		t.Fatal("competing migration acquired the runtime v2 advisory lock")
+	}
+	if err := firstTransaction.Commit(ctx); err != nil {
+		t.Fatalf("release first migration transaction: %v", err)
+	}
+	if err := applyMigration(t, ctx, secondPool, "runtime-v2.up.sql"); err != nil {
+		t.Fatalf("reconcile runtime v2 after advisory lock release: %v", err)
+	}
+}
+
 func applyRuntimeMigrations(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
 	t.Helper()
 	for _, filename := range []string{"runtime-v1.up.sql", "runtime-v2.up.sql"} {
