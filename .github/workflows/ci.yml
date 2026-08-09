@@ -135,9 +135,13 @@ jobs:
           set -euo pipefail
           cluster=agent-runtime-isolated
           registry=agent-runtime-registry.localhost
+          registry_container="k3d-$registry"
+          cluster_server_container="k3d-${cluster}-server-0"
           ownership_record="$RUNNER_TEMP/k3d-ownership.json"
           cluster_create_succeeded=false
           registry_create_succeeded=false
+          registry_container_id=""
+          cluster_server_container_id=""
           test ! -e "$ownership_record"
           test ! -e "$RUNNER_TEMP/agent-runtime-isolated.kubeconfig"
           if k3d cluster list -o json | jq -e --arg name "$cluster" 'any(.[]; .name == $name)' >/dev/null; then
@@ -150,18 +154,34 @@ jobs:
           fi
           write_ownership_record() {
             jq -n --arg cluster "$cluster" --arg registry "$registry" \
+              --arg registry_container "$registry_container" --arg registry_container_id "$registry_container_id" \
+              --arg cluster_server_container "$cluster_server_container" --arg cluster_server_container_id "$cluster_server_container_id" \
               --argjson cluster_create_succeeded "$cluster_create_succeeded" --argjson registry_create_succeeded "$registry_create_succeeded" \
-              '{version:1,cluster:$cluster,registry:$registry,cluster_create_succeeded:$cluster_create_succeeded,registry_create_succeeded:$registry_create_succeeded}' \
+              '{version:1,cluster:$cluster,registry:$registry,registry_container:$registry_container,registry_container_id:$registry_container_id,cluster_server_container:$cluster_server_container,cluster_server_container_id:$cluster_server_container_id,cluster_create_succeeded:$cluster_create_succeeded,registry_create_succeeded:$registry_create_succeeded}' \
               > "$ownership_record"
+          }
+          container_identity_matches() {
+            container_name="$1"
+            expected_id="$2"
+            observed_id="$(docker container inspect --format '{{.Id}}' "$container_name" 2>/dev/null)" || return 1
+            [[ -n "$expected_id" && "$observed_id" == "$expected_id" ]]
           }
           cleanup_owned_resources() {
             status=$?
             set +e
             if [[ "$cluster_create_succeeded" == true ]] && k3d cluster list -o json | jq -e --arg name "$cluster" 'any(.[]; .name == $name)' >/dev/null; then
-              k3d cluster delete "$cluster"
+              if container_identity_matches "$cluster_server_container" "$cluster_server_container_id"; then
+                k3d cluster delete "$cluster"
+              else
+                echo "refusing to delete k3d cluster with mismatched server container identity; retained for diagnosis" >&2
+              fi
             fi
             if [[ "$registry_create_succeeded" == true ]] && k3d registry list -o json | jq -e --arg name "$registry" 'any(.[]; .name == $name)' >/dev/null; then
-              k3d registry delete "$registry"
+              if container_identity_matches "$registry_container" "$registry_container_id"; then
+                k3d registry delete "$registry"
+              else
+                echo "refusing to delete k3d registry with mismatched container identity; retained for diagnosis" >&2
+              fi
             fi
             trap - EXIT
             exit "$status"
@@ -181,6 +201,8 @@ jobs:
             --image registry:2.8.3@sha256:a3d8aaa63ed8681a604f1dea0aa03f100d5895b6a58ace528858a7b332415373 \
             --port 127.0.0.1:5111 --enforce-port-match; then
             registry_create_succeeded=true
+            registry_container_id="$(docker container inspect --format '{{.Id}}' "$registry_container")"
+            [[ "$registry_container_id" =~ ^[a-f0-9]{64}$ ]]
             write_ownership_record
           else
             write_ownership_record
@@ -198,6 +220,8 @@ jobs:
             --k3s-arg '--disable=servicelb@server:0' \
             --wait --timeout 5m; then
             cluster_create_succeeded=true
+            cluster_server_container_id="$(docker container inspect --format '{{.Id}}' "$cluster_server_container")"
+            [[ "$cluster_server_container_id" =~ ^[a-f0-9]{64}$ ]]
             write_ownership_record
           else
             write_ownership_record
@@ -375,11 +399,31 @@ jobs:
           [[ -f "$ownership_record" ]] || exit 0
           cluster="$(jq -er '.cluster | select(. == "agent-runtime-isolated")' "$ownership_record")"
           registry="$(jq -er '.registry | select(. == "agent-runtime-registry.localhost")' "$ownership_record")"
+          registry_container="$(jq -er '.registry_container' "$ownership_record")"
+          registry_container_id="$(jq -er '.registry_container_id' "$ownership_record")"
+          cluster_server_container="$(jq -er '.cluster_server_container' "$ownership_record")"
+          cluster_server_container_id="$(jq -er '.cluster_server_container_id' "$ownership_record")"
           cluster_create_succeeded="$(jq -er '.cluster_create_succeeded | if type == "boolean" then . else error("cluster_create_succeeded must be boolean") end' "$ownership_record")"
           registry_create_succeeded="$(jq -er '.registry_create_succeeded | if type == "boolean" then . else error("registry_create_succeeded must be boolean") end' "$ownership_record")"
+          [[ "$registry_container" == "k3d-$registry" ]]
+          [[ "$cluster_server_container" == "k3d-${cluster}-server-0" ]]
+          container_identity_matches() {
+            container_name="$1"
+            expected_id="$2"
+            observed_id="$(docker container inspect --format '{{.Id}}' "$container_name" 2>/dev/null)" || return 1
+            [[ -n "$expected_id" && "$observed_id" == "$expected_id" ]]
+          }
           if [[ "$cluster_create_succeeded" == true ]] && k3d cluster list -o json | jq -e --arg name "$cluster" 'any(.[]; .name == $name)' >/dev/null; then
-            k3d cluster delete "$cluster"
+            if container_identity_matches "$cluster_server_container" "$cluster_server_container_id"; then
+              k3d cluster delete "$cluster"
+            else
+              echo "refusing to delete k3d cluster with mismatched server container identity; retained for diagnosis" >&2
+            fi
           fi
           if [[ "$registry_create_succeeded" == true ]] && k3d registry list -o json | jq -e --arg name "$registry" 'any(.[]; .name == $name)' >/dev/null; then
-            k3d registry delete "$registry"
+            if container_identity_matches "$registry_container" "$registry_container_id"; then
+              k3d registry delete "$registry"
+            else
+              echo "refusing to delete k3d registry with mismatched container identity; retained for diagnosis" >&2
+            fi
           fi

@@ -274,6 +274,32 @@ var _ = Describe("M1 deployment safety boundaries", func() {
 		Expect(clusterSuccess).To(BeNumerically(">", clusterCreate))
 	})
 
+	It("refuses cleanup when a same-named k3d resource was replaced", func() {
+		workflow := read(".github/workflows/ci.yml")
+		for _, required := range []string{
+			`registry_container="k3d-$registry"`,
+			`cluster_server_container="k3d-${cluster}-server-0"`,
+			`registry_container_id="$(docker container inspect --format '{{.Id}}' "$registry_container")"`,
+			`cluster_server_container_id="$(docker container inspect --format '{{.Id}}' "$cluster_server_container")"`,
+			"registry_container_id:$registry_container_id",
+			"cluster_server_container_id:$cluster_server_container_id",
+			"container_identity_matches",
+			`if container_identity_matches "$cluster_server_container" "$cluster_server_container_id"; then`,
+			`if container_identity_matches "$registry_container" "$registry_container_id"; then`,
+			"refusing to delete k3d cluster with mismatched server container identity",
+			"refusing to delete k3d registry with mismatched container identity",
+		} {
+			Expect(workflow).To(ContainSubstring(required))
+		}
+
+		registrySuccess := strings.Index(workflow, "registry_create_succeeded=true")
+		registryIdentity := strings.Index(workflow, `registry_container_id="$(docker container inspect`)
+		clusterSuccess := strings.Index(workflow, "cluster_create_succeeded=true")
+		clusterIdentity := strings.Index(workflow, `cluster_server_container_id="$(docker container inspect`)
+		Expect(registryIdentity).To(BeNumerically(">", registrySuccess))
+		Expect(clusterIdentity).To(BeNumerically(">", clusterSuccess))
+	})
+
 	It("keeps repository-reading deployment assertions out of product package tests", func() {
 		_, err := os.Stat(filepath.Join("..", "..", "internal", "roles", "production_stack_test.go"))
 		Expect(os.IsNotExist(err)).To(BeTrue())
