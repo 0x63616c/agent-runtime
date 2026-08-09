@@ -16,14 +16,14 @@ func TestRuntimeV2MigrationDeclaresBoundedMetadataAuthorityWithoutRawContentColu
 	}
 	statement := string(contents)
 	for _, required := range []string{
-		"CREATE TABLE runtime.tenants",
-		"CREATE TABLE runtime.agent_revisions",
-		"CREATE TABLE runtime.sessions",
-		"CREATE TABLE runtime.inputs",
-		"CREATE TABLE runtime.turns",
-		"CREATE TABLE runtime.session_events",
-		"CREATE TABLE runtime.audit_records",
-		"CREATE TABLE runtime.runtime_outbox",
+		"CREATE TABLE IF NOT EXISTS runtime.tenants",
+		"CREATE TABLE IF NOT EXISTS runtime.agent_revisions",
+		"CREATE TABLE IF NOT EXISTS runtime.sessions",
+		"CREATE TABLE IF NOT EXISTS runtime.inputs",
+		"CREATE TABLE IF NOT EXISTS runtime.turns",
+		"CREATE TABLE IF NOT EXISTS runtime.session_events",
+		"CREATE TABLE IF NOT EXISTS runtime.audit_records",
+		"CREATE TABLE IF NOT EXISTS runtime.runtime_outbox",
 		"content_digest",
 		"content_size_bytes",
 		"expected_version",

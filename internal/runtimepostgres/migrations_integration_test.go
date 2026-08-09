@@ -30,6 +30,7 @@ func TestRuntimeMigrationsEnforceBoundedTenantScopedMetadataAndOutboxFacts(t *te
 		t.Fatalf("ping PostgreSQL: %v", err)
 	}
 	applyRuntimeMigrations(t, ctx, pool)
+	applyRuntimeMigrations(t, ctx, pool)
 	if _, err := pool.Exec(ctx, `
 		TRUNCATE runtime.runtime_outbox, runtime.audit_records, runtime.session_events,
 			runtime.turns, runtime.inputs, runtime.sessions, runtime.agent_revisions,

@@ -3,14 +3,14 @@
 -- digest, media type, and bounded byte count.
 BEGIN;
 
-CREATE TABLE runtime.tenants (
+CREATE TABLE IF NOT EXISTS runtime.tenants (
     tenant_id TEXT PRIMARY KEY,
     created_at TIMESTAMPTZ NOT NULL,
     retention_expires_at TIMESTAMPTZ,
     CHECK (octet_length(tenant_id) BETWEEN 1 AND 128)
 );
 
-CREATE TABLE runtime.agent_revisions (
+CREATE TABLE IF NOT EXISTS runtime.agent_revisions (
     tenant_id TEXT NOT NULL REFERENCES runtime.tenants (tenant_id),
     agent_id TEXT NOT NULL,
     revision_id TEXT NOT NULL,
@@ -32,7 +32,7 @@ CREATE TABLE runtime.agent_revisions (
     CHECK (specification_size_bytes BETWEEN 0 AND 262144)
 );
 
-CREATE TABLE runtime.sessions (
+CREATE TABLE IF NOT EXISTS runtime.sessions (
     tenant_id TEXT NOT NULL REFERENCES runtime.tenants (tenant_id),
     principal_id TEXT NOT NULL,
     session_id TEXT NOT NULL,
@@ -52,7 +52,7 @@ CREATE TABLE runtime.sessions (
     CHECK (version > 0)
 );
 
-CREATE TABLE runtime.inputs (
+CREATE TABLE IF NOT EXISTS runtime.inputs (
     tenant_id TEXT NOT NULL,
     principal_id TEXT NOT NULL,
     session_id TEXT NOT NULL,
@@ -77,7 +77,7 @@ CREATE TABLE runtime.inputs (
     CHECK (content_size_bytes BETWEEN 0 AND 262144)
 );
 
-CREATE TABLE runtime.turns (
+CREATE TABLE IF NOT EXISTS runtime.turns (
     tenant_id TEXT NOT NULL,
     principal_id TEXT NOT NULL,
     session_id TEXT NOT NULL,
@@ -98,7 +98,7 @@ CREATE TABLE runtime.turns (
     CHECK (failure_code IS NULL OR octet_length(failure_code) BETWEEN 1 AND 64)
 );
 
-CREATE TABLE runtime.session_events (
+CREATE TABLE IF NOT EXISTS runtime.session_events (
     tenant_id TEXT NOT NULL,
     principal_id TEXT NOT NULL,
     session_id TEXT NOT NULL,
@@ -122,7 +122,7 @@ CREATE TABLE runtime.session_events (
     CHECK (turn_id IS NULL OR octet_length(turn_id) BETWEEN 1 AND 128)
 );
 
-CREATE TABLE runtime.audit_records (
+CREATE TABLE IF NOT EXISTS runtime.audit_records (
     tenant_id TEXT NOT NULL REFERENCES runtime.tenants (tenant_id),
     audit_id TEXT NOT NULL,
     operation_id TEXT NOT NULL,
@@ -142,7 +142,7 @@ CREATE TABLE runtime.audit_records (
     CHECK (octet_length(subject_id) BETWEEN 1 AND 128)
 );
 
-CREATE TABLE runtime.runtime_outbox (
+CREATE TABLE IF NOT EXISTS runtime.runtime_outbox (
     outbox_id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     tenant_id TEXT NOT NULL REFERENCES runtime.tenants (tenant_id),
     aggregate_kind TEXT NOT NULL,
@@ -164,9 +164,9 @@ CREATE TABLE runtime.runtime_outbox (
     CHECK (payload_size_bytes BETWEEN 0 AND 65536)
 );
 
-CREATE INDEX session_events_retention_index
+CREATE INDEX IF NOT EXISTS session_events_retention_index
     ON runtime.session_events (retention_expires_at, tenant_id, principal_id, session_id, sequence);
-CREATE INDEX runtime_outbox_delivery_index
+CREATE INDEX IF NOT EXISTS runtime_outbox_delivery_index
     ON runtime.runtime_outbox (published_at, outbox_id);
 
 COMMIT;
