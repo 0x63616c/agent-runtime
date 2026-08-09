@@ -151,6 +151,30 @@ func TestHostHandlerRejectsRogueTLSAndQuarantinesBadSignature(t *testing.T) {
 	}
 }
 
+func TestHostHandlerRejectsTrailingRawCredential(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 8, 8, 12, 0, 0, 0, time.UTC)
+	fakeClock, _ := clock.NewFake(now)
+	controlPublic, controlPrivate, _ := ed25519.GenerateKey(rand.Reader)
+	certificate := testPeerCertificate(t, "host_01", 1)
+	store := sandboxcontrol.NewMemoryLedger()
+	hostPublic, _, _ := ed25519.GenerateKey(rand.Reader)
+	host := sandboxcontrol.HostEnrollment{HostID: "host_01", Tenant: "tenant_01", Pool: "pool_01", Generation: 1, ProtocolVersion: sandboxhostprotocol.Version, CertificateDigest: certificateDigest(certificate), SigningPublicKey: hostPublic, CapabilityDigest: testDigest('b'), Status: sandboxcontrol.HostActive, ExpiresAt: now.Add(time.Hour)}
+	if err := store.ProvisionHost(context.Background(), host, sandboxcontrol.AttestationInput{Profile: sandboxcontrol.AttestationProfileLocalMetadata}, nil); err != nil {
+		t.Fatal(err)
+	}
+	handler, err := NewHandler(Config{Store: store, ControlTrust: testControlTrust(now, controlPublic), ControlSigningKey: controlPrivate, Entropy: bytes.NewReader(bytes.Repeat([]byte{0x44}, 4096)), Clock: fakeClock, LeaseDuration: time.Minute})
+	if err != nil {
+		t.Fatal(err)
+	}
+	wire := []byte(`{"protocol_version":"sandbox.host-control/v1","kind":"pull","host_id":"host_01","host_generation":1}Bearer raw-credential`)
+	response := performBytes(t, handler, certificate, http.MethodPost, pullPath, wire)
+	if response.Code != http.StatusForbidden {
+		t.Fatalf("trailing credential status=%d body=%s", response.Code, response.Body.String())
+	}
+}
+
 func testControlTrust(now time.Time, publicKey ed25519.PublicKey) sandboxhostprotocol.TrustBundle {
 	return sandboxhostprotocol.TrustBundle{Version: 3, RevocationEpoch: 9, Current: sandboxhostprotocol.SigningKey{ID: "control_01", Version: 4, PublicKey: publicKey, NotBefore: now.Add(-time.Hour), NotAfter: now.Add(time.Hour)}}
 }
