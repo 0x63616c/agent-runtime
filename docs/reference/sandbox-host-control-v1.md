@@ -31,8 +31,10 @@ spiffe://agent-runtime/sandbox-host/<host-id>/generation/<positive-generation>
 The URI identity, certificate digest, generation, protocol, status, and expiry
 must all match the durable enrollment. Missing, unenrolled, expired, revoked,
 quarantined, incompatible, or wrong-generation identities receive the same
-denial. Old and next certificate generations may overlap during rotation;
-revocation targets one generation and does not reactivate or weaken another.
+denial. The operator procedure permits old and next certificate generations to
+overlap during a future rotation; revocation targets one generation and does
+not reactivate or weaken another. M3 does not yet retain a live
+certificate-rotation proof.
 
 Provisioning receives raw bounded attestation evidence, its explicit profile,
 and a verifier predicate. The durable store invokes the predicate itself and
@@ -65,7 +67,9 @@ then checks host generation and envelope time before journaling. A strictly
 newer snapshot may rotate current to next during overlap and later retire it.
 Unknown fields, trailing JSON, altered bytes, legacy zero bindings, retired or
 revoked keys, replay to another host/generation, and expired envelopes are
-refused.
+refused. The atomic snapshot primitive has unit coverage for this lifecycle;
+the reference host does not yet implement a watched configuration reload, and
+M3 has no retained live control-trust-rotation proof.
 
 TLS supplies transport confidentiality. M3 does not add application-layer
 envelope encryption beyond TLS and therefore makes no protection claim after a
