@@ -53,7 +53,7 @@
     "envelope": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["protocol_version", "envelope_id", "delivery_id", "nonce", "issued_at", "expires_at", "control_key_id", "host_id", "host_generation", "assignment_id", "lease_epoch", "fencing_token", "tenant", "principal", "sandbox_id", "process_id", "operation_id", "operation_kind", "effective_spec_digest", "capability_digest", "canonical_request_digest", "sequence_contract", "payload_digest", "payload", "signature"],
+      "required": ["protocol_version", "envelope_id", "delivery_id", "nonce", "issued_at", "expires_at", "control_key_id", "control_key_version", "control_revocation_epoch", "host_id", "host_generation", "assignment_id", "lease_epoch", "fencing_token", "tenant", "principal", "sandbox_id", "process_id", "operation_id", "operation_kind", "effective_spec_digest", "capability_digest", "canonical_request_digest", "sequence_contract", "payload_digest", "payload", "signature"],
       "properties": {
         "protocol_version": {"const": "sandbox.host-control/v1"},
         "envelope_id": {"$ref": "#/$defs/id"},
@@ -62,6 +62,8 @@
         "issued_at": {"type": "string", "format": "date-time"},
         "expires_at": {"type": "string", "format": "date-time"},
         "control_key_id": {"$ref": "#/$defs/id"},
+        "control_key_version": {"type": "integer", "minimum": 1},
+        "control_revocation_epoch": {"type": "integer", "minimum": 1},
         "host_id": {"$ref": "#/$defs/id"},
         "host_generation": {"type": "integer", "minimum": 1},
         "assignment_id": {"$ref": "#/$defs/id"},

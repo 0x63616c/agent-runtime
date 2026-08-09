@@ -65,13 +65,18 @@ func TestParseHostControlRequiresDistinctExplicitAuthority(t *testing.T) {
     "tls_certificate_file": "/run/host-control/tls.crt",
     "tls_private_key_file": "/run/host-control/tls.key",
     "client_ca_file": "/run/host-control/client-ca.crt",
+    "control_trust_version": 3,
+    "control_revocation_epoch": 9,
     "control_key_id": "control_01",
+    "control_key_version": 4,
+    "control_key_not_before": "2026-08-08T00:00:00Z",
+    "control_key_not_after": "2026-08-09T00:00:00Z",
     "control_signing_key_environment": "SANDBOX_CONTROL_SIGNING_KEY",
     "lease_seconds": 60
   }
 }`
 	config, err := Parse(strings.NewReader(withHost))
-	if err != nil || config.hostControl == nil || config.hostControl.lease != time.Minute {
+	if err != nil || config.hostControl == nil || config.hostControl.lease != time.Minute || config.hostControl.trustVersion != 3 || config.hostControl.keyVersion != 4 || config.hostControl.revocationEpoch != 9 {
 		t.Fatalf("Parse(host control) = %#v, %v", config.hostControl, err)
 	}
 	invalid := strings.Replace(withHost, `"127.0.0.1:9443"`, `"127.0.0.1:8443"`, 1)
