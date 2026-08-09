@@ -4,6 +4,7 @@ package runtimeadmission
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -116,6 +117,63 @@ func TestPostgresAdmissionStoresOnlyReferencesAndSerializesDistinctInputs(t *tes
 	_, err = orphanService.SendInput(ctx, owner, agentruntime.SendInputRequest{SessionID: "sess_0000000000000009", IdempotencyKey: "missing-session", Parts: []agentruntime.ContentPart{{Kind: agentruntime.ContentText, Text: "orphan"}}})
 	if err == nil || orphanStore.Count() != 1 {
 		t.Fatalf("missing-session result=%v staged=%d, want durable refusal and retained untracked object", err, orphanStore.Count())
+	}
+}
+
+func TestPostgresAdmissionRefusesUnauthorizedArtifactReferencesBeforeStaging(t *testing.T) {
+	pool := openAdmissionPool(t)
+	ctx := context.Background()
+	resetAdmissionSchema(t, ctx, pool)
+	applyAdmissionMigrations(t, ctx, pool)
+	now := time.Date(2026, 8, 9, 23, 30, 0, 0, time.UTC)
+	seedAdmissionSession(t, ctx, pool, "tenant_a", "alice", "sess_0000000000000001", now)
+	repository, err := NewPostgresRepository(pool)
+	if err != nil {
+		t.Fatalf("new repository: %v", err)
+	}
+	store := NewMemoryContentStore()
+	catalog := NewMemoryArtifactCatalog()
+	allowed := agentruntime.ArtifactReference{ID: "art_0000000000000001", MediaType: "text/plain", SizeBytes: 5, SHA256: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}
+	catalog.Seed(Owner{TenantID: "tenant_a", PrincipalID: "alice"}, allowed)
+	service, err := NewService(store, catalog, repository, fixedClock{now: now}, &integrationIDs{})
+	if err != nil {
+		t.Fatalf("new service: %v", err)
+	}
+	request := func(key string, reference agentruntime.ArtifactReference) agentruntime.SendInputRequest {
+		return agentruntime.SendInputRequest{SessionID: "sess_0000000000000001", IdempotencyKey: key, Parts: []agentruntime.ContentPart{{Kind: agentruntime.ContentArtifact, Artifact: &reference}}}
+	}
+	if _, err := service.SendInput(ctx, Owner{TenantID: "tenant_a", PrincipalID: "alice"}, request("allowed-artifact", allowed)); err != nil {
+		t.Fatalf("send authorized artifact: %v", err)
+	}
+	if store.Count() != 1 {
+		t.Fatalf("stored authorized artifact input count = %d, want 1", store.Count())
+	}
+	for _, test := range []struct {
+		name      string
+		owner     Owner
+		reference agentruntime.ArtifactReference
+	}{
+		{"missing", Owner{TenantID: "tenant_a", PrincipalID: "alice"}, agentruntime.ArtifactReference{ID: "art_0000000000000002", MediaType: "text/plain", SizeBytes: 5, SHA256: allowed.SHA256}},
+		{"cross-tenant", Owner{TenantID: "tenant_b", PrincipalID: "alice"}, allowed},
+		{"cross-principal", Owner{TenantID: "tenant_a", PrincipalID: "bob"}, allowed},
+		{"metadata-mismatch", Owner{TenantID: "tenant_a", PrincipalID: "alice"}, agentruntime.ArtifactReference{ID: allowed.ID, MediaType: allowed.MediaType, SizeBytes: allowed.SizeBytes, SHA256: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := service.SendInput(ctx, test.owner, request("denied-"+test.name, test.reference))
+			if !errors.Is(err, ErrNotFoundOrDenied) {
+				t.Fatalf("send denied artifact error = %v, want ErrNotFoundOrDenied", err)
+			}
+			if store.Count() != 1 {
+				t.Fatalf("staged content after denied artifact = %d, want 1", store.Count())
+			}
+		})
+	}
+	var inputs int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM runtime.inputs WHERE tenant_id='tenant_a' AND principal_id='alice'`).Scan(&inputs); err != nil {
+		t.Fatalf("count inputs: %v", err)
+	}
+	if inputs != 1 {
+		t.Fatalf("durable inputs after denied artifact references = %d, want 1", inputs)
 	}
 }
 
