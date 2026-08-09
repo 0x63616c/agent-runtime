@@ -72,13 +72,13 @@ func VerifyHostAttestation(ctx context.Context, input AttestationInput, host Hos
 		return HostAttestation{Profile: input.Profile, State: AttestationMetadataOnly}
 	}
 	raw := append([]byte(nil), input.Evidence...)
+	defer clear(raw)
 	digest := sandboxhostprotocol.Digest(raw)
 	evidence := AttestationEvidence{HostID: host.HostID, Generation: host.Generation, CertificateDigest: host.CertificateDigest, CapabilityDigest: host.CapabilityDigest, AttestationDigest: digest, Evidence: raw}
 	if input.Profile != AttestationProfileVerified || verifier == nil || ctx.Err() != nil || !validAttestationEvidence(evidence) {
 		return HostAttestation{Profile: input.Profile, State: AttestationFailed, Digest: digest}
 	}
 	verifyErr := verifier.VerifyHostAttestation(ctx, evidence)
-	clear(raw)
 	if verifyErr != nil {
 		return HostAttestation{Profile: input.Profile, State: AttestationFailed, Digest: digest}
 	}

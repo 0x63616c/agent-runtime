@@ -81,6 +81,14 @@ honestly `metadata-only`, never hardware-attested.
 
 ## Rotation and revocation
 
+The following is the required operator procedure for a future deployed
+rotation controller; it is not evidence that M3's one-poll reference host or
+the multi-process harness performs a certificate or control-trust rotation.
+M3 unit coverage exercises complete in-memory control-trust replacement and
+refusal of a retired key. It does not exercise a watched configuration reload,
+control signing-key change, overlapping host certificates, or a live
+certificate-generation rotation.
+
 1. Publish the next control verification key to hosts while current remains
    accepted; atomically reload the complete higher trust-bundle version.
 2. Move control signing to that key only after the overlap is deployed.
@@ -125,9 +133,10 @@ the integration packages sequentially against the real database. Its
 multi-process test proves public Submit, durable body/routing, mTLS host pull,
 host restart after journal commit, stable single-execution receipt recovery,
 restart after receipt with result recovery, signed completion, rogue signing
-key quarantine, explicit cleanup, certificate-generation rotation,
-reassignment, and final public success. The harness removes its temporary
-binaries, network, database container, and volume.
+key quarantine, explicit cleanup, reassignment to a newly enrolled generation,
+and final public success. It does not exercise a certificate rotation or
+control-trust rotation/reload. The harness removes its temporary binaries,
+network, database container, and volume.
 
 This test uses a reference effect marker. It is not Linux/KVM execution or a
 hostile-tenant isolation test; those claims remain M4-gated.

@@ -30,8 +30,11 @@ type TrustBundle struct {
 
 // AtomicTrust owns one replace-only control trust snapshot.
 type AtomicTrust struct {
-	mu     sync.RWMutex
-	bundle TrustBundle
+	mu                sync.RWMutex
+	bundle            TrustBundle
+	knownKeys         map[string]SigningKey
+	retiredKeyIDs     map[string]struct{}
+	maximumKeyVersion uint64
 }
 
 // NewAtomicTrust validates and retains an initial control trust snapshot.
@@ -39,7 +42,11 @@ func NewAtomicTrust(bundle TrustBundle) (*AtomicTrust, error) {
 	if !validTrustBundle(bundle) {
 		return nil, errors.New("create host control trust: invalid versioned key bundle")
 	}
-	return &AtomicTrust{bundle: copyTrustBundle(bundle)}, nil
+	knownKeys := make(map[string]SigningKey, 2)
+	for _, key := range trustKeys(bundle) {
+		knownKeys[key.ID] = copySigningKey(key)
+	}
+	return &AtomicTrust{bundle: copyTrustBundle(bundle), knownKeys: knownKeys, retiredKeyIDs: make(map[string]struct{}), maximumKeyVersion: maximumTrustKeyVersion(bundle)}, nil
 }
 
 // Snapshot returns one immutable copy of the current trust snapshot.
@@ -50,7 +57,10 @@ func (trust *AtomicTrust) Snapshot() TrustBundle {
 }
 
 // Update atomically replaces trust with a strictly newer, non-regressing
-// revocation epoch. Readers observe either complete snapshot, never a mix.
+// revocation epoch. A key ID is immutable for its lifetime; once it leaves a
+// snapshot it is retired permanently, and a newly introduced key must have a
+// key version greater than every previously observed key. Readers observe
+// either complete snapshot, never a mix.
 func (trust *AtomicTrust) Update(bundle TrustBundle) error {
 	if !validTrustBundle(bundle) {
 		return errors.New("update host control trust: invalid versioned key bundle")
@@ -59,6 +69,34 @@ func (trust *AtomicTrust) Update(bundle TrustBundle) error {
 	defer trust.mu.Unlock()
 	if bundle.Version <= trust.bundle.Version || bundle.RevocationEpoch < trust.bundle.RevocationEpoch {
 		return errors.New("update host control trust: version or revocation epoch regressed")
+	}
+	for _, key := range trustKeys(bundle) {
+		known, knownBefore := trust.knownKeys[key.ID]
+		if _, retired := trust.retiredKeyIDs[key.ID]; retired {
+			return errors.New("update host control trust: retired key cannot be reintroduced")
+		}
+		if knownBefore {
+			if !sameSigningKey(known, key) {
+				return errors.New("update host control trust: key identity mutation is forbidden")
+			}
+			continue
+		}
+		if key.Version <= trust.maximumKeyVersion {
+			return errors.New("update host control trust: newly introduced key version regressed")
+		}
+	}
+	for _, key := range trustKeys(trust.bundle) {
+		if !containsTrustKey(bundle, key.ID) {
+			trust.retiredKeyIDs[key.ID] = struct{}{}
+		}
+	}
+	for _, key := range trustKeys(bundle) {
+		if _, known := trust.knownKeys[key.ID]; !known {
+			trust.knownKeys[key.ID] = copySigningKey(key)
+		}
+		if key.Version > trust.maximumKeyVersion {
+			trust.maximumKeyVersion = key.Version
+		}
 	}
 	trust.bundle = copyTrustBundle(bundle)
 	return nil
@@ -124,11 +162,39 @@ func validSigningKey(key SigningKey) bool {
 }
 
 func copyTrustBundle(bundle TrustBundle) TrustBundle {
-	bundle.Current.PublicKey = append(ed25519.PublicKey(nil), bundle.Current.PublicKey...)
+	bundle.Current = copySigningKey(bundle.Current)
 	if bundle.Next != nil {
-		next := *bundle.Next
-		next.PublicKey = append(ed25519.PublicKey(nil), next.PublicKey...)
+		next := copySigningKey(*bundle.Next)
 		bundle.Next = &next
 	}
 	return bundle
+}
+
+func trustKeys(bundle TrustBundle) []SigningKey {
+	keys := []SigningKey{bundle.Current}
+	if bundle.Next != nil {
+		keys = append(keys, *bundle.Next)
+	}
+	return keys
+}
+
+func maximumTrustKeyVersion(bundle TrustBundle) uint64 {
+	maximum := bundle.Current.Version
+	if bundle.Next != nil && bundle.Next.Version > maximum {
+		maximum = bundle.Next.Version
+	}
+	return maximum
+}
+
+func containsTrustKey(bundle TrustBundle, id string) bool {
+	return bundle.Current.ID == id || (bundle.Next != nil && bundle.Next.ID == id)
+}
+
+func sameSigningKey(left, right SigningKey) bool {
+	return left.ID == right.ID && left.Version == right.Version && bytes.Equal(left.PublicKey, right.PublicKey) && left.NotBefore.Equal(right.NotBefore) && left.NotAfter.Equal(right.NotAfter)
+}
+
+func copySigningKey(key SigningKey) SigningKey {
+	key.PublicKey = append(ed25519.PublicKey(nil), key.PublicKey...)
+	return key
 }
