@@ -66,3 +66,29 @@ func TestRuntimeV2RollbackArtifactExplicitlyRefusesDestructiveRollback(t *testin
 		}
 	}
 }
+
+func TestRuntimeV3MigrationRaisesInputReferenceBoundWithoutRawContent(t *testing.T) {
+	t.Parallel()
+
+	contents, err := os.ReadFile(filepath.Join("..", "..", "deploy", "production", "migrations", "runtime-v3.up.sql"))
+	if err != nil {
+		t.Fatalf("read runtime v3 migration: %v", err)
+	}
+	statement := string(contents)
+	for _, required := range []string{
+		"hashtextextended('agent-runtime/runtime-v3', 0)",
+		"inputs_content_size_bytes_v3_bound",
+		"2101248",
+		"migration_version, schema_fingerprint",
+		"runtime v3 migration fingerprint mismatch",
+	} {
+		if !strings.Contains(statement, required) {
+			t.Errorf("runtime v3 migration is missing %q", required)
+		}
+	}
+	for _, prohibited := range []string{"raw_prompt", "prompt_text", "content_text", "event_payload"} {
+		if strings.Contains(statement, prohibited) {
+			t.Errorf("runtime v3 migration must not persist raw content column %q", prohibited)
+		}
+	}
+}

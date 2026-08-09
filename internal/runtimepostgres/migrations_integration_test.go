@@ -133,8 +133,19 @@ func TestRuntimeMigrationsEnforceBoundedTenantScopedMetadataAndOutboxFacts(t *te
 			content_size_bytes, accepted_at
 		) VALUES ('tenant_a', 'principal_a', 'ses_0000000000000001',
 			'inp_0000000000000002', 1, 'send-2', 'sha256:2222222222222222222222222222222222222222222222222222222222222222',
-			'sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee', 'application/vnd.agent-runtime.input+json', 262145, $1)`, now)
+			'sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee', 'application/vnd.agent-runtime.input+cbor;version=1', 2101249, $1)`, now)
 	assertPostgresCode(t, err, "23514")
+	_, err = pool.Exec(ctx, `
+		INSERT INTO runtime.inputs (
+			tenant_id, principal_id, session_id, input_id, expected_version,
+			idempotency_key, request_digest, content_digest, content_media_type,
+			content_size_bytes, accepted_at
+		) VALUES ('tenant_a', 'principal_a', 'ses_0000000000000001',
+			'inp_0000000000000003', 1, 'send-3', 'sha256:3333333333333333333333333333333333333333333333333333333333333333',
+			'sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff', 'application/vnd.agent-runtime.input+cbor;version=1', 2101248, $1)`, now)
+	if err != nil {
+		t.Fatalf("insert maximum v3 content reference metadata: %v", err)
+	}
 
 	rows, err := pool.Query(ctx, `
 		SELECT column_name
@@ -297,7 +308,9 @@ func TestRuntimeV2MigrationRejectsCompetingAdvisoryLockThenReconcilesAfterReleas
 	pool := openRuntimePool(t)
 	ctx := context.Background()
 	resetRuntimeV2(t, ctx, pool)
-	applyRuntimeMigrations(t, ctx, pool)
+	if err := applyMigration(t, ctx, pool, "runtime-v1.up.sql"); err != nil {
+		t.Fatalf("apply runtime v1 before v2 lock test: %v", err)
+	}
 
 	firstPool := openRuntimePool(t)
 	secondPool := openRuntimePool(t)
@@ -326,11 +339,31 @@ func TestRuntimeV2MigrationRejectsCompetingAdvisoryLockThenReconcilesAfterReleas
 
 func applyRuntimeMigrations(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
 	t.Helper()
-	for _, filename := range []string{"runtime-v1.up.sql", "runtime-v2.up.sql"} {
+	for _, migration := range []struct {
+		version  int
+		filename string
+	}{{1, "runtime-v1.up.sql"}, {2, "runtime-v2.up.sql"}, {3, "runtime-v3.up.sql"}} {
+		version, filename := migration.version, migration.filename
+		if version > 1 && migrationApplied(t, ctx, pool, version) {
+			continue
+		}
 		if err := applyMigration(t, ctx, pool, filename); err != nil {
 			t.Fatalf("apply %s: %v", filename, err)
 		}
 	}
+}
+
+func migrationApplied(t *testing.T, ctx context.Context, pool *pgxpool.Pool, version int) bool {
+	t.Helper()
+	var exists bool
+	if err := pool.QueryRow(ctx, `SELECT to_regclass('runtime.schema_migrations') IS NOT NULL`).Scan(&exists); err != nil || !exists {
+		return false
+	}
+	var applied bool
+	if err := pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM runtime.schema_migrations WHERE migration_version=$1)`, version).Scan(&applied); err != nil {
+		t.Fatalf("read runtime migration ledger: %v", err)
+	}
+	return applied
 }
 
 func applyMigration(t *testing.T, ctx context.Context, pool *pgxpool.Pool, filename string) error {

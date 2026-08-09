@@ -2381,6 +2381,13 @@
                 "rollback_digest": "sha256:7a7e414ab410fa94befd10925dbad6b52cbd42eba63058ea8c6185bfae015781",
                 "upgrade_artifact": "migrations/runtime-v2.up.sql",
                 "rollback_artifact": "migrations/runtime-v2.down.sql"
+              },
+              {
+                "version": 3,
+                "upgrade_digest": "sha256:3a84f651d9a8f07ea431c5c07c73656545910b48699b062385980f3a1e26324a",
+                "rollback_digest": "sha256:762c88efc5d85fdb44b756ec35fa4a03b13409b5cf9710804c4b4d436e5fe245",
+                "upgrade_artifact": "migrations/runtime-v3.up.sql",
+                "rollback_artifact": "migrations/runtime-v3.down.sql"
               }
             ]
           }
@@ -5197,6 +5204,13 @@
                 "rollback_digest": "sha256:7a7e414ab410fa94befd10925dbad6b52cbd42eba63058ea8c6185bfae015781",
                 "upgrade_artifact": "migrations/runtime-v2.up.sql",
                 "rollback_artifact": "migrations/runtime-v2.down.sql"
+              },
+              {
+                "version": 3,
+                "upgrade_digest": "sha256:3a84f651d9a8f07ea431c5c07c73656545910b48699b062385980f3a1e26324a",
+                "rollback_digest": "sha256:762c88efc5d85fdb44b756ec35fa4a03b13409b5cf9710804c4b4d436e5fe245",
+                "upgrade_artifact": "migrations/runtime-v3.up.sql",
+                "rollback_artifact": "migrations/runtime-v3.down.sql"
               }
             ]
           }
@@ -8013,6 +8027,13 @@
                 "rollback_digest": "sha256:7a7e414ab410fa94befd10925dbad6b52cbd42eba63058ea8c6185bfae015781",
                 "upgrade_artifact": "migrations/runtime-v2.up.sql",
                 "rollback_artifact": "migrations/runtime-v2.down.sql"
+              },
+              {
+                "version": 3,
+                "upgrade_digest": "sha256:3a84f651d9a8f07ea431c5c07c73656545910b48699b062385980f3a1e26324a",
+                "rollback_digest": "sha256:762c88efc5d85fdb44b756ec35fa4a03b13409b5cf9710804c4b4d436e5fe245",
+                "upgrade_artifact": "migrations/runtime-v3.up.sql",
+                "rollback_artifact": "migrations/runtime-v3.down.sql"
               }
             ]
           }
