@@ -3,76 +3,86 @@ package sandboxcontrol
 import (
 	"bytes"
 	"encoding/json"
+	"io"
+	"regexp"
 	"strings"
-	"unicode"
 
+	"github.com/0x63616c/agent-runtime/sandbox"
 	"github.com/cockroachdb/errors"
 )
 
-// validateDispatchBody keeps durable dispatch metadata secret-free. It does
-// not claim that arbitrary command output or bytes are secret-free.
+var publicEnvironmentName = regexp.MustCompile(`^PUBLIC_[A-Z0-9_]{1,120}$`)
+
+var ordinaryEnvironmentNames = map[string]struct{}{
+	"LANG": {}, "LC_ALL": {}, "LOG_LEVEL": {}, "MODE": {}, "TERM": {}, "TZ": {},
+}
+
+type dispatchEnvelope struct {
+	Version string                   `json:"version"`
+	Kind    string                   `json:"kind"`
+	Request sandbox.OperationRequest `json:"request"`
+}
+
+// validateDispatchBody permits only the canonical typed control request (or
+// the exact metadata-only test/reference sentinel). Durable environment is an
+// explicit public allow-list; secret authority stays reference-only.
 func validateDispatchBody(body string) error {
-	if body == "" {
+	if body == "" || body == `{}` || body == `{"version":"sandbox.control/v1"}` {
 		return nil
 	}
 	decoder := json.NewDecoder(strings.NewReader(body))
-	decoder.UseNumber()
-	var value any
-	if err := decoder.Decode(&value); err != nil {
-		return errors.New("accept sandbox operation: dispatch body must be JSON")
+	decoder.DisallowUnknownFields()
+	var envelope dispatchEnvelope
+	if err := decoder.Decode(&envelope); err != nil {
+		return errors.New("accept sandbox operation: dispatch body must be a typed control request")
 	}
 	var trailing any
-	if err := decoder.Decode(&trailing); err == nil {
+	if err := decoder.Decode(&trailing); err != io.EOF {
 		return errors.New("accept sandbox operation: dispatch body must contain one value")
 	}
-	if containsSecretMaterial(value, false) {
-		return errors.New("accept sandbox operation: dispatch body contains direct secret material")
+	canonical, err := json.Marshal(envelope)
+	if err != nil || !bytes.Equal(canonical, []byte(body)) || envelope.Version != "sandbox.control/v1" || envelope.Kind != "operation-request" {
+		return errors.New("accept sandbox operation: dispatch body must be canonical sandbox.control/v1")
+	}
+	if err := validateRequestDispatch(envelope.Request); err != nil {
+		return err
 	}
 	return nil
 }
 
-func containsSecretMaterial(value any, environment bool) bool {
-	switch typed := value.(type) {
-	case map[string]any:
-		for key, nested := range typed {
-			if environment && secretShapedKey(key) {
-				return true
-			}
-			if secretShapedKey(key) && key != "secret_bindings" && key != "secret_binding" && key != "secret_reference" && key != "secret_references" {
-				return true
-			}
-			if containsSecretMaterial(nested, environment || key == "environment") {
-				return true
-			}
-		}
-	case []any:
-		for _, nested := range typed {
-			if containsSecretMaterial(nested, environment) {
-				return true
-			}
-		}
-	case string:
-		return looksLikeSecret(typed)
-	}
-	return false
-}
-
-func secretShapedKey(key string) bool {
-	key = strings.ToUpper(strings.Map(func(r rune) rune {
-		if unicode.IsLetter(r) || unicode.IsDigit(r) {
-			return r
-		}
-		return '_'
-	}, key))
-	for _, marker := range []string{"SECRET", "TOKEN", "PASSWORD", "PASSWD", "API_KEY", "ACCESS_KEY", "PRIVATE_KEY", "CREDENTIAL", "AUTHORIZATION"} {
-		if strings.Contains(key, marker) {
-			return true
+func validateRequestDispatch(request sandbox.OperationRequest) error {
+	if request.CreateSandbox != nil {
+		if err := validateOrdinaryEnvironment(request.CreateSandbox.Spec.Environment); err != nil {
+			return err
 		}
 	}
-	return false
+	if request.ExecProcess != nil {
+		if err := validateOrdinaryEnvironment(request.ExecProcess.Command.Environment); err != nil {
+			return err
+		}
+		for _, argument := range append([]string{string(request.ExecProcess.Command.Executable)}, request.ExecProcess.Command.Argv...) {
+			if directCredentialWire(argument) {
+				return errors.New("accept sandbox operation: command contains direct credential material")
+			}
+		}
+	}
+	return nil
 }
 
-func looksLikeSecret(value string) bool {
-	value = strings.TrimSpace(value)
-	return strings.HasPrefix(value, "-----BEGIN ") || strings.HasPrefix(value, "Bearer ") || strings.HasPrefix(value, "sk-") || strings.HasPrefix(value, "AKIA") || bytes.Contains([]byte(value), []byte("aws_secret_access_key"))
+func validateOrdinaryEnvironment(environment map[string]string) error {
+	for name, value := range environment {
+		if _, allowed := ordinaryEnvironmentNames[name]; !allowed && !publicEnvironmentName.MatchString(name) {
+			return errors.New("accept sandbox operation: durable environment name is not explicitly public")
+		}
+		if directCredentialWire(value) {
+			return errors.New("accept sandbox operation: durable environment contains direct credential material")
+		}
+	}
+	return nil
+}
+
+func directCredentialWire(value string) bool {
+	trimmed := strings.TrimSpace(value)
+	lower := strings.ToLower(trimmed)
+	return strings.HasPrefix(lower, "bearer ") || strings.HasPrefix(trimmed, "-----BEGIN ") || strings.HasPrefix(lower, "sk-") || strings.HasPrefix(trimmed, "AKIA") || strings.Contains(lower, "aws_secret_access_key")
 }
