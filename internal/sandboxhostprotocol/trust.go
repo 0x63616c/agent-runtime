@@ -116,7 +116,7 @@ func validTrustBundle(bundle TrustBundle) bool {
 	if bundle.Version == 0 || bundle.RevocationEpoch == 0 || !validSigningKey(bundle.Current) {
 		return false
 	}
-	return bundle.Next == nil || (validSigningKey(*bundle.Next) && (bundle.Current.ID != bundle.Next.ID || bundle.Current.Version != bundle.Next.Version))
+	return bundle.Next == nil || (validSigningKey(*bundle.Next) && bundle.Current.ID != bundle.Next.ID)
 }
 
 func validSigningKey(key SigningKey) bool {

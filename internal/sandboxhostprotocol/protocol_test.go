@@ -124,6 +124,22 @@ func TestEnvelopeTrustBindsKeyValidityAndRevocationEpoch(t *testing.T) {
 	}
 }
 
+func TestTrustRejectsCurrentAndNextWithTheSameKeyID(t *testing.T) {
+	t.Parallel()
+
+	publicKey, _, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 8, 8, 12, 0, 0, 0, time.UTC)
+	current := SigningKey{ID: "control-key", Version: 1, PublicKey: publicKey, NotBefore: now.Add(-time.Hour), NotAfter: now.Add(time.Hour)}
+	next := current
+	next.Version = 2
+	if _, err := NewAtomicTrust(TrustBundle{Version: 1, RevocationEpoch: 1, Current: current, Next: &next}); err == nil {
+		t.Fatal("NewAtomicTrust() accepted colliding current and next key IDs")
+	}
+}
+
 func TestResultSignatureBindsAssignmentAndFence(t *testing.T) {
 	t.Parallel()
 
