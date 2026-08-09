@@ -16,8 +16,10 @@ Implemented M3 behavior includes:
 - canonical control-signed assignment envelopes bound to tenant, Principal,
   Operation, Effective Spec, capability snapshot, lease, fence, expiry,
   signing-key version, and revocation epoch;
-- atomically reloadable current/next verification trust with overlap,
-  retirement, validity, and legacy-zero-binding refusal;
+- atomically replaced current/next verification trust with validity and
+  legacy-zero-binding refusal; retirement lineage exists only for one running
+  `AtomicTrust` instance and is not restart-persistent without authenticated
+  persisted trust history;
 - persisted exact-envelope replay across control or host restart;
 - a journal-before-effect reference host with lost receipt and lost result
   acknowledgement recovery;
