@@ -61,16 +61,26 @@ guest serial marker, control request, and cleanup proof.
 
 The internal fixture validator now understands five logical identities and can
 verify a downloaded tar.gz source bundle before extracting separately hashed
-Firecracker and Jailer members. It also requires a source/member or direct-file
-identity for the kernel, rootfs, and guest agent. The rootfs and guest-agent
-rows require project-build provenance; the rootfs row binds the exact
-guest-agent digest embedded as `/sbin/init`.
+Firecracker and Jailer members. It requires a source-kind-specific immutable
+identity: a release version that matches the release-download URL, an
+object-store version ID that matches the URL, or a project commit matching the
+build provenance. Floating `latest`, `main`, and cross-kind references are
+refused. Every bootable artifact must declare Linux/amd64 before staging.
+
+The rootfs is a project-build tar.gz source with separately verified ext4 and
+bounded attestation members. Provisioning parses the attestation and checks its
+rootfs digest/size and `/sbin/init` digest/size against the verified static
+guest-agent artifact. This is stronger than a lock assertion, but is still not
+an ext4 filesystem inspection or proof that a guest has booted.
 
 `tools/firecracker/` contains a static Linux/amd64 guest-agent source and a
-minimal no-download ext4 recipe. These are deliberately only build inputs:
-there is no checked-in final lock, rootfs image, SBOM, fixture digest, guest
-transport implementation, or boot evidence yet. The source emits the planned
-marker and bounded `PING <nonce>` / `PONG <vm-id> <nonce>` byte protocol, but
-the lease-fenced authenticated M3-to-vsock transport remains a required bridge.
-Neither the source nor its unit tests establish a guest boot or hardware
-isolation claim.
+minimal no-download ext4 recipe. The recipe rejects dynamically linked or
+non-x86_64 ELF init input and emits a rootfs-attestation sidecar for lock-bundle
+assembly. The guest's closed boot-input contract is
+`init=/sbin/init -- <vm-id> <fixture-version>`; it writes the marker, answers
+one bounded PING/PONG, then attempts controlled power-off using a five-second
+deadline. These are deliberately only build and lifecycle inputs: there is no
+checked-in final lock, rootfs image, SBOM, fixture digest, guest transport
+implementation, or boot evidence yet. The lease-fenced authenticated M3-to-vsock
+transport remains a required bridge. Neither unit tests nor attestation checks
+establish a guest boot, actual controlled shutdown, or hardware-isolation claim.

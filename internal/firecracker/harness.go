@@ -188,10 +188,10 @@ func validFixtureSource(source LockedSource) bool {
 	switch source.Kind {
 	case FixtureSourceReleaseArchive:
 		version, ok := strings.CutPrefix(source.Reference, "release:")
-		return ok && validReleaseVersion(version) && source.Format == FixtureSourceTarGzip && parsed.Host == "github.com" && strings.Contains(parsed.Path, "/releases/download/"+version+"/")
+		return ok && validReleaseVersion(version) && source.Format == FixtureSourceTarGzip && parsed.Host == "github.com" && strings.HasPrefix(parsed.Path, "/firecracker-microvm/firecracker/releases/download/"+version+"/")
 	case FixtureSourceVersionedObject:
 		versionID, ok := strings.CutPrefix(source.Reference, "version-id:")
-		return ok && validObjectVersionID(versionID) && source.Format == FixtureSourceFile && parsed.Query().Get("versionId") == versionID
+		return ok && validObjectVersionID(versionID) && source.Format == FixtureSourceFile && len(parsed.Query()["versionId"]) == 1 && parsed.Query().Get("versionId") == versionID
 	case FixtureSourceProjectBuild:
 		revision, ok := strings.CutPrefix(source.Reference, "commit:")
 		return ok && validRevision(revision) && (source.Format == FixtureSourceFile || source.Format == FixtureSourceTarGzip)
@@ -434,8 +434,11 @@ func verifyRootFSAgentBinding(lock FixtureLock, stagedSources map[string]string)
 	var attestation RootFSAttestation
 	decoder := json.NewDecoder(strings.NewReader(string(contents)))
 	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&attestation); err != nil || decoder.More() || !validRootFSAttestation(attestation, *rootFS, *guestAgent) {
+	if err := decoder.Decode(&attestation); err != nil || !validRootFSAttestation(attestation, *rootFS, *guestAgent) {
 		return fmt.Errorf("%w: rootfs attestation does not bind /sbin/init to the verified guest agent", ErrArtifactIntegrity)
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		return fmt.Errorf("%w: rootfs attestation contains trailing data", ErrArtifactIntegrity)
 	}
 	return nil
 }

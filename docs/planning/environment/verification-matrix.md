@@ -69,11 +69,13 @@ The future `tools/firecracker/fixtures.lock` is the single reviewed manifest
 for:
 
 - one verified source bundle plus separately hashed Firecracker and matched
-  Jailer members, with release version, architecture, source URL/reference,
-  source/member SHA-256 and license data;
+  Jailer members, with a release version that matches the release-download URL,
+  Linux/amd64 architecture, source/member SHA-256 and license data;
 - an uncompressed x86_64 guest `vmlinux` source/object and SHA-256;
-- a project-owned minimal ext4 root filesystem source/object, SHA-256, SBOM
-  digest, reproducible recipe/toolchain/input provenance; and
+- a project-owned minimal ext4 root filesystem source bundle, SHA-256, SBOM
+  digest, reproducible recipe/toolchain/input provenance, and a bounded
+  attestation member whose `/sbin/init` digest/size verifies against the static
+  guest-agent artifact; and
 - a project-owned static guest-agent source/object with the same provenance,
   bound into the rootfs by digest, and its serial/control protocol version.
 
@@ -82,10 +84,13 @@ The checked-in validator and `tools/firecracker/` recipes are only groundwork.
 They do not make a rootfs, artifact download, Linux/KVM runner, guest boot or
 guest-control result available.
 
-The fixture fetcher verifies every digest before execution, writes a private
-copy of the writable rootfs under the job's temporary directory, and never
-updates the lock file automatically. Firecracker documents the kernel/rootfs
-requirements and recommends its Jailer for production execution. See
+The fixture fetcher verifies every digest before execution, rejects mutable or
+cross-kind source references and non-Linux/amd64 boot artifacts before staging,
+parses the rootfs attestation bundle, writes a private copy of the writable
+rootfs under the job's temporary directory, and never updates the lock file
+automatically. It does not prove the ext4 contents at runtime. Firecracker
+documents the kernel/rootfs requirements and recommends its Jailer for
+production execution. See
 [getting started](https://github.com/firecracker-microvm/firecracker/blob/main/docs/getting-started.md)
 and [Jailer operation](https://github.com/firecracker-microvm/firecracker/blob/main/docs/jailer.md).
 
