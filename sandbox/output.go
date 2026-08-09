@@ -100,9 +100,10 @@ func (redactor *literalRedactor) replace(value []byte) ([]byte, bool) {
 	return append([]byte(nil), value...), changed
 }
 
-// processOutputSpool owns one process-wide output budget while preserving the
-// source stream on each event. It stores redacted bytes once, in control-plane
-// order, so stdout and stderr cannot each consume the declared process limit.
+// processOutputSpool owns one process-scoped produced-output budget and an
+// independent retained-output tail for each source stream. It stores redacted
+// bytes once in control-plane order; stdout and stderr share the produced limit
+// while retaining their declared tails independently.
 type processOutputSpool struct {
 	producedLimit uint64
 	retainedLimit uint64

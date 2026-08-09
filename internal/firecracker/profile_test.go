@@ -28,6 +28,21 @@ func TestCompileCreatesJailedDenyAllFoundationPlan(t *testing.T) {
 	if plan.Machine.VCPUCount != 1 || plan.Machine.MemoryMiB != 256 {
 		t.Errorf("Machine = %#v, want one vCPU and 256 MiB", plan.Machine)
 	}
+	wantResources := ResourceEnforcement{
+		CgroupVersion:       2,
+		RootDiskBytes:       profile.Resources.RootDiskBytes,
+		PIDs:                profile.Resources.PIDs,
+		ProcessCount:        profile.Resources.ProcessCount,
+		OpenFiles:           profile.Resources.OpenFiles,
+		Inodes:              profile.Resources.Inodes,
+		Files:               profile.Resources.Files,
+		Lifetime:            profile.Resources.Lifetime,
+		ProducedOutputBytes: profile.Resources.ProducedOutputBytes,
+		RetainedOutputBytes: profile.Resources.RetainedOutputBytes,
+	}
+	if plan.Resources != wantResources {
+		t.Errorf("Resources = %#v, want exact enforcement %#v", plan.Resources, wantResources)
+	}
 	for name, capability := range map[string]sandbox.CapabilityDescriptor{
 		"control protocol": plan.Capabilities.ControlProtocol,
 		"isolation":        plan.Capabilities.Isolation,
@@ -54,12 +69,48 @@ func TestCompileCreatesJailedDenyAllFoundationPlan(t *testing.T) {
 
 func TestVerifyPlanArtifactsRejectsAChangedPinnedArtifactBeforeLaunch(t *testing.T) {
 	const fixture = "fixture"
-	plan := Plan{Firecracker: PinnedArtifact{Path: "/firecracker", Digest: "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"}}
+	plan := mustCompile(t, validProfile())
 	err := VerifyPlanArtifacts(plan, artifactOpenFunc(func(path string) (io.ReadCloser, error) {
 		return io.NopCloser(bytes.NewBufferString(fixture)), nil
 	}))
 	if !errors.Is(err, ErrArtifactIntegrity) {
 		t.Fatalf("VerifyPlanArtifacts() error = %v, want integrity refusal", err)
+	}
+}
+
+func TestVerifyPlanArtifactsRejectsUncompiledOrIncompletePlanBeforeOpening(t *testing.T) {
+	compiled := mustCompile(t, validProfile())
+	uncompiled := compiled
+	uncompiled.compiled = false
+	incomplete := compiled
+	incomplete.RootFS = PinnedArtifact{}
+	incompleteResources := compiled
+	incompleteResources.Resources = ResourceEnforcement{}
+	incompleteJailer := compiled
+	incompleteJailer.JailerArguments = nil
+	for _, test := range []struct {
+		name string
+		plan Plan
+	}{
+		{name: "zero", plan: Plan{}},
+		{name: "uncompiled", plan: uncompiled},
+		{name: "missing artifact", plan: incomplete},
+		{name: "missing resources", plan: incompleteResources},
+		{name: "missing jailer configuration", plan: incompleteJailer},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			opens := 0
+			err := VerifyPlanArtifacts(test.plan, artifactOpenFunc(func(string) (io.ReadCloser, error) {
+				opens++
+				return io.NopCloser(bytes.NewReader(nil)), nil
+			}))
+			if !errors.Is(err, ErrArtifactIntegrity) {
+				t.Fatalf("VerifyPlanArtifacts() error = %v, want incomplete-plan refusal", err)
+			}
+			if opens != 0 {
+				t.Fatalf("artifact opens = %d, want none before complete compiled-plan validation", opens)
+			}
+		})
 	}
 }
 
@@ -71,6 +122,16 @@ func TestCompileRefusesProfilesThatWouldWidenFoundationAuthority(t *testing.T) {
 		{"allows network", func(p *Profile) { p.Network.Mode = NetworkAllowlist }},
 		{"declares host mounts", func(p *Profile) { p.HostMountsEnabled = true }},
 		{"rounds cpu", func(p *Profile) { p.Resources.MilliCPU = 500 }},
+		{"omits root disk limit", func(p *Profile) { p.Resources.RootDiskBytes = 0 }},
+		{"omits PID limit", func(p *Profile) { p.Resources.PIDs = 0 }},
+		{"omits process limit", func(p *Profile) { p.Resources.ProcessCount = 0 }},
+		{"omits open-file limit", func(p *Profile) { p.Resources.OpenFiles = 0 }},
+		{"omits inode limit", func(p *Profile) { p.Resources.Inodes = 0 }},
+		{"omits file limit", func(p *Profile) { p.Resources.Files = 0 }},
+		{"omits lifetime limit", func(p *Profile) { p.Resources.Lifetime = 0 }},
+		{"omits produced-output limit", func(p *Profile) { p.Resources.ProducedOutputBytes = 0 }},
+		{"omits retained-output limit", func(p *Profile) { p.Resources.RetainedOutputBytes = 0 }},
+		{"widens retained output beyond produced output", func(p *Profile) { p.Resources.RetainedOutputBytes = p.Resources.ProducedOutputBytes + 1 }},
 		{"accepts unpinned rootfs", func(p *Profile) { p.RootFS.Digest = "" }},
 	}
 	for _, tc := range cases {
@@ -80,6 +141,31 @@ func TestCompileRefusesProfilesThatWouldWidenFoundationAuthority(t *testing.T) {
 			_, err := Compile(profile)
 			if !errors.Is(err, ErrInvalidProfile) && !errors.Is(err, ErrCapabilityUnavailable) {
 				t.Fatalf("Compile() error = %v, want explicit refusal", err)
+			}
+		})
+	}
+}
+
+func TestCompileRejectsUnsafeVMIDGrammar(t *testing.T) {
+	for _, vmID := range []string{
+		".",
+		"..",
+		"sandbox.001",
+		"../sandbox",
+		"sandbox/child",
+		`sandbox\child`,
+		"sandbox\x00child",
+		"sandbox\x1fchild",
+		"sandbox\x7fchild",
+		"-sandbox",
+		"sandbox-",
+		"Sandbox_001",
+	} {
+		t.Run(vmID, func(t *testing.T) {
+			profile := validProfile()
+			profile.VMID = vmID
+			if _, err := Compile(profile); !errors.Is(err, ErrInvalidProfile) {
+				t.Fatalf("Compile() error = %v, want unsafe VM ID refusal", err)
 			}
 		})
 	}
@@ -194,7 +280,7 @@ func validProfile() Profile {
 		Resources: sandbox.ResourceLimits{
 			MilliCPU: 1000, MemoryBytes: 256 << 20, RootDiskBytes: 1 << 30,
 			PIDs: 64, ProcessCount: 32, OpenFiles: 512, Inodes: 10_000, Files: 5_000,
-			Lifetime: time.Minute, ProducedOutputBytes: 1 << 20, RetainedOutputBytes: 1 << 20,
+			Lifetime: time.Minute, ProducedOutputBytes: 2 << 20, RetainedOutputBytes: 1 << 20,
 			TransferBytes: 1 << 20, NetworkConnections: 1, VolumeBytes: 1 << 30, SnapshotBytes: 1 << 30,
 		},
 		Network: NetworkPolicy{Mode: NetworkDenyAll},

@@ -10,6 +10,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/0x63616c/agent-runtime/sandbox"
 )
@@ -69,17 +70,33 @@ type MachineConfig struct {
 	MemoryMiB uint32
 }
 
+// ResourceEnforcement is the exact finite host configuration carried to the Jailer and host agent.
+type ResourceEnforcement struct {
+	CgroupVersion       uint8
+	RootDiskBytes       uint64
+	PIDs                uint32
+	ProcessCount        uint32
+	OpenFiles           uint32
+	Inodes              uint64
+	Files               uint64
+	Lifetime            time.Duration
+	ProducedOutputBytes uint64
+	RetainedOutputBytes uint64
+}
+
 // Plan is a resolved, immutable launch plan. The host agent verifies fixture digests before launch.
 type Plan struct {
 	VMID            string
 	JailerArguments []string
 	Machine         MachineConfig
+	Resources       ResourceEnforcement
 	Network         NetworkPolicy
 	Capabilities    sandbox.CapabilitySnapshot
 	Firecracker     PinnedArtifact
 	Jailer          PinnedArtifact
 	Kernel          PinnedArtifact
 	RootFS          PinnedArtifact
+	compiled        bool
 }
 
 // Compile rejects profile widening and produces the deterministic foundation launch plan.
@@ -109,18 +126,31 @@ func Compile(profile Profile) (Plan, error) {
 		VMID:            profile.VMID,
 		JailerArguments: []string{"--id", profile.VMID, "--exec-file", profile.Firecracker.Path, "--uid", strconv.FormatUint(uint64(profile.UID), 10), "--gid", strconv.FormatUint(uint64(profile.GID), 10), "--chroot-base-dir", profile.ChrootBaseDir, "--cgroup-version", "2", "--", "--api-sock", "/run/firecracker.socket"},
 		Machine:         machine,
-		Network:         NetworkPolicy{Mode: NetworkDenyAll},
-		Capabilities:    foundationCapabilities(),
-		Firecracker:     profile.Firecracker,
-		Jailer:          profile.Jailer,
-		Kernel:          profile.Kernel,
-		RootFS:          profile.RootFS,
+		Resources: ResourceEnforcement{
+			CgroupVersion:       2,
+			RootDiskBytes:       profile.Resources.RootDiskBytes,
+			PIDs:                profile.Resources.PIDs,
+			ProcessCount:        profile.Resources.ProcessCount,
+			OpenFiles:           profile.Resources.OpenFiles,
+			Inodes:              profile.Resources.Inodes,
+			Files:               profile.Resources.Files,
+			Lifetime:            profile.Resources.Lifetime,
+			ProducedOutputBytes: profile.Resources.ProducedOutputBytes,
+			RetainedOutputBytes: profile.Resources.RetainedOutputBytes,
+		},
+		Network:      NetworkPolicy{Mode: NetworkDenyAll},
+		Capabilities: foundationCapabilities(),
+		Firecracker:  profile.Firecracker,
+		Jailer:       profile.Jailer,
+		Kernel:       profile.Kernel,
+		RootFS:       profile.RootFS,
+		compiled:     true,
 	}, nil
 }
 
 func machineConfig(limits sandbox.ResourceLimits) (MachineConfig, error) {
 	const mib = uint64(1 << 20)
-	if limits.MilliCPU == 0 || limits.MilliCPU%1000 != 0 || limits.MemoryBytes < 128*mib || limits.MemoryBytes%mib != 0 || limits.RootDiskBytes == 0 || limits.PIDs == 0 || limits.ProcessCount == 0 || limits.OpenFiles == 0 || limits.Lifetime <= 0 || limits.ProducedOutputBytes == 0 || limits.RetainedOutputBytes == 0 || limits.RetainedOutputBytes > limits.ProducedOutputBytes {
+	if limits.MilliCPU == 0 || limits.MilliCPU%1000 != 0 || limits.MemoryBytes < 128*mib || limits.MemoryBytes%mib != 0 || limits.RootDiskBytes == 0 || limits.PIDs == 0 || limits.ProcessCount == 0 || limits.OpenFiles == 0 || limits.Inodes == 0 || limits.Files == 0 || limits.Lifetime <= 0 || limits.ProducedOutputBytes == 0 || limits.RetainedOutputBytes == 0 || limits.RetainedOutputBytes > limits.ProducedOutputBytes {
 		return MachineConfig{}, fmt.Errorf("%w: Firecracker requires exact vCPU, MiB memory and finite resource limits", ErrInvalidProfile)
 	}
 	return MachineConfig{VCPUCount: limits.MilliCPU / 1000, MemoryMiB: uint32(limits.MemoryBytes / mib)}, nil
@@ -140,7 +170,19 @@ func safeAbsolutePath(value string) bool {
 }
 
 func validVMID(value string) bool {
-	return len(value) > 0 && len(value) <= 63 && !strings.ContainsAny(value, "/\\ \t\n")
+	if len(value) == 0 || len(value) > 63 || !vmIDAlphaNumeric(value[0]) || !vmIDAlphaNumeric(value[len(value)-1]) {
+		return false
+	}
+	for index := 1; index < len(value)-1; index++ {
+		if value[index] != '-' && !vmIDAlphaNumeric(value[index]) {
+			return false
+		}
+	}
+	return true
+}
+
+func vmIDAlphaNumeric(character byte) bool {
+	return character >= 'a' && character <= 'z' || character >= '0' && character <= '9'
 }
 
 func validSHA256(value sandbox.Digest) bool {
@@ -164,13 +206,13 @@ func (f artifactOpenFunc) Open(path string) (io.ReadCloser, error) { return f(pa
 
 // VerifyPlanArtifacts checks all launch inputs before a Jailer or VMM process may start.
 func VerifyPlanArtifacts(plan Plan, opener artifactOpener) error {
+	if !validCompiledPlan(plan) {
+		return fmt.Errorf("%w: a complete compiled launch plan is required", ErrArtifactIntegrity)
+	}
 	if opener == nil {
 		return fmt.Errorf("%w: opener is required", ErrArtifactIntegrity)
 	}
 	for _, artifact := range []PinnedArtifact{plan.Firecracker, plan.Jailer, plan.Kernel, plan.RootFS} {
-		if artifact.Path == "" && artifact.Digest == "" {
-			continue
-		}
 		file, err := opener.Open(artifact.Path)
 		if err != nil {
 			return fmt.Errorf("%w: open %s: %v", ErrArtifactIntegrity, artifact.Path, err)
@@ -271,7 +313,15 @@ func checkEnvironment(host environment, prerequisite environmentPrerequisite, pl
 }
 
 func hasPinnedLaunchPlan(plan Plan) bool {
-	return validVMID(plan.VMID) && validArtifact(plan.Firecracker) && validArtifact(plan.Jailer) && validArtifact(plan.Kernel) && validArtifact(plan.RootFS) && len(plan.JailerArguments) > 0
+	return validCompiledPlan(plan)
+}
+
+func validCompiledPlan(plan Plan) bool {
+	return plan.compiled && validVMID(plan.VMID) && validArtifact(plan.Firecracker) && validArtifact(plan.Jailer) && validArtifact(plan.Kernel) && validArtifact(plan.RootFS) && len(plan.JailerArguments) > 0 && plan.Machine.VCPUCount > 0 && plan.Machine.MemoryMiB >= 128 && validResourceEnforcement(plan.Resources) && plan.Network.Mode == NetworkDenyAll && len(plan.Network.Allowlist) == 0
+}
+
+func validResourceEnforcement(resources ResourceEnforcement) bool {
+	return resources.CgroupVersion == 2 && resources.RootDiskBytes > 0 && resources.PIDs > 0 && resources.ProcessCount > 0 && resources.OpenFiles > 0 && resources.Inodes > 0 && resources.Files > 0 && resources.Lifetime > 0 && resources.ProducedOutputBytes > 0 && resources.RetainedOutputBytes > 0 && resources.RetainedOutputBytes <= resources.ProducedOutputBytes
 }
 
 type localEnvironment struct{ check func(string) error }
