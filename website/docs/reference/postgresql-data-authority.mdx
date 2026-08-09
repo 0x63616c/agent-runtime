@@ -7,10 +7,10 @@ slug: /reference/postgresql-data-authority
 # PostgreSQL data-authority foundation
 
 The versioned production Stack declares PostgreSQL as the Agent Runtime v1
-metadata, cursor, audit, and outbox authority. The second reviewed runtime
-migration creates the normalized storage foundation for tenants, immutable
-Agent revision metadata, Sessions, content-referenced Inputs, Turns, ordered
-Product events, audit facts, and a durable publication/reconciliation outbox.
+metadata, cursor, audit, and outbox authority. The reviewed runtime migrations
+create the normalized storage foundation for tenants, immutable Agent revision
+metadata, Sessions, content-referenced Inputs, Turns, ordered Product events,
+audit facts, and a durable publication/reconciliation outbox.
 
 The migration stores only bounded metadata and immutable content references:
 digests, media types, and byte counts. It deliberately has no raw prompt,
@@ -29,20 +29,38 @@ Its database constraints establish the initial mechanical guards:
 - outbox records are unique for one aggregate version and event kind, with
   bounded reference payload metadata.
 
-The v2 upgrade artifact, its forward-only refusal artifact, and their SHA-256
-digests are declared in `deploy/production/stack.json`. The upgrade takes a
-PostgreSQL transaction advisory lock and verifies both its versioned migration
-fingerprint and the required physical schema before it reports success. This
-prevents `IF NOT EXISTS` from silently accepting a partial or different schema.
-The refusal artifact never drops data: recovery from a bad v2 deployment
-requires an operator-approved PostgreSQL backup/PITR procedure, not an
-automatic rollback. This repository does not yet contain a backup/PITR runbook
-or a retained restore drill, so that recovery path remains unproven. Migrations
-are applied only by an explicit audited Stack operator action; runtime
-processes have no DDL authority. A disposable PostgreSQL integration test
-executes the artifacts and proves the schema constraints only.
+The v2 and v3 upgrade artifacts, their forward-only refusal artifacts, and
+their SHA-256 digests are declared in `deploy/production/stack.json`. An
+upgrade takes a PostgreSQL transaction advisory lock and verifies both its
+versioned migration fingerprint and the required physical schema before it
+reports success. This prevents `IF NOT EXISTS` from silently accepting a
+partial or different schema. The refusal artifacts never drop data: recovery
+from a bad deployment requires an operator-approved PostgreSQL backup/PITR
+procedure, not an automatic rollback. This repository does not yet contain a
+backup/PITR runbook or a retained restore drill, so that recovery path remains
+unproven. Migrations are applied only by an explicit audited Stack operator
+action; runtime processes have no DDL authority. Disposable PostgreSQL
+integration tests execute the artifacts and prove the declared constraints.
 
-The v2 schema is not yet an RLS or database-role authorization boundary. The
+## Internal admission adapter (not the public API)
+
+M5 currently contains an internal first-admission adapter used only by direct
+application composition and real PostgreSQL integration tests. It accepts an
+already-authorized, pre-existing Session; validates artifact references for
+that exact owner before staging; persists immutable content references rather
+than raw Input parts; and atomically records the Input, queued Turn, bounded
+facts, audit record, and outbox record. Its narrow transaction also serializes
+identical owner/idempotency-key admissions so a conflicting Session is refused
+rather than surfacing a database uniqueness failure.
+
+This is not a public HTTP or Go SDK route, and it does not change the public
+runtime's `memory-unsafe` store. The current content store in this seam is a
+deterministic in-memory test implementation, not a production blob
+authorization plane. The outbox is transactionally recorded only: publication,
+retry/reconciliation, and restart recovery have not been implemented or
+proven.
+
+The current schema is not yet an RLS or database-role authorization boundary. The
 future production adapter must add tenant RLS policy, role grants, and a
 least-privilege migration/runtime credential split before it uses these tables
 for public requests.
@@ -50,10 +68,10 @@ for public requests.
 :::caution Foundation, not completed runtime durability
 
 The currently runnable public API remains explicitly configured with
-`memory-unsafe` storage. It has not yet been connected to these tables, and
-this migration alone does not prove process-restart recovery, optimistic
-conversation writes, event replay/expiry, audit publication recovery, blob
-authorization, tenant erasure, backup/restore, or the private Temporal
-adapter. No M5 requirement is complete on the strength of this schema slice.
+`memory-unsafe` storage. The internal adapter does not by itself prove
+process-restart recovery, event replay/expiry, audit publication recovery,
+blob authorization, tenant erasure, backup/restore, or the private Temporal
+adapter. No M5 requirement is complete on the strength of this schema and
+first-admission slice.
 
 :::

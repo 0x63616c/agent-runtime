@@ -27,6 +27,9 @@ func (store *MemoryContentStore) PutInput(ctx context.Context, owner Owner, part
 	if err := validateOwner(owner); err != nil {
 		return ContentReference{}, err
 	}
+	if len(parts) == 0 || len(parts) > agentruntime.MaxInputParts {
+		return ContentReference{}, errors.New("input content part count is outside the public contract")
+	}
 	if err := validateParts(parts); err != nil {
 		return ContentReference{}, err
 	}

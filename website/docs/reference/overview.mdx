@@ -33,9 +33,10 @@ serialized Turn state, explicit cancellation, and ordered cursor replay. The
 HTTP/OpenAPI transport is implemented, while the runtime role still uses its
 explicitly labelled in-memory test store. The declared
 [PostgreSQL data-authority foundation](./postgresql-data-authority.mdx) now has
-reviewed bounded schema artifacts and a disposable PostgreSQL constraint
-proof; a runtime repository adapter, durable cursors/outbox, and the Temporal
-adapter remain unimplemented and are not implied by this contract slice.
+reviewed bounded schema artifacts, a disposable PostgreSQL constraint proof,
+and a narrow internal first-admission repository seam. That seam is not wired
+to public routes, records an outbox without a publisher or recovery guarantee,
+and does not imply durable cursors or the Temporal adapter.
 
 Generated files live only under `website/docs/reference/generated/`. Curated
 pages explain semantics and ownership without duplicating unverified schemas.

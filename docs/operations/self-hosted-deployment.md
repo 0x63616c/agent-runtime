@@ -113,8 +113,11 @@ Before a production rollout, the platform operator must define and test:
   declares normalized tenant, Agent revision, Session,
   content-reference Input, Turn, Product-event, audit, and outbox tables. It
   intentionally contains no raw prompt or event-body columns; the blob
-  authority owns content bytes. The standalone API remains `memory-unsafe`
-  until its durable repository adapter is implemented; this foundation does
+  authority owns content bytes. A narrow internal first-admission repository
+  seam exists for real PostgreSQL integration tests, but it is not wired to
+  the standalone API, its deterministic in-memory content store is not a blob
+  authorization plane, and its recorded outbox has no publisher or recovery
+  guarantee. The standalone API remains `memory-unsafe`; this foundation does
   not yet provide tenant RLS or least-privilege database-role enforcement.
 - Blob bucket/prefix lifecycle, retention, backup/restore, encryption and
   credential rotation.

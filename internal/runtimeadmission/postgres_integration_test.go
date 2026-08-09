@@ -177,6 +177,82 @@ func TestPostgresAdmissionRefusesUnauthorizedArtifactReferencesBeforeStaging(t *
 	}
 }
 
+func TestPostgresAdmissionSerializesOnePrincipalIdempotencyKeyAcrossTwoSessionConnections(t *testing.T) {
+	pool := openAdmissionPool(t)
+	ctx := context.Background()
+	resetAdmissionSchema(t, ctx, pool)
+	applyAdmissionMigrations(t, ctx, pool)
+	now := time.Date(2026, 8, 10, 0, 0, 0, 0, time.UTC)
+	seedAdmissionSession(t, ctx, pool, "tenant_a", "alice", "sess_0000000000000001", now)
+	seedAdmissionSession(t, ctx, pool, "tenant_a", "alice", "sess_0000000000000002", now)
+
+	firstPool := openAdmissionPool(t)
+	secondPool := openAdmissionPool(t)
+	firstRepository, err := NewPostgresRepository(firstPool)
+	if err != nil {
+		t.Fatalf("new first repository: %v", err)
+	}
+	secondRepository, err := NewPostgresRepository(secondPool)
+	if err != nil {
+		t.Fatalf("new second repository: %v", err)
+	}
+	content := NewMemoryContentStore()
+	firstService, err := NewService(content, NewMemoryArtifactCatalog(), firstRepository, fixedClock{now: now}, &integrationIDs{})
+	if err != nil {
+		t.Fatalf("new first service: %v", err)
+	}
+	secondService, err := NewService(content, NewMemoryArtifactCatalog(), secondRepository, fixedClock{now: now}, &integrationIDs{})
+	if err != nil {
+		t.Fatalf("new second service: %v", err)
+	}
+	owner := Owner{TenantID: "tenant_a", PrincipalID: "alice"}
+	requests := []agentruntime.SendInputRequest{
+		{SessionID: "sess_0000000000000001", IdempotencyKey: "cross-session-key", Parts: []agentruntime.ContentPart{{Kind: agentruntime.ContentText, Text: "one"}}},
+		{SessionID: "sess_0000000000000002", IdempotencyKey: "cross-session-key", Parts: []agentruntime.ContentPart{{Kind: agentruntime.ContentText, Text: "two"}}},
+	}
+	type outcome struct {
+		result agentruntime.SendInputResult
+		err    error
+	}
+	outcomes := make(chan outcome, 2)
+	start := make(chan struct{})
+	go func() {
+		<-start
+		result, callErr := firstService.SendInput(ctx, owner, requests[0])
+		outcomes <- outcome{result, callErr}
+	}()
+	go func() {
+		<-start
+		result, callErr := secondService.SendInput(ctx, owner, requests[1])
+		outcomes <- outcome{result, callErr}
+	}()
+	close(start)
+	first := <-outcomes
+	second := <-outcomes
+	accepted, conflicts := 0, 0
+	for _, outcome := range []outcome{first, second} {
+		if outcome.err == nil {
+			accepted++
+			continue
+		}
+		if errors.Is(outcome.err, ErrConflict) {
+			conflicts++
+			continue
+		}
+		t.Fatalf("cross-session concurrent idempotency error = %v, want ErrConflict", outcome.err)
+	}
+	if accepted != 1 || conflicts != 1 {
+		t.Fatalf("accepted=%d conflicts=%d, want exactly one each; results=%#v %#v", accepted, conflicts, first, second)
+	}
+	var inputs int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM runtime.inputs WHERE tenant_id='tenant_a' AND principal_id='alice' AND idempotency_key='cross-session-key'`).Scan(&inputs); err != nil {
+		t.Fatalf("count cross-session idempotency rows: %v", err)
+	}
+	if inputs != 1 {
+		t.Fatalf("cross-session idempotency rows = %d, want 1", inputs)
+	}
+}
+
 type integrationIDs struct {
 	mu   sync.Mutex
 	next int
@@ -222,10 +298,10 @@ func applyAdmissionMigrations(t *testing.T, ctx context.Context, pool *pgxpool.P
 }
 func seedAdmissionSession(t *testing.T, ctx context.Context, pool *pgxpool.Pool, tenant, principal, session string, now time.Time) {
 	t.Helper()
-	if _, err := pool.Exec(ctx, `INSERT INTO runtime.tenants (tenant_id,created_at) VALUES ($1,$2)`, tenant, now); err != nil {
+	if _, err := pool.Exec(ctx, `INSERT INTO runtime.tenants (tenant_id,created_at) VALUES ($1,$2) ON CONFLICT (tenant_id) DO NOTHING`, tenant, now); err != nil {
 		t.Fatalf("seed tenant: %v", err)
 	}
-	if _, err := pool.Exec(ctx, `INSERT INTO runtime.agent_revisions (tenant_id,agent_id,revision_id,revision,name,model_profile,specification_digest,specification_size_bytes,created_at) VALUES ($1,'agent_0000000000000001','arev_0000000000000001',1,'assistant','balanced','sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',1,$2)`, tenant, now); err != nil {
+	if _, err := pool.Exec(ctx, `INSERT INTO runtime.agent_revisions (tenant_id,agent_id,revision_id,revision,name,model_profile,specification_digest,specification_size_bytes,created_at) VALUES ($1,'agent_0000000000000001','arev_0000000000000001',1,'assistant','balanced','sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',1,$2) ON CONFLICT (tenant_id, revision_id) DO NOTHING`, tenant, now); err != nil {
 		t.Fatalf("seed revision: %v", err)
 	}
 	if _, err := pool.Exec(ctx, `INSERT INTO runtime.sessions (tenant_id,principal_id,session_id,agent_id,agent_revision_id,state,version,created_at,updated_at) VALUES ($1,$2,$3,'agent_0000000000000001','arev_0000000000000001','open',1,$4,$4)`, tenant, principal, session, now); err != nil {

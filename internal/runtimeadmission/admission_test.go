@@ -65,6 +65,29 @@ func TestInputCanonicalEncodingUsesDeterministicCBORWithoutTextEscapingGrowth(t 
 	}
 }
 
+func TestContentStoreRejectsPartCountsOutsidePublicContract(t *testing.T) {
+	t.Parallel()
+	store := NewMemoryContentStore()
+	owner := Owner{TenantID: "tenant_a", PrincipalID: "alice"}
+	if _, err := store.PutInput(context.Background(), owner, nil); err == nil {
+		t.Fatal("empty parts staged content, want public-contract refusal")
+	}
+	parts := make([]agentruntime.ContentPart, agentruntime.MaxInputParts+1)
+	for index := range parts {
+		parts[index] = agentruntime.ContentPart{Kind: agentruntime.ContentText, Text: "x"}
+	}
+	if _, err := store.PutInput(context.Background(), owner, parts); err == nil {
+		t.Fatal("too many parts staged content, want public-contract refusal")
+	}
+}
+
+func TestGeneratedTypedIDsUseSDKCanonicalParsers(t *testing.T) {
+	t.Parallel()
+	if _, err := newID[agentruntime.InputID](literalIDs{value: "0000000000000001"}, "wrong_"); err == nil {
+		t.Fatal("generated input ID accepted wrong canonical prefix")
+	}
+}
+
 func TestServiceRefusesUnauthorizedArtifactBeforeStaging(t *testing.T) {
 	t.Parallel()
 
@@ -95,6 +118,10 @@ func TestServiceRefusesUnauthorizedArtifactBeforeStaging(t *testing.T) {
 }
 
 type rejectingRepository struct{}
+
+type literalIDs struct{ value string }
+
+func (source literalIDs) Next() (string, error) { return source.value, nil }
 
 func (rejectingRepository) Admit(context.Context, Owner, PreparedInput, IDSource) (AdmissionResult, error) {
 	return AdmissionResult{}, errors.New("repository should not be called")

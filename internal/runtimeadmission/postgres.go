@@ -3,6 +3,7 @@ package runtimeadmission
 import (
 	"context"
 	stderrors "errors"
+	"strconv"
 	"time"
 
 	agentruntime "github.com/0x63616c/agent-runtime/sdk/go"
@@ -38,6 +39,9 @@ func (repository *PostgresRepository) Admit(ctx context.Context, owner Owner, pr
 			_ = tx.Rollback(context.Background())
 		}
 	}()
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, idempotencyLockKey(owner, prepared.IdempotencyKey)); err != nil {
+		return AdmissionResult{}, errors.Wrap(ErrUnavailable, "lock input idempotency key")
+	}
 	var version int64
 	var state string
 	err = tx.QueryRow(ctx, `SELECT version, state FROM runtime.sessions WHERE tenant_id=$1 AND principal_id=$2 AND session_id=$3 FOR UPDATE`, owner.TenantID, owner.PrincipalID, prepared.SessionID.String()).Scan(&version, &state)
@@ -177,4 +181,8 @@ func nextEventSequence(ctx context.Context, tx pgx.Tx, owner Owner, sessionID ag
 		return 0, errors.Wrap(ErrUnavailable, "allocate event sequence")
 	}
 	return sequence, nil
+}
+
+func idempotencyLockKey(owner Owner, key string) string {
+	return "agent-runtime/input-idempotency/v1/" + strconv.Itoa(len(owner.TenantID)) + ":" + owner.TenantID + "/" + strconv.Itoa(len(owner.PrincipalID)) + ":" + owner.PrincipalID + "/" + strconv.Itoa(len(key)) + ":" + key
 }

@@ -122,7 +122,33 @@ func newID[T ~string](source IDSource, prefix string) (T, error) {
 	if len(value) != 16 || strings.ContainsAny(value, "_- ") {
 		return "", errors.New("invalid runtime admission identifier payload")
 	}
-	return T(prefix + value), nil
+	candidate := prefix + value
+	if err := validateTypedID(prefix, candidate); err != nil {
+		return "", err
+	}
+	return T(candidate), nil
+}
+
+func validateTypedID(prefix, candidate string) error {
+	var err error
+	switch prefix {
+	case "inpt_":
+		_, err = agentruntime.ParseInputID(candidate)
+	case "turn_":
+		_, err = agentruntime.ParseTurnID(candidate)
+	case "evt_":
+		_, err = agentruntime.ParseEventID(candidate)
+	case "cur_":
+		_, err = agentruntime.ParseCursor(candidate)
+	case "aud_":
+		return nil // audit IDs are internal but retain the same generated-payload validation above.
+	default:
+		return errors.New("unsupported runtime admission identifier prefix")
+	}
+	if err != nil {
+		return errors.Wrap(err, "parse generated runtime admission identifier")
+	}
+	return nil
 }
 
 type fixedClock struct{ now time.Time }
