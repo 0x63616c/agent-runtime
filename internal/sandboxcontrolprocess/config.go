@@ -150,8 +150,11 @@ func Parse(input io.Reader) (Config, error) {
 	if err := decoder.Decode(&trailing); err != io.EOF {
 		return Config{}, errors.New("parse sandbox-control configuration: exactly one document is required")
 	}
-	if decoded.Version != 1 {
-		return Config{}, errors.New("validate sandbox-control configuration: version must be 1")
+	if decoded.Version != 1 && decoded.Version != 2 {
+		return Config{}, errors.New("validate sandbox-control configuration: version must be 1 or 2")
+	}
+	if decoded.Version == 1 && decoded.HostControl != nil {
+		return Config{}, errors.New("validate sandbox-control configuration: version 1 host_control cannot bind versioned envelope trust; migrate to version 2")
 	}
 	host, port, err := net.SplitHostPort(decoded.ListenAddress)
 	if err != nil || (host != "127.0.0.1" && host != "0.0.0.0" && host != "::1" && host != "::") || port == "" {

@@ -1,5 +1,5 @@
 {
-  "version": 1,
+  "version": 2,
   "control_url": "https://sandbox-control.internal:9443",
   "server_name": "sandbox-control.internal",
   "trust_bundle_file": "/run/sandbox-host/control-ca.crt",

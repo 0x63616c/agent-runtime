@@ -1,6 +1,6 @@
 {
-  "version": 1,
-  "listen_address": "0.0.0.0:9443",
+  "version": 2,
+  "listen_address": "0.0.0.0:8443",
   "tls_certificate_file": "/run/sandbox-control/tls/tls.crt",
   "tls_private_key_file": "/run/sandbox-control/tls/tls.key",
   "database_dsn_environment": "SANDBOX_DATABASE_DSN",
