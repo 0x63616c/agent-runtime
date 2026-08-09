@@ -29,6 +29,9 @@ const (
 	HostActive      HostStatus = "active"
 	HostRevoked     HostStatus = "revoked"
 	HostQuarantined HostStatus = "quarantined"
+	// HostAttestationFailed records a verifier refusal retained for operator
+	// diagnosis. Failed hosts can never authenticate or receive work.
+	HostAttestationFailed HostStatus = "attestation-failed"
 )
 
 // HostEnrollment is operator-owned durable host identity metadata. It contains
@@ -43,6 +46,8 @@ type HostEnrollment struct {
 	SigningPublicKey    ed25519.PublicKey
 	CapabilityDigest    string
 	AttestationDigest   string
+	AttestationProfile  AttestationProfile
+	AttestationState    AttestationState
 	Status              HostStatus
 	ExpiresAt           time.Time
 	LastAuthenticatedAt time.Time
@@ -126,6 +131,7 @@ func (ledger *MemoryLedger) ProvisionHost(ctx context.Context, enrollment HostEn
 	if err := ctx.Err(); err != nil {
 		return errors.Wrap(err, "provision sandbox host")
 	}
+	enrollment = normalizeHostEnrollment(enrollment)
 	if !validHostEnrollment(enrollment) {
 		return errors.New("provision sandbox host: invalid bounded enrollment")
 	}
@@ -474,11 +480,11 @@ func dispatchFrom(operation Operation, fields hostAssignmentFields) HostDispatch
 }
 
 func validHostEnrollment(host HostEnrollment) bool {
-	return validBounded(host.HostID, maxHostIDBytes) && validBounded(host.Tenant, 256) && validBounded(host.Pool, 128) && host.Generation > 0 && host.ProtocolVersion == sandboxhostprotocol.Version && validBounded(host.CertificateDigest, maxDigestBytes) && len(host.SigningPublicKey) == ed25519.PublicKeySize && validBounded(host.CapabilityDigest, maxDigestBytes) && (host.AttestationDigest == "" || validBounded(host.AttestationDigest, maxDigestBytes)) && host.Status == HostActive && !host.ExpiresAt.IsZero()
+	return validBounded(host.HostID, maxHostIDBytes) && validBounded(host.Tenant, 256) && validBounded(host.Pool, 128) && host.Generation > 0 && host.ProtocolVersion == sandboxhostprotocol.Version && validBounded(host.CertificateDigest, maxDigestBytes) && len(host.SigningPublicKey) == ed25519.PublicKeySize && validBounded(host.CapabilityDigest, maxDigestBytes) && (host.AttestationDigest == "" || validBounded(host.AttestationDigest, maxDigestBytes)) && validHostAttestation(host) && !host.ExpiresAt.IsZero()
 }
 
 func sameEnrollment(left, right HostEnrollment) bool {
-	return left.HostID == right.HostID && left.Tenant == right.Tenant && left.Pool == right.Pool && left.Generation == right.Generation && left.ProtocolVersion == right.ProtocolVersion && left.CertificateDigest == right.CertificateDigest && string(left.SigningPublicKey) == string(right.SigningPublicKey) && left.CapabilityDigest == right.CapabilityDigest && left.AttestationDigest == right.AttestationDigest && left.Status == right.Status && left.ExpiresAt.Equal(right.ExpiresAt)
+	return left.HostID == right.HostID && left.Tenant == right.Tenant && left.Pool == right.Pool && left.Generation == right.Generation && left.ProtocolVersion == right.ProtocolVersion && left.CertificateDigest == right.CertificateDigest && string(left.SigningPublicKey) == string(right.SigningPublicKey) && left.CapabilityDigest == right.CapabilityDigest && left.AttestationDigest == right.AttestationDigest && left.AttestationProfile == right.AttestationProfile && left.AttestationState == right.AttestationState && left.Status == right.Status && left.ExpiresAt.Equal(right.ExpiresAt)
 }
 
 func validDeliverySeed(seed DeliverySeed, requireAssignment bool) bool {

@@ -96,6 +96,54 @@ func TestMemoryHostControlLostAckRestartFenceAndQuarantine(t *testing.T) {
 	}
 }
 
+func TestAttestationVerifierRecordsFailureAndRefusesFailedHost(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 8, 8, 12, 0, 0, 0, time.UTC)
+	publicKey, _, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	host := HostEnrollment{HostID: "host_attestation_failed", Tenant: "tenant_01", Pool: "pool_01", Generation: 1, ProtocolVersion: sandboxhostprotocol.Version, CertificateDigest: digest("1"), SigningPublicKey: publicKey, CapabilityDigest: digest("2"), AttestationDigest: digest("3"), Status: HostActive, ExpiresAt: now.Add(time.Hour)}
+	attested := VerifyHostAttestation(context.Background(), AttestationProfileVerified, host, AttestationVerifierFunc(func(context.Context, AttestationEvidence) error {
+		return errors.New("measurement mismatch")
+	}))
+	if attested.State != AttestationFailed {
+		t.Fatalf("VerifyHostAttestation() state = %q, want %q", attested.State, AttestationFailed)
+	}
+	host.AttestationProfile, host.AttestationState, host.Status = attested.Profile, attested.State, HostAttestationFailed
+	ledger := NewMemoryLedger()
+	if err := ledger.ProvisionHost(context.Background(), host); err != nil {
+		t.Fatalf("ProvisionHost() failed to retain attestation failure: %v", err)
+	}
+	if _, err := ledger.AuthenticateHost(context.Background(), HostIdentity{HostID: host.HostID, Generation: host.Generation, CertificateDigest: host.CertificateDigest}, now); !errors.Is(err, ErrHostDenied) {
+		t.Fatalf("AuthenticateHost() accepted failed attestation: %v", err)
+	}
+}
+
+func TestLocalMetadataAttestationIsAdmittedWithoutClaimingVerification(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 8, 8, 12, 0, 0, 0, time.UTC)
+	publicKey, _, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	host := HostEnrollment{HostID: "host_attestation_local", Tenant: "tenant_01", Pool: "pool_01", Generation: 1, ProtocolVersion: sandboxhostprotocol.Version, CertificateDigest: digest("1"), SigningPublicKey: publicKey, CapabilityDigest: digest("2"), AttestationDigest: digest("3"), Status: HostActive, ExpiresAt: now.Add(time.Hour)}
+	attested := VerifyHostAttestation(context.Background(), AttestationProfileLocalMetadata, host, nil)
+	if attested.State != AttestationMetadataOnly {
+		t.Fatalf("VerifyHostAttestation() state = %q, want metadata-only", attested.State)
+	}
+	host.AttestationProfile, host.AttestationState = attested.Profile, attested.State
+	ledger := NewMemoryLedger()
+	if err := ledger.ProvisionHost(context.Background(), host); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ledger.AuthenticateHost(context.Background(), HostIdentity{HostID: host.HostID, Generation: host.Generation, CertificateDigest: host.CertificateDigest}, now); err != nil {
+		t.Fatalf("AuthenticateHost() rejected metadata-only local profile: %v", err)
+	}
+}
+
 func TestMemoryHostControlRecoversTerminalOutputAndResultAcksAfterLeaseExpiry(t *testing.T) {
 	t.Parallel()
 
