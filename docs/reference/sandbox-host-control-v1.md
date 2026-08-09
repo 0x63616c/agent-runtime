@@ -69,7 +69,10 @@ Unknown fields, trailing JSON, altered bytes, legacy zero bindings, retired or
 revoked keys, replay to another host/generation, and expired envelopes are
 refused. The atomic snapshot primitive has unit coverage for this lifecycle;
 the reference host does not yet implement a watched configuration reload, and
-M3 has no retained live control-trust-rotation proof.
+M3 has no retained live control-trust-rotation proof. Retirement lineage is
+in-memory and lasts only for one running `AtomicTrust` instance; a restarted
+host needs authenticated persisted trust history before it can make an
+across-restart retirement claim, and M3 does not yet provide that persistence.
 
 TLS supplies transport confidentiality. M3 does not add application-layer
 envelope encryption beyond TLS and therefore makes no protection claim after a

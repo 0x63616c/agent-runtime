@@ -28,7 +28,7 @@ type TrustBundle struct {
 	Next            *SigningKey
 }
 
-// AtomicTrust owns one replace-only control trust snapshot.
+// AtomicTrust owns one replace-only in-memory control trust snapshot.
 type AtomicTrust struct {
 	mu                sync.RWMutex
 	bundle            TrustBundle
@@ -57,10 +57,12 @@ func (trust *AtomicTrust) Snapshot() TrustBundle {
 }
 
 // Update atomically replaces trust with a strictly newer, non-regressing
-// revocation epoch. A key ID is immutable for its lifetime; once it leaves a
-// snapshot it is retired permanently, and a newly introduced key must have a
-// key version greater than every previously observed key. Readers observe
-// either complete snapshot, never a mix.
+// revocation epoch. A key ID is immutable for this AtomicTrust instance; once
+// it leaves a snapshot it is retired for the instance lifetime, and a newly
+// introduced key must have a key version greater than every previously
+// observed key. Readers observe either complete snapshot, never a mix. A
+// process restart needs authenticated persisted trust history to preserve this
+// lineage; the reference host does not implement that persistence.
 func (trust *AtomicTrust) Update(bundle TrustBundle) error {
 	if !validTrustBundle(bundle) {
 		return errors.New("update host control trust: invalid versioned key bundle")
@@ -83,6 +85,11 @@ func (trust *AtomicTrust) Update(bundle TrustBundle) error {
 		}
 		if key.Version <= trust.maximumKeyVersion {
 			return errors.New("update host control trust: newly introduced key version regressed")
+		}
+		for knownID, knownKey := range trust.knownKeys {
+			if knownID != key.ID && bytes.Equal(knownKey.PublicKey, key.PublicKey) {
+				return errors.New("update host control trust: public key material is already bound to another key ID")
+			}
 		}
 	}
 	for _, key := range trustKeys(trust.bundle) {
@@ -154,7 +161,7 @@ func validTrustBundle(bundle TrustBundle) bool {
 	if bundle.Version == 0 || bundle.RevocationEpoch == 0 || !validSigningKey(bundle.Current) {
 		return false
 	}
-	return bundle.Next == nil || (validSigningKey(*bundle.Next) && bundle.Current.ID != bundle.Next.ID)
+	return bundle.Next == nil || (validSigningKey(*bundle.Next) && bundle.Current.ID != bundle.Next.ID && bundle.Current.Version < bundle.Next.Version && !bytes.Equal(bundle.Current.PublicKey, bundle.Next.PublicKey))
 }
 
 func validSigningKey(key SigningKey) bool {

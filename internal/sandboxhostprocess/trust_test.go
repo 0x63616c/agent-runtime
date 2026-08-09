@@ -21,11 +21,16 @@ func TestControlTrustReloadRotatesThenRetiresPreviousKey(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	thirdPublic, _, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
 	now := time.Date(2026, 8, 8, 12, 0, 0, 0, time.UTC)
 	first := controlTrustKeyConfig{id: "control_01", version: 1, publicKeyEnvironment: "FIRST_PUBLIC", notBefore: now.Add(-time.Hour), notAfter: now.Add(time.Hour)}
 	second := controlTrustKeyConfig{id: "control_02", version: 2, publicKeyEnvironment: "SECOND_PUBLIC", notBefore: now.Add(-time.Hour), notAfter: now.Add(time.Hour)}
+	third := controlTrustKeyConfig{id: "control_03", version: 3, publicKeyEnvironment: "THIRD_PUBLIC", notBefore: now.Add(-time.Hour), notAfter: now.Add(time.Hour)}
 	lookup := func(name string) (string, bool) {
-		values := map[string]string{"FIRST_PUBLIC": base64.RawStdEncoding.EncodeToString(firstPublic), "SECOND_PUBLIC": base64.RawStdEncoding.EncodeToString(secondPublic)}
+		values := map[string]string{"FIRST_PUBLIC": base64.RawStdEncoding.EncodeToString(firstPublic), "SECOND_PUBLIC": base64.RawStdEncoding.EncodeToString(secondPublic), "THIRD_PUBLIC": base64.RawStdEncoding.EncodeToString(thirdPublic)}
 		value, ok := values[name]
 		return value, ok
 	}
@@ -38,11 +43,11 @@ func TestControlTrustReloadRotatesThenRetiresPreviousKey(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := ReloadControlTrust(trust, controlTrustConfig{version: 2, revocationEpoch: 4, current: second, next: &first}, lookup); err != nil {
+	if err := ReloadControlTrust(trust, controlTrustConfig{version: 2, revocationEpoch: 4, current: second, next: &third}, lookup); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := sandboxhostprotocol.VerifyEnvelopeWithTrust(oldWire, "host_01", 1, now, trust.Snapshot()); err != nil {
-		t.Fatalf("previous key during overlap: %v", err)
+	if _, err := sandboxhostprotocol.VerifyEnvelopeWithTrust(oldWire, "host_01", 1, now, trust.Snapshot()); err == nil {
+		t.Fatal("retired control key remained trusted after promotion")
 	}
 	newWire, err := sandboxhostprotocol.SignEnvelopeWithTrust(processTestEnvelope(now), trust.Snapshot(), secondPrivate)
 	if err != nil {

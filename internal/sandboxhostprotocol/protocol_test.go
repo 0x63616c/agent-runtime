@@ -41,7 +41,7 @@ func TestEnvelopeCanonicalSignatureAndHostBinding(t *testing.T) {
 	}
 }
 
-func TestEnvelopeTrustRotatesCurrentKeyThenRefusesRetiredKey(t *testing.T) {
+func TestEnvelopeTrustPromotesNextKeyThenRefusesRetiredKey(t *testing.T) {
 	t.Parallel()
 
 	currentPublic, currentPrivate, err := ed25519.GenerateKey(rand.Reader)
@@ -52,9 +52,14 @@ func TestEnvelopeTrustRotatesCurrentKeyThenRefusesRetiredKey(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	futurePublic, _, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
 	now := time.Date(2026, 8, 8, 12, 0, 0, 0, time.UTC)
 	current := SigningKey{ID: "control-current", Version: 1, PublicKey: currentPublic, NotBefore: now.Add(-time.Hour), NotAfter: now.Add(2 * time.Hour)}
 	next := SigningKey{ID: "control-next", Version: 2, PublicKey: nextPublic, NotBefore: now.Add(-time.Hour), NotAfter: now.Add(2 * time.Hour)}
+	future := SigningKey{ID: "control-future", Version: 3, PublicKey: futurePublic, NotBefore: now.Add(-time.Hour), NotAfter: now.Add(2 * time.Hour)}
 	trust, err := NewAtomicTrust(TrustBundle{Version: 1, RevocationEpoch: 7, Current: current, Next: &next})
 	if err != nil {
 		t.Fatal(err)
@@ -68,11 +73,11 @@ func TestEnvelopeTrustRotatesCurrentKeyThenRefusesRetiredKey(t *testing.T) {
 		t.Fatalf("VerifyEnvelopeWithTrust() before rotation: %v", err)
 	}
 
-	if err := trust.Update(TrustBundle{Version: 2, RevocationEpoch: 7, Current: next, Next: &current}); err != nil {
+	if err := trust.Update(TrustBundle{Version: 2, RevocationEpoch: 7, Current: next, Next: &future}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := VerifyEnvelopeWithTrust(oldEnvelope, "host_01", 7, now.Add(time.Second), trust.Snapshot()); err != nil {
-		t.Fatalf("VerifyEnvelopeWithTrust() during overlap: %v", err)
+	if _, err := VerifyEnvelopeWithTrust(oldEnvelope, "host_01", 7, now.Add(time.Second), trust.Snapshot()); err == nil {
+		t.Fatal("VerifyEnvelopeWithTrust() accepted a retired key after promotion")
 	}
 	newEnvelope, err := SignEnvelopeWithTrust(testEnvelope(now), trust.Snapshot(), nextPrivate)
 	if err != nil {
@@ -137,6 +142,39 @@ func TestTrustRejectsCurrentAndNextWithTheSameKeyID(t *testing.T) {
 	next.Version = 2
 	if _, err := NewAtomicTrust(TrustBundle{Version: 1, RevocationEpoch: 1, Current: current, Next: &next}); err == nil {
 		t.Fatal("NewAtomicTrust() accepted colliding current and next key IDs")
+	}
+}
+
+func TestTrustRejectsOutOfOrderVersionsAndDuplicatePublicKeys(t *testing.T) {
+	t.Parallel()
+
+	firstPublic, _, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondPublic, _, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 8, 8, 12, 0, 0, 0, time.UTC)
+	first := SigningKey{ID: "control-first", Version: 1, PublicKey: firstPublic, NotBefore: now.Add(-time.Hour), NotAfter: now.Add(time.Hour)}
+	second := SigningKey{ID: "control-second", Version: 2, PublicKey: secondPublic, NotBefore: now.Add(-time.Hour), NotAfter: now.Add(time.Hour)}
+	if _, err := NewAtomicTrust(TrustBundle{Version: 1, RevocationEpoch: 1, Current: second, Next: &first}); err == nil {
+		t.Fatal("NewAtomicTrust() accepted an out-of-order next key version")
+	}
+	duplicate := first
+	duplicate.ID, duplicate.Version = "control-duplicate", 2
+	if _, err := NewAtomicTrust(TrustBundle{Version: 1, RevocationEpoch: 1, Current: first, Next: &duplicate}); err == nil {
+		t.Fatal("NewAtomicTrust() accepted duplicate public key material under two IDs")
+	}
+	trust, err := NewAtomicTrust(TrustBundle{Version: 1, RevocationEpoch: 1, Current: first})
+	if err != nil {
+		t.Fatal(err)
+	}
+	duplicatedDuringUpdate := first
+	duplicatedDuringUpdate.ID, duplicatedDuringUpdate.Version = "control-duplicate-update", 2
+	if err := trust.Update(TrustBundle{Version: 2, RevocationEpoch: 1, Current: first, Next: &duplicatedDuringUpdate}); err == nil {
+		t.Fatal("Update() accepted duplicate public key material under a new ID")
 	}
 }
 
