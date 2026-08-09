@@ -11,6 +11,10 @@ stack_a="${AGENT_RUNTIME_DEV_STACK_A:-m1-isolation-a}"
 stack_b="${AGENT_RUNTIME_DEV_STACK_B:-m1-isolation-b}"
 evidence_file="${AGENT_RUNTIME_TWO_STACK_EVIDENCE:-}"
 diagnostics_dir="${AGENT_RUNTIME_TWO_STACK_DIAGNOSTICS:-}"
+diagnostic_self_test=false
+if [[ "${1:-}" == "--self-test-diagnostics" ]]; then
+  diagnostic_self_test=true
+fi
 # A clean K3s node needs to fetch immutable dependency images before either
 # Stack can become Ready. Keep this bounded while allowing that cold path.
 readiness_timeout=12m
@@ -68,6 +72,61 @@ runtime_roles_ready() {
     ($runtime_roles | length) == ($roles | length) and all($runtime_roles[]; .status.readyReplicas == .spec.replicas)
   ' >/dev/null
 }
+
+# Diagnostics are a deliberately small, typed status record, not a redacted
+# copy of Kubernetes/Tilt output.  Workload output can contain credentials in
+# arbitrary JSON, headers, or environment dumps, so retaining it is unsafe even
+# when a best-effort redactor believes it has removed known keys.
+write_safe_diagnostic_summary() {
+  local stack="$1"
+  local namespace="$2"
+  local ci_status="$3"
+  local probe_status="$4"
+  local roles_observed="$5"
+  local roles_ready="$6"
+  local destination="$diagnostics_dir/$stack.summary.json"
+
+  jq -n \
+    --arg stack "$stack" \
+    --arg namespace "$namespace" \
+    --arg profile "$profile" \
+    --arg probe_status "$probe_status" \
+    --argjson tilt_ci_exit_code "$ci_status" \
+    --argjson runtime_roles_observed "$roles_observed" \
+    --argjson runtime_roles_ready "$roles_ready" \
+    '{kind:"diagnostic-summary/v1",version:1,stack:$stack,namespace:$namespace,profile:$profile,tilt_ci_exit_code:$tilt_ci_exit_code,workload_probe:$probe_status,runtime_roles_observed:$runtime_roles_observed,runtime_roles_ready:$runtime_roles_ready}' \
+    >"$destination"
+
+  jq -e '
+    keys == ["kind","namespace","profile","runtime_roles_observed","runtime_roles_ready","stack","tilt_ci_exit_code","version","workload_probe"] and
+    .kind == "diagnostic-summary/v1" and .version == 1 and
+    (.stack | type == "string") and (.namespace | type == "string") and (.profile | type == "string") and
+    (.tilt_ci_exit_code | type == "number") and (.workload_probe | type == "string") and
+    (.runtime_roles_observed | type == "number") and (.runtime_roles_ready | type == "boolean")
+  ' "$destination" >/dev/null || {
+    rm -f -- "$destination"
+    echo "refusing to retain a diagnostic summary outside the safe schema" >&2
+    return 1
+  }
+}
+
+if [[ "$diagnostic_self_test" == true ]]; then
+  command -v jq >/dev/null || {
+    echo "jq is required for diagnostic self-test" >&2
+    exit 1
+  }
+  write_safe_diagnostic_summary "fixture-stack" "ar-fixture-stack" 7 "unavailable" 0 false
+  for unsafe_value in 'Bearer adversarial-header-token' 'MODEL_API_KEY=adversarial-env-secret' '{"token":"adversarial-json-secret"}'; do
+    if grep -F -- "$unsafe_value" "$diagnostics_dir/fixture-stack.summary.json" >/dev/null; then
+      echo "safe diagnostic summary retained an unsafe fixture value" >&2
+      exit 1
+    fi
+  done
+  rm -f -- "$diagnostics_dir/fixture-stack.summary.json"
+  rmdir -- "$diagnostics_dir"
+  echo "safe diagnostic summary rejects raw JSON, header, and environment payloads"
+  exit 0
+fi
 
 if [[ "${1:-}" == "--self-test-selectors" ]]; then
   command -v jq >/dev/null || {
@@ -192,61 +251,33 @@ cleanup() {
 }
 trap cleanup EXIT
 
-redact_diagnostics() {
-  local source="$1"
-  local destination="$2"
-  # The retained diagnostic set is useful only if it cannot carry a credential
-  # from a workload log or a Tilt session. Keep keys but replace their values.
-  sed -E \
-    -e 's/((password|secret|token|credential|api[_-]?key)[[:space:]]*[:=][[:space:]]*)[^[:space:]",}]+/\1[REDACTED]/Ig' \
-    -e 's/(Authorization:[[:space:]]*(Bearer|Basic)[[:space:]]+)[^[:space:]"]+/\1[REDACTED]/Ig' \
-    "$source" >"$destination"
-}
-
 capture_stack_diagnostics() {
   local stack="$1"
   local namespace="$2"
   local ci_status="$3"
-  local prefix="$diagnostics_dir/$stack"
-  local raw_snapshot="$prefix.tilt-session.raw.json"
+  local probe_status="unavailable"
+  local roles_observed=0
+  local roles_ready=false
+  local deployment_state
 
-  printf '%s\n' "$ci_status" >"$prefix.tilt-ci.exit-code"
-  if [[ -f "$raw_snapshot" ]]; then
-    redact_diagnostics "$raw_snapshot" "$prefix.tilt-session.json"
-    rm -f -- "$raw_snapshot"
+  if deployment_state="$(kubectl --context "$context" --namespace "$namespace" get deployments -l "app.kubernetes.io/part-of=agent-runtime,agent-runtime.dev/profile=$profile,agent-runtime.dev/stack=$stack" -o json 2>/dev/null)"; then
+    probe_status="available"
+    roles_observed="$(printf '%s' "$deployment_state" | jq --argjson roles "$runtime_role_ids" '[.items[] | select(.metadata.labels["agent-runtime.dev/resource"] as $id | $roles | index($id) != null)] | length' 2>/dev/null || printf '0')"
+    if printf '%s' "$deployment_state" | runtime_roles_ready; then
+      roles_ready=true
+    fi
   fi
-  kubectl --context "$context" --namespace "$namespace" get pods,deployments,persistentvolumeclaims,events -o json \
-    >"$prefix.resources.raw.json" 2>&1 || true
-  redact_diagnostics "$prefix.resources.raw.json" "$prefix.resources.json"
-  rm -f -- "$prefix.resources.raw.json"
-  kubectl --context "$context" --namespace "$namespace" get events --sort-by=.lastTimestamp \
-    >"$prefix.events.raw.txt" 2>&1 || true
-  redact_diagnostics "$prefix.events.raw.txt" "$prefix.events.txt"
-  rm -f -- "$prefix.events.raw.txt"
-  kubectl --context "$context" --namespace "$namespace" describe pods \
-    >"$prefix.pods.raw.txt" 2>&1 || true
-  redact_diagnostics "$prefix.pods.raw.txt" "$prefix.pods.txt"
-  rm -f -- "$prefix.pods.raw.txt"
-  kubectl --context "$context" --namespace "$namespace" logs --all-containers --prefix --tail=200 -l "agent-runtime.dev/stack=$stack" \
-    >"$prefix.workload-logs.raw.txt" 2>&1 || true
-  redact_diagnostics "$prefix.workload-logs.raw.txt" "$prefix.workload-logs.txt"
-  rm -f -- "$prefix.workload-logs.raw.txt"
+  write_safe_diagnostic_summary "$stack" "$namespace" "$ci_status" "$probe_status" "$roles_observed" "$roles_ready"
 }
 
 start_stack() {
   local stack="$1"
   local namespace="$2"
-  local prefix="$diagnostics_dir/$stack"
   local ci_status=0
-  # Local-path provisioners serialize four PVC helper operations; retain a
-  # bounded allowance for both volume work and dependent role startup.
-  printf 'tilt ci --context %q --namespace %q --port 0 --timeout %q --output-snapshot-on-exit %q -- --stack=%q --profile=%q\n' \
-    "$context" "$namespace" "$readiness_timeout" "$prefix.tilt-session.raw.json" "$stack" "$profile" >"$prefix.tilt-ci.command.txt"
+  # Do not retain Tilt output: it may contain workload environment or headers.
+  # The allowlisted summary below records only bounded readiness metadata.
   tilt ci --context "$context" --namespace "$namespace" --port 0 --timeout "$readiness_timeout" \
-    --output-snapshot-on-exit "$prefix.tilt-session.raw.json" -- --stack="$stack" --profile="$profile" \
-    >"$prefix.tilt-ci.raw.log" 2>&1 || ci_status=$?
-  redact_diagnostics "$prefix.tilt-ci.raw.log" "$prefix.tilt-ci.log"
-  rm -f -- "$prefix.tilt-ci.raw.log"
+    -- --stack="$stack" --profile="$profile" >/dev/null 2>&1 || ci_status=$?
   capture_stack_diagnostics "$stack" "$namespace" "$ci_status"
   if [[ "$ci_status" != 0 ]]; then
     return "$ci_status"

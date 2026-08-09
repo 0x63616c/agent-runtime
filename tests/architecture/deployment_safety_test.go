@@ -1,8 +1,11 @@
 package architecture_test
 
 import (
+	"crypto/sha256"
 	"encoding/json"
+	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 
@@ -63,7 +66,8 @@ var _ = Describe("M1 deployment safety boundaries", func() {
 		Expect(os.IsNotExist(err)).To(BeTrue())
 		Expect(read("evidence/issue-14-deployment-e2e.json")).To(ContainSubstring(`"milestone": "M1 self-hosted roles and deployment"`))
 		var proof struct {
-			ImplementationRevision string `json:"implementation_revision"`
+			ImplementationRevision string          `json:"implementation_revision"`
+			ProofProvenance        proofProvenance `json:"proof_provenance"`
 			CredentialMatrix       struct {
 				Expected       int  `json:"expected_rejections"`
 				Rejected       int  `json:"rejected"`
@@ -77,6 +81,7 @@ var _ = Describe("M1 deployment safety boundaries", func() {
 		}
 		Expect(json.Unmarshal([]byte(read("evidence/issue-14-deployment-e2e.json")), &proof)).To(Succeed())
 		Expect(proof.ImplementationRevision).To(HaveLen(40))
+		verifyRetainedProof("evidence/issue-14-deployment-e2e.json", proof.ImplementationRevision, proof.ProofProvenance)
 		Expect(proof.CredentialMatrix.Expected).To(Equal(76))
 		Expect(proof.CredentialMatrix.Rejected).To(Equal(76))
 		Expect(proof.CredentialMatrix.AllowedPaths).To(Equal(8))
@@ -110,14 +115,22 @@ var _ = Describe("M1 deployment safety boundaries", func() {
 			"06d8f25bc3a971c4eb29e0ff08429b180402db0f4dec838c9eac427e296800a0",
 			"tilt.0.37.6.linux.x86_64.tar.gz",
 			"e9672b8a18d43501f35dcfe98465969a7db0e436b36cf0c50c7e6f8d40de5fe6",
-			"k3d cluster create agent-runtime-isolated",
+			"fetch-depth: 0",
+			"k3d cluster list -o json",
+			"k3d registry list -o json",
+			"refusing to reuse pre-existing k3d cluster agent-runtime-isolated",
+			"refusing to reuse pre-existing k3d registry agent-runtime-registry.localhost",
+			"cluster_creation_started=false",
+			"registry_creation_started=false",
+			"k3d-ownership.json",
+			"k3d cluster create \"$cluster\"",
 			"--api-port 127.0.0.1:6447",
 			"--kubeconfig-update-default=false",
 			"--kubeconfig-switch-context=false",
-			"k3d kubeconfig get agent-runtime-isolated > \"$KUBECONFIG\"",
+			"k3d kubeconfig get \"$cluster\" > \"$KUBECONFIG\"",
 			"refusing to reuse occupied loopback API port 6447",
 			"refusing to reuse occupied loopback registry port 5111",
-			"k3d registry create agent-runtime-registry.localhost",
+			"k3d registry create \"$registry\"",
 			"registry:2.8.3@sha256:a3d8aaa63ed8681a604f1dea0aa03f100d5895b6a58ace528858a7b332415373",
 			"--registry-use k3d-agent-runtime-registry.localhost:5111",
 			`api_endpoint="$(kubectl config view --raw --minify`,
@@ -142,11 +155,21 @@ var _ = Describe("M1 deployment safety boundaries", func() {
 			"AGENT_RUNTIME_DEV_CONTEXT: k3d-agent-runtime-isolated",
 			"just two-stack-smoke",
 			"if: always()",
-			"k3d cluster delete agent-runtime-isolated",
-			"k3d registry delete agent-runtime-registry.localhost",
+			"k3d cluster delete \"$cluster\"",
+			"k3d registry delete \"$registry\"",
+			"AGENT_RUNTIME_TWO_STACK_DIAGNOSTICS: ${{ runner.temp }}/two-stack-diagnostics",
+			"two-stack-diagnostics/*.summary.json",
 			"actions/upload-artifact@",
 		} {
 			Expect(workflow).To(ContainSubstring(required))
+		}
+		for _, forbidden := range []string{
+			"kubernetes-diagnostics.txt",
+			"k3s-server.log",
+			"kubectl get nodes,namespaces,pods,persistentvolumeclaims --all-namespaces",
+			"docker logs k3d-agent-runtime-isolated-server-0",
+		} {
+			Expect(workflow).NotTo(ContainSubstring(forbidden))
 		}
 		Expect(read("Tiltfile")).To(ContainSubstring("k3d-agent-runtime-isolated"))
 		Expect(read("Tiltfile")).To(ContainSubstring("host_from_cluster='k3d-agent-runtime-registry.localhost:5111'"))
@@ -159,11 +182,10 @@ var _ = Describe("M1 deployment safety boundaries", func() {
 			`AGENT_RUNTIME_TWO_STACK_EVIDENCE`,
 			`AGENT_RUNTIME_TWO_STACK_DIAGNOSTICS`,
 			`readiness_timeout=12m`,
-			`--output-snapshot-on-exit`,
-			`tilt-ci.log`,
+			`write_safe_diagnostic_summary`,
+			`diagnostic-summary/v1`,
+			`--self-test-diagnostics`,
 			`capture_stack_diagnostics`,
-			`redact_diagnostics`,
-			`[REDACTED]`,
 			`declared_egress_consecutive_successes`,
 			`default_deny_consecutive_failures`,
 			`tilt alpha tiltfile-result`,
@@ -178,11 +200,26 @@ var _ = Describe("M1 deployment safety boundaries", func() {
 		} {
 			Expect(twoStackScript).To(ContainSubstring(required))
 		}
+		for _, forbidden := range []string{
+			"redact_diagnostics",
+			"tilt-session.raw.json",
+			"tilt-ci.raw.log",
+			"workload-logs.raw",
+			"kubectl --context \"$context\" --namespace \"$namespace\" logs",
+		} {
+			Expect(twoStackScript).NotTo(ContainSubstring(forbidden))
+		}
+		selfTest := exec.Command("bash", "deploy/dev/run-two-stack-smoke.sh", "--self-test-diagnostics")
+		selfTest.Dir = "../.."
+		output, err := selfTest.CombinedOutput()
+		Expect(err).NotTo(HaveOccurred(), string(output))
+		Expect(string(output)).To(ContainSubstring("safe diagnostic summary rejects raw JSON, header, and environment payloads"))
 
 		var proof struct {
-			ImplementationRevision string `json:"implementation_revision"`
-			ConcurrentReady        bool   `json:"both_stacks_concurrently_ready"`
-			FirstTeardownIsolated  bool   `json:"first_teardown_left_second_unchanged"`
+			ImplementationRevision string          `json:"implementation_revision"`
+			ProofProvenance        proofProvenance `json:"proof_provenance"`
+			ConcurrentReady        bool            `json:"both_stacks_concurrently_ready"`
+			FirstTeardownIsolated  bool            `json:"first_teardown_left_second_unchanged"`
 			NetworkPolicy          struct {
 				Allowed int `json:"declared_egress_consecutive_successes"`
 				Denied  int `json:"default_deny_consecutive_failures"`
@@ -194,6 +231,7 @@ var _ = Describe("M1 deployment safety boundaries", func() {
 		}
 		Expect(json.Unmarshal([]byte(read("evidence/issue-14-two-stack-e2e.json")), &proof)).To(Succeed())
 		Expect(proof.ImplementationRevision).To(HaveLen(40))
+		verifyRetainedProof("evidence/issue-14-two-stack-e2e.json", proof.ImplementationRevision, proof.ProofProvenance)
 		Expect(proof.ConcurrentReady).To(BeTrue())
 		Expect(proof.FirstTeardownIsolated).To(BeTrue())
 		Expect(proof.NetworkPolicy.Allowed).To(Equal(3))
@@ -208,3 +246,48 @@ var _ = Describe("M1 deployment safety boundaries", func() {
 		Expect(read("tests/architecture/production_stack_test.go")).To(ContainSubstring("Self-hosted production Stack"))
 	})
 })
+
+type proofProvenance struct {
+	SourceRevision         string `json:"source_revision"`
+	SourceTreeID           string `json:"source_tree_id"`
+	RetentionRevision      string `json:"retention_revision"`
+	RetainedArtifactSHA256 string `json:"retained_artifact_sha256"`
+}
+
+func verifyRetainedProof(path, implementationRevision string, provenance proofProvenance) {
+	Expect(provenance.SourceRevision).To(Equal(implementationRevision), path)
+	Expect(provenance.SourceRevision).To(HaveLen(40), path)
+	Expect(provenance.RetentionRevision).To(HaveLen(40), path)
+	Expect(provenance.RetentionRevision).NotTo(Equal(provenance.SourceRevision), path)
+	Expect(provenance.SourceTreeID).To(HaveLen(40), path)
+	Expect(provenance.RetainedArtifactSHA256).To(MatchRegexp(`^sha256:[a-f0-9]{64}$`), path)
+
+	root := "../.."
+	ancestor := exec.Command("git", "merge-base", "--is-ancestor", provenance.SourceRevision, provenance.RetentionRevision)
+	ancestor.Dir = root
+	output, err := ancestor.CombinedOutput()
+	Expect(err).NotTo(HaveOccurred(), string(output), path)
+
+	treeID := gitOutput(root, "rev-parse", provenance.SourceRevision+"^{tree}")
+	Expect(provenance.SourceTreeID).To(Equal(treeID), path)
+	historical := gitBytes(root, "show", provenance.RetentionRevision+":"+path)
+	sum := sha256.Sum256([]byte(historical))
+	Expect(provenance.RetainedArtifactSHA256).To(Equal(fmt.Sprintf("sha256:%x", sum)), path)
+	var historicalProof struct {
+		ImplementationRevision string `json:"implementation_revision"`
+	}
+	Expect(json.Unmarshal([]byte(historical), &historicalProof)).To(Succeed(), path)
+	Expect(historicalProof.ImplementationRevision).To(Equal(provenance.SourceRevision), path)
+}
+
+func gitOutput(directory string, arguments ...string) string {
+	return strings.TrimSpace(gitBytes(directory, arguments...))
+}
+
+func gitBytes(directory string, arguments ...string) string {
+	command := exec.Command("git", arguments...)
+	command.Dir = directory
+	output, err := command.Output()
+	ExpectWithOffset(1, err).NotTo(HaveOccurred(), strings.Join(arguments, " "))
+	return string(output)
+}

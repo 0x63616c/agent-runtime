@@ -513,7 +513,7 @@
     },
     {
       "id": "INF-005",
-      "status": "completed",
+      "status": "in_progress",
       "evidence": [
         {
           "revision": "042b192988b3ebd706f73668fb5c0ccbef49533c",

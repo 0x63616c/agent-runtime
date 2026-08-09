@@ -151,7 +151,7 @@ the operator verifies the source revision label and GitHub provenance for an
 immutable digest, then makes a reviewed Stack revision that pins it. Never
 hand-convert this desired state into untracked manifests.
 
-Main CI creates a disposable k3d `v5.9.0` cluster with the multi-architecture
+The committed main-CI workflow is configured to create a disposable k3d `v5.9.0` cluster with the multi-architecture
 K3s image pinned as
 `rancher/k3s:v1.33.9-k3s1@sha256:f17e43023cce2b9c613e198f26e73637bf734b5156d37c9f44819d97bac4d655`.
 The downloaded Linux amd64 k3d binary is verified against
@@ -177,3 +177,22 @@ node CRI resolve the reviewed index digest before checking its tag and digest
 reference. A mounted disposable consumer makes the `WaitForFirstConsumer`
 local-path PVC bind; the namespace and volume are then removed. Its evidence is explicitly
 K3s-in-container evidence and makes no KVM claim.
+
+## M1 proof provenance and CI safety
+
+The retained local M1 artifacts bind two distinct immutable revisions: the
+runtime/render source candidate is
+`49d5b0de99ec2e2f989c069cf6471a68817480fb`; the later evidence-retention
+commit is `6b50b522120f1c794442baaa25710d6f7800dc2c`. Each current evidence
+envelope records the source commit/tree, retention commit, and SHA-256 of the
+historical retained artifact. This is provenance, not a claim that the local
+proof ran on the retention commit or on the current checkout.
+
+The two-Stack CI lane refuses existing k3d cluster and registry names before
+it starts creation. It records that each exact resource's creation has started
+before invoking k3d, and cleanup deletes only a resource with that recorded
+ownership and exact name. CI retains only schema-validated diagnostic summaries
+(identity, bounded readiness counts, and Tilt exit code); it never publishes
+workload logs, raw Tilt snapshots, arbitrary Kubernetes object dumps, or K3s
+server logs. A hosted run of this exact revised lane remains required before
+M1 isolation acceptance can be claimed.

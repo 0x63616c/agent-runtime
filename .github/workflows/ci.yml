@@ -21,6 +21,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          fetch-depth: 0
       - name: Install pinned Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
@@ -77,6 +78,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          fetch-depth: 0
       - name: Install locked Node
         uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
@@ -103,6 +105,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          fetch-depth: 0
       - name: Install pinned Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
@@ -130,7 +133,40 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          cluster=agent-runtime-isolated
+          registry=agent-runtime-registry.localhost
+          ownership_record="$RUNNER_TEMP/k3d-ownership.json"
+          cluster_creation_started=false
+          registry_creation_started=false
+          test ! -e "$ownership_record"
           test ! -e "$RUNNER_TEMP/agent-runtime-isolated.kubeconfig"
+          if k3d cluster list -o json | jq -e --arg name "$cluster" 'any(.[]; .name == $name)' >/dev/null; then
+            echo "refusing to reuse pre-existing k3d cluster agent-runtime-isolated" >&2
+            exit 1
+          fi
+          if k3d registry list -o json | jq -e --arg name "$registry" 'any(.[]; .name == $name)' >/dev/null; then
+            echo "refusing to reuse pre-existing k3d registry agent-runtime-registry.localhost" >&2
+            exit 1
+          fi
+          write_ownership_record() {
+            jq -n --arg cluster "$cluster" --arg registry "$registry" \
+              --argjson cluster_creation_started "$cluster_creation_started" --argjson registry_creation_started "$registry_creation_started" \
+              '{version:1,cluster:$cluster,registry:$registry,cluster_creation_started:$cluster_creation_started,registry_creation_started:$registry_creation_started}' \
+              > "$ownership_record"
+          }
+          cleanup_owned_resources() {
+            status=$?
+            set +e
+            if [[ "$cluster_creation_started" == true ]] && k3d cluster list -o json | jq -e --arg name "$cluster" 'any(.[]; .name == $name)' >/dev/null; then
+              k3d cluster delete "$cluster"
+            fi
+            if [[ "$registry_creation_started" == true ]] && k3d registry list -o json | jq -e --arg name "$registry" 'any(.[]; .name == $name)' >/dev/null; then
+              k3d registry delete "$registry"
+            fi
+            trap - EXIT
+            exit "$status"
+          }
+          trap cleanup_owned_resources EXIT
           if (exec 3<>/dev/tcp/127.0.0.1/6447) 2>/dev/null; then
             echo "refusing to reuse occupied loopback API port 6447" >&2
             exit 1
@@ -140,10 +176,14 @@ jobs:
             exit 1
           fi
           export KUBECONFIG="$RUNNER_TEMP/agent-runtime-isolated.kubeconfig"
-          k3d registry create agent-runtime-registry.localhost \
+          registry_creation_started=true
+          write_ownership_record
+          k3d registry create "$registry" \
             --image registry:2.8.3@sha256:a3d8aaa63ed8681a604f1dea0aa03f100d5895b6a58ace528858a7b332415373 \
             --port 127.0.0.1:5111 --enforce-port-match
-          k3d cluster create agent-runtime-isolated \
+          cluster_creation_started=true
+          write_ownership_record
+          k3d cluster create "$cluster" \
             --image rancher/k3s:v1.33.9-k3s1@sha256:f17e43023cce2b9c613e198f26e73637bf734b5156d37c9f44819d97bac4d655 \
             --api-port 127.0.0.1:6447 \
             --registry-use k3d-agent-runtime-registry.localhost:5111 \
@@ -152,7 +192,7 @@ jobs:
             --k3s-arg '--disable=traefik@server:0' \
             --k3s-arg '--disable=servicelb@server:0' \
             --wait --timeout 5m
-          k3d kubeconfig get agent-runtime-isolated > "$KUBECONFIG"
+          k3d kubeconfig get "$cluster" > "$KUBECONFIG"
           api_endpoint="$(kubectl config view --raw --minify -o jsonpath='{.clusters[0].cluster.server}')"
           api_port="${api_endpoint##*:}"
           [[ "$api_endpoint" == https://127.0.0.1:6447 ]]
@@ -160,6 +200,7 @@ jobs:
           (( api_port <= 65535 ))
           kubectl --context k3d-agent-runtime-isolated wait --for=condition=Ready node --all --timeout=5m
           echo "KUBECONFIG=$KUBECONFIG" >> "$GITHUB_ENV"
+          trap - EXIT
       - name: Preload and prove the local-path helper image
         shell: bash
         run: |
@@ -294,20 +335,14 @@ jobs:
           AGENT_RUNTIME_DEV_STACK_A: ci-isolation-a
           AGENT_RUNTIME_DEV_STACK_B: ci-isolation-b
           AGENT_RUNTIME_TWO_STACK_EVIDENCE: ${{ runner.temp }}/two-stack-evidence.json
+          AGENT_RUNTIME_TWO_STACK_DIAGNOSTICS: ${{ runner.temp }}/two-stack-diagnostics
           AGENT_RUNTIME_CLUSTER_RUNTIME: k3d-v5.9.0
           AGENT_RUNTIME_CLUSTER_IMAGE: rancher/k3s:v1.33.9-k3s1@sha256:f17e43023cce2b9c613e198f26e73637bf734b5156d37c9f44819d97bac4d655
           AGENT_RUNTIME_REGISTRY_IMAGE: registry:2.8.3@sha256:a3d8aaa63ed8681a604f1dea0aa03f100d5895b6a58ace528858a7b332415373
           AGENT_RUNTIME_KUBECTL_VERSION: v1.33.9
           AGENT_RUNTIME_TILT_VERSION: v0.37.6
         run: just two-stack-smoke ci k3d-agent-runtime-isolated "$RUNNER_TEMP/two-stack-evidence.json"
-      - name: Export bounded cluster diagnostics
-        if: always()
-        shell: bash
-        run: |
-          set +e
-          kubectl get nodes,namespaces,pods,persistentvolumeclaims --all-namespaces -o wide > "$RUNNER_TEMP/kubernetes-diagnostics.txt" 2>&1
-          docker logs k3d-agent-runtime-isolated-server-0 > "$RUNNER_TEMP/k3s-server.log" 2>&1
-      - name: Upload two-Stack evidence and diagnostics
+      - name: Upload two-Stack evidence and allowlisted diagnostics
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -315,12 +350,23 @@ jobs:
           path: |
             ${{ runner.temp }}/two-stack-evidence.json
             ${{ runner.temp }}/local-path-helper-evidence.json
-            ${{ runner.temp }}/kubernetes-diagnostics.txt
-            ${{ runner.temp }}/k3s-server.log
+            ${{ runner.temp }}/two-stack-diagnostics/*.summary.json
           if-no-files-found: error
           retention-days: 30
       - name: Delete disposable cluster
         if: always()
+        shell: bash
         run: |
-          k3d cluster delete agent-runtime-isolated
-          k3d registry delete agent-runtime-registry.localhost
+          set -euo pipefail
+          ownership_record="$RUNNER_TEMP/k3d-ownership.json"
+          [[ -f "$ownership_record" ]] || exit 0
+          cluster="$(jq -er '.cluster | select(. == "agent-runtime-isolated")' "$ownership_record")"
+          registry="$(jq -er '.registry | select(. == "agent-runtime-registry.localhost")' "$ownership_record")"
+          cluster_creation_started="$(jq -er '.cluster_creation_started | if type == "boolean" then . else error("cluster_creation_started must be boolean") end' "$ownership_record")"
+          registry_creation_started="$(jq -er '.registry_creation_started | if type == "boolean" then . else error("registry_creation_started must be boolean") end' "$ownership_record")"
+          if [[ "$cluster_creation_started" == true ]] && k3d cluster list -o json | jq -e --arg name "$cluster" 'any(.[]; .name == $name)' >/dev/null; then
+            k3d cluster delete "$cluster"
+          fi
+          if [[ "$registry_creation_started" == true ]] && k3d registry list -o json | jq -e --arg name "$registry" 'any(.[]; .name == $name)' >/dev/null; then
+            k3d registry delete "$registry"
+          fi

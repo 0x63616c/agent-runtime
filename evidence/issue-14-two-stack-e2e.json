@@ -4,6 +4,12 @@
   "proof_level": "isolated_kubernetes_integration",
   "utc_time": "2026-08-09T20:08:44Z",
   "implementation_revision": "49d5b0de99ec2e2f989c069cf6471a68817480fb",
+  "proof_provenance": {
+    "source_revision": "49d5b0de99ec2e2f989c069cf6471a68817480fb",
+    "source_tree_id": "f04391a971104e2dd20a752b90d5704d87feca31",
+    "retention_revision": "6b50b522120f1c794442baaa25710d6f7800dc2c",
+    "retained_artifact_sha256": "sha256:b0187a62233b369fb55d2995957a0a093b1ec9bb6c5f19228a05672f2b08d8cd"
+  },
   "command": {
     "path": "deploy/dev/run-two-stack-smoke.sh",
     "kubernetes_context": "k3d-agent-runtime-isolated",
