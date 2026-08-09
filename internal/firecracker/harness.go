@@ -179,7 +179,7 @@ func (lock FixtureLock) Validate() error {
 
 func validFixtureSource(source LockedSource) bool {
 	parsed, err := url.Parse(source.URL)
-	if err != nil || parsed.Scheme != "https" || parsed.Host == "" {
+	if err != nil || parsed.Scheme != "https" || parsed.Host == "" || parsed.User != nil || parsed.Fragment != "" {
 		return false
 	}
 	if !validFixtureID(source.ID) || source.Format == "" || !validSHA256(source.Digest) || source.SizeBytes == 0 || source.SizeBytes >= math.MaxInt64 || strings.TrimSpace(source.License) == "" {
@@ -188,13 +188,13 @@ func validFixtureSource(source LockedSource) bool {
 	switch source.Kind {
 	case FixtureSourceReleaseArchive:
 		version, ok := strings.CutPrefix(source.Reference, "release:")
-		return ok && validReleaseVersion(version) && source.Format == FixtureSourceTarGzip && parsed.Host == "github.com" && strings.HasPrefix(parsed.Path, "/firecracker-microvm/firecracker/releases/download/"+version+"/")
+		return ok && validReleaseVersion(version) && source.Format == FixtureSourceTarGzip && len(parsed.Query()) == 0 && parsed.Host == "github.com" && strings.HasPrefix(parsed.Path, "/firecracker-microvm/firecracker/releases/download/"+version+"/")
 	case FixtureSourceVersionedObject:
 		versionID, ok := strings.CutPrefix(source.Reference, "version-id:")
-		return ok && validObjectVersionID(versionID) && source.Format == FixtureSourceFile && len(parsed.Query()["versionId"]) == 1 && parsed.Query().Get("versionId") == versionID
+		return ok && validObjectVersionID(versionID) && source.Format == FixtureSourceFile && len(parsed.Query()) == 1 && len(parsed.Query()["versionId"]) == 1 && parsed.Query().Get("versionId") == versionID
 	case FixtureSourceProjectBuild:
 		revision, ok := strings.CutPrefix(source.Reference, "commit:")
-		return ok && validRevision(revision) && (source.Format == FixtureSourceFile || source.Format == FixtureSourceTarGzip)
+		return ok && validRevision(revision) && len(parsed.Query()) == 0 && (source.Format == FixtureSourceFile || source.Format == FixtureSourceTarGzip)
 	default:
 		return false
 	}

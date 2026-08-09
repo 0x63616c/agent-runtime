@@ -19,6 +19,10 @@ toolchain, input-lock and SBOM digests. Release archives use an exact
 `release:vX.Y.Z` URL identity, object sources use the URL's exact
 `version-id:...`, and project outputs use `commit:<40-lowercase-hex>`.
 `latest`, `main`, floating release URLs, and cross-kind identities are refused.
+Fixture URLs are also log-safe identities: userinfo, fragments, and all query
+parameters are refused, except for exactly one `versionId` matching a
+versioned-object reference. Presigned URLs and embedded credentials cannot enter
+the lock.
 
 The rootfs project-build source is a verified tar.gz containing the ext4 member
 and a bounded `rootfs-attestation.json` sidecar. Before staging the image, the

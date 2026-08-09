@@ -65,7 +65,9 @@ Firecracker and Jailer members. It requires a source-kind-specific immutable
 identity: a release version that matches the release-download URL, an
 object-store version ID that matches the URL, or a project commit matching the
 build provenance. Floating `latest`, `main`, and cross-kind references are
-refused. Every bootable artifact must declare Linux/amd64 before staging.
+refused. Fixture URLs reject userinfo, fragments, presigned parameters and every
+query other than one matching `versionId` on an object-store source. Every
+bootable artifact must declare Linux/amd64 before staging.
 
 The rootfs is a project-build tar.gz source with separately verified ext4 and
 bounded attestation members. Provisioning parses the attestation and checks its

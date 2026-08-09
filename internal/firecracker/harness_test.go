@@ -98,6 +98,37 @@ func TestFixtureLockV2RejectsMutableAndMismatchedSourceReferencesBeforeStaging(t
 	}
 }
 
+func TestFixtureLockV2RejectsCredentialedFragmentedAndPresignedSourceURLs(t *testing.T) {
+	for _, mutate := range []func(*FixtureLock){
+		func(lock *FixtureLock) {
+			lock.Sources[0].URL = "https://token@github.com/firecracker-microvm/firecracker/releases/download/v1.16.1/firecracker-v1.16.1-x86_64.tgz"
+		},
+		func(lock *FixtureLock) { lock.Sources[0].URL += "#secret" },
+		func(lock *FixtureLock) { lock.Sources[0].URL += "?X-Amz-Signature=secret" },
+		func(lock *FixtureLock) { lock.Sources[1].URL += "&X-Amz-Signature=secret" },
+		func(lock *FixtureLock) {
+			lock.Sources[1].URL = "https://token@fixtures.invalid/vmlinux?versionId=kernel-20260805"
+		},
+		func(lock *FixtureLock) { lock.Sources[2].URL += "?signature=secret" },
+		func(lock *FixtureLock) { lock.Sources[3].URL += "#secret" },
+	} {
+		lock := validFixtureLock()
+		mutate(&lock)
+		if err := lock.Validate(); !errors.Is(err, ErrFixtureLock) {
+			t.Errorf("Validate() error = %v, want secret-bearing source URL refusal", err)
+		}
+	}
+}
+
+func TestFixtureLockV2AdmitsAnOfficialVersionedS3ObjectURL(t *testing.T) {
+	lock := validFixtureLock()
+	lock.Sources[1].URL = "https://s3.amazonaws.com/spec.ccfc.min/firecracker-ci/20260805-f2f43b669a02-0/x86_64/vmlinux-6.18.39?versionId=kernel-20260805"
+
+	if err := lock.Validate(); err != nil {
+		t.Fatalf("Validate() error = %v, want one exact versionId query admitted", err)
+	}
+}
+
 func TestFixtureLockV2RejectsNonLinuxAMD64ArtifactsBeforeStaging(t *testing.T) {
 	for _, mutate := range []func(*FixtureLock){
 		func(lock *FixtureLock) { lock.Artifacts[0].Platform.Architecture = "arm64" },

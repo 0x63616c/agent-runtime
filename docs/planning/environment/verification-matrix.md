@@ -85,10 +85,10 @@ They do not make a rootfs, artifact download, Linux/KVM runner, guest boot or
 guest-control result available.
 
 The fixture fetcher verifies every digest before execution, rejects mutable or
-cross-kind source references and non-Linux/amd64 boot artifacts before staging,
-parses the rootfs attestation bundle, writes a private copy of the writable
-rootfs under the job's temporary directory, and never updates the lock file
-automatically. It does not prove the ext4 contents at runtime. Firecracker
+cross-kind source references, credential-bearing/fragmented/presigned URLs, and
+non-Linux/amd64 boot artifacts before staging, parses the rootfs attestation
+bundle, writes a private copy of the writable rootfs under the job's temporary
+directory, and never updates the lock file automatically. It does not prove the ext4 contents at runtime. Firecracker
 documents the kernel/rootfs requirements and recommends its Jailer for
 production execution. See
 [getting started](https://github.com/firecracker-microvm/firecracker/blob/main/docs/getting-started.md)
