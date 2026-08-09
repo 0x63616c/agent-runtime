@@ -441,7 +441,7 @@ func (ledger *MemoryLedger) ConfirmHostCleanupAndRequeue(ctx context.Context, pr
 func (ledger *MemoryLedger) authenticateHostLocked(identity HostIdentity, now time.Time) (HostEnrollment, error) {
 	key := hostEnrollmentKey(identity.HostID, identity.Generation)
 	host, exists := ledger.hosts[key]
-	if !exists || host.Status != HostActive || host.Generation != identity.Generation || host.CertificateDigest != identity.CertificateDigest || host.ProtocolVersion != sandboxhostprotocol.Version || now.IsZero() || !now.Before(host.ExpiresAt) {
+	if !exists || !validHostEnrollment(host) || host.Status != HostActive || host.Generation != identity.Generation || host.CertificateDigest != identity.CertificateDigest || host.ProtocolVersion != sandboxhostprotocol.Version || now.IsZero() || !now.Before(host.ExpiresAt) {
 		return HostEnrollment{}, ErrHostDenied
 	}
 	host.LastAuthenticatedAt = now.UTC()

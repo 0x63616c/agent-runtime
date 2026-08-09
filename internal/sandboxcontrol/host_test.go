@@ -162,6 +162,45 @@ func TestProvisionHostRejectsOversizedAttestationBeforeVerifier(t *testing.T) {
 	}
 }
 
+func TestProvisionHostZeroesBorrowedVerifierEvidence(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 8, 8, 12, 0, 0, 0, time.UTC)
+	host := HostEnrollment{HostID: "host_zero_attestation", Tenant: "tenant_01", Pool: "pool_01", Generation: 1, ProtocolVersion: sandboxhostprotocol.Version, CertificateDigest: digest("1"), SigningPublicKey: make(ed25519.PublicKey, ed25519.PublicKeySize), CapabilityDigest: digest("2"), Status: HostActive, ExpiresAt: now.Add(time.Hour)}
+	var borrowed []byte
+	verifier := AttestationVerifierFunc(func(_ context.Context, evidence AttestationEvidence) error {
+		borrowed = evidence.Evidence
+		return nil
+	})
+	if err := NewMemoryLedger().ProvisionHost(context.Background(), host, AttestationInput{Profile: AttestationProfileVerified, Evidence: []byte("synthetic-attestation")}, verifier); err != nil {
+		t.Fatal(err)
+	}
+	for index, value := range borrowed {
+		if value != 0 {
+			t.Fatalf("borrowed verifier evidence byte %d = %d, want zero", index, value)
+		}
+	}
+}
+
+func TestMemoryLedgerRefusesCorruptPersistedAttestationTuple(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 8, 8, 12, 0, 0, 0, time.UTC)
+	host := HostEnrollment{HostID: "host_corrupt_attestation", Tenant: "tenant_01", Pool: "pool_01", Generation: 1, ProtocolVersion: sandboxhostprotocol.Version, CertificateDigest: digest("1"), SigningPublicKey: make(ed25519.PublicKey, ed25519.PublicKeySize), CapabilityDigest: digest("2"), Status: HostActive, ExpiresAt: now.Add(time.Hour)}
+	ledger := NewMemoryLedger()
+	if err := ledger.ProvisionHost(context.Background(), host, AttestationInput{Profile: AttestationProfileLocalMetadata}, nil); err != nil {
+		t.Fatal(err)
+	}
+	key := hostEnrollmentKey(host.HostID, host.Generation)
+	corrupt := ledger.hosts[key]
+	corrupt.AttestationProfile = AttestationProfileVerified
+	ledger.hosts[key] = corrupt
+	identity := HostIdentity{HostID: host.HostID, Generation: host.Generation, CertificateDigest: host.CertificateDigest}
+	if _, err := ledger.AuthenticateHost(context.Background(), identity, now); !errors.Is(err, ErrHostDenied) {
+		t.Fatalf("AuthenticateHost(corrupt attestation) error = %v", err)
+	}
+}
+
 func TestMemoryHostControlRecoversTerminalOutputAndResultAcksAfterLeaseExpiry(t *testing.T) {
 	t.Parallel()
 

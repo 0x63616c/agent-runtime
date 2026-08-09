@@ -11,6 +11,8 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
+var errConcurrentHostEnrollment = errors.New("concurrent sandbox host enrollment winner")
+
 // ProvisionHost records one operator-reconciled enrollment generation. The
 // runtime host API never calls this method.
 func (ledger *PostgresLedger) ProvisionHost(ctx context.Context, enrollment HostEnrollment, input AttestationInput, verifier AttestationVerifier) error {
@@ -40,7 +42,7 @@ func (ledger *PostgresLedger) ProvisionHost(ctx context.Context, enrollment Host
 			}
 			return nil
 		}
-		_, err = tx.Exec(ctx, `
+		result, err := tx.Exec(ctx, `
 			INSERT INTO runtime.sandbox_host_enrollments
 				(host_id, tenant, pool, generation, protocol_version, certificate_digest,
 				 signing_public_key, capability_digest, attestation_digest, attestation_profile, attestation_state, status, expires_at)
@@ -49,8 +51,27 @@ func (ledger *PostgresLedger) ProvisionHost(ctx context.Context, enrollment Host
 			enrollment.HostID, enrollment.Tenant, enrollment.Pool, int64(enrollment.Generation),
 			enrollment.ProtocolVersion, enrollment.CertificateDigest, []byte(enrollment.SigningPublicKey),
 			enrollment.CapabilityDigest, enrollment.AttestationDigest, enrollment.AttestationProfile, enrollment.AttestationState, enrollment.Status, enrollment.ExpiresAt.UTC())
-		return errors.Wrap(err, "write sandbox host enrollment")
+		if err != nil {
+			return errors.Wrap(err, "write sandbox host enrollment")
+		}
+		if result.RowsAffected() == 0 {
+			return errConcurrentHostEnrollment
+		}
+		return nil
 	})
+	if errors.Is(err, errConcurrentHostEnrollment) {
+		winner, readErr := scanHost(ledger.pool.QueryRow(ctx, selectHostGenerationSQL, enrollment.HostID, int64(enrollment.Generation)))
+		if readErr != nil {
+			return errors.Wrap(readErr, "read concurrent sandbox host enrollment winner")
+		}
+		if !validHostEnrollment(winner) || !sameEnrollment(winner, enrollment) {
+			return ErrConflict
+		}
+		if winner.Status == HostAttestationFailed {
+			return ErrHostAttestationFailed
+		}
+		return nil
+	}
 	if err != nil {
 		return err
 	}
@@ -375,7 +396,7 @@ func (ledger *PostgresLedger) ConfirmHostCleanupAndRequeue(ctx context.Context, 
 
 func authenticatePostgresHost(ctx context.Context, tx pgx.Tx, identity HostIdentity, now time.Time) (HostEnrollment, error) {
 	host, err := scanHost(tx.QueryRow(ctx, selectHostGenerationSQL+` FOR UPDATE`, identity.HostID, int64(identity.Generation)))
-	if err != nil || host.Status != HostActive || host.Generation != identity.Generation || host.CertificateDigest != identity.CertificateDigest || host.ProtocolVersion != sandboxhostprotocol.Version || now.IsZero() || !now.Before(host.ExpiresAt) {
+	if err != nil || !validHostEnrollment(host) || host.Status != HostActive || host.Generation != identity.Generation || host.CertificateDigest != identity.CertificateDigest || host.ProtocolVersion != sandboxhostprotocol.Version || now.IsZero() || !now.Before(host.ExpiresAt) {
 		return HostEnrollment{}, ErrHostDenied
 	}
 	if _, err := tx.Exec(ctx, `UPDATE runtime.sandbox_host_enrollments SET last_authenticated_at=$3 WHERE host_id=$1 AND generation=$2`, host.HostID, int64(host.Generation), now.UTC()); err != nil {

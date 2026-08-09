@@ -255,6 +255,124 @@ func TestPostgresProvisionHostPersistsVerifierFailureWithoutRawEvidence(t *testi
 	}
 }
 
+func TestPostgresProvisionHostComparesConcurrentWinnerAndFailedOutcome(t *testing.T) {
+	dsn := os.Getenv("AR_SANDBOXCONTROL_POSTGRES_DSN")
+	if dsn == "" {
+		t.Fatal("AR_SANDBOXCONTROL_POSTGRES_DSN is required for the integration suite")
+	}
+	ctx := context.Background()
+	pool := openIntegrationPool(t, ctx, dsn)
+	t.Cleanup(pool.Close)
+	if _, err := pool.Exec(ctx, `TRUNCATE runtime.sandbox_host_outputs, runtime.sandbox_host_dispatches, runtime.sandbox_host_enrollments, runtime.sandbox_operation_outbox, runtime.sandbox_operations RESTART IDENTITY`); err != nil {
+		t.Fatal(err)
+	}
+	ledger, _ := NewPostgresLedger(pool)
+	now := time.Date(2026, 8, 8, 13, 0, 0, 0, time.UTC)
+
+	t.Run("compares winner", func(t *testing.T) {
+		const contenders = 4
+		ready := sync.WaitGroup{}
+		ready.Add(contenders)
+		release := make(chan struct{})
+		verifier := AttestationVerifierFunc(func(context.Context, AttestationEvidence) error {
+			ready.Done()
+			<-release
+			return nil
+		})
+		errorsByContender := make(chan error, contenders)
+		for contender := 0; contender < contenders; contender++ {
+			contender := contender
+			go func() {
+				certificate := digest("a")
+				if contender%2 != 0 {
+					certificate = digest("b")
+				}
+				host := HostEnrollment{HostID: "host_pg_concurrent", Tenant: "tenant-pg", Pool: "pool-pg", Generation: 1, ProtocolVersion: sandboxhostprotocol.Version, CertificateDigest: certificate, SigningPublicKey: make(ed25519.PublicKey, ed25519.PublicKeySize), CapabilityDigest: digest("2"), Status: HostActive, ExpiresAt: now.Add(time.Hour)}
+				errorsByContender <- ledger.ProvisionHost(ctx, host, AttestationInput{Profile: AttestationProfileVerified, Evidence: []byte("concurrent-evidence")}, verifier)
+			}()
+		}
+		ready.Wait()
+		close(release)
+		var succeeded, conflicted int
+		for contender := 0; contender < contenders; contender++ {
+			err := <-errorsByContender
+			switch {
+			case err == nil:
+				succeeded++
+			case errors.Is(err, ErrConflict):
+				conflicted++
+			default:
+				t.Fatalf("concurrent ProvisionHost() error = %v", err)
+			}
+		}
+		if succeeded == 0 || conflicted == 0 || succeeded+conflicted != contenders {
+			t.Fatalf("concurrent outcomes succeeded=%d conflicted=%d", succeeded, conflicted)
+		}
+	})
+
+	t.Run("returns durable failed outcome", func(t *testing.T) {
+		const contenders = 4
+		ready := sync.WaitGroup{}
+		ready.Add(contenders)
+		release := make(chan struct{})
+		verifier := AttestationVerifierFunc(func(context.Context, AttestationEvidence) error {
+			ready.Done()
+			<-release
+			return errors.New("measurement refused")
+		})
+		errorsByContender := make(chan error, contenders)
+		host := HostEnrollment{HostID: "host_pg_concurrent_failed", Tenant: "tenant-pg", Pool: "pool-pg", Generation: 1, ProtocolVersion: sandboxhostprotocol.Version, CertificateDigest: digest("1"), SigningPublicKey: make(ed25519.PublicKey, ed25519.PublicKeySize), CapabilityDigest: digest("2"), Status: HostActive, ExpiresAt: now.Add(time.Hour)}
+		for contender := 0; contender < contenders; contender++ {
+			go func() {
+				errorsByContender <- ledger.ProvisionHost(ctx, host, AttestationInput{Profile: AttestationProfileVerified, Evidence: []byte("failed-evidence")}, verifier)
+			}()
+		}
+		ready.Wait()
+		close(release)
+		for contender := 0; contender < contenders; contender++ {
+			if err := <-errorsByContender; !errors.Is(err, ErrHostAttestationFailed) {
+				t.Fatalf("concurrent failed ProvisionHost() error = %v", err)
+			}
+		}
+	})
+}
+
+func TestPostgresAttestationTupleConstraintAndCorruptRowRefusal(t *testing.T) {
+	dsn := os.Getenv("AR_SANDBOXCONTROL_POSTGRES_DSN")
+	if dsn == "" {
+		t.Fatal("AR_SANDBOXCONTROL_POSTGRES_DSN is required for the integration suite")
+	}
+	ctx := context.Background()
+	pool := openIntegrationPool(t, ctx, dsn)
+	t.Cleanup(pool.Close)
+	if _, err := pool.Exec(ctx, `TRUNCATE runtime.sandbox_host_outputs, runtime.sandbox_host_dispatches, runtime.sandbox_host_enrollments, runtime.sandbox_operation_outbox, runtime.sandbox_operations RESTART IDENTITY`); err != nil {
+		t.Fatal(err)
+	}
+	ledger, _ := NewPostgresLedger(pool)
+	now := time.Date(2026, 8, 8, 14, 0, 0, 0, time.UTC)
+	host := HostEnrollment{HostID: "host_pg_corrupt", Tenant: "tenant-pg", Pool: "pool-pg", Generation: 1, ProtocolVersion: sandboxhostprotocol.Version, CertificateDigest: digest("1"), SigningPublicKey: make(ed25519.PublicKey, ed25519.PublicKeySize), CapabilityDigest: digest("2"), Status: HostActive, ExpiresAt: now.Add(time.Hour)}
+	if err := ledger.ProvisionHost(ctx, host, AttestationInput{Profile: AttestationProfileLocalMetadata}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE runtime.sandbox_host_enrollments SET attestation_profile='verified-v1' WHERE host_id=$1`, host.HostID); err == nil {
+		t.Fatal("attestation tuple database constraint accepted a corrupt tuple")
+	}
+	if _, err := pool.Exec(ctx, `ALTER TABLE runtime.sandbox_host_enrollments DROP CONSTRAINT sandbox_host_enrollments_attestation_tuple_check`); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_, _ = pool.Exec(context.Background(), `DELETE FROM runtime.sandbox_host_enrollments WHERE host_id='host_pg_corrupt'`)
+		_, _ = pool.Exec(context.Background(), `ALTER TABLE runtime.sandbox_host_enrollments ADD CONSTRAINT sandbox_host_enrollments_attestation_tuple_check CHECK ((attestation_profile='local-metadata-v1' AND attestation_state='metadata-only' AND attestation_digest IS NULL AND status IN ('active','revoked','quarantined')) OR (attestation_profile='verified-v1' AND attestation_state='verified' AND attestation_digest IS NOT NULL AND status IN ('active','revoked','quarantined')) OR (attestation_profile='verified-v1' AND attestation_state='failed' AND attestation_digest IS NOT NULL AND status='attestation-failed'))`)
+	})
+	if _, err := pool.Exec(ctx, `UPDATE runtime.sandbox_host_enrollments SET attestation_profile='verified-v1' WHERE host_id=$1`, host.HostID); err != nil {
+		t.Fatal(err)
+	}
+	identity := HostIdentity{HostID: host.HostID, Generation: host.Generation, CertificateDigest: host.CertificateDigest}
+	if _, err := ledger.AuthenticateHost(ctx, identity, now); !errors.Is(err, ErrHostDenied) {
+		t.Fatalf("AuthenticateHost(corrupt tuple) error = %v", err)
+	}
+}
+
 func TestPostgresHostControlRecoversTerminalOutputAndResultAcksAfterLeaseExpiry(t *testing.T) {
 	dsn := os.Getenv("AR_SANDBOXCONTROL_POSTGRES_DSN")
 	if dsn == "" {

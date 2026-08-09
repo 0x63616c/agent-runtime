@@ -55,6 +55,8 @@ type AttestationEvidence struct {
 }
 
 // AttestationVerifier evaluates the selected profile's evidence predicate.
+// Evidence is borrowed only for the duration of the call. Implementations
+// must not retain it; the store zeroes its owned verifier buffer afterward.
 type AttestationVerifier interface {
 	VerifyHostAttestation(context.Context, AttestationEvidence) error
 }
@@ -72,7 +74,12 @@ func VerifyHostAttestation(ctx context.Context, input AttestationInput, host Hos
 	raw := append([]byte(nil), input.Evidence...)
 	digest := sandboxhostprotocol.Digest(raw)
 	evidence := AttestationEvidence{HostID: host.HostID, Generation: host.Generation, CertificateDigest: host.CertificateDigest, CapabilityDigest: host.CapabilityDigest, AttestationDigest: digest, Evidence: raw}
-	if input.Profile != AttestationProfileVerified || verifier == nil || ctx.Err() != nil || !validAttestationEvidence(evidence) || verifier.VerifyHostAttestation(ctx, evidence) != nil {
+	if input.Profile != AttestationProfileVerified || verifier == nil || ctx.Err() != nil || !validAttestationEvidence(evidence) {
+		return HostAttestation{Profile: input.Profile, State: AttestationFailed, Digest: digest}
+	}
+	verifyErr := verifier.VerifyHostAttestation(ctx, evidence)
+	clear(raw)
+	if verifyErr != nil {
 		return HostAttestation{Profile: input.Profile, State: AttestationFailed, Digest: digest}
 	}
 	return HostAttestation{Profile: input.Profile, State: AttestationVerified, Digest: digest}
