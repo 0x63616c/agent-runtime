@@ -22,7 +22,7 @@ func TestMemoryHostControlLostAckRestartFenceAndQuarantine(t *testing.T) {
 	}
 	hostPublic := hostPrivate.Public().(ed25519.PublicKey)
 	host := HostEnrollment{HostID: "host_01", Tenant: "tenant_01", Pool: "pool_01", Generation: 3, ProtocolVersion: sandboxhostprotocol.Version, CertificateDigest: digest("1"), SigningPublicKey: hostPublic, CapabilityDigest: digest("2"), Status: HostActive, ExpiresAt: now.Add(time.Hour)}
-	if err := ledger.ProvisionHost(context.Background(), host); err != nil {
+	if err := ledger.ProvisionHost(context.Background(), host, AttestationInput{Profile: AttestationProfileLocalMetadata}, nil); err != nil {
 		t.Fatal(err)
 	}
 	operation := Operation{Principal: "tenant_01:subject_01", Tenant: "tenant_01", ID: "op_host", Kind: "close-sandbox", TargetKind: "sandbox", TargetID: "sbx_host", InputDigest: digest("3"), CanonicalDigest: digest("4"), EffectiveSpecDigest: digest("5"), CapabilityDigest: host.CapabilityDigest, DispatchBody: `{"version":"sandbox.control/v1"}`, AcceptedAt: now, RetentionExpiresAt: now.Add(time.Hour), CleanupRequired: true}
@@ -104,17 +104,13 @@ func TestAttestationVerifierRecordsFailureAndRefusesFailedHost(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	host := HostEnrollment{HostID: "host_attestation_failed", Tenant: "tenant_01", Pool: "pool_01", Generation: 1, ProtocolVersion: sandboxhostprotocol.Version, CertificateDigest: digest("1"), SigningPublicKey: publicKey, CapabilityDigest: digest("2"), AttestationDigest: digest("3"), Status: HostActive, ExpiresAt: now.Add(time.Hour)}
-	attested := VerifyHostAttestation(context.Background(), AttestationProfileVerified, host, AttestationVerifierFunc(func(context.Context, AttestationEvidence) error {
+	host := HostEnrollment{HostID: "host_attestation_failed", Tenant: "tenant_01", Pool: "pool_01", Generation: 1, ProtocolVersion: sandboxhostprotocol.Version, CertificateDigest: digest("1"), SigningPublicKey: publicKey, CapabilityDigest: digest("2"), Status: HostActive, ExpiresAt: now.Add(time.Hour)}
+	verifier := AttestationVerifierFunc(func(context.Context, AttestationEvidence) error {
 		return errors.New("measurement mismatch")
-	}))
-	if attested.State != AttestationFailed {
-		t.Fatalf("VerifyHostAttestation() state = %q, want %q", attested.State, AttestationFailed)
-	}
-	host.AttestationProfile, host.AttestationState, host.Status = attested.Profile, attested.State, HostAttestationFailed
+	})
 	ledger := NewMemoryLedger()
-	if err := ledger.ProvisionHost(context.Background(), host); err != nil {
-		t.Fatalf("ProvisionHost() failed to retain attestation failure: %v", err)
+	if err := ledger.ProvisionHost(context.Background(), host, AttestationInput{Profile: AttestationProfileVerified, Evidence: []byte("synthetic-attestation")}, verifier); !errors.Is(err, ErrHostAttestationFailed) {
+		t.Fatalf("ProvisionHost() failed attestation error = %v", err)
 	}
 	if _, err := ledger.AuthenticateHost(context.Background(), HostIdentity{HostID: host.HostID, Generation: host.Generation, CertificateDigest: host.CertificateDigest}, now); !errors.Is(err, ErrHostDenied) {
 		t.Fatalf("AuthenticateHost() accepted failed attestation: %v", err)
@@ -129,18 +125,24 @@ func TestLocalMetadataAttestationIsAdmittedWithoutClaimingVerification(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
-	host := HostEnrollment{HostID: "host_attestation_local", Tenant: "tenant_01", Pool: "pool_01", Generation: 1, ProtocolVersion: sandboxhostprotocol.Version, CertificateDigest: digest("1"), SigningPublicKey: publicKey, CapabilityDigest: digest("2"), AttestationDigest: digest("3"), Status: HostActive, ExpiresAt: now.Add(time.Hour)}
-	attested := VerifyHostAttestation(context.Background(), AttestationProfileLocalMetadata, host, nil)
-	if attested.State != AttestationMetadataOnly {
-		t.Fatalf("VerifyHostAttestation() state = %q, want metadata-only", attested.State)
-	}
-	host.AttestationProfile, host.AttestationState = attested.Profile, attested.State
+	host := HostEnrollment{HostID: "host_attestation_local", Tenant: "tenant_01", Pool: "pool_01", Generation: 1, ProtocolVersion: sandboxhostprotocol.Version, CertificateDigest: digest("1"), SigningPublicKey: publicKey, CapabilityDigest: digest("2"), Status: HostActive, ExpiresAt: now.Add(time.Hour)}
 	ledger := NewMemoryLedger()
-	if err := ledger.ProvisionHost(context.Background(), host); err != nil {
+	if err := ledger.ProvisionHost(context.Background(), host, AttestationInput{Profile: AttestationProfileLocalMetadata}, nil); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := ledger.AuthenticateHost(context.Background(), HostIdentity{HostID: host.HostID, Generation: host.Generation, CertificateDigest: host.CertificateDigest}, now); err != nil {
+	authenticated, err := ledger.AuthenticateHost(context.Background(), HostIdentity{HostID: host.HostID, Generation: host.Generation, CertificateDigest: host.CertificateDigest}, now)
+	if err != nil || authenticated.AttestationState != AttestationMetadataOnly {
 		t.Fatalf("AuthenticateHost() rejected metadata-only local profile: %v", err)
+	}
+}
+
+func TestProvisionHostRejectsCallerSuppliedAttestationOutcome(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 8, 8, 12, 0, 0, 0, time.UTC)
+	host := HostEnrollment{HostID: "host_forged_attestation", Tenant: "tenant_01", Pool: "pool_01", Generation: 1, ProtocolVersion: sandboxhostprotocol.Version, CertificateDigest: digest("1"), SigningPublicKey: make(ed25519.PublicKey, ed25519.PublicKeySize), CapabilityDigest: digest("2"), AttestationDigest: digest("3"), AttestationProfile: AttestationProfileVerified, AttestationState: AttestationVerified, Status: HostActive, ExpiresAt: now.Add(time.Hour)}
+	if err := NewMemoryLedger().ProvisionHost(context.Background(), host, AttestationInput{Profile: AttestationProfileLocalMetadata}, nil); err == nil {
+		t.Fatal("ProvisionHost() trusted a caller-supplied verified state")
 	}
 }
 
@@ -154,7 +156,7 @@ func TestMemoryHostControlRecoversTerminalOutputAndResultAcksAfterLeaseExpiry(t 
 		t.Fatal(err)
 	}
 	host := HostEnrollment{HostID: "host_ack_recovery", Tenant: "tenant_01", Pool: "pool_01", Generation: 1, ProtocolVersion: sandboxhostprotocol.Version, CertificateDigest: digest("1"), SigningPublicKey: hostPrivate.Public().(ed25519.PublicKey), CapabilityDigest: digest("2"), Status: HostActive, ExpiresAt: now.Add(time.Hour)}
-	if err := ledger.ProvisionHost(context.Background(), host); err != nil {
+	if err := ledger.ProvisionHost(context.Background(), host, AttestationInput{Profile: AttestationProfileLocalMetadata}, nil); err != nil {
 		t.Fatal(err)
 	}
 	operation := Operation{Principal: "tenant_01:subject_01", Tenant: host.Tenant, ID: "op_ack_recovery", Kind: "close-sandbox", TargetKind: "sandbox", TargetID: "sbx_ack_recovery", InputDigest: digest("3"), CanonicalDigest: digest("4"), EffectiveSpecDigest: digest("5"), CapabilityDigest: host.CapabilityDigest, DispatchBody: `{"version":"sandbox.control/v1"}`, AcceptedAt: now, RetentionExpiresAt: now.Add(time.Hour), CleanupRequired: true}
@@ -195,7 +197,7 @@ func TestMemoryHostControlRefusesWrongTenantRevokedAndRogueIdentity(t *testing.T
 	now := time.Date(2026, 8, 7, 12, 0, 0, 0, time.UTC)
 	ledger := NewMemoryLedger()
 	host := HostEnrollment{HostID: "host_01", Tenant: "tenant_01", Pool: "pool_01", Generation: 1, ProtocolVersion: sandboxhostprotocol.Version, CertificateDigest: digest("1"), SigningPublicKey: make(ed25519.PublicKey, ed25519.PublicKeySize), CapabilityDigest: digest("2"), Status: HostActive, ExpiresAt: now.Add(time.Hour)}
-	if err := ledger.ProvisionHost(context.Background(), host); err != nil {
+	if err := ledger.ProvisionHost(context.Background(), host, AttestationInput{Profile: AttestationProfileLocalMetadata}, nil); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := ledger.AuthenticateHost(context.Background(), HostIdentity{HostID: host.HostID, Generation: host.Generation, CertificateDigest: digest("9")}, now); !errors.Is(err, ErrHostDenied) {
@@ -218,10 +220,10 @@ func TestMemoryHostControlOverlapsRotationThenRevokesOldGeneration(t *testing.T)
 	second := first
 	second.Generation = 2
 	second.CertificateDigest = digest("3")
-	if err := ledger.ProvisionHost(context.Background(), first); err != nil {
+	if err := ledger.ProvisionHost(context.Background(), first, AttestationInput{Profile: AttestationProfileLocalMetadata}, nil); err != nil {
 		t.Fatal(err)
 	}
-	if err := ledger.ProvisionHost(context.Background(), second); err != nil {
+	if err := ledger.ProvisionHost(context.Background(), second, AttestationInput{Profile: AttestationProfileLocalMetadata}, nil); err != nil {
 		t.Fatal(err)
 	}
 	firstIdentity := HostIdentity{HostID: first.HostID, Generation: first.Generation, CertificateDigest: first.CertificateDigest}
@@ -272,7 +274,7 @@ func TestMemoryHostControlRefusesExpiredAndTerminalHeartbeat(t *testing.T) {
 			t.Parallel()
 			ledger := NewMemoryLedger()
 			host := HostEnrollment{HostID: "host_heartbeat_" + test.name, Tenant: "tenant_01", Pool: "pool_01", Generation: 1, ProtocolVersion: sandboxhostprotocol.Version, CertificateDigest: digest("1"), SigningPublicKey: make(ed25519.PublicKey, ed25519.PublicKeySize), CapabilityDigest: digest("2"), Status: HostActive, ExpiresAt: now.Add(time.Hour)}
-			if err := ledger.ProvisionHost(context.Background(), host); err != nil {
+			if err := ledger.ProvisionHost(context.Background(), host, AttestationInput{Profile: AttestationProfileLocalMetadata}, nil); err != nil {
 				t.Fatal(err)
 			}
 			operation := Operation{Principal: "tenant_01:subject_01", Tenant: "tenant_01", ID: "op_heartbeat_" + test.name, Kind: "close-sandbox", TargetKind: "sandbox", TargetID: "sbx_heartbeat", InputDigest: digest("3"), CanonicalDigest: digest("4"), EffectiveSpecDigest: digest("5"), CapabilityDigest: host.CapabilityDigest, DispatchBody: `{"version":"sandbox.control/v1"}`, AcceptedAt: now, RetentionExpiresAt: now.Add(time.Hour), CleanupRequired: true}

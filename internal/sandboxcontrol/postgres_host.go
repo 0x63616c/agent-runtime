@@ -13,12 +13,16 @@ import (
 
 // ProvisionHost records one operator-reconciled enrollment generation. The
 // runtime host API never calls this method.
-func (ledger *PostgresLedger) ProvisionHost(ctx context.Context, enrollment HostEnrollment) error {
-	enrollment = normalizeHostEnrollment(enrollment)
+func (ledger *PostgresLedger) ProvisionHost(ctx context.Context, enrollment HostEnrollment, input AttestationInput, verifier AttestationVerifier) error {
+	var err error
+	enrollment, err = evaluateHostEnrollment(ctx, enrollment, input, verifier)
+	if err != nil {
+		return err
+	}
 	if !validHostEnrollment(enrollment) {
 		return errors.New("provision PostgreSQL sandbox host: invalid bounded enrollment")
 	}
-	return ledger.transaction(ctx, "provision PostgreSQL sandbox host", func(tx pgx.Tx) error {
+	err = ledger.transaction(ctx, "provision PostgreSQL sandbox host", func(tx pgx.Tx) error {
 		var maximumGeneration *int64
 		if err := tx.QueryRow(ctx, `SELECT MAX(generation) FROM runtime.sandbox_host_enrollments WHERE host_id=$1`, enrollment.HostID).Scan(&maximumGeneration); err != nil {
 			return errors.Wrap(err, "read sandbox host generation")
@@ -47,6 +51,13 @@ func (ledger *PostgresLedger) ProvisionHost(ctx context.Context, enrollment Host
 			enrollment.CapabilityDigest, enrollment.AttestationDigest, enrollment.AttestationProfile, enrollment.AttestationState, enrollment.Status, enrollment.ExpiresAt.UTC())
 		return errors.Wrap(err, "write sandbox host enrollment")
 	})
+	if err != nil {
+		return err
+	}
+	if enrollment.Status == HostAttestationFailed {
+		return ErrHostAttestationFailed
+	}
+	return nil
 }
 
 // RevokeHost denies the current generation and fences all of its operations.
