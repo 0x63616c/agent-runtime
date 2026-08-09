@@ -146,6 +146,22 @@ func TestProvisionHostRejectsCallerSuppliedAttestationOutcome(t *testing.T) {
 	}
 }
 
+func TestProvisionHostRejectsOversizedAttestationBeforeVerifier(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 8, 8, 12, 0, 0, 0, time.UTC)
+	host := HostEnrollment{HostID: "host_oversized_attestation", Tenant: "tenant_01", Pool: "pool_01", Generation: 1, ProtocolVersion: sandboxhostprotocol.Version, CertificateDigest: digest("1"), SigningPublicKey: make(ed25519.PublicKey, ed25519.PublicKeySize), CapabilityDigest: digest("2"), Status: HostActive, ExpiresAt: now.Add(time.Hour)}
+	called := false
+	verifier := AttestationVerifierFunc(func(context.Context, AttestationEvidence) error {
+		called = true
+		return nil
+	})
+	err := NewMemoryLedger().ProvisionHost(context.Background(), host, AttestationInput{Profile: AttestationProfileVerified, Evidence: make([]byte, maxAttestationEvidenceBytes+1)}, verifier)
+	if err == nil || errors.Is(err, ErrHostAttestationFailed) || called {
+		t.Fatalf("ProvisionHost() oversized evidence error = %v, verifier called = %t", err, called)
+	}
+}
+
 func TestMemoryHostControlRecoversTerminalOutputAndResultAcksAfterLeaseExpiry(t *testing.T) {
 	t.Parallel()
 
