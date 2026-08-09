@@ -30,7 +30,12 @@
     "tls_certificate_file": "/run/sandbox-control/host-tls/tls.crt",
     "tls_private_key_file": "/run/sandbox-control/host-tls/tls.key",
     "client_ca_file": "/run/sandbox-control/host-client-ca/ca.crt",
+    "control_trust_version": 1,
+    "control_revocation_epoch": 1,
     "control_key_id": "control_signing_2026_01",
+    "control_key_version": 1,
+    "control_key_not_before": "2026-08-08T00:00:00Z",
+    "control_key_not_after": "2026-08-09T00:00:00Z",
     "control_signing_key_environment": "SANDBOX_CONTROL_SIGNING_KEY",
     "lease_seconds": 60
   }

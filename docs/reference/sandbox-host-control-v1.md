@@ -28,10 +28,13 @@ quarantined, incompatible, or wrong-generation identities receive the same
 denial. Old and next certificate generations may overlap during rotation;
 revocation targets one generation and does not reactivate or weaken another.
 
-`attestation_digest` is operator-supplied enrollment evidence metadata only.
-M3 stores and binds that bounded reference but does not collect or verify a
-hardware attestation. It must not be described as attestation proof. Linux/KVM
-and Firecracker trust claims remain gated on M4.
+Provisioning receives raw bounded attestation evidence, its explicit profile,
+and a verifier predicate. The durable store invokes the predicate itself and
+atomically persists only a derived digest and safe outcome. It rejects a
+caller-supplied verified state. Verification failure is durably
+`attestation-failed` and cannot authenticate. The local-unsafe profile records
+`metadata-only`; it does not claim hardware or runtime-integrity attestation.
+Linux/KVM and Firecracker trust claims remain gated on M4.
 
 ## Signed assignment envelope
 
@@ -41,18 +44,22 @@ serializable transaction. The envelope is canonical JSON signed by the
 control-plane Ed25519 key and transported over mTLS. It binds:
 
 - protocol, envelope, delivery and nonce identities;
-- issue and finite expiry instants plus control signing-key ID;
+- issue and finite expiry instants plus control signing-key ID/version and the
+  monotonic revocation epoch;
 - Host ID/generation, Assignment ID, lease epoch, and fencing token;
 - tenant and Principal, Sandbox/Process/Operation identities and operation kind;
 - Effective-Spec, capability-snapshot, canonical-request, and payload digests;
 - the exact bounded canonical operation request; and
 - `host-proposed/control-owned-v1` output sequencing.
 
-The host strictly decodes the canonical bytes, selects the declared control
-key from an explicit key set, verifies signature and payload digest, and checks
-host generation and time interval before journaling. Unknown fields, trailing
-JSON, altered bytes, unknown signing keys, replay to another host/generation,
-and expired envelopes are refused.
+The host strictly decodes the canonical bytes, atomically selects the declared
+control key from the complete current/next trust snapshot, verifies its key
+version, revocation epoch, signature, payload digest and declared key validity,
+then checks host generation and envelope time before journaling. A strictly
+newer snapshot may rotate current to next during overlap and later retire it.
+Unknown fields, trailing JSON, altered bytes, legacy zero bindings, retired or
+revoked keys, replay to another host/generation, and expired envelopes are
+refused.
 
 TLS supplies transport confidentiality. M3 does not add application-layer
 envelope encryption beyond TLS and therefore makes no protection claim after a

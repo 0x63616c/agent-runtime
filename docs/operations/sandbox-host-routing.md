@@ -19,8 +19,12 @@ evidence only; it does not promote Linux/KVM or Firecracker security profiles.
 Apply every ordered `deploy/sandboxcontrol/migrations/*.up.sql` before starting
 the service. `sandbox-control` has no migration authority. Its public HTTPS
 listener and private host listener use distinct addresses and certificate/key
-paths. The private listener additionally declares a client CA, control signing
-key ID and secret environment name, and a finite lease.
+paths. The private listener additionally declares a client CA; monotonic trust,
+revocation, and current-key versions; current-key validity; a signing-key secret
+environment name; and a finite lease. The reference host declares the same
+trust version and revocation epoch plus complete current/optional-next public
+keys and validity intervals. Legacy envelopes with zero key version or zero
+revocation epoch are refused.
 
 Use `deploy/sandboxcontrol/control.example.json` as the strict control
 declaration and `deploy/sandboxhost/reference.example.json` as the strict
@@ -31,16 +35,23 @@ host's recovery test profile and must remain false in normal runs.
 
 Enrollment is a separate audited operator action using the durable
 `HostControlStore.ProvisionHost` boundary. Runtime startup never auto-enrolls a
-peer. Provision the exact certificate digest, Ed25519 public key, tenant,
-capability digest, protocol, generation, and expiry before connecting it.
+peer. The operator supplies raw bounded evidence, a declared attestation
+profile, and a verifier predicate to that call. The store derives and persists
+only its digest and `verified`, `failed`, or `metadata-only` outcome atomically;
+it never trusts caller-supplied outcome fields or stores the raw evidence. A
+failed outcome is durable and cannot authenticate. The local-unsafe profile is
+honestly `metadata-only`, never hardware-attested.
 
 ## Rotation and revocation
 
-1. Issue a next-generation client certificate and host signing key.
-2. Provision the new generation while the old generation remains active.
-3. Start the new host and verify authentication and compatible capability.
-4. Drain/fence work from the old generation.
-5. Revoke the old generation explicitly.
+1. Publish the next control verification key to hosts while current remains
+   accepted; atomically reload the complete higher trust-bundle version.
+2. Move control signing to that key only after the overlap is deployed.
+3. Remove the prior key in a strictly newer bundle after its envelope TTL and
+   lost-ack window; increment the revocation epoch for immediate refusal.
+4. Issue a next-generation client certificate and host signing key.
+5. Provision the new generation while the old generation remains active.
+6. Drain/fence work from the old generation, then revoke it explicitly.
 
 Revocation and quarantine deny future authentication and fence all of that
 Host ID's non-terminal work. Rotation overlap permits both exact generations;
