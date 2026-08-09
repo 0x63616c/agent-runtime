@@ -2,13 +2,13 @@
   "version": 2,
   "milestone": "M1 self-hosted roles and deployment",
   "proof_level": "local_disposable_kubernetes_integration",
-  "utc_time": "2026-08-07T08:40:06Z",
-  "implementation_revision": "8d15f19abacceb38d76ee138b58cb2c70d4ceb51",
+  "utc_time": "2026-08-09T20:05:45Z",
+  "implementation_revision": "49d5b0de99ec2e2f989c069cf6471a68817480fb",
   "stack": {
     "path": "deploy/production/stack.json",
     "profile": "local",
     "name": "agent-runtime",
-    "render_digest": "sha256:a05ea7461ae88d2bf6ea26e6b56aae8703c683ad04d526c4f7f86a7d907c8860"
+    "render_digest": "sha256:2e9d9bac20e254729a05e5046ea597f78216eed55681602700a366648596d2a7"
   },
   "command": {
     "path": "deploy/production/run-kubernetes-smoke.sh",
@@ -16,7 +16,7 @@
     "result": "passed"
   },
   "operator": {
-    "audit_sha256": "sha256:abfce7c1257b82847119b916a836102a273471352741362564f3b4c975fe3423",
+    "audit_sha256": "sha256:6b3b019df2e54bb29e73ad03caeb8c89f52353e64fb9ee13a3b726a4d724eb83",
     "bootstrap": true,
     "apply": true,
     "reconcile_zero_kubernetes_drift": true,
@@ -28,6 +28,12 @@
     "declared_deployments": 16,
     "running_ready_pods": 19,
     "independent_roles_ready": 8
+  },
+  "credential_matrix": {
+    "expected_rejections": 76,
+    "rejected": 76,
+    "allowed_paths": 8,
+    "secret_values_redacted": true
   },
   "secrets": {
     "local_generated_references": 12,
