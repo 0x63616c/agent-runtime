@@ -23,6 +23,15 @@ verify: check
 # Compatibility alias for the final completion gate.
 completion-check: verify
 
+# Requires the protected self-hosted Linux/x86_64/KVM runner contract and always
+# retains a redacted blocked report rather than treating a local machine as proof.
+firecracker-smoke report="evidence/firecracker-smoke.json":
+    go run ./cmd/firecracker-smoke -report "{{report}}"
+
+# The protected workflow invokes this alias from its self-hosted KVM runner.
+firecracker-integration report="evidence/firecracker-integration.json":
+    just firecracker-smoke "{{report}}"
+
 # Installs the locked public-docs toolchain and starts the local Docusaurus site.
 docs:
     npm --prefix website ci

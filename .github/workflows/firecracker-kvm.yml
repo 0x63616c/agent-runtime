@@ -1,0 +1,40 @@
+name: firecracker-kvm
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    name: protected-linux-kvm-smoke
+    runs-on: [self-hosted, linux, x64, kvm, firecracker-protected]
+    environment: firecracker-kvm
+    timeout-minutes: 15
+    steps:
+      - name: Check out immutable revision
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install pinned Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Install pinned just
+        uses: extractions/setup-just@53165ef7e734c5c07cb06b3c8e7b647c5aa16db3 # v4
+        with:
+          just-version: 1.58.0
+      - name: Run fail-closed KVM integration harness
+        env:
+          FIRECRACKER_RUNNER_CONTRACT: protected-linux-kvm-v1
+        run: just firecracker-integration evidence/firecracker-kvm-report.json
+      - name: Retain redacted protected-run report
+        if: always() && hashFiles('evidence/firecracker-kvm-report.json') != ''
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: firecracker-kvm-${{ github.sha }}
+          path: evidence/firecracker-kvm-report.json
+          if-no-files-found: error
+          retention-days: 90

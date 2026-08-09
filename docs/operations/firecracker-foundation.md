@@ -40,3 +40,14 @@ The following are still required before any Firecracker foundation claim:
 - separate certified profiles for mounts, volumes/snapshots, command-scoped
   secrets, and mediated egress. Unsupported requests must continue to fail
   closed.
+
+## Protected-runner commands
+
+`just firecracker-smoke` and `just firecracker-integration` deliberately fail
+closed on an ordinary developer host. Both retain a redacted `blocked` report
+instead of emitting simulated success. The dispatch-only `firecracker-kvm`
+workflow is restricted to the protected self-hosted `linux`, `x64`, `kvm`, and
+`firecracker-protected` runner contract and uploads that report even on failure.
+It cannot become `linux_kvm_e2e` evidence until a reviewed fixture lock and the
+enrolled M3 host-control bridge drive `SmokeHarness` through a real Jailer,
+guest serial marker, control request, and cleanup proof.
