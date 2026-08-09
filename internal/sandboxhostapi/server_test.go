@@ -32,7 +32,7 @@ func TestHostHandlerPullLostAckReceiptRenewAndResult(t *testing.T) {
 	certificate := testPeerCertificate(t, "host_01", 1)
 	store := sandboxcontrol.NewMemoryLedger()
 	host := sandboxcontrol.HostEnrollment{HostID: "host_01", Tenant: "tenant_01", Pool: "pool_01", Generation: 1, ProtocolVersion: sandboxhostprotocol.Version, CertificateDigest: certificateDigest(certificate), SigningPublicKey: hostPublic, CapabilityDigest: testDigest('b'), Status: sandboxcontrol.HostActive, ExpiresAt: now.Add(time.Hour)}
-	if err := store.ProvisionHost(context.Background(), host); err != nil {
+	if err := store.ProvisionHost(context.Background(), host, sandboxcontrol.AttestationInput{Profile: sandboxcontrol.AttestationProfileLocalMetadata}, nil); err != nil {
 		t.Fatal(err)
 	}
 	operation := sandboxcontrol.Operation{Principal: "tenant_01:subject_01", Tenant: "tenant_01", ID: "op_host_api", Kind: "close-sandbox", TargetKind: "sandbox", TargetID: "sbx_host_api", InputDigest: testDigest('c'), CanonicalDigest: testDigest('d'), EffectiveSpecDigest: testDigest('e'), CapabilityDigest: host.CapabilityDigest, DispatchBody: `{"version":"sandbox.control/v1"}`, AcceptedAt: now, RetentionExpiresAt: now.Add(time.Hour), CleanupRequired: true}
@@ -131,7 +131,7 @@ func TestHostHandlerRejectsRogueTLSAndQuarantinesBadSignature(t *testing.T) {
 	certificate := testPeerCertificate(t, "host_01", 1)
 	store := sandboxcontrol.NewMemoryLedger()
 	host := sandboxcontrol.HostEnrollment{HostID: "host_01", Tenant: "tenant_01", Pool: "pool_01", Generation: 1, ProtocolVersion: sandboxhostprotocol.Version, CertificateDigest: certificateDigest(certificate), SigningPublicKey: hostPublic, CapabilityDigest: testDigest('b'), Status: sandboxcontrol.HostActive, ExpiresAt: now.Add(time.Hour)}
-	if err := store.ProvisionHost(context.Background(), host); err != nil {
+	if err := store.ProvisionHost(context.Background(), host, sandboxcontrol.AttestationInput{Profile: sandboxcontrol.AttestationProfileLocalMetadata}, nil); err != nil {
 		t.Fatal(err)
 	}
 	handler, _ := NewHandler(Config{Store: store, ControlTrust: testControlTrust(now, controlPrivate.Public().(ed25519.PublicKey)), ControlSigningKey: controlPrivate, Entropy: bytes.NewReader(bytes.Repeat([]byte{0x44}, 4096)), Clock: fakeClock, LeaseDuration: time.Minute})

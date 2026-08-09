@@ -20,6 +20,8 @@ var (
 	ErrNoHostAssignment = errors.New("sandbox host has no assignment")
 	// ErrHostProtocolViolation reports an authenticated but impossible message.
 	ErrHostProtocolViolation = errors.New("sandbox host protocol violation")
+	// ErrHostAttestationFailed reports a durably retained verifier refusal.
+	ErrHostAttestationFailed = errors.New("sandbox host attestation failed")
 )
 
 // HostStatus is the durable enrollment security state.
@@ -85,7 +87,7 @@ type HostDispatch struct {
 
 // HostControlStore is the private enrolled-host authority seam.
 type HostControlStore interface {
-	ProvisionHost(context.Context, HostEnrollment) error
+	ProvisionHost(context.Context, HostEnrollment, AttestationInput, AttestationVerifier) error
 	RevokeHost(context.Context, string, uint64, time.Time) error
 	AuthenticateHost(context.Context, HostIdentity, time.Time) (HostEnrollment, error)
 	PullHostAssignment(context.Context, HostIdentity, time.Time, time.Time, DeliverySeed, EnvelopeSigner) (HostDispatch, error)
@@ -127,11 +129,15 @@ type hostOutputFields struct {
 
 // ProvisionHost records an audited enrollment generation or idempotently
 // reconnects the byte-equivalent current generation.
-func (ledger *MemoryLedger) ProvisionHost(ctx context.Context, enrollment HostEnrollment) error {
+func (ledger *MemoryLedger) ProvisionHost(ctx context.Context, enrollment HostEnrollment, input AttestationInput, verifier AttestationVerifier) error {
 	if err := ctx.Err(); err != nil {
 		return errors.Wrap(err, "provision sandbox host")
 	}
-	enrollment = normalizeHostEnrollment(enrollment)
+	var err error
+	enrollment, err = evaluateHostEnrollment(ctx, enrollment, input, verifier)
+	if err != nil {
+		return err
+	}
 	if !validHostEnrollment(enrollment) {
 		return errors.New("provision sandbox host: invalid bounded enrollment")
 	}
@@ -150,11 +156,17 @@ func (ledger *MemoryLedger) ProvisionHost(ctx context.Context, enrollment HostEn
 		if !sameEnrollment(current, enrollment) {
 			return ErrConflict
 		}
+		if enrollment.Status == HostAttestationFailed {
+			return ErrHostAttestationFailed
+		}
 		return nil
 	}
 	enrollment.SigningPublicKey = append(ed25519.PublicKey(nil), enrollment.SigningPublicKey...)
 	enrollment.ExpiresAt = enrollment.ExpiresAt.UTC()
 	ledger.hosts[key] = enrollment
+	if enrollment.Status == HostAttestationFailed {
+		return ErrHostAttestationFailed
+	}
 	return nil
 }
 

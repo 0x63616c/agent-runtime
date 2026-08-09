@@ -169,7 +169,7 @@ func TestPostgresHostControlPersistsLostAckAndQuarantineAcrossRestart(t *testing
 	}
 	now := time.Date(2026, 8, 7, 3, 0, 0, 0, time.UTC)
 	host := HostEnrollment{HostID: "host_pg", Tenant: "tenant-pg", Pool: "pool-pg", Generation: 2, ProtocolVersion: sandboxhostprotocol.Version, CertificateDigest: digest("1"), SigningPublicKey: make(ed25519.PublicKey, ed25519.PublicKeySize), CapabilityDigest: digest("2"), Status: HostActive, ExpiresAt: now.Add(time.Hour)}
-	if err := ledger.ProvisionHost(ctx, host); err != nil {
+	if err := ledger.ProvisionHost(ctx, host, AttestationInput{Profile: AttestationProfileLocalMetadata}, nil); err != nil {
 		t.Fatal(err)
 	}
 	operation := Operation{Principal: "tenant-pg:subject-pg", Tenant: host.Tenant, ID: "op_pg_host", Kind: "close-sandbox", TargetKind: "sandbox", TargetID: "sbx_pg_host", InputDigest: digest("3"), CanonicalDigest: digest("4"), EffectiveSpecDigest: digest("5"), CapabilityDigest: host.CapabilityDigest, DispatchBody: `{"version":"sandbox.control/v1"}`, AcceptedAt: now, RetentionExpiresAt: now.Add(time.Hour), CleanupRequired: true}
@@ -221,6 +221,40 @@ func TestPostgresHostControlPersistsLostAckAndQuarantineAcrossRestart(t *testing
 	}
 }
 
+func TestPostgresProvisionHostPersistsVerifierFailureWithoutRawEvidence(t *testing.T) {
+	dsn := os.Getenv("AR_SANDBOXCONTROL_POSTGRES_DSN")
+	if dsn == "" {
+		t.Fatal("AR_SANDBOXCONTROL_POSTGRES_DSN is required for the integration suite")
+	}
+	ctx := context.Background()
+	pool := openIntegrationPool(t, ctx, dsn)
+	t.Cleanup(pool.Close)
+	if _, err := pool.Exec(ctx, `TRUNCATE runtime.sandbox_host_outputs, runtime.sandbox_host_dispatches, runtime.sandbox_host_enrollments, runtime.sandbox_operation_outbox, runtime.sandbox_operations RESTART IDENTITY`); err != nil {
+		t.Fatal(err)
+	}
+	ledger, err := NewPostgresLedger(pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 8, 8, 12, 0, 0, 0, time.UTC)
+	host := HostEnrollment{HostID: "host_pg_attestation_failed", Tenant: "tenant-pg", Pool: "pool-pg", Generation: 1, ProtocolVersion: sandboxhostprotocol.Version, CertificateDigest: digest("1"), SigningPublicKey: make(ed25519.PublicKey, ed25519.PublicKeySize), CapabilityDigest: digest("2"), Status: HostActive, ExpiresAt: now.Add(time.Hour)}
+	const rawEvidence = "synthetic-raw-attestation"
+	verifier := AttestationVerifierFunc(func(context.Context, AttestationEvidence) error { return errors.New("measurement refused") })
+	if err := ledger.ProvisionHost(ctx, host, AttestationInput{Profile: AttestationProfileVerified, Evidence: []byte(rawEvidence)}, verifier); !errors.Is(err, ErrHostAttestationFailed) {
+		t.Fatalf("ProvisionHost() error = %v", err)
+	}
+	var profile, state, status, digest string
+	if err := pool.QueryRow(ctx, `SELECT attestation_profile, attestation_state, status, attestation_digest FROM runtime.sandbox_host_enrollments WHERE host_id=$1 AND generation=$2`, host.HostID, 1).Scan(&profile, &state, &status, &digest); err != nil {
+		t.Fatal(err)
+	}
+	if profile != string(AttestationProfileVerified) || state != string(AttestationFailed) || status != string(HostAttestationFailed) || digest == "" || digest == rawEvidence {
+		t.Fatalf("persisted attestation outcome = %q %q %q %q", profile, state, status, digest)
+	}
+	if _, err := ledger.AuthenticateHost(ctx, HostIdentity{HostID: host.HostID, Generation: host.Generation, CertificateDigest: host.CertificateDigest}, now); !errors.Is(err, ErrHostDenied) {
+		t.Fatalf("AuthenticateHost() error = %v", err)
+	}
+}
+
 func TestPostgresHostControlRecoversTerminalOutputAndResultAcksAfterLeaseExpiry(t *testing.T) {
 	dsn := os.Getenv("AR_SANDBOXCONTROL_POSTGRES_DSN")
 	if dsn == "" {
@@ -238,7 +272,7 @@ func TestPostgresHostControlRecoversTerminalOutputAndResultAcksAfterLeaseExpiry(
 	}
 	now := time.Date(2026, 8, 7, 4, 0, 0, 0, time.UTC)
 	host := HostEnrollment{HostID: "host_pg_ack", Tenant: "tenant-pg", Pool: "pool-pg", Generation: 1, ProtocolVersion: sandboxhostprotocol.Version, CertificateDigest: digest("1"), SigningPublicKey: make(ed25519.PublicKey, ed25519.PublicKeySize), CapabilityDigest: digest("2"), Status: HostActive, ExpiresAt: now.Add(time.Hour)}
-	if err := ledger.ProvisionHost(ctx, host); err != nil {
+	if err := ledger.ProvisionHost(ctx, host, AttestationInput{Profile: AttestationProfileLocalMetadata}, nil); err != nil {
 		t.Fatal(err)
 	}
 	operation := Operation{Principal: "tenant-pg:subject-pg", Tenant: host.Tenant, ID: "op_pg_ack", Kind: "close-sandbox", TargetKind: "sandbox", TargetID: "sbx_pg_ack", InputDigest: digest("3"), CanonicalDigest: digest("4"), EffectiveSpecDigest: digest("5"), CapabilityDigest: host.CapabilityDigest, DispatchBody: `{"version":"sandbox.control/v1"}`, AcceptedAt: now, RetentionExpiresAt: now.Add(time.Hour), CleanupRequired: true}

@@ -3,8 +3,18 @@ package sandboxcontrol
 import (
 	"context"
 
+	"github.com/0x63616c/agent-runtime/internal/sandboxhostprotocol"
 	"github.com/cockroachdb/errors"
 )
+
+const maxAttestationEvidenceBytes = 64 << 10
+
+// AttestationInput is raw, bounded enrollment evidence plus its explicit
+// assurance profile. Evidence is verified transiently and never persisted.
+type AttestationInput struct {
+	Profile  AttestationProfile
+	Evidence []byte
+}
 
 // AttestationProfile identifies the evidence assurance a host enrollment
 // presents. Metadata-only local evidence is explicitly not a hardware or
@@ -41,6 +51,7 @@ type AttestationEvidence struct {
 	CertificateDigest string
 	CapabilityDigest  string
 	AttestationDigest string
+	Evidence          []byte
 }
 
 // AttestationVerifier evaluates the selected profile's evidence predicate.
@@ -54,15 +65,16 @@ type AttestationVerifierFunc func(context.Context, AttestationEvidence) error
 // VerifyHostAttestation calls the explicit profile predicate and returns a
 // safe durable state. Verification failure is recorded as state, not exposed
 // as unbounded verifier detail.
-func VerifyHostAttestation(ctx context.Context, profile AttestationProfile, host HostEnrollment, verifier AttestationVerifier) HostAttestation {
-	if profile == AttestationProfileLocalMetadata {
-		return HostAttestation{Profile: profile, State: AttestationMetadataOnly}
+func VerifyHostAttestation(ctx context.Context, input AttestationInput, host HostEnrollment, verifier AttestationVerifier) HostAttestation {
+	if input.Profile == AttestationProfileLocalMetadata && len(input.Evidence) == 0 {
+		return HostAttestation{Profile: input.Profile, State: AttestationMetadataOnly}
 	}
-	evidence := AttestationEvidence{HostID: host.HostID, Generation: host.Generation, CertificateDigest: host.CertificateDigest, CapabilityDigest: host.CapabilityDigest, AttestationDigest: host.AttestationDigest}
-	if profile != AttestationProfileVerified || verifier == nil || ctx.Err() != nil || !validAttestationEvidence(evidence) || verifier.VerifyHostAttestation(ctx, evidence) != nil {
-		return HostAttestation{Profile: profile, State: AttestationFailed}
+	digest := sandboxhostprotocol.Digest(input.Evidence)
+	evidence := AttestationEvidence{HostID: host.HostID, Generation: host.Generation, CertificateDigest: host.CertificateDigest, CapabilityDigest: host.CapabilityDigest, AttestationDigest: digest, Evidence: append([]byte(nil), input.Evidence...)}
+	if input.Profile != AttestationProfileVerified || verifier == nil || ctx.Err() != nil || !validAttestationEvidence(evidence) || verifier.VerifyHostAttestation(ctx, evidence) != nil {
+		return HostAttestation{Profile: input.Profile, State: AttestationFailed, Digest: digest}
 	}
-	return HostAttestation{Profile: profile, State: AttestationVerified}
+	return HostAttestation{Profile: input.Profile, State: AttestationVerified, Digest: digest}
 }
 
 // VerifyHostAttestation implements AttestationVerifier.
@@ -77,14 +89,19 @@ func (verifier AttestationVerifierFunc) VerifyHostAttestation(ctx context.Contex
 type HostAttestation struct {
 	Profile AttestationProfile
 	State   AttestationState
+	Digest  string
 }
 
-func normalizeHostEnrollment(host HostEnrollment) HostEnrollment {
-	if host.AttestationProfile == "" && host.AttestationState == "" {
-		host.AttestationProfile = AttestationProfileLocalMetadata
-		host.AttestationState = AttestationMetadataOnly
+func evaluateHostEnrollment(ctx context.Context, host HostEnrollment, input AttestationInput, verifier AttestationVerifier) (HostEnrollment, error) {
+	if host.Status != HostActive || host.AttestationProfile != "" || host.AttestationState != "" || host.AttestationDigest != "" {
+		return HostEnrollment{}, errors.New("provision sandbox host: caller-supplied attestation outcome is forbidden")
 	}
-	return host
+	attestation := VerifyHostAttestation(ctx, input, host, verifier)
+	host.AttestationProfile, host.AttestationState, host.AttestationDigest = attestation.Profile, attestation.State, attestation.Digest
+	if attestation.State == AttestationFailed {
+		host.Status = HostAttestationFailed
+	}
+	return host, nil
 }
 
 func validHostAttestation(host HostEnrollment) bool {
@@ -99,5 +116,5 @@ func validHostAttestation(host HostEnrollment) bool {
 }
 
 func validAttestationEvidence(evidence AttestationEvidence) bool {
-	return validBounded(evidence.HostID, maxHostIDBytes) && evidence.Generation > 0 && validBounded(evidence.CertificateDigest, maxDigestBytes) && validBounded(evidence.CapabilityDigest, maxDigestBytes) && validBounded(evidence.AttestationDigest, maxDigestBytes)
+	return validBounded(evidence.HostID, maxHostIDBytes) && evidence.Generation > 0 && validBounded(evidence.CertificateDigest, maxDigestBytes) && validBounded(evidence.CapabilityDigest, maxDigestBytes) && validBounded(evidence.AttestationDigest, maxDigestBytes) && len(evidence.Evidence) > 0 && len(evidence.Evidence) <= maxAttestationEvidenceBytes
 }

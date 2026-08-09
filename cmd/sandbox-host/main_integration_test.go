@@ -65,7 +65,7 @@ func TestReferenceHostMultiProcessLostAckQuarantineCleanupAndReassignment(t *tes
 		t.Fatal(err)
 	}
 	host1 := sandboxcontrol.HostEnrollment{HostID: "host_01", Tenant: "tenant_01", Pool: "reference", Generation: 1, ProtocolVersion: sandboxhostprotocol.Version, CertificateDigest: certificateDigest(identities.host1Certificate), SigningPublicKey: hostPublic1, CapabilityDigest: operation.CapabilityDigest, Status: sandboxcontrol.HostActive, ExpiresAt: time.Now().UTC().Add(time.Hour)}
-	if err := ledger.ProvisionHost(context.Background(), host1); err != nil {
+	if err := ledger.ProvisionHost(context.Background(), host1, sandboxcontrol.AttestationInput{Profile: sandboxcontrol.AttestationProfileLocalMetadata}, nil); err != nil {
 		t.Fatal(err)
 	}
 	journalPath := filepath.Join(directory, "receipts.json")
@@ -132,7 +132,7 @@ func TestReferenceHostMultiProcessLostAckQuarantineCleanupAndReassignment(t *tes
 	host2.CertificateDigest = certificateDigest(identities.host2Certificate)
 	host2.SigningPublicKey = hostPublic2
 	host2.ExpiresAt = time.Now().UTC().Add(time.Hour)
-	if err := ledger.ProvisionHost(context.Background(), host2); err != nil {
+	if err := ledger.ProvisionHost(context.Background(), host2, sandboxcontrol.AttestationInput{Profile: sandboxcontrol.AttestationProfileLocalMetadata}, nil); err != nil {
 		t.Fatal(err)
 	}
 	reassignedConfig := writeHostConfig(t, directory, "host-reassigned.json", hostAddress, identities, 2, filepath.Join(directory, "reassigned-receipts.json"), false, false, false)
