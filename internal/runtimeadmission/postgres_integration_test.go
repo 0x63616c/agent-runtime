@@ -8,11 +8,13 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	agentruntime "github.com/0x63616c/agent-runtime/sdk/go"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -211,93 +213,55 @@ func TestPostgresAdmissionClassifiesExistingIdempotencyBeforeMissingTargetSessio
 	}
 }
 
-func TestPostgresAdmissionSerializesOnePrincipalIdempotencyKeyAcrossTwoSessionConnections(t *testing.T) {
+func TestPostgresIdempotencyAdvisoryLockContentionIsDatabaseObserved(t *testing.T) {
 	pool := openAdmissionPool(t)
 	ctx := context.Background()
 	resetAdmissionSchema(t, ctx, pool)
 	applyAdmissionMigrations(t, ctx, pool)
-	now := time.Date(2026, 8, 10, 0, 0, 0, 0, time.UTC)
-	seedAdmissionSession(t, ctx, pool, "tenant_a", "alice", "sess_0000000000000001", now)
-
-	firstPool := openAdmissionPool(t)
-	secondPool := openAdmissionPool(t)
-	firstRepository, err := NewPostgresRepository(firstPool)
-	if err != nil {
-		t.Fatalf("new first repository: %v", err)
-	}
-	secondRepository, err := NewPostgresRepository(secondPool)
-	if err != nil {
-		t.Fatalf("new second repository: %v", err)
-	}
-	firstLockHeld := make(chan struct{})
-	releaseFirst := make(chan struct{})
-	firstRepository.afterIdempotencyLock = func(context.Context) error {
-		close(firstLockHeld)
-		<-releaseFirst
-		return nil
-	}
-	secondAtIdempotencyBoundary := make(chan struct{})
-	releaseSecond := make(chan struct{})
-	secondRepository.beforeIdempotencyLock = func(context.Context) error {
-		close(secondAtIdempotencyBoundary)
-		<-releaseSecond
-		return nil
-	}
-	content := NewMemoryContentStore()
-	firstService, err := NewService(content, NewMemoryArtifactCatalog(), firstRepository, fixedClock{now: now}, &integrationIDs{})
-	if err != nil {
-		t.Fatalf("new first service: %v", err)
-	}
-	secondService, err := NewService(content, NewMemoryArtifactCatalog(), secondRepository, fixedClock{now: now}, &integrationIDs{})
-	if err != nil {
-		t.Fatalf("new second service: %v", err)
-	}
 	owner := Owner{TenantID: "tenant_a", PrincipalID: "alice"}
-	requests := []agentruntime.SendInputRequest{
-		{SessionID: "sess_0000000000000001", IdempotencyKey: "cross-session-key", Parts: []agentruntime.ContentPart{{Kind: agentruntime.ContentText, Text: "one"}}},
-		{SessionID: "sess_0000000000000009", IdempotencyKey: "cross-session-key", Parts: []agentruntime.ContentPart{{Kind: agentruntime.ContentText, Text: "two"}}},
+	lockKey := idempotencyLockKey(owner, "cross-session-key")
+	holder := openAdmissionConnection(t, "m5-idempotency-holder")
+	holderTx, err := holder.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin lock-holder transaction: %v", err)
 	}
-	type outcome struct {
-		result agentruntime.SendInputResult
-		err    error
+	t.Cleanup(func() { _ = holderTx.Rollback(context.Background()) })
+	if _, err := holderTx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, lockKey); err != nil {
+		t.Fatalf("hold exact idempotency lock: %v", err)
 	}
-	firstOutcome := make(chan outcome, 1)
-	secondOutcome := make(chan outcome, 1)
+
+	contender := openAdmissionConnection(t, "m5-idempotency-contender")
+	queryFlushed := make(chan struct{})
+	queryDone := make(chan error, 1)
 	go func() {
-		result, callErr := firstService.SendInput(ctx, owner, requests[0])
-		firstOutcome <- outcome{result, callErr}
+		result := contender.PgConn().Exec(context.Background(), "SELECT pg_advisory_xact_lock(hashtextextended('"+sqlLiteral(lockKey)+"', 0))")
+		close(queryFlushed)
+		_, queryErr := result.ReadAll()
+		queryDone <- queryErr
 	}()
-	<-firstLockHeld
-	go func() {
-		result, callErr := secondService.SendInput(ctx, owner, requests[1])
-		secondOutcome <- outcome{result, callErr}
-	}()
-	<-secondAtIdempotencyBoundary
-	close(releaseFirst)
-	first := <-firstOutcome
-	close(releaseSecond)
-	second := <-secondOutcome
-	accepted, conflicts := 0, 0
-	for _, outcome := range []outcome{first, second} {
-		if outcome.err == nil {
-			accepted++
-			continue
-		}
-		if errors.Is(outcome.err, ErrConflict) {
-			conflicts++
-			continue
-		}
-		t.Fatalf("cross-session concurrent idempotency error = %v, want ErrConflict", outcome.err)
+	<-queryFlushed
+	var waitType, waitEvent, query string
+	err = pool.QueryRow(ctx, `SELECT wait_event_type, wait_event, query FROM pg_stat_activity WHERE pid=$1`, contender.PgConn().PID()).Scan(&waitType, &waitEvent, &query)
+	if err != nil {
+		t.Fatalf("observe contender backend: %v", err)
 	}
-	if accepted != 1 || conflicts != 1 {
-		t.Fatalf("accepted=%d conflicts=%d, want exactly one each; results=%#v %#v", accepted, conflicts, first, second)
+	var waitingAdvisoryLocks int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM pg_locks WHERE pid=$1 AND locktype='advisory' AND NOT granted`, contender.PgConn().PID()).Scan(&waitingAdvisoryLocks); err != nil {
+		t.Fatalf("count contender advisory lock waits: %v", err)
 	}
-	var inputs int
-	if err := pool.QueryRow(ctx, `SELECT count(*) FROM runtime.inputs WHERE tenant_id='tenant_a' AND principal_id='alice' AND idempotency_key='cross-session-key'`).Scan(&inputs); err != nil {
-		t.Fatalf("count cross-session idempotency rows: %v", err)
+	if waitType != "Lock" || waitEvent != "advisory" || !strings.Contains(query, "pg_advisory_xact_lock(hashtextextended('") || waitingAdvisoryLocks != 1 {
+		t.Fatalf("contender state = wait=%q/%q query=%q advisory_waits=%d, want exact advisory lock wait", waitType, waitEvent, query, waitingAdvisoryLocks)
 	}
-	if inputs != 1 {
-		t.Fatalf("cross-session idempotency rows = %d, want 1", inputs)
+	select {
+	case queryErr := <-queryDone:
+		t.Fatalf("contender completed while holder retained lock: %v", queryErr)
+	default:
+	}
+	if err := holderTx.Commit(ctx); err != nil {
+		t.Fatalf("release exact idempotency lock: %v", err)
+	}
+	if err := <-queryDone; err != nil {
+		t.Fatalf("contender completes after lock release: %v", err)
 	}
 }
 
@@ -326,6 +290,27 @@ func openAdmissionPool(t *testing.T) *pgxpool.Pool {
 	t.Cleanup(pool.Close)
 	return pool
 }
+
+func openAdmissionConnection(t *testing.T, applicationName string) *pgx.Conn {
+	t.Helper()
+	dsn := os.Getenv("AR_RUNTIME_POSTGRES_DSN")
+	if dsn == "" {
+		t.Fatal("AR_RUNTIME_POSTGRES_DSN is required")
+	}
+	configuration, err := pgx.ParseConfig(dsn)
+	if err != nil {
+		t.Fatalf("parse PostgreSQL connection: %v", err)
+	}
+	configuration.RuntimeParams["application_name"] = applicationName
+	connection, err := pgx.ConnectConfig(context.Background(), configuration)
+	if err != nil {
+		t.Fatalf("open PostgreSQL connection: %v", err)
+	}
+	t.Cleanup(func() { _ = connection.Close(context.Background()) })
+	return connection
+}
+
+func sqlLiteral(value string) string { return strings.ReplaceAll(value, "'", "''") }
 func resetAdmissionSchema(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
 	t.Helper()
 	if _, err := pool.Exec(ctx, `DROP TABLE IF EXISTS runtime.runtime_outbox, runtime.audit_records, runtime.session_events, runtime.turns, runtime.inputs, runtime.sessions, runtime.agent_revisions, runtime.tenants, runtime.schema_migrations CASCADE`); err != nil {
