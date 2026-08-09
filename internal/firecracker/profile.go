@@ -55,6 +55,7 @@ type Profile struct {
 	Jailer            PinnedArtifact
 	Kernel            PinnedArtifact
 	RootFS            PinnedArtifact
+	GuestAgent        PinnedArtifact
 	KVMDevice         string
 	ChrootBaseDir     string
 	UID               uint32
@@ -97,6 +98,7 @@ type Plan struct {
 	jailer          PinnedArtifact
 	kernel          PinnedArtifact
 	rootFS          PinnedArtifact
+	guestAgent      PinnedArtifact
 	compiled        bool
 }
 
@@ -157,12 +159,15 @@ func (plan Plan) Kernel() PinnedArtifact { return plan.kernel }
 // RootFS returns the pinned guest root filesystem artifact.
 func (plan Plan) RootFS() PinnedArtifact { return plan.rootFS }
 
+// GuestAgent returns the pinned project-owned guest control program artifact.
+func (plan Plan) GuestAgent() PinnedArtifact { return plan.guestAgent }
+
 // Compile rejects profile widening and produces the deterministic foundation launch plan.
 func Compile(profile Profile) (Plan, error) {
 	if profile.Version != "firecracker.host/v1" || !validVMID(profile.VMID) {
 		return Plan{}, fmt.Errorf("%w: version and VM ID are required", ErrInvalidProfile)
 	}
-	for _, artifact := range []PinnedArtifact{profile.Firecracker, profile.Jailer, profile.Kernel, profile.RootFS} {
+	for _, artifact := range []PinnedArtifact{profile.Firecracker, profile.Jailer, profile.Kernel, profile.RootFS, profile.GuestAgent} {
 		if !validArtifact(artifact) {
 			return Plan{}, fmt.Errorf("%w: every executable and guest artifact must be absolute and SHA-256 pinned", ErrInvalidProfile)
 		}
@@ -203,6 +208,7 @@ func Compile(profile Profile) (Plan, error) {
 		jailer:       profile.Jailer,
 		kernel:       profile.Kernel,
 		rootFS:       profile.RootFS,
+		guestAgent:   profile.GuestAgent,
 		compiled:     true,
 	}, nil
 }
@@ -273,7 +279,7 @@ func VerifyPlanArtifacts(plan Plan, opener artifactOpener) error {
 	if opener == nil {
 		return fmt.Errorf("%w: opener is required", ErrArtifactIntegrity)
 	}
-	for _, artifact := range []PinnedArtifact{plan.firecracker, plan.jailer, plan.kernel, plan.rootFS} {
+	for _, artifact := range []PinnedArtifact{plan.firecracker, plan.jailer, plan.kernel, plan.rootFS, plan.guestAgent} {
 		file, err := opener.Open(artifact.Path)
 		if err != nil {
 			return fmt.Errorf("%w: open %s: %v", ErrArtifactIntegrity, artifact.Path, err)
@@ -378,7 +384,7 @@ func hasPinnedLaunchPlan(plan Plan) bool {
 }
 
 func validCompiledPlan(plan Plan) bool {
-	return plan.compiled && validVMID(plan.vmID) && validArtifact(plan.firecracker) && validArtifact(plan.jailer) && validArtifact(plan.kernel) && validArtifact(plan.rootFS) && len(plan.jailerArguments) > 0 && plan.machine.VCPUCount > 0 && plan.machine.MemoryMiB >= 128 && validResourceEnforcement(plan.resources) && plan.network.Mode == NetworkDenyAll && len(plan.network.Allowlist) == 0
+	return plan.compiled && validVMID(plan.vmID) && validArtifact(plan.firecracker) && validArtifact(plan.jailer) && validArtifact(plan.kernel) && validArtifact(plan.rootFS) && validArtifact(plan.guestAgent) && len(plan.jailerArguments) > 0 && plan.machine.VCPUCount > 0 && plan.machine.MemoryMiB >= 128 && validResourceEnforcement(plan.resources) && plan.network.Mode == NetworkDenyAll && len(plan.network.Allowlist) == 0
 }
 
 func validResourceEnforcement(resources ResourceEnforcement) bool {

@@ -1,6 +1,8 @@
 package firecracker
 
 import (
+	"archive/tar"
+	"compress/gzip"
 	"context"
 	"crypto/sha256"
 	"errors"
@@ -8,6 +10,7 @@ import (
 	"io"
 	"math"
 	"os"
+	"path"
 	"path/filepath"
 	"runtime"
 	"sort"
@@ -36,33 +39,94 @@ const (
 	FixtureKernel FixtureName = "kernel"
 	// FixtureRootFS identifies the admitted guest root filesystem.
 	FixtureRootFS FixtureName = "rootfs"
+	// FixtureGuestAgent identifies the project-owned static guest control program.
+	FixtureGuestAgent FixtureName = "guest-agent"
 )
+
+// FixtureSourceFormat describes how artifacts are derived from a verified source.
+type FixtureSourceFormat string
+
+const (
+	// FixtureSourceFile identifies a source containing exactly one artifact.
+	FixtureSourceFile FixtureSourceFormat = "file"
+	// FixtureSourceTarGzip identifies a gzip-compressed tar source bundle.
+	FixtureSourceTarGzip FixtureSourceFormat = "tar.gz"
+)
+
+// LockedSource records a single immutable non-executable fixture source.
+type LockedSource struct {
+	ID        string              `json:"id"`
+	URL       string              `json:"url"`
+	Reference string              `json:"immutable_reference"`
+	Format    FixtureSourceFormat `json:"format"`
+	Digest    sandbox.Digest      `json:"sha256"`
+	SizeBytes uint64              `json:"size_bytes"`
+	License   string              `json:"license"`
+}
+
+// BuildProvenance records the checked-in, reproducible inputs of a project-owned fixture output.
+type BuildProvenance struct {
+	RecipePath       string         `json:"recipe_path"`
+	SourceRevision   string         `json:"source_revision"`
+	Toolchain        string         `json:"toolchain"`
+	InputsDigest     sandbox.Digest `json:"inputs_sha256"`
+	SBOMDigest       sandbox.Digest `json:"sbom_sha256"`
+	Static           bool           `json:"static"`
+	GuestAgentDigest sandbox.Digest `json:"guest_agent_sha256,omitempty"`
+}
 
 // LockedArtifact records immutable provenance required before an artifact may be used.
 type LockedArtifact struct {
-	Name      FixtureName    `json:"name"`
-	Source    string         `json:"source"`
-	Digest    sandbox.Digest `json:"sha256"`
-	SizeBytes uint64         `json:"size_bytes"`
-	License   string         `json:"license"`
+	Name      FixtureName      `json:"name"`
+	SourceID  string           `json:"source_id"`
+	Member    string           `json:"member,omitempty"`
+	Digest    sandbox.Digest   `json:"sha256"`
+	SizeBytes uint64           `json:"size_bytes"`
+	License   string           `json:"license"`
+	Build     *BuildProvenance `json:"build,omitempty"`
 }
 
 // FixtureLock is a reviewed, complete fixture identity lock.
 type FixtureLock struct {
 	Version   string           `json:"version"`
+	Sources   []LockedSource   `json:"sources"`
 	Artifacts []LockedArtifact `json:"artifacts"`
 }
 
 // Validate rejects partial, mutable, duplicate, or unlicensed fixture locks.
 func (lock FixtureLock) Validate() error {
-	if lock.Version != "firecracker.fixtures/v1" || len(lock.Artifacts) != 4 {
-		return fmt.Errorf("%w: version and exactly four artifacts are required", ErrFixtureLock)
+	if lock.Version != "firecracker.fixtures/v2" || len(lock.Artifacts) != 5 {
+		return fmt.Errorf("%w: version and exactly five artifacts are required", ErrFixtureLock)
 	}
-	want := map[FixtureName]bool{FixtureFirecracker: false, FixtureJailer: false, FixtureKernel: false, FixtureRootFS: false}
+	sources := make(map[string]LockedSource, len(lock.Sources))
+	for _, source := range lock.Sources {
+		if !validFixtureSource(source) || sources[source.ID].ID != "" {
+			return fmt.Errorf("%w: every source needs one safe ID, immutable HTTPS reference, SHA-256, non-zero size, format, and license", ErrFixtureLock)
+		}
+		sources[source.ID] = source
+	}
+	want := map[FixtureName]bool{FixtureFirecracker: false, FixtureJailer: false, FixtureKernel: false, FixtureRootFS: false, FixtureGuestAgent: false}
+	var firecrackerSourceID, jailerSourceID string
+	var guestAgentDigest sandbox.Digest
+	var rootFS *LockedArtifact
 	for _, artifact := range lock.Artifacts {
 		seen, known := want[artifact.Name]
-		if !known || seen || !strings.HasPrefix(artifact.Source, "https://") || !validSHA256(artifact.Digest) || artifact.SizeBytes == 0 || artifact.SizeBytes >= math.MaxInt64 || strings.TrimSpace(artifact.License) == "" {
-			return fmt.Errorf("%w: every named artifact needs one HTTPS source, SHA-256, non-zero size, and license", ErrFixtureLock)
+		source, found := sources[artifact.SourceID]
+		if !known || seen || !found || !validArtifactIdentity(artifact) || !validArtifactDerivation(artifact, source) {
+			return fmt.Errorf("%w: every named artifact needs one source, valid derivation, SHA-256, non-zero size, and license", ErrFixtureLock)
+		}
+		if artifact.Name == FixtureFirecracker {
+			firecrackerSourceID = artifact.SourceID
+		}
+		if artifact.Name == FixtureJailer {
+			jailerSourceID = artifact.SourceID
+		}
+		if artifact.Name == FixtureGuestAgent {
+			guestAgentDigest = artifact.Digest
+		}
+		if artifact.Name == FixtureRootFS {
+			copy := artifact
+			rootFS = &copy
 		}
 		want[artifact.Name] = true
 	}
@@ -71,7 +135,72 @@ func (lock FixtureLock) Validate() error {
 			return fmt.Errorf("%w: missing %s", ErrFixtureLock, name)
 		}
 	}
+	if firecrackerSourceID == "" || firecrackerSourceID != jailerSourceID || rootFS == nil || rootFS.Build == nil || rootFS.Build.GuestAgentDigest != guestAgentDigest {
+		return fmt.Errorf("%w: Firecracker and Jailer must share one verified bundle and rootfs must bind the guest agent digest", ErrFixtureLock)
+	}
 	return nil
+}
+
+func validFixtureSource(source LockedSource) bool {
+	return validFixtureID(source.ID) && strings.HasPrefix(source.URL, "https://") && strings.TrimSpace(source.Reference) != "" && source.Format != "" && validSHA256(source.Digest) && source.SizeBytes > 0 && source.SizeBytes < math.MaxInt64 && strings.TrimSpace(source.License) != ""
+}
+
+func validArtifactIdentity(artifact LockedArtifact) bool {
+	return validSHA256(artifact.Digest) && artifact.SizeBytes > 0 && artifact.SizeBytes < math.MaxInt64 && strings.TrimSpace(artifact.License) != ""
+}
+
+func validArtifactDerivation(artifact LockedArtifact, source LockedSource) bool {
+	switch source.Format {
+	case FixtureSourceFile:
+		if artifact.Member != "" || artifact.Digest != source.Digest || artifact.SizeBytes != source.SizeBytes {
+			return false
+		}
+	case FixtureSourceTarGzip:
+		if !validBundleMember(artifact.Member) {
+			return false
+		}
+	default:
+		return false
+	}
+	switch artifact.Name {
+	case FixtureFirecracker, FixtureJailer:
+		return source.Format == FixtureSourceTarGzip && artifact.Build == nil
+	case FixtureKernel:
+		return source.Format == FixtureSourceFile && artifact.Build == nil
+	case FixtureRootFS:
+		return source.Format == FixtureSourceFile && validBuildProvenance(artifact.Build, false)
+	case FixtureGuestAgent:
+		return source.Format == FixtureSourceFile && validBuildProvenance(artifact.Build, true)
+	default:
+		return false
+	}
+}
+
+func validFixtureID(value string) bool {
+	return validVMID(value)
+}
+
+func validBundleMember(value string) bool {
+	return value != "" && value != "." && !strings.HasPrefix(value, "/") && path.Clean(value) == value && !strings.HasPrefix(value, "../") && !strings.Contains(value, "\\")
+}
+
+func validBuildProvenance(provenance *BuildProvenance, requireStatic bool) bool {
+	if provenance == nil || provenance.Static != requireStatic || !strings.HasPrefix(provenance.RecipePath, "tools/firecracker/") || path.Clean(provenance.RecipePath) != provenance.RecipePath || strings.Contains(provenance.RecipePath, "\\") || !validRevision(provenance.SourceRevision) || strings.TrimSpace(provenance.Toolchain) == "" || !validSHA256(provenance.InputsDigest) || !validSHA256(provenance.SBOMDigest) {
+		return false
+	}
+	return !requireStatic || provenance.GuestAgentDigest == ""
+}
+
+func validRevision(value string) bool {
+	if len(value) != 40 {
+		return false
+	}
+	for _, character := range value {
+		if (character < '0' || character > '9') && (character < 'a' || character > 'f') {
+			return false
+		}
+	}
+	return true
 }
 
 // FixtureResponse is a non-executable immutable fixture response. ContentLength
@@ -143,36 +272,135 @@ func ProvisionFixtures(ctx context.Context, lock FixtureLock, fetcher FixtureFet
 			_ = os.RemoveAll(filepath.Join(destination, entry.Name()))
 		}
 	}()
+	stagedSources, err := stageFixtureSources(ctx, lock.Sources, fetcher, destination)
+	if err != nil {
+		return FixtureSet{}, err
+	}
 	set := FixtureSet{directory: destination, artifacts: make(map[FixtureName]PinnedArtifact, len(lock.Artifacts))}
 	for _, artifact := range lock.Artifacts {
-		response, err := fetcher.Open(ctx, artifact.Source)
-		if err != nil {
-			return FixtureSet{}, fmt.Errorf("%w: download %s: %v", ErrArtifactIntegrity, artifact.Name, err)
+		source, found := findFixtureSource(lock.Sources, artifact.SourceID)
+		if !found {
+			return FixtureSet{}, fmt.Errorf("%w: source %s disappeared after validation", ErrFixtureLock, artifact.SourceID)
 		}
-		if response.Body == nil {
-			return FixtureSet{}, fmt.Errorf("%w: download %s: empty response body", ErrArtifactIntegrity, artifact.Name)
+		path, found := stagedSources[artifact.SourceID]
+		if !found {
+			return FixtureSet{}, fmt.Errorf("%w: staged source %s is absent", ErrArtifactIntegrity, artifact.SourceID)
 		}
-		if response.ContentLength >= 0 && uint64(response.ContentLength) > artifact.SizeBytes {
-			_ = response.Body.Close()
-			return FixtureSet{}, fmt.Errorf("%w: download %s: declared content length exceeds fixture limit", ErrArtifactIntegrity, artifact.Name)
+		artifactPath := filepath.Join(destination, string(artifact.Name))
+		if err := stageFixtureArtifact(artifactPath, source, artifact, path); err != nil {
+			return FixtureSet{}, err
 		}
-		path := filepath.Join(destination, string(artifact.Name))
-		file, createErr := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
-		if createErr != nil {
-			_ = response.Body.Close()
-			return FixtureSet{}, fmt.Errorf("stage %s: %w", artifact.Name, createErr)
-		}
-		hash := sha256.New()
-		written, copyErr := io.Copy(io.MultiWriter(file, hash), io.LimitReader(response.Body, int64(artifact.SizeBytes)+1))
-		closeErr := errors.Join(file.Close(), response.Body.Close())
-		if copyErr != nil || closeErr != nil || uint64(written) != artifact.SizeBytes || fmt.Sprintf("sha256:%x", hash.Sum(nil)) != string(artifact.Digest) {
-			return FixtureSet{}, fmt.Errorf("%w: verify %s", ErrArtifactIntegrity, artifact.Name)
-		}
-		set.artifacts[artifact.Name] = PinnedArtifact{Path: path, Digest: artifact.Digest}
+		set.artifacts[artifact.Name] = PinnedArtifact{Path: artifactPath, Digest: artifact.Digest}
 	}
 	set.verified = true
 	cleanup = false
 	return set, nil
+}
+
+func stageFixtureSources(ctx context.Context, sources []LockedSource, fetcher FixtureFetcher, destination string) (map[string]string, error) {
+	sourceDirectory := filepath.Join(destination, ".sources")
+	if err := os.Mkdir(sourceDirectory, 0o700); err != nil {
+		return nil, fmt.Errorf("stage fixture sources: %w", err)
+	}
+	staged := make(map[string]string, len(sources))
+	for _, source := range sources {
+		response, err := fetcher.Open(ctx, source.URL)
+		if err != nil {
+			return nil, fmt.Errorf("%w: download source %s: %v", ErrArtifactIntegrity, source.ID, err)
+		}
+		if response.Body == nil {
+			return nil, fmt.Errorf("%w: download source %s: empty response body", ErrArtifactIntegrity, source.ID)
+		}
+		if response.ContentLength >= 0 && uint64(response.ContentLength) > source.SizeBytes {
+			_ = response.Body.Close()
+			return nil, fmt.Errorf("%w: download source %s: declared content length exceeds fixture limit", ErrArtifactIntegrity, source.ID)
+		}
+		stagedPath := filepath.Join(sourceDirectory, source.ID)
+		if err := writeVerifiedFixture(stagedPath, response.Body, source.Digest, source.SizeBytes); err != nil {
+			return nil, fmt.Errorf("%w: verify source %s", ErrArtifactIntegrity, source.ID)
+		}
+		staged[source.ID] = stagedPath
+	}
+	return staged, nil
+}
+
+func stageFixtureArtifact(destination string, source LockedSource, artifact LockedArtifact, sourcePath string) error {
+	if source.Format == FixtureSourceFile {
+		file, err := os.Open(sourcePath)
+		if err != nil {
+			return fmt.Errorf("%w: open staged source %s: %v", ErrArtifactIntegrity, source.ID, err)
+		}
+		if err := writeVerifiedFixture(destination, file, artifact.Digest, artifact.SizeBytes); err != nil {
+			return fmt.Errorf("%w: verify %s", ErrArtifactIntegrity, artifact.Name)
+		}
+		return nil
+	}
+	file, err := os.Open(sourcePath)
+	if err != nil {
+		return fmt.Errorf("%w: open staged bundle %s: %v", ErrArtifactIntegrity, source.ID, err)
+	}
+	defer file.Close()
+	gzipReader, err := gzip.NewReader(file)
+	if err != nil {
+		return fmt.Errorf("%w: open gzip bundle %s: %v", ErrArtifactIntegrity, source.ID, err)
+	}
+	defer gzipReader.Close()
+	tarReader := tar.NewReader(gzipReader)
+	found := false
+	for {
+		header, nextErr := tarReader.Next()
+		if errors.Is(nextErr, io.EOF) {
+			break
+		}
+		if nextErr != nil {
+			return fmt.Errorf("%w: read bundle %s: %v", ErrArtifactIntegrity, source.ID, nextErr)
+		}
+		if header.Name != artifact.Member {
+			continue
+		}
+		if found || header.Typeflag != tar.TypeReg || header.Size != int64(artifact.SizeBytes) {
+			return fmt.Errorf("%w: invalid bundle member %s", ErrArtifactIntegrity, artifact.Name)
+		}
+		if err := writeVerifiedFixture(destination, tarReader, artifact.Digest, artifact.SizeBytes); err != nil {
+			return fmt.Errorf("%w: verify bundle member %s", ErrArtifactIntegrity, artifact.Name)
+		}
+		found = true
+	}
+	if !found {
+		return fmt.Errorf("%w: bundle member %s is absent", ErrArtifactIntegrity, artifact.Name)
+	}
+	return nil
+}
+
+func writeVerifiedFixture(destination string, reader io.Reader, digest sandbox.Digest, sizeBytes uint64) error {
+	file, err := os.OpenFile(destination, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		return err
+	}
+	hash := sha256.New()
+	written, copyErr := io.Copy(io.MultiWriter(file, hash), io.LimitReader(reader, int64(sizeBytes)+1))
+	closeErr := errors.Join(file.Close(), closerError(reader))
+	if copyErr != nil || closeErr != nil || uint64(written) != sizeBytes || fmt.Sprintf("sha256:%x", hash.Sum(nil)) != string(digest) {
+		return errors.New("digest or size mismatch")
+	}
+	return nil
+}
+
+func closerError(reader io.Reader) error {
+	closer, ok := reader.(io.Closer)
+	if !ok {
+		return nil
+	}
+	return closer.Close()
+}
+
+func findFixtureSource(sources []LockedSource, id string) (LockedSource, bool) {
+	for _, source := range sources {
+		if source.ID == id {
+			return source, true
+		}
+	}
+	return LockedSource{}, false
 }
 
 // LaunchRequest is the complete no-NIC Jailer request passed to a protected host implementation.
@@ -339,11 +567,11 @@ func fixturesMatchPlan(set FixtureSet, plan Plan) bool {
 			return false
 		}
 	}
-	return set.verified && len(set.artifacts) == 4 && safeAbsolutePath(set.directory)
+	return set.verified && len(set.artifacts) == 5 && safeAbsolutePath(set.directory)
 }
 
 func planArtifacts(plan Plan) map[FixtureName]PinnedArtifact {
-	return map[FixtureName]PinnedArtifact{FixtureFirecracker: plan.Firecracker(), FixtureJailer: plan.Jailer(), FixtureKernel: plan.Kernel(), FixtureRootFS: plan.RootFS()}
+	return map[FixtureName]PinnedArtifact{FixtureFirecracker: plan.Firecracker(), FixtureJailer: plan.Jailer(), FixtureKernel: plan.Kernel(), FixtureRootFS: plan.RootFS(), FixtureGuestAgent: plan.GuestAgent()}
 }
 
 func digest(content []byte) sandbox.Digest {

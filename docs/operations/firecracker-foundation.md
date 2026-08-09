@@ -2,10 +2,14 @@
 
 The internal `firecracker.host/v1` compiler is a declarative, fail-closed
 launch-plan boundary. It requires immutable paths and SHA-256 identities for
-the Firecracker binary, Jailer, kernel, and root filesystem; requires the
-Jailer to use an unprivileged identity and cgroups v2; requires finite CPU,
-memory, disk, process and output limits; and permits no guest NIC, egress
-allow-list, or host mount.
+the Firecracker binary, Jailer, kernel, root filesystem, and project-owned
+guest agent; requires the Jailer to use an unprivileged identity and cgroups
+v2; requires finite CPU, memory, disk, process and output limits; and permits
+no guest NIC, egress allow-list, or host mount.
+
+The fixture boundary refuses the prior four-artifact `firecracker.fixtures/v1`
+shape rather than guessing a migration. A reviewed v2 lock is required before
+any source can be staged.
 
 It is not Firecracker evidence. Every capability in its returned profile is
 `unavailable` until the protected Linux/KVM lane verifies the exact plan,
@@ -31,8 +35,9 @@ macOS check into an isolation claim.
 
 The following are still required before any Firecracker foundation claim:
 
-- a reviewed fixture lock with release URLs and SHA-256 values, then host-side
-  digest verification before launch;
+- a reviewed `firecracker.fixtures/v2` lock with source-bundle/member and
+  project-build provenance, final release URLs and SHA-256 values, then
+  host-side digest verification before launch;
 - a dedicated Linux x86_64 `/dev/kvm` runner with a real Jailer/guest-marker
   smoke run and cleanup proof;
 - a public-control E2E for create, exec, output, cancellation, timeout,
@@ -51,3 +56,21 @@ workflow is restricted to the protected self-hosted `linux`, `x64`, `kvm`, and
 It cannot become `linux_kvm_e2e` evidence until a reviewed fixture lock and the
 enrolled M3 host-control bridge drive `SmokeHarness` through a real Jailer,
 guest serial marker, control request, and cleanup proof.
+
+## Fixture-lock v2 groundwork
+
+The internal fixture validator now understands five logical identities and can
+verify a downloaded tar.gz source bundle before extracting separately hashed
+Firecracker and Jailer members. It also requires a source/member or direct-file
+identity for the kernel, rootfs, and guest agent. The rootfs and guest-agent
+rows require project-build provenance; the rootfs row binds the exact
+guest-agent digest embedded as `/sbin/init`.
+
+`tools/firecracker/` contains a static Linux/amd64 guest-agent source and a
+minimal no-download ext4 recipe. These are deliberately only build inputs:
+there is no checked-in final lock, rootfs image, SBOM, fixture digest, guest
+transport implementation, or boot evidence yet. The source emits the planned
+marker and bounded `PING <nonce>` / `PONG <vm-id> <nonce>` byte protocol, but
+the lease-fenced authenticated M3-to-vsock transport remains a required bridge.
+Neither the source nor its unit tests establish a guest boot or hardware
+isolation claim.

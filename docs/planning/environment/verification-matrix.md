@@ -65,12 +65,22 @@ pull requests retain mock-driver and manifest tests so feedback remains fast.
 
 ### Pinned fixture and boot protocol
 
-`tools/firecracker/fixtures.lock` is the single checked-in manifest for:
+The future `tools/firecracker/fixtures.lock` is the single reviewed manifest
+for:
 
-- Firecracker and Jailer release version, architecture, source URL, and SHA-256;
-- an uncompressed x86_64 guest `vmlinux` artifact and SHA-256;
-- a minimal ext4 root filesystem artifact and SHA-256; and
-- the expected guest test-program version and serial marker format.
+- one verified source bundle plus separately hashed Firecracker and matched
+  Jailer members, with release version, architecture, source URL/reference,
+  source/member SHA-256 and license data;
+- an uncompressed x86_64 guest `vmlinux` source/object and SHA-256;
+- a project-owned minimal ext4 root filesystem source/object, SHA-256, SBOM
+  digest, reproducible recipe/toolchain/input provenance; and
+- a project-owned static guest-agent source/object with the same provenance,
+  bound into the rootfs by digest, and its serial/control protocol version.
+
+The lock must use `firecracker.fixtures/v2`; it has no final real entries yet.
+The checked-in validator and `tools/firecracker/` recipes are only groundwork.
+They do not make a rootfs, artifact download, Linux/KVM runner, guest boot or
+guest-control result available.
 
 The fixture fetcher verifies every digest before execution, writes a private
 copy of the writable rootfs under the job's temporary directory, and never
@@ -83,7 +93,8 @@ The `firecracker-smoke` test performs these concrete steps:
 
 1. Assert the runner contract and fail with `KVM_UNAVAILABLE` before downloading
    or launching anything if it cannot be met.
-2. Verify the pinned binary, Jailer, kernel, and rootfs digests.
+2. Verify the pinned source bundle, extracted binary/Jailer members, kernel,
+   rootfs, and guest-agent digests and provenance.
 3. Allocate a unique VM id and job-temporary directory; copy the rootfs there.
 4. Start the Jailer with a dedicated unprivileged uid/gid and cgroup for that
    VM. Configure Firecracker through its Unix API socket with exactly one vCPU,

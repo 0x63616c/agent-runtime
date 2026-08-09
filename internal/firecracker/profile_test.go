@@ -66,8 +66,17 @@ func TestCompileCreatesJailedDenyAllFoundationPlan(t *testing.T) {
 			t.Errorf("%s capability = %#v, must remain unavailable before retained Linux/KVM evidence", name, capability)
 		}
 	}
-	if plan.VMID() != profile.VMID || plan.Firecracker() != profile.Firecracker || plan.Jailer() != profile.Jailer || plan.Kernel() != profile.Kernel || plan.RootFS() != profile.RootFS {
+	if plan.VMID() != profile.VMID || plan.Firecracker() != profile.Firecracker || plan.Jailer() != profile.Jailer || plan.Kernel() != profile.Kernel || plan.RootFS() != profile.RootFS || plan.GuestAgent() != profile.GuestAgent {
 		t.Errorf("Plan lost pinned executables: %#v", plan)
+	}
+}
+
+func TestCompileRequiresPinnedGuestAgentAlongsideRootFS(t *testing.T) {
+	profile := validProfile()
+	profile.GuestAgent = PinnedArtifact{}
+
+	if _, err := Compile(profile); !errors.Is(err, ErrInvalidProfile) {
+		t.Fatalf("Compile() error = %v, want guest-agent refusal", err)
 	}
 }
 
@@ -78,6 +87,7 @@ func TestPlanAccessorsDefensivelyCopyMutableState(t *testing.T) {
 	profile.Jailer.Digest = emptyDigest
 	profile.Kernel.Digest = emptyDigest
 	profile.RootFS.Digest = emptyDigest
+	profile.GuestAgent.Digest = emptyDigest
 	plan := mustCompile(t, profile)
 
 	arguments := plan.JailerArguments()
@@ -314,6 +324,7 @@ func validProfile() Profile {
 		Jailer:        PinnedArtifact{Path: "/opt/firecracker/jailer", Digest: "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"},
 		Kernel:        PinnedArtifact{Path: "/opt/firecracker/vmlinux", Digest: "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"},
 		RootFS:        PinnedArtifact{Path: "/opt/firecracker/rootfs.ext4", Digest: "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"},
+		GuestAgent:    PinnedArtifact{Path: "/opt/firecracker/guest-agent", Digest: "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"},
 		KVMDevice:     "/dev/kvm",
 		ChrootBaseDir: "/srv/agent-runtime/jailer",
 		UID:           10001,
