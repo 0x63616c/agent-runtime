@@ -1,0 +1,47 @@
+---
+title: PostgreSQL data-authority foundation
+description: The declared runtime schema and the durability work it does not yet prove.
+slug: /reference/postgresql-data-authority
+---
+
+# PostgreSQL data-authority foundation
+
+The versioned production Stack declares PostgreSQL as the Agent Runtime v1
+metadata, cursor, audit, and outbox authority. The second reviewed runtime
+migration creates the normalized storage foundation for tenants, immutable
+Agent revision metadata, Sessions, content-referenced Inputs, Turns, ordered
+Product events, audit facts, and a durable publication/reconciliation outbox.
+
+The migration stores only bounded metadata and immutable content references:
+digests, media types, and byte counts. It deliberately has no raw prompt,
+Input-body, or Product-event body columns. The declared blob authority owns
+content bytes; PostgreSQL owns authorization-scoped indexes, state, order, and
+retention metadata.
+
+Its database constraints establish the initial mechanical guards:
+
+- every runtime row is scoped by its tenant, and Session records are additionally
+  scoped by principal;
+- Agent revisions, Sessions, Inputs, and Turns retain their typed runtime
+  identities and ordered relationships;
+- each Session event has one unique ordered sequence, Cursor, and event ID;
+- audit facts deduplicate an operation identity within a tenant; and
+- outbox records are unique for one aggregate version and event kind, with
+  bounded reference payload metadata.
+
+The forward and reverse migration artifacts and their SHA-256 digests are
+declared in `deploy/production/stack.json`. They are applied only by an
+explicit audited Stack operator action; runtime processes have no DDL
+authority. A disposable PostgreSQL integration test executes the artifacts and
+proves those constraints against PostgreSQL.
+
+:::caution Foundation, not completed runtime durability
+
+The currently runnable public API remains explicitly configured with
+`memory-unsafe` storage. It has not yet been connected to these tables, and
+this migration alone does not prove process-restart recovery, optimistic
+conversation writes, event replay/expiry, audit publication recovery, blob
+authorization, tenant erasure, backup/restore, or the private Temporal
+adapter. No M5 requirement is complete on the strength of this schema slice.
+
+:::

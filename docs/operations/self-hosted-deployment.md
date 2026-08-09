@@ -104,7 +104,12 @@ Before a production rollout, the platform operator must define and test:
 - Temporal namespace history retention, archival/backup policy, frontend and
   worker capacity, namespace authentication, and task-queue isolation.
 - PostgreSQL backup/restore ownership, an immutable/reversible migration
-  artifact pair, migration Job readiness, and recovery authority.
+  artifact pair, migration Job readiness, and recovery authority. The current
+  runtime v2 migration declares normalized tenant, Agent revision, Session,
+  content-reference Input, Turn, Product-event, audit, and outbox tables. It
+  intentionally contains no raw prompt or event-body columns; the blob
+  authority owns content bytes. The standalone API remains `memory-unsafe`
+  until its durable repository adapter is implemented.
 - Blob bucket/prefix lifecycle, retention, backup/restore, encryption and
   credential rotation.
 - Codec ingress hosts and CORS origins. Routing hosts are Stack Ingress rules;

@@ -30,8 +30,12 @@ The active M5 work now provides a Temporal-free public
 [Go contract and deterministic kernel](./runtime-go-contract.mdx). It defines
 typed IDs, immutable revision/session snapshots, idempotent bounded Input,
 serialized Turn state, explicit cancellation, and ordered cursor replay. The
-HTTP/OpenAPI transport, PostgreSQL authority, and Temporal adapter remain
-unimplemented and are not implied by this contract slice.
+HTTP/OpenAPI transport is implemented, while the runtime role still uses its
+explicitly labelled in-memory test store. The declared
+[PostgreSQL data-authority foundation](./postgresql-data-authority.mdx) now has
+reviewed bounded schema artifacts and a disposable PostgreSQL constraint
+proof; a runtime repository adapter, durable cursors/outbox, and the Temporal
+adapter remain unimplemented and are not implied by this contract slice.
 
 Generated files live only under `website/docs/reference/generated/`. Curated
 pages explain semantics and ownership without duplicating unverified schemas.
