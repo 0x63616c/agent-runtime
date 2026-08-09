@@ -43,8 +43,8 @@ const (
 	AttestationFailed AttestationState = "failed"
 )
 
-// AttestationEvidence is the bounded metadata supplied to a verifier. It
-// contains references only and never an attestation statement or secret.
+// AttestationEvidence is the bounded immutable input supplied transiently to
+// a verifier. Only its digest and outcome may be persisted.
 type AttestationEvidence struct {
 	HostID            string
 	Generation        uint64
@@ -69,8 +69,9 @@ func VerifyHostAttestation(ctx context.Context, input AttestationInput, host Hos
 	if input.Profile == AttestationProfileLocalMetadata && len(input.Evidence) == 0 {
 		return HostAttestation{Profile: input.Profile, State: AttestationMetadataOnly}
 	}
-	digest := sandboxhostprotocol.Digest(input.Evidence)
-	evidence := AttestationEvidence{HostID: host.HostID, Generation: host.Generation, CertificateDigest: host.CertificateDigest, CapabilityDigest: host.CapabilityDigest, AttestationDigest: digest, Evidence: append([]byte(nil), input.Evidence...)}
+	raw := append([]byte(nil), input.Evidence...)
+	digest := sandboxhostprotocol.Digest(raw)
+	evidence := AttestationEvidence{HostID: host.HostID, Generation: host.Generation, CertificateDigest: host.CertificateDigest, CapabilityDigest: host.CapabilityDigest, AttestationDigest: digest, Evidence: raw}
 	if input.Profile != AttestationProfileVerified || verifier == nil || ctx.Err() != nil || !validAttestationEvidence(evidence) || verifier.VerifyHostAttestation(ctx, evidence) != nil {
 		return HostAttestation{Profile: input.Profile, State: AttestationFailed, Digest: digest}
 	}
@@ -95,6 +96,9 @@ type HostAttestation struct {
 func evaluateHostEnrollment(ctx context.Context, host HostEnrollment, input AttestationInput, verifier AttestationVerifier) (HostEnrollment, error) {
 	if host.Status != HostActive || host.AttestationProfile != "" || host.AttestationState != "" || host.AttestationDigest != "" {
 		return HostEnrollment{}, errors.New("provision sandbox host: caller-supplied attestation outcome is forbidden")
+	}
+	if len(input.Evidence) > maxAttestationEvidenceBytes {
+		return HostEnrollment{}, errors.New("provision sandbox host: attestation evidence exceeds bounded input")
 	}
 	attestation := VerifyHostAttestation(ctx, input, host, verifier)
 	host.AttestationProfile, host.AttestationState, host.AttestationDigest = attestation.Profile, attestation.State, attestation.Digest
