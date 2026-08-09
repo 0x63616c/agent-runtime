@@ -59,7 +59,7 @@ func TestRequiredSecretDoesNotDiscloseValues(t *testing.T) {
 func TestParseHostControlRequiresDistinctExplicitAuthority(t *testing.T) {
 	t.Parallel()
 
-	withHost := strings.TrimSuffix(validDocument, "\n}") + `,
+	withHost := strings.Replace(strings.TrimSuffix(validDocument, "\n}"), `"version": 1`, `"version": 2`, 1) + `,
   "host_control": {
     "listen_address": "127.0.0.1:9443",
     "tls_certificate_file": "/run/host-control/tls.crt",
@@ -82,6 +82,18 @@ func TestParseHostControlRequiresDistinctExplicitAuthority(t *testing.T) {
 	invalid := strings.Replace(withHost, `"127.0.0.1:9443"`, `"127.0.0.1:8443"`, 1)
 	if _, err := Parse(strings.NewReader(invalid)); err == nil {
 		t.Fatal("Parse() accepted shared public/host listener")
+	}
+	legacy := strings.Replace(withHost, `"version": 2`, `"version": 1`, 1)
+	if _, err := Parse(strings.NewReader(legacy)); err == nil || !strings.Contains(err.Error(), "migrate to version 2") {
+		t.Fatalf("Parse(version 1 host control) error = %v, want explicit version 2 migration", err)
+	}
+}
+
+func TestParseVersionOneWithoutHostControlRemainsCompatible(t *testing.T) {
+	t.Parallel()
+
+	if _, err := Parse(strings.NewReader(validDocument)); err != nil {
+		t.Fatalf("Parse(version 1 public-only control) error = %v", err)
 	}
 }
 

@@ -6,6 +6,12 @@ public callers see only Principal-scoped Operations and runtime-owned states.
 No host ID, certificate, assignment, lease, fence, or backend type crosses that
 boundary.
 
+The current control and host process declarations use configuration version 2.
+That is separate from this stable private protocol identifier: version 2 is the
+first declaration format that can express the complete versioned control trust
+bundle. See the [operator migration procedure](../operations/sandbox-host-routing.md#configuration-format-v1-to-v2-migration)
+for the deliberate non-mixed-version upgrade.
+
 ## Trust and enrollment
 
 An infrastructure operator provisions each host generation in PostgreSQL

@@ -35,22 +35,24 @@ type Config struct {
 }
 
 type document struct {
-	Version                   int                  `json:"version"`
-	ControlURL                string               `json:"control_url"`
-	ServerName                string               `json:"server_name"`
-	TrustBundleFile           string               `json:"trust_bundle_file"`
-	ClientCertificateFile     string               `json:"client_certificate_file"`
-	ClientPrivateKeyFile      string               `json:"client_private_key_file"`
-	HostID                    string               `json:"host_id"`
-	HostGeneration            uint64               `json:"host_generation"`
-	JournalFile               string               `json:"journal_file"`
-	MaximumReceipts           int                  `json:"maximum_receipts"`
-	ControlTrust              controlTrustDocument `json:"control_trust"`
-	HostSigningKeyEnvironment string               `json:"host_signing_key_environment"`
-	RequestTimeoutSeconds     uint32               `json:"request_timeout_seconds"`
-	TestFaultAfterJournal     bool                 `json:"test_fault_after_journal"`
-	TestFaultAfterReceipt     bool                 `json:"test_fault_after_receipt"`
-	TestFaultAfterResultSend  bool                 `json:"test_fault_after_result_send"`
+	Version                     int                  `json:"version"`
+	ControlURL                  string               `json:"control_url"`
+	ServerName                  string               `json:"server_name"`
+	TrustBundleFile             string               `json:"trust_bundle_file"`
+	ClientCertificateFile       string               `json:"client_certificate_file"`
+	ClientPrivateKeyFile        string               `json:"client_private_key_file"`
+	HostID                      string               `json:"host_id"`
+	HostGeneration              uint64               `json:"host_generation"`
+	JournalFile                 string               `json:"journal_file"`
+	MaximumReceipts             int                  `json:"maximum_receipts"`
+	ControlTrust                controlTrustDocument `json:"control_trust"`
+	ControlKeyID                string               `json:"control_key_id"`
+	ControlPublicKeyEnvironment string               `json:"control_public_key_environment"`
+	HostSigningKeyEnvironment   string               `json:"host_signing_key_environment"`
+	RequestTimeoutSeconds       uint32               `json:"request_timeout_seconds"`
+	TestFaultAfterJournal       bool                 `json:"test_fault_after_journal"`
+	TestFaultAfterReceipt       bool                 `json:"test_fault_after_receipt"`
+	TestFaultAfterResultSend    bool                 `json:"test_fault_after_result_send"`
 }
 
 type controlTrustDocument struct {
@@ -99,8 +101,14 @@ func Parse(input io.Reader) (Config, error) {
 		return Config{}, errors.New("parse sandbox-host configuration: exactly one document is required")
 	}
 	endpoint, err := url.Parse(decoded.ControlURL)
-	if decoded.Version != 1 || err != nil || endpoint.Scheme != "https" || endpoint.Host == "" || endpoint.Path != "" || endpoint.RawQuery != "" || endpoint.Fragment != "" {
-		return Config{}, errors.New("validate sandbox-host configuration: version 1 and one HTTPS origin are required")
+	if err != nil || endpoint.Scheme != "https" || endpoint.Host == "" || endpoint.Path != "" || endpoint.RawQuery != "" || endpoint.Fragment != "" {
+		return Config{}, errors.New("validate sandbox-host configuration: one HTTPS origin is required")
+	}
+	if decoded.Version == 1 {
+		return Config{}, errors.New("validate sandbox-host configuration: version 1 cannot verify versioned envelope trust; migrate to version 2")
+	}
+	if decoded.Version != 2 {
+		return Config{}, errors.New("validate sandbox-host configuration: version must be 2")
 	}
 	if decoded.ServerName == "" || decoded.HostID == "" || decoded.HostGeneration == 0 || decoded.MaximumReceipts <= 0 || decoded.MaximumReceipts > 100000 {
 		return Config{}, errors.New("validate sandbox-host configuration: bounded identity and receipt limit are required")
@@ -109,6 +117,9 @@ func Parse(input io.Reader) (Config, error) {
 		if !filepath.IsAbs(path) {
 			return Config{}, errors.New("validate sandbox-host configuration: explicit absolute mounted paths are required")
 		}
+	}
+	if decoded.ControlKeyID != "" || decoded.ControlPublicKeyEnvironment != "" {
+		return Config{}, errors.New("validate sandbox-host configuration: version 2 requires control_trust and refuses legacy single-key trust")
 	}
 	controlTrust, err := parseControlTrust(decoded.ControlTrust)
 	if decoded.ClientCertificateFile == decoded.ClientPrivateKeyFile || err != nil || !environmentName.MatchString(decoded.HostSigningKeyEnvironment) {
