@@ -28,8 +28,24 @@ func TestCompileCreatesJailedDenyAllFoundationPlan(t *testing.T) {
 	if plan.Machine.VCPUCount != 1 || plan.Machine.MemoryMiB != 256 {
 		t.Errorf("Machine = %#v, want one vCPU and 256 MiB", plan.Machine)
 	}
-	if plan.Capabilities.Isolation.State != sandbox.CapabilityUnavailable || plan.Capabilities.Mounts.State != sandbox.CapabilityUnavailable || plan.Capabilities.Secrets.State != sandbox.CapabilityUnavailable || plan.Capabilities.Egress.State != sandbox.CapabilityUnavailable {
-		t.Errorf("Capabilities = %#v, must remain unavailable before retained Linux/KVM evidence", plan.Capabilities)
+	for name, capability := range map[string]sandbox.CapabilityDescriptor{
+		"control protocol": plan.Capabilities.ControlProtocol,
+		"isolation":        plan.Capabilities.Isolation,
+		"guest":            plan.Capabilities.Guest,
+		"resources":        plan.Capabilities.Resources,
+		"reconnect":        plan.Capabilities.Reconnect,
+		"image admission":  plan.Capabilities.ImageAdmission,
+		"output":           plan.Capabilities.Output,
+		"transfer":         plan.Capabilities.Transfer,
+		"mounts":           plan.Capabilities.Mounts,
+		"volumes":          plan.Capabilities.Volumes,
+		"snapshots":        plan.Capabilities.Snapshots,
+		"egress":           plan.Capabilities.Egress,
+		"secrets":          plan.Capabilities.Secrets,
+	} {
+		if capability.State != sandbox.CapabilityUnavailable {
+			t.Errorf("%s capability = %#v, must remain unavailable before retained Linux/KVM evidence", name, capability)
+		}
 	}
 	if plan.Jailer != profile.Jailer || plan.Firecracker != profile.Firecracker {
 		t.Errorf("Plan lost pinned executables: %#v", plan)
@@ -70,14 +86,96 @@ func TestCompileRefusesProfilesThatWouldWidenFoundationAuthority(t *testing.T) {
 }
 
 func TestAssessEnvironmentRetainsEveryMissingPrerequisite(t *testing.T) {
-	report := AssessEnvironment(environmentFunc(func(path string) error {
-		if path == "/dev/kvm" {
-			return errors.New("not found")
+	plan := mustCompile(t, validProfile())
+	for _, prerequisite := range []environmentPrerequisite{
+		usableKVMPrerequisite,
+		jailerPrerequisite,
+		cgroupV2Prerequisite,
+		pinnedArtifactsPrerequisite,
+	} {
+		t.Run(string(prerequisite), func(t *testing.T) {
+			report := AssessEnvironment(environmentFunc(func(got environmentPrerequisite, gotPlan Plan) error {
+				if !reflect.DeepEqual(gotPlan, plan) {
+					t.Errorf("verify() plan = %#v, want %#v", gotPlan, plan)
+				}
+				if got == prerequisite {
+					return errors.New("unverified")
+				}
+				return nil
+			}), "linux", plan)
+			if report.Available {
+				t.Fatalf("AssessEnvironment() = %#v, want unavailable when %s is unverified", report, prerequisite)
+			}
+			if got := checkFor(report, prerequisite); got.Available || got.Reason != "unverified" {
+				t.Errorf("%s check = %#v, want unavailable unverified check", prerequisite, got)
+			}
+		})
+	}
+}
+
+func TestAssessEnvironmentRequiresACompletePinnedPlan(t *testing.T) {
+	report := AssessEnvironment(environmentFunc(func(_ environmentPrerequisite, _ Plan) error { return nil }), "linux", Plan{})
+	if report.Available || report.Jailer.Available || report.PinnedArtifacts.Available {
+		t.Fatalf("AssessEnvironment() = %#v, want incomplete plan unavailable", report)
+	}
+	if report.Jailer.Reason == "" || report.PinnedArtifacts.Reason == "" {
+		t.Errorf("AssessEnvironment() = %#v, want explicit missing plan reasons", report)
+	}
+}
+
+func TestAssessEnvironmentReportsAvailableOnlyAfterEveryProtectedCheckPasses(t *testing.T) {
+	plan := mustCompile(t, validProfile())
+	seen := map[environmentPrerequisite]bool{}
+	report := AssessEnvironment(environmentFunc(func(prerequisite environmentPrerequisite, _ Plan) error {
+		seen[prerequisite] = true
+		return nil
+	}), "linux", plan)
+	if !report.Available {
+		t.Fatalf("AssessEnvironment() = %#v, want all protected checks available", report)
+	}
+	for _, prerequisite := range []environmentPrerequisite{usableKVMPrerequisite, jailerPrerequisite, cgroupV2Prerequisite, pinnedArtifactsPrerequisite} {
+		if !seen[prerequisite] {
+			t.Errorf("AssessEnvironment() did not verify %s", prerequisite)
+		}
+	}
+}
+
+func TestAssessEnvironmentDoesNotTreatOpeningKVMAsUsableKVM(t *testing.T) {
+	report := AssessEnvironment(localEnvironment{check: func(path string) error {
+		if path != "/dev/kvm" && path != "/sys/fs/cgroup/cgroup.controllers" {
+			t.Fatalf("unexpected host probe %q", path)
 		}
 		return nil
-	}), "darwin")
-	if report.Available || !reflect.DeepEqual(report.Reasons, []string{"host OS is darwin, want linux", "/dev/kvm: not found"}) {
-		t.Errorf("AssessEnvironment() = %#v", report)
+	}}, "linux", Plan{})
+	if report.Available || report.KVM.Available || report.KVM.Reason != "opened, but KVM API and jailed guest execution were not verified" {
+		t.Errorf("AssessEnvironment() = %#v, want unavailable usable-KVM check", report)
+	}
+	if !report.CgroupV2.Available {
+		t.Errorf("AssessEnvironment() = %#v, want cgroup v2 observation retained", report)
+	}
+}
+
+func mustCompile(t *testing.T, profile Profile) Plan {
+	t.Helper()
+	plan, err := Compile(profile)
+	if err != nil {
+		t.Fatalf("Compile() error = %v", err)
+	}
+	return plan
+}
+
+func checkFor(report EnvironmentReport, prerequisite environmentPrerequisite) EnvironmentCheck {
+	switch prerequisite {
+	case usableKVMPrerequisite:
+		return report.KVM
+	case jailerPrerequisite:
+		return report.Jailer
+	case cgroupV2Prerequisite:
+		return report.CgroupV2
+	case pinnedArtifactsPrerequisite:
+		return report.PinnedArtifacts
+	default:
+		return EnvironmentCheck{Reason: "unknown prerequisite"}
 	}
 }
 

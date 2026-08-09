@@ -11,8 +11,11 @@ It is not Firecracker evidence. Every capability in its returned profile is
 `unavailable` until the protected Linux/KVM lane verifies the exact plan,
 fixtures, Jailer cleanup, a booted guest marker, and the durable public
 sandbox-control path. `cmd/firecracker-e2e` presently records an explicit
-Linux/KVM environmental refusal report and fails closed when invoked with
-`-require-kvm`; it does not launch a VMM on a developer machine.
+Linux/KVM environmental refusal report. It records Linux, usable KVM, Jailer,
+cgroups v2, and pinned-artifact checks separately; `available` is their
+fail-closed composite. Opening `/dev/kvm` alone is not usable-KVM proof.
+`-require-kvm` fails unless that composite is available, and the command does
+not launch a VMM on a developer machine.
 
 ## M3 integration gap
 

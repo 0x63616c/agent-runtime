@@ -18,9 +18,9 @@ var (
 	// ErrInvalidProfile means a declarative Firecracker host profile is unsafe or incomplete.
 	ErrInvalidProfile = errors.New("invalid Firecracker host profile")
 	// ErrArtifactIntegrity means a fixture differs from its declared immutable digest.
-	ErrArtifactIntegrity = errors.New("Firecracker fixture integrity check failed")
+	ErrArtifactIntegrity = errors.New("firecracker fixture integrity check failed")
 	// ErrCapabilityUnavailable means a requested profile has no certified Firecracker data plane.
-	ErrCapabilityUnavailable = errors.New("Firecracker capability is unavailable")
+	ErrCapabilityUnavailable = errors.New("firecracker capability is unavailable")
 )
 
 // NetworkMode identifies the only host-network authority represented by a profile.
@@ -128,7 +128,7 @@ func machineConfig(limits sandbox.ResourceLimits) (MachineConfig, error) {
 
 func foundationCapabilities() sandbox.CapabilitySnapshot {
 	unavailable := sandbox.CapabilityDescriptor{State: sandbox.CapabilityUnavailable, ContractVersion: "firecracker.host/v1", ConformanceVersion: "not-certified", DataPlane: "none"}
-	return sandbox.CapabilitySnapshot{SchemaVersion: "sandbox.capabilities/v1", Isolation: unavailable, Guest: unavailable, Resources: unavailable, Reconnect: unavailable, ImageAdmission: unavailable, Output: unavailable, Transfer: unavailable, Mounts: unavailable, Volumes: unavailable, Snapshots: unavailable, Egress: unavailable, Secrets: unavailable}
+	return sandbox.CapabilitySnapshot{SchemaVersion: "sandbox.capabilities/v1", ControlProtocol: unavailable, Isolation: unavailable, Guest: unavailable, Resources: unavailable, Reconnect: unavailable, ImageAdmission: unavailable, Output: unavailable, Transfer: unavailable, Mounts: unavailable, Volumes: unavailable, Snapshots: unavailable, Egress: unavailable, Secrets: unavailable}
 }
 
 func validArtifact(artifact PinnedArtifact) bool {
@@ -148,7 +148,7 @@ func validSHA256(value sandbox.Digest) bool {
 		return false
 	}
 	for _, character := range value[len("sha256:"):] {
-		if !(character >= '0' && character <= '9' || character >= 'a' && character <= 'f') {
+		if (character < '0' || character > '9') && (character < 'a' || character > 'f') {
 			return false
 		}
 	}
@@ -185,32 +185,118 @@ func VerifyPlanArtifacts(plan Plan, opener artifactOpener) error {
 	return nil
 }
 
-type environment interface{ check(string) error }
-type environmentFunc func(string) error
+type environment interface {
+	verify(environmentPrerequisite, Plan) error
+}
 
-func (f environmentFunc) check(path string) error { return f(path) }
+type environmentFunc func(environmentPrerequisite, Plan) error
+
+func (f environmentFunc) verify(prerequisite environmentPrerequisite, plan Plan) error {
+	return f(prerequisite, plan)
+}
+
+type environmentPrerequisite string
+
+const (
+	usableKVMPrerequisite       environmentPrerequisite = "usable-kvm"
+	jailerPrerequisite          environmentPrerequisite = "jailer"
+	cgroupV2Prerequisite        environmentPrerequisite = "cgroup-v2"
+	pinnedArtifactsPrerequisite environmentPrerequisite = "pinned-artifacts"
+)
+
+// EnvironmentCheck records whether one required protected-runner prerequisite was verified.
+type EnvironmentCheck struct {
+	Available bool   `json:"available"`
+	Reason    string `json:"reason,omitempty"`
+}
 
 // EnvironmentReport is retained by the KVM lane whenever the runner is unavailable.
 type EnvironmentReport struct {
-	Available bool     `json:"available"`
-	Reasons   []string `json:"reasons"`
+	Available       bool             `json:"available"`
+	Linux           EnvironmentCheck `json:"linux"`
+	KVM             EnvironmentCheck `json:"kvm"`
+	Jailer          EnvironmentCheck `json:"jailer"`
+	CgroupV2        EnvironmentCheck `json:"cgroup_v2"`
+	PinnedArtifacts EnvironmentCheck `json:"pinned_artifacts"`
+	Reasons         []string         `json:"reasons"`
 }
 
-// AssessEnvironment verifies only the prerequisites that make a real KVM run possible.
-func AssessEnvironment(host environment, goos string) EnvironmentReport {
-	report := EnvironmentReport{Available: true}
-	if goos != "linux" {
-		report.Available = false
-		report.Reasons = append(report.Reasons, "host OS is "+goos+", want linux")
+// AssessEnvironment verifies every prerequisite for one protected Firecracker runner.
+// A readable /dev/kvm is not proof of usable KVM; the protected lane supplies that proof through its verifier.
+func AssessEnvironment(host environment, goos string, plan Plan) EnvironmentReport {
+	report := EnvironmentReport{Linux: checkLinux(goos)}
+	report.KVM = checkEnvironment(host, usableKVMPrerequisite, plan)
+	report.CgroupV2 = checkEnvironment(host, cgroupV2Prerequisite, plan)
+	if !hasPinnedLaunchPlan(plan) {
+		missingPlan := EnvironmentCheck{Reason: "a compiled plan with pinned Firecracker, Jailer, kernel and root filesystem is required"}
+		report.Jailer = missingPlan
+		report.PinnedArtifacts = missingPlan
+	} else {
+		report.Jailer = checkEnvironment(host, jailerPrerequisite, plan)
+		report.PinnedArtifacts = checkEnvironment(host, pinnedArtifactsPrerequisite, plan)
 	}
-	if err := host.check("/dev/kvm"); err != nil {
-		report.Available = false
-		report.Reasons = append(report.Reasons, "/dev/kvm: "+err.Error())
+	report.Available = report.Linux.Available && report.KVM.Available && report.Jailer.Available && report.CgroupV2.Available && report.PinnedArtifacts.Available
+	for _, check := range []struct {
+		name  string
+		value EnvironmentCheck
+	}{
+		{"linux", report.Linux},
+		{"usable KVM", report.KVM},
+		{"jailer", report.Jailer},
+		{"cgroup v2", report.CgroupV2},
+		{"pinned artifacts", report.PinnedArtifacts},
+	} {
+		if !check.value.Available {
+			report.Reasons = append(report.Reasons, check.name+": "+check.value.Reason)
+		}
 	}
 	return report
 }
 
-// LocalEnvironmentReport probes the current host without starting a VMM.
+func checkLinux(goos string) EnvironmentCheck {
+	if goos == "linux" {
+		return EnvironmentCheck{Available: true}
+	}
+	return EnvironmentCheck{Reason: "host OS is " + goos + ", want linux"}
+}
+
+func checkEnvironment(host environment, prerequisite environmentPrerequisite, plan Plan) EnvironmentCheck {
+	if host == nil {
+		return EnvironmentCheck{Reason: "protected-runner verifier is required"}
+	}
+	if err := host.verify(prerequisite, plan); err != nil {
+		return EnvironmentCheck{Reason: err.Error()}
+	}
+	return EnvironmentCheck{Available: true}
+}
+
+func hasPinnedLaunchPlan(plan Plan) bool {
+	return validVMID(plan.VMID) && validArtifact(plan.Firecracker) && validArtifact(plan.Jailer) && validArtifact(plan.Kernel) && validArtifact(plan.RootFS) && len(plan.JailerArguments) > 0
+}
+
+type localEnvironment struct{ check func(string) error }
+
+func (host localEnvironment) verify(prerequisite environmentPrerequisite, _ Plan) error {
+	if host.check == nil {
+		return errors.New("local path checker is required")
+	}
+	switch prerequisite {
+	case usableKVMPrerequisite:
+		if err := host.check("/dev/kvm"); err != nil {
+			return fmt.Errorf("/dev/kvm read/write access: %w", err)
+		}
+		return errors.New("opened, but KVM API and jailed guest execution were not verified")
+	case cgroupV2Prerequisite:
+		if err := host.check("/sys/fs/cgroup/cgroup.controllers"); err != nil {
+			return fmt.Errorf("cgroup v2 controller file: %w", err)
+		}
+		return nil
+	default:
+		return fmt.Errorf("local report cannot verify %s", prerequisite)
+	}
+}
+
+// LocalEnvironmentReport probes the current host without starting a VMM and always fails closed without protected-runner proof.
 func LocalEnvironmentReport(check func(string) error) EnvironmentReport {
-	return AssessEnvironment(environmentFunc(check), runtime.GOOS)
+	return AssessEnvironment(localEnvironment{check: check}, runtime.GOOS, Plan{})
 }
