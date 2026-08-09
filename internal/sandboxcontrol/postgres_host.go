@@ -14,6 +14,7 @@ import (
 // ProvisionHost records one operator-reconciled enrollment generation. The
 // runtime host API never calls this method.
 func (ledger *PostgresLedger) ProvisionHost(ctx context.Context, enrollment HostEnrollment) error {
+	enrollment = normalizeHostEnrollment(enrollment)
 	if !validHostEnrollment(enrollment) {
 		return errors.New("provision PostgreSQL sandbox host: invalid bounded enrollment")
 	}
@@ -38,12 +39,12 @@ func (ledger *PostgresLedger) ProvisionHost(ctx context.Context, enrollment Host
 		_, err = tx.Exec(ctx, `
 			INSERT INTO runtime.sandbox_host_enrollments
 				(host_id, tenant, pool, generation, protocol_version, certificate_digest,
-				 signing_public_key, capability_digest, attestation_digest, status, expires_at)
-			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,NULLIF($9,''),$10,$11)
+				 signing_public_key, capability_digest, attestation_digest, attestation_profile, attestation_state, status, expires_at)
+			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,NULLIF($9,''),$10,$11,$12,$13)
 			ON CONFLICT (host_id, generation) DO NOTHING`,
 			enrollment.HostID, enrollment.Tenant, enrollment.Pool, int64(enrollment.Generation),
 			enrollment.ProtocolVersion, enrollment.CertificateDigest, []byte(enrollment.SigningPublicKey),
-			enrollment.CapabilityDigest, enrollment.AttestationDigest, enrollment.Status, enrollment.ExpiresAt.UTC())
+			enrollment.CapabilityDigest, enrollment.AttestationDigest, enrollment.AttestationProfile, enrollment.AttestationState, enrollment.Status, enrollment.ExpiresAt.UTC())
 		return errors.Wrap(err, "write sandbox host enrollment")
 	})
 }
@@ -466,7 +467,7 @@ func scanHost(row hostRowScanner) (HostEnrollment, error) {
 	var attestation, quarantine *string
 	var lastAuthenticated *time.Time
 	err := row.Scan(&host.HostID, &host.Tenant, &host.Pool, &generation, &host.ProtocolVersion,
-		&host.CertificateDigest, &publicKey, &host.CapabilityDigest, &attestation,
+		&host.CertificateDigest, &publicKey, &host.CapabilityDigest, &attestation, &host.AttestationProfile, &host.AttestationState,
 		&host.Status, &host.ExpiresAt, &lastAuthenticated, &quarantine)
 	if err != nil {
 		return HostEnrollment{}, err
@@ -487,7 +488,7 @@ func scanHost(row hostRowScanner) (HostEnrollment, error) {
 }
 
 const selectHostGenerationSQL = `SELECT host_id, tenant, pool, generation, protocol_version,
-	certificate_digest, signing_public_key, capability_digest, attestation_digest,
+	certificate_digest, signing_public_key, capability_digest, attestation_digest, attestation_profile, attestation_state,
 	status, expires_at, last_authenticated_at, quarantine_reason
 	FROM runtime.sandbox_host_enrollments WHERE host_id=$1 AND generation=$2`
 
