@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -60,7 +61,7 @@ func (lock FixtureLock) Validate() error {
 	want := map[FixtureName]bool{FixtureFirecracker: false, FixtureJailer: false, FixtureKernel: false, FixtureRootFS: false}
 	for _, artifact := range lock.Artifacts {
 		seen, known := want[artifact.Name]
-		if !known || seen || !strings.HasPrefix(artifact.Source, "https://") || !validSHA256(artifact.Digest) || artifact.SizeBytes == 0 || strings.TrimSpace(artifact.License) == "" {
+		if !known || seen || !strings.HasPrefix(artifact.Source, "https://") || !validSHA256(artifact.Digest) || artifact.SizeBytes == 0 || artifact.SizeBytes >= math.MaxInt64 || strings.TrimSpace(artifact.License) == "" {
 			return fmt.Errorf("%w: every named artifact needs one HTTPS source, SHA-256, non-zero size, and license", ErrFixtureLock)
 		}
 		want[artifact.Name] = true
@@ -73,15 +74,23 @@ func (lock FixtureLock) Validate() error {
 	return nil
 }
 
+// FixtureResponse is a non-executable immutable fixture response. ContentLength
+// is -1 when the source did not declare one.
+type FixtureResponse struct {
+	Body          io.ReadCloser
+	ContentLength int64
+}
+
 // FixtureFetcher retrieves an immutable source without executing it.
 type FixtureFetcher interface {
-	Open(context.Context, string) (io.ReadCloser, error)
+	Open(context.Context, string) (FixtureResponse, error)
 }
 
 type fixtureStoreFunc func(context.Context, string) (io.ReadCloser, error)
 
-func (f fixtureStoreFunc) Open(ctx context.Context, source string) (io.ReadCloser, error) {
-	return f(ctx, source)
+func (f fixtureStoreFunc) Open(ctx context.Context, source string) (FixtureResponse, error) {
+	body, err := f(ctx, source)
+	return FixtureResponse{Body: body, ContentLength: -1}, err
 }
 
 // FixtureSet contains fixtures that have been downloaded and completely verified.
@@ -136,19 +145,26 @@ func ProvisionFixtures(ctx context.Context, lock FixtureLock, fetcher FixtureFet
 	}()
 	set := FixtureSet{directory: destination, artifacts: make(map[FixtureName]PinnedArtifact, len(lock.Artifacts))}
 	for _, artifact := range lock.Artifacts {
-		reader, err := fetcher.Open(ctx, artifact.Source)
+		response, err := fetcher.Open(ctx, artifact.Source)
 		if err != nil {
 			return FixtureSet{}, fmt.Errorf("%w: download %s: %v", ErrArtifactIntegrity, artifact.Name, err)
+		}
+		if response.Body == nil {
+			return FixtureSet{}, fmt.Errorf("%w: download %s: empty response body", ErrArtifactIntegrity, artifact.Name)
+		}
+		if response.ContentLength >= 0 && uint64(response.ContentLength) > artifact.SizeBytes {
+			_ = response.Body.Close()
+			return FixtureSet{}, fmt.Errorf("%w: download %s: declared content length exceeds fixture limit", ErrArtifactIntegrity, artifact.Name)
 		}
 		path := filepath.Join(destination, string(artifact.Name))
 		file, createErr := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 		if createErr != nil {
-			_ = reader.Close()
+			_ = response.Body.Close()
 			return FixtureSet{}, fmt.Errorf("stage %s: %w", artifact.Name, createErr)
 		}
 		hash := sha256.New()
-		written, copyErr := io.Copy(io.MultiWriter(file, hash), reader)
-		closeErr := errors.Join(file.Close(), reader.Close())
+		written, copyErr := io.Copy(io.MultiWriter(file, hash), io.LimitReader(response.Body, int64(artifact.SizeBytes)+1))
+		closeErr := errors.Join(file.Close(), response.Body.Close())
 		if copyErr != nil || closeErr != nil || uint64(written) != artifact.SizeBytes || fmt.Sprintf("sha256:%x", hash.Sum(nil)) != string(artifact.Digest) {
 			return FixtureSet{}, fmt.Errorf("%w: verify %s", ErrArtifactIntegrity, artifact.Name)
 		}
@@ -198,7 +214,7 @@ type SmokeHost interface {
 	Launch(context.Context, LaunchRequest) error
 	AwaitSerial(context.Context, string) error
 	Control(context.Context) error
-	Cleanup(context.Context) CleanupProof
+	Cleanup(context.Context) (CleanupProof, error)
 }
 
 // EvidenceResult classifies an observed protected-run outcome.
@@ -227,6 +243,8 @@ type SmokeHarness struct {
 	Host    SmokeHost
 	Timeout time.Duration
 }
+
+const maximumCleanupTimeout = 30 * time.Second
 
 // KVMPreflight captures the non-secret, necessary host observations before a protected run.
 type KVMPreflight struct {
@@ -269,7 +287,29 @@ func (harness SmokeHarness) Run(ctx context.Context, plan Plan, fixtures Fixture
 	}
 	ctx, cancel := context.WithTimeout(ctx, harness.Timeout)
 	defer cancel()
-	defer func() { evidence.Cleanup = harness.Host.Cleanup(context.Background()) }()
+	cleanupTimeout := harness.Timeout
+	if cleanupTimeout > maximumCleanupTimeout {
+		cleanupTimeout = maximumCleanupTimeout
+	}
+	defer func() {
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), cleanupTimeout)
+		defer cleanupCancel()
+		proof, cleanupErr := harness.Host.Cleanup(cleanupCtx)
+		evidence.Cleanup = proof
+		if cleanupErr != nil {
+			err = errors.Join(err, fmt.Errorf("cleanup protected Firecracker resources: %w", cleanupErr))
+		}
+		if !proof.Proved {
+			if proof.Reason == "" {
+				proof.Reason = "cleanup proof is absent"
+				evidence.Cleanup = proof
+			}
+			err = errors.Join(err, fmt.Errorf("cleanup protected Firecracker resources: cleanup proof is absent"))
+		}
+		if err != nil {
+			evidence.Result = EvidenceBlocked
+		}
+	}()
 	if err := harness.Host.Preflight(ctx, plan, fixtures); err != nil {
 		return SmokeEvidence{}, fmt.Errorf("%w: preflight: %v", ErrSmokeUnavailable, err)
 	}

@@ -1,6 +1,9 @@
 name: firecracker-kvm
 
 on:
+  push:
+    branches:
+      - main
   workflow_dispatch:
 
 permissions:
