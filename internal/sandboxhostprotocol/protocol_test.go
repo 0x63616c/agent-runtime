@@ -41,6 +41,89 @@ func TestEnvelopeCanonicalSignatureAndHostBinding(t *testing.T) {
 	}
 }
 
+func TestEnvelopeTrustRotatesCurrentKeyThenRefusesRetiredKey(t *testing.T) {
+	t.Parallel()
+
+	currentPublic, currentPrivate, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	nextPublic, nextPrivate, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 8, 8, 12, 0, 0, 0, time.UTC)
+	current := SigningKey{ID: "control-current", Version: 1, PublicKey: currentPublic, NotBefore: now.Add(-time.Hour), NotAfter: now.Add(2 * time.Hour)}
+	next := SigningKey{ID: "control-next", Version: 2, PublicKey: nextPublic, NotBefore: now.Add(-time.Hour), NotAfter: now.Add(2 * time.Hour)}
+	trust, err := NewAtomicTrust(TrustBundle{Version: 1, RevocationEpoch: 7, Current: current, Next: &next})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	oldEnvelope, err := SignEnvelopeWithTrust(testEnvelope(now), trust.Snapshot(), currentPrivate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := VerifyEnvelopeWithTrust(oldEnvelope, "host_01", 7, now.Add(time.Second), trust.Snapshot()); err != nil {
+		t.Fatalf("VerifyEnvelopeWithTrust() before rotation: %v", err)
+	}
+
+	if err := trust.Update(TrustBundle{Version: 2, RevocationEpoch: 7, Current: next, Next: &current}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := VerifyEnvelopeWithTrust(oldEnvelope, "host_01", 7, now.Add(time.Second), trust.Snapshot()); err != nil {
+		t.Fatalf("VerifyEnvelopeWithTrust() during overlap: %v", err)
+	}
+	newEnvelope, err := SignEnvelopeWithTrust(testEnvelope(now), trust.Snapshot(), nextPrivate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := VerifyEnvelopeWithTrust(newEnvelope, "host_01", 7, now.Add(time.Second), trust.Snapshot()); err != nil {
+		t.Fatalf("VerifyEnvelopeWithTrust() after rotation: %v", err)
+	}
+
+	if err := trust.Update(TrustBundle{Version: 3, RevocationEpoch: 7, Current: next}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := VerifyEnvelopeWithTrust(oldEnvelope, "host_01", 7, now.Add(time.Second), trust.Snapshot()); err == nil {
+		t.Fatal("VerifyEnvelopeWithTrust() accepted a retired key")
+	}
+}
+
+func TestEnvelopeTrustBindsKeyValidityAndRevocationEpoch(t *testing.T) {
+	t.Parallel()
+
+	publicKey, privateKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 8, 8, 12, 0, 0, 0, time.UTC)
+	key := SigningKey{ID: "control-current", Version: 1, PublicKey: publicKey, NotBefore: now.Add(-time.Hour), NotAfter: now.Add(time.Hour)}
+	trust, err := NewAtomicTrust(TrustBundle{Version: 1, RevocationEpoch: 4, Current: key})
+	if err != nil {
+		t.Fatal(err)
+	}
+	signed, err := SignEnvelopeWithTrust(testEnvelope(now), trust.Snapshot(), privateKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := VerifyEnvelopeWithTrust(signed, "host_01", 7, now.Add(time.Second), trust.Snapshot()); err != nil {
+		t.Fatalf("VerifyEnvelopeWithTrust() with matching epoch: %v", err)
+	}
+	if err := trust.Update(TrustBundle{Version: 2, RevocationEpoch: 5, Current: key}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := VerifyEnvelopeWithTrust(signed, "host_01", 7, now.Add(time.Second), trust.Snapshot()); err == nil {
+		t.Fatal("VerifyEnvelopeWithTrust() accepted a revoked epoch")
+	}
+
+	expired := key
+	expired.NotAfter = now.Add(30 * time.Second)
+	if _, err := SignEnvelopeWithTrust(testEnvelope(now), TrustBundle{Version: 3, RevocationEpoch: 5, Current: expired}, privateKey); err == nil {
+		t.Fatal("SignEnvelopeWithTrust() accepted an envelope beyond key validity")
+	}
+}
+
 func TestResultSignatureBindsAssignmentAndFence(t *testing.T) {
 	t.Parallel()
 
