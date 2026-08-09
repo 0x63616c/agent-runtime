@@ -18,7 +18,7 @@ func TestRuntimeV2MigrationDeclaresBoundedMetadataAuthorityWithoutRawContentColu
 	for _, required := range []string{
 		"SELECT pg_advisory_xact_lock",
 		"CREATE TABLE IF NOT EXISTS runtime.schema_migrations",
-		"runtime-v2-authority-schema-20260809",
+		"md5:3e2be286da9ec6335297a050e0cb59a4",
 		"CREATE TABLE IF NOT EXISTS runtime.tenants",
 		"CREATE TABLE IF NOT EXISTS runtime.agent_revisions",
 		"CREATE TABLE IF NOT EXISTS runtime.sessions",

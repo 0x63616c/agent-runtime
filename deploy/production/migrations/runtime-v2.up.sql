@@ -184,13 +184,14 @@ CREATE INDEX IF NOT EXISTS runtime_outbox_delivery_index
     ON runtime.runtime_outbox (published_at, outbox_id);
 
 INSERT INTO runtime.schema_migrations (migration_version, schema_fingerprint, applied_at)
-VALUES (2, 'runtime-v2-authority-schema-20260809', now())
+VALUES (2, 'md5:3e2be286da9ec6335297a050e0cb59a4', now())
 ON CONFLICT (migration_version) DO NOTHING;
 
 DO $$
 DECLARE
-    expected_fingerprint TEXT := 'runtime-v2-authority-schema-20260809';
+    expected_fingerprint TEXT := 'md5:3e2be286da9ec6335297a050e0cb59a4';
     stored_fingerprint TEXT;
+    actual_fingerprint TEXT;
 BEGIN
     SELECT schema_fingerprint INTO stored_fingerprint
     FROM runtime.schema_migrations
@@ -200,28 +201,48 @@ BEGIN
     END IF;
     IF EXISTS (
         SELECT 1
-        FROM (VALUES
-            ('tenants', 'tenant_id'), ('tenants', 'created_at'),
-            ('agent_revisions', 'tenant_id'), ('agent_revisions', 'agent_id'), ('agent_revisions', 'revision_id'), ('agent_revisions', 'specification_digest'),
-            ('sessions', 'tenant_id'), ('sessions', 'principal_id'), ('sessions', 'session_id'), ('sessions', 'agent_id'), ('sessions', 'agent_revision_id'),
-            ('inputs', 'tenant_id'), ('inputs', 'principal_id'), ('inputs', 'session_id'), ('inputs', 'input_id'), ('inputs', 'request_digest'), ('inputs', 'content_digest'),
-            ('turns', 'tenant_id'), ('turns', 'principal_id'), ('turns', 'session_id'), ('turns', 'turn_id'), ('turns', 'input_id'),
-            ('session_events', 'tenant_id'), ('session_events', 'principal_id'), ('session_events', 'session_id'), ('session_events', 'sequence'), ('session_events', 'cursor'), ('session_events', 'input_id'), ('session_events', 'turn_id'),
-            ('audit_records', 'tenant_id'), ('audit_records', 'audit_id'), ('audit_records', 'operation_id'),
-            ('runtime_outbox', 'outbox_id'), ('runtime_outbox', 'tenant_id'), ('runtime_outbox', 'payload_digest')
-        ) AS expected(table_name, column_name)
-        LEFT JOIN information_schema.columns actual
-          ON actual.table_schema = 'runtime' AND actual.table_name = expected.table_name AND actual.column_name = expected.column_name
-        WHERE actual.column_name IS NULL
+        FROM pg_class relation
+        JOIN pg_namespace namespace ON namespace.oid = relation.relnamespace
+        WHERE namespace.nspname = 'runtime'
+          AND relation.relkind = 'r'
+          AND relation.relname = ANY (ARRAY['schema_migrations', 'tenants', 'agent_revisions', 'sessions', 'inputs', 'turns', 'session_events', 'audit_records', 'runtime_outbox'])
+          AND relation.relowner <> current_user::regrole
     ) THEN
-        RAISE EXCEPTION USING ERRCODE = 'P0001', MESSAGE = 'runtime v2 migration physical schema is incomplete';
+        RAISE EXCEPTION USING ERRCODE = 'P0001', MESSAGE = 'runtime v2 migration table ownership mismatch';
     END IF;
-    IF (SELECT count(*) FROM pg_constraint WHERE connamespace = 'runtime'::regnamespace AND conname = ANY (ARRAY[
-        'agent_revisions_specification_digest_format', 'sessions_agent_revision_integrity', 'inputs_session_integrity', 'inputs_request_digest_format', 'inputs_content_digest_format',
-        'turns_input_integrity', 'session_events_session_integrity', 'session_events_turn_integrity', 'session_events_link_pair',
-        'runtime_outbox_payload_digest_format'
-    ])) <> 10 THEN
-        RAISE EXCEPTION USING ERRCODE = 'P0001', MESSAGE = 'runtime v2 migration constraints are incomplete';
+    WITH objects AS (
+        SELECT format('T|%s', relation.relname) AS line
+        FROM pg_class relation
+        JOIN pg_namespace namespace ON namespace.oid = relation.relnamespace
+        WHERE namespace.nspname = 'runtime'
+          AND relation.relkind = 'r'
+          AND relation.relname = ANY (ARRAY['schema_migrations', 'tenants', 'agent_revisions', 'sessions', 'inputs', 'turns', 'session_events', 'audit_records', 'runtime_outbox'])
+        UNION ALL
+        SELECT format('C|%s|%s|%s|%s|%s', relation.relname, attribute.attname, format_type(attribute.atttypid, attribute.atttypmod), attribute.attnotnull, coalesce(pg_get_expr(default_value.adbin, default_value.adrelid), ''))
+        FROM pg_class relation
+        JOIN pg_namespace namespace ON namespace.oid = relation.relnamespace
+        JOIN pg_attribute attribute ON attribute.attrelid = relation.oid AND attribute.attnum > 0 AND NOT attribute.attisdropped
+        LEFT JOIN pg_attrdef default_value ON default_value.adrelid = relation.oid AND default_value.adnum = attribute.attnum
+        WHERE namespace.nspname = 'runtime'
+          AND relation.relkind = 'r'
+          AND relation.relname = ANY (ARRAY['schema_migrations', 'tenants', 'agent_revisions', 'sessions', 'inputs', 'turns', 'session_events', 'audit_records', 'runtime_outbox'])
+        UNION ALL
+        SELECT format('K|%s|%s|%s|%s', relation.relname, con.conname, con.contype, pg_get_constraintdef(con.oid, true))
+        FROM pg_constraint con
+        JOIN pg_class relation ON relation.oid = con.conrelid
+        JOIN pg_namespace namespace ON namespace.oid = relation.relnamespace
+        WHERE namespace.nspname = 'runtime'
+          AND relation.relname = ANY (ARRAY['schema_migrations', 'tenants', 'agent_revisions', 'sessions', 'inputs', 'turns', 'session_events', 'audit_records', 'runtime_outbox'])
+        UNION ALL
+        SELECT format('I|%s|%s|%s', tablename, indexname, indexdef)
+        FROM pg_indexes
+        WHERE schemaname = 'runtime'
+          AND tablename = ANY (ARRAY['schema_migrations', 'tenants', 'agent_revisions', 'sessions', 'inputs', 'turns', 'session_events', 'audit_records', 'runtime_outbox'])
+    )
+    SELECT 'md5:' || md5(string_agg(line, E'\n' ORDER BY line)) INTO actual_fingerprint
+    FROM objects;
+    IF actual_fingerprint IS DISTINCT FROM expected_fingerprint THEN
+        RAISE EXCEPTION USING ERRCODE = 'P0001', MESSAGE = 'runtime v2 migration physical catalog fingerprint mismatch';
     END IF;
 END $$;
 

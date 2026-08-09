@@ -106,8 +106,9 @@ Before a production rollout, the platform operator must define and test:
 - PostgreSQL backup/restore ownership, immutable migration artifacts, migration
   Job readiness, and recovery authority. The current runtime v2 migration is
   deliberately forward-only: its declared rollback artifact refuses before any
-  destructive action, so recovery uses a tested PostgreSQL backup/PITR runbook
-  rather than automatic schema deletion. The upgrade uses a transaction
+  destructive action, so recovery requires an operator-approved PostgreSQL
+  backup/PITR procedure rather than automatic schema deletion. No backup/PITR
+  runbook or restore drill has been implemented or retained yet. The upgrade uses a transaction
   advisory lock plus migration fingerprint and physical-schema checks, then
   declares normalized tenant, Agent revision, Session,
   content-reference Input, Turn, Product-event, audit, and outbox tables. It

@@ -34,11 +34,13 @@ digests are declared in `deploy/production/stack.json`. The upgrade takes a
 PostgreSQL transaction advisory lock and verifies both its versioned migration
 fingerprint and the required physical schema before it reports success. This
 prevents `IF NOT EXISTS` from silently accepting a partial or different schema.
-The refusal artifact never drops data: recovery from a bad v2 deployment is a
-tested PostgreSQL backup/PITR operation, not an automatic rollback. Migrations
+The refusal artifact never drops data: recovery from a bad v2 deployment
+requires an operator-approved PostgreSQL backup/PITR procedure, not an
+automatic rollback. This repository does not yet contain a backup/PITR runbook
+or a retained restore drill, so that recovery path remains unproven. Migrations
 are applied only by an explicit audited Stack operator action; runtime
 processes have no DDL authority. A disposable PostgreSQL integration test
-executes the artifacts and proves those constraints against PostgreSQL.
+executes the artifacts and proves the schema constraints only.
 
 The v2 schema is not yet an RLS or database-role authorization boundary. The
 future production adapter must add tenant RLS policy, role grants, and a

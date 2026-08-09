@@ -188,7 +188,7 @@ func TestRuntimeV2MigrationRejectsPartialSchemaAndWrongMigrationFingerprint(t *t
 	ctx := context.Background()
 	resetRuntimeV2(t, ctx, pool)
 	applyMigration(t, ctx, pool, "runtime-v1.up.sql")
-	if _, err := pool.Exec(ctx, `CREATE TABLE runtime.tenants (tenant_id TEXT PRIMARY KEY)`); err != nil {
+	if _, err := pool.Exec(ctx, `CREATE TABLE runtime.tenants (tenant_id TEXT PRIMARY KEY, created_at TIMESTAMPTZ NOT NULL)`); err != nil {
 		t.Fatalf("create deliberately partial tenant table: %v", err)
 	}
 	err := applyMigration(t, ctx, pool, "runtime-v2.up.sql")
@@ -205,6 +205,30 @@ func TestRuntimeV2MigrationRejectsPartialSchemaAndWrongMigrationFingerprint(t *t
 		INSERT INTO runtime.schema_migrations (migration_version, schema_fingerprint, applied_at)
 		VALUES (2, 'wrong-fingerprint', now())`); err != nil {
 		t.Fatalf("seed deliberately wrong migration fingerprint: %v", err)
+	}
+	err = applyMigration(t, ctx, pool, "runtime-v2.up.sql")
+	assertPostgresCode(t, err, "P0001")
+
+	resetRuntimeV2(t, ctx, pool)
+	applyMigration(t, ctx, pool, "runtime-v1.up.sql")
+	if _, err := pool.Exec(ctx, `CREATE TABLE runtime.tenants (tenant_id TEXT PRIMARY KEY, created_at TEXT NOT NULL, retention_expires_at TIMESTAMPTZ)`); err != nil {
+		t.Fatalf("create deliberately wrong-type tenant table: %v", err)
+	}
+	err = applyMigration(t, ctx, pool, "runtime-v2.up.sql")
+	assertPostgresCode(t, err, "P0001")
+
+	resetRuntimeV2(t, ctx, pool)
+	applyRuntimeMigrations(t, ctx, pool)
+	if _, err := pool.Exec(ctx, `ALTER TABLE runtime.tenants ADD CONSTRAINT spoofed_tenant_check CHECK (tenant_id <> '')`); err != nil {
+		t.Fatalf("add spoofed check constraint: %v", err)
+	}
+	err = applyMigration(t, ctx, pool, "runtime-v2.up.sql")
+	assertPostgresCode(t, err, "P0001")
+
+	resetRuntimeV2(t, ctx, pool)
+	applyRuntimeMigrations(t, ctx, pool)
+	if _, err := pool.Exec(ctx, `CREATE INDEX spoofed_tenant_index ON runtime.tenants (tenant_id)`); err != nil {
+		t.Fatalf("add spoofed duplicate index: %v", err)
 	}
 	err = applyMigration(t, ctx, pool, "runtime-v2.up.sql")
 	assertPostgresCode(t, err, "P0001")
