@@ -69,6 +69,13 @@ func TestPostgresBootProbeV2RefusesRevokedAndStaleLeaseSessions(t *testing.T) {
 	if err := ledger.RevokeHost(ctx, host.HostID, host.Generation, now.Add(time.Second)); err != nil {
 		t.Fatal(err)
 	}
+	fenced, err := ledger.LoadBootProbeSession(ctx, "host-instance-01")
+	if err != nil || fenced.Session.Lifecycle.Phase != firecrackerbootprobev2.LifecycleCleanupPending {
+		t.Fatalf("revoked v2 session = %#v, %v", fenced, err)
+	}
+	if err := ledger.RevokeHost(ctx, host.HostID, host.Generation, now.Add(2*time.Second)); err != nil {
+		t.Fatalf("repeat RevokeHost() = %v", err)
+	}
 	if _, err := ledger.AuthorizeBootProbeLaunch(ctx, identity, created, now.Add(2*time.Second)); err == nil {
 		t.Fatal("AuthorizeBootProbeLaunch accepted revoked host")
 	}
