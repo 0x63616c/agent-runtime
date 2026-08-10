@@ -89,6 +89,7 @@ func RunOnceWithExecutor(ctx context.Context, config Config, lookup SecretLookup
 	if err != nil {
 		return err
 	}
+	defer journal.Close()
 	for _, pending := range journal.PendingStarts() {
 		if err := sendResult(ctx, client, config.controlURL, pending.Wire); err != nil {
 			return err

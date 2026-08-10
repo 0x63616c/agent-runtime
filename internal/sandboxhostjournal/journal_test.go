@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/0x63616c/agent-runtime/internal/sandboxhostprotocol"
+	"github.com/cockroachdb/errors"
 )
 
 func TestJournalPersistsReceiptBeforeSingleReferenceEffect(t *testing.T) {
@@ -21,6 +22,9 @@ func TestJournalPersistsReceiptBeforeSingleReferenceEffect(t *testing.T) {
 	first, duplicate, err := journal.Accept(envelope, testDigest('b'))
 	if err != nil || duplicate || first.ExecutionCount != 1 {
 		t.Fatalf("Accept(first) = %#v, %t, %v", first, duplicate, err)
+	}
+	if err := journal.Close(); err != nil {
+		t.Fatal(err)
 	}
 	restarted, err := Open(path, 100)
 	if err != nil {
@@ -57,7 +61,7 @@ func TestJournalRefusesCorruptStartedAcknowledgementWithoutIntent(t *testing.T) 
 	}
 }
 
-func TestJournalRefusesLegacyTerminalWithoutDurableIntent(t *testing.T) {
+func TestJournalReplaysLegacyV1TerminalWithoutDurableIntent(t *testing.T) {
 	t.Parallel()
 
 	path := filepath.Join(t.TempDir(), "receipts.json")
@@ -68,8 +72,12 @@ func TestJournalRefusesLegacyTerminalWithoutDurableIntent(t *testing.T) {
 	if err := os.WriteFile(path, wire, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Open(path, 100); err == nil {
-		t.Fatal("Open() accepted a terminal observation without durable intent")
+	journal, err := Open(path, 100)
+	if err != nil {
+		t.Fatalf("Open() refused a legacy v1 terminal journal: %v", err)
+	}
+	if pending := journal.PendingResults(); len(pending) != 1 || string(pending[0].Wire) != `{"state":"succeeded"}` {
+		t.Fatalf("legacy PendingResults() = %#v", pending)
 	}
 }
 
@@ -94,6 +102,9 @@ func TestJournalReplaysExactUnacknowledgedResultAfterRestart(t *testing.T) {
 	if err := journal.StageResult(envelope, resultWire); err != nil {
 		t.Fatal(err)
 	}
+	if err := journal.Close(); err != nil {
+		t.Fatal(err)
+	}
 	restarted, err := Open(path, 100)
 	if err != nil {
 		t.Fatal(err)
@@ -103,6 +114,9 @@ func TestJournalReplaysExactUnacknowledgedResultAfterRestart(t *testing.T) {
 		t.Fatalf("PendingResults() = %#v", pending)
 	}
 	if err := restarted.AcknowledgeResult(entry.ReceiptKey, sandboxhostprotocol.Digest(resultWire)); err != nil {
+		t.Fatal(err)
+	}
+	if err := restarted.Close(); err != nil {
 		t.Fatal(err)
 	}
 	finished, err := Open(path, 100)
@@ -147,6 +161,9 @@ func TestJournalFsyncsOneStableStartedIntentBeforeAnyExecution(t *testing.T) {
 	if err := journal.StageStarted(envelope, []byte(`{"changed":true}`)); err == nil {
 		t.Fatal("StageStarted() accepted an altered execution intent")
 	}
+	if err := journal.Close(); err != nil {
+		t.Fatal(err)
+	}
 	restarted, err := Open(path, 100)
 	if err != nil {
 		t.Fatal(err)
@@ -160,6 +177,29 @@ func TestJournalFsyncsOneStableStartedIntentBeforeAnyExecution(t *testing.T) {
 	}
 	if err := restarted.AcknowledgeStarted(entry.ReceiptKey, sandboxhostprotocol.Digest(startedWire)); err != nil {
 		t.Fatalf("AcknowledgeStarted: %v", err)
+	}
+}
+
+func TestJournalExclusivelyLocksOneHostInstance(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "receipts.json")
+	first, err := Open(path, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Open(path, 100); !errors.Is(err, ErrLocked) {
+		t.Fatalf("second Open() error = %v, want ErrLocked", err)
+	}
+	if err := first.Close(); err != nil {
+		t.Fatal(err)
+	}
+	second, err := Open(path, 100)
+	if err != nil {
+		t.Fatalf("Open() after release: %v", err)
+	}
+	if err := second.Close(); err != nil {
+		t.Fatal(err)
 	}
 }
 

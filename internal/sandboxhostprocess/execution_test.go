@@ -60,6 +60,9 @@ func TestExecuteEnvelopeNeverReexecutesAfterRestartWithOnlyStartedIntent(t *test
 	if err := journal.StageStarted(envelope, started); err != nil {
 		t.Fatal(err)
 	}
+	if err := journal.Close(); err != nil {
+		t.Fatal(err)
+	}
 	restarted, err := sandboxhostjournal.Open(path, 10)
 	if err != nil {
 		t.Fatal(err)
@@ -214,6 +217,42 @@ func TestSignExecutionResultBoundsResultIDForMaximumDeliveryID(t *testing.T) {
 	result, err := sandboxhostprotocol.VerifyResult(wire, now.Add(time.Second), executionPrivateKey().Public().(ed25519.PublicKey))
 	if err != nil || len(result.ResultID) > 128 {
 		t.Fatalf("bounded result ID = %#v, %v", result, err)
+	}
+}
+
+func TestConcurrentHostOwnersCannotExecuteOneJournalTwice(t *testing.T) {
+	t.Parallel()
+
+	envelope, now := executionEnvelope()
+	path := filepath.Join(t.TempDir(), "journal.json")
+	first, err := sandboxhostjournal.Open(path, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer first.Close()
+	if _, _, err := first.Accept(envelope, sandboxhostprotocol.Digest([]byte("envelope"))); err != nil {
+		t.Fatal(err)
+	}
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	completed := make(chan error, 1)
+	executions := 0
+	go func() {
+		completed <- executeEnvelope(context.Background(), envelope, now, first, executionPrivateKey(), executorFunc(func(context.Context, sandboxhostprotocol.Envelope) error {
+			executions++
+			close(entered)
+			<-release
+			return nil
+		}), func(context.Context, []byte) error { return nil }, context.WithDeadline)
+	}()
+	<-entered
+	second, secondErr := sandboxhostjournal.Open(path, 10)
+	if second != nil || !errors.Is(secondErr, sandboxhostjournal.ErrLocked) {
+		t.Fatalf("second journal owner = %#v, %v", second, secondErr)
+	}
+	close(release)
+	if err := <-completed; err != nil || executions != 1 {
+		t.Fatalf("first execution error:%v calls:%d", err, executions)
 	}
 }
 
