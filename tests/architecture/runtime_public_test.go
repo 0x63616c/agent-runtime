@@ -36,6 +36,7 @@ var _ = Describe("public Agent Runtime Go contract", func() {
 			"github.com/0x63616c/agent-runtime/internal/sandboxcontrol",
 			"github.com/0x63616c/agent-runtime/temporalpayload",
 			"github.com/0x63616c/agent-runtime/tests/testroute",
+			"github.com/minio/minio-go/v7",
 			"go.temporal.io/sdk/client",
 		))
 		consumer := GinkgoT().TempDir()
@@ -251,6 +252,7 @@ func forbiddenExampleImports(path string) ([]string, error) {
 		if strings.HasPrefix(value, "github.com/0x63616c/agent-runtime/internal/") ||
 			strings.HasPrefix(value, "github.com/0x63616c/agent-runtime/temporalpayload") ||
 			strings.HasPrefix(value, "github.com/0x63616c/agent-runtime/tests/") ||
+			strings.HasPrefix(value, "github.com/minio/") ||
 			strings.HasPrefix(value, "go.temporal.io/") {
 			imports = append(imports, value)
 		}
