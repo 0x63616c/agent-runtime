@@ -63,6 +63,76 @@ func TestCommandAndObservationBindOneExactAuthenticatedPrivateBootProbe(t *testi
 	}
 }
 
+func TestStageReadyBindsAPersistedPreparedSessionToTheDistinctObservationKey(t *testing.T) {
+	now := time.Date(2026, time.August, 10, 18, 0, 0, 0, time.UTC)
+	_, hostPrivate, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state, _, identity := validStateAndGrant(t, now)
+	session, err := firecrackerbootprobev2.NewSession(state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wire, err := firecrackerbootprobev2.EncodeSession(session)
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot := firecrackerbootprobev2.Snapshot{Version: 7, Session: session, Wire: wire}
+	readyWire, err := signStageReady(snapshot, identity, "YW5vdGhlci1ncmFudC1ndWVzdC1ub25jZQ", hostPrivate)
+	if err != nil {
+		t.Fatalf("signStageReady() error = %v", err)
+	}
+	verified, err := VerifyStageReady(context.Background(), readyWire, now.Add(time.Second), staticHostTrust{observation: hostPrivate.Public().(ed25519.PublicKey)})
+	if err != nil {
+		t.Fatalf("VerifyStageReady() error = %v", err)
+	}
+	ready := verified.StageReady()
+	if ready.ExpectedVersion != snapshot.Version || ready.M4 != identity || ready.Delivery != state.Current {
+		t.Fatalf("VerifyStageReady() = %#v, want exact persisted stage-ready binding", ready)
+	}
+}
+
+func TestStageReadyRefusesAChangedIdentityOrControlSigningKey(t *testing.T) {
+	now := time.Date(2026, time.August, 10, 18, 0, 0, 0, time.UTC)
+	controlPublic, _, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, hostPrivate, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state, _, identity := validStateAndGrant(t, now)
+	session, err := firecrackerbootprobev2.NewSession(state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sessionWire, err := firecrackerbootprobev2.EncodeSession(session)
+	if err != nil {
+		t.Fatal(err)
+	}
+	readyWire, err := signStageReady(firecrackerbootprobev2.Snapshot{Version: 7, Session: session, Wire: sessionWire}, identity, "YW5vdGhlci1ncmFudC1ndWVzdC1ub25jZQ", hostPrivate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := VerifyStageReady(context.Background(), readyWire, now.Add(time.Second), staticHostTrust{observation: controlPublic}); !errors.Is(err, ErrInvalidStageReady) {
+		t.Fatalf("VerifyStageReady(control key) error = %v, want ErrInvalidStageReady", err)
+	}
+	ready, err := decodeStageReady(readyWire)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ready.M4.StageDigest = digest('9')
+	altered, err := encodeStageReady(ready)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := VerifyStageReady(context.Background(), altered, now.Add(time.Second), staticHostTrust{observation: hostPrivate.Public().(ed25519.PublicKey)}); !errors.Is(err, ErrInvalidStageReady) {
+		t.Fatalf("VerifyStageReady(changed identity) error = %v, want ErrInvalidStageReady", err)
+	}
+}
+
 func TestCommandRefusesGrantForAnotherEnvelopeOrSelfReportedM4Identity(t *testing.T) {
 	now := time.Date(2026, time.August, 10, 18, 0, 0, 0, time.UTC)
 	controlPublic, controlPrivate, err := ed25519.GenerateKey(rand.Reader)

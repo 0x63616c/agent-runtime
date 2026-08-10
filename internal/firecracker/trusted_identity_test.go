@@ -33,6 +33,12 @@ func TestCompiledM4IdentityVerifierAcceptsOnlyTheExactCompilerOutput(t *testing.
 	if _, err := NewCompiledM4IdentityVerifier(TrustedM4Identity{}); !errors.Is(err, ErrInvalidProfile) {
 		t.Fatalf("NewCompiledM4IdentityVerifier(uncompiled) error = %v, want ErrInvalidProfile", err)
 	}
+	if _, err := (TrustedM4Identity{}).LaunchGrantIdentity(); !errors.Is(err, ErrInvalidProfile) {
+		t.Fatalf("LaunchGrantIdentity(uncompiled) error = %v, want ErrInvalidProfile", err)
+	}
+	if got, err := identity.LaunchGrantIdentity(); err != nil || got != identity.launchGrantIdentity() {
+		t.Fatalf("LaunchGrantIdentity() = %#v, %v, want compiler output %#v", got, err, identity.launchGrantIdentity())
+	}
 }
 
 func TestCompileTrustedM4IdentityReturnsDeterministicRedactedBindings(t *testing.T) {
