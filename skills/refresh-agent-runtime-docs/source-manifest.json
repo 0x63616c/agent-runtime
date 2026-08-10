@@ -71,6 +71,19 @@
       ],
       "artifactKind": "openapi-operation-index",
       "publicStatus": "Current public contract; runtime transport remains development evidence"
+    },
+    {
+      "output": "website/docs/reference/generated/go-sdk-symbols.mdx",
+      "inputs": [
+        "sdk/go/client.go",
+        "sdk/go/doc.go",
+        "sdk/go/error.go",
+        "sdk/go/ids.go",
+        "sdk/go/openapi_routes_gen.go",
+        "sdk/go/types.go"
+      ],
+      "artifactKind": "go-sdk-symbol-index",
+      "publicStatus": "Current public Go SDK contract; runtime availability remains limited to implemented evidence"
     }
   ],
   "curated": [

@@ -21,30 +21,43 @@ const defaultMaxResponseBytes int64 = 2 << 20
 
 // RuntimeClient is the Temporal-free application contract for durable Agent Runtime commands.
 type RuntimeClient interface {
+	// CreateAgent creates the first immutable Agent revision through the admin surface.
 	CreateAgent(context.Context, CreateAgentRequest) (AgentSpecification, error)
+	// ReviseAgent creates another immutable Agent revision through the admin surface.
 	ReviseAgent(context.Context, ReviseAgentRequest) (AgentSpecification, error)
+	// GetAgentRevision reads one immutable Agent revision through the admin surface.
 	GetAgentRevision(context.Context, AgentID, AgentRevisionID) (AgentSpecification, error)
+	// CreateSession creates a principal-owned Session pinned to one Agent revision.
 	CreateSession(context.Context, CreateSessionRequest) (Session, error)
+	// SendInput idempotently admits bounded Input into a Session.
 	SendInput(context.Context, SendInputRequest) (SendInputResult, error)
+	// InspectSession returns caller-safe Session state without backend identifiers.
 	InspectSession(context.Context, SessionID) (SessionView, error)
+	// InspectTurn returns one caller-safe Turn snapshot.
 	InspectTurn(context.Context, SessionID, TurnID) (Turn, error)
+	// Events resumes bounded Product-event observation after an opaque Cursor.
 	Events(context.Context, SessionID, Cursor, int) (EventPage, error)
+	// CancelTurn explicitly requests durable Turn cancellation.
 	CancelTurn(context.Context, CancelTurnRequest) (Turn, error)
+	// CloseSession closes Input admission and drains accepted work.
 	CloseSession(context.Context, CloseSessionRequest) (Session, error)
 }
 
 // RequestIDSource creates a fresh opaque correlation ID for each HTTP attempt.
 type RequestIDSource interface {
+	// NextRequestID creates one fresh opaque correlation ID.
 	NextRequestID() (RequestID, error)
 }
 
 // AuthorizationSink accepts one request-scoped bearer credential.
 type AuthorizationSink interface {
+	// SetBearerToken accepts one request-scoped bearer credential.
 	SetBearerToken(string) error
 }
 
 // CredentialSource authorizes one request without exposing credential bytes to Client diagnostics.
 type CredentialSource interface {
+	// Authorize applies one request-scoped credential without exposing it to Client diagnostics.
 	Authorize(context.Context, AuthorizationSink) error
 }
 

@@ -82,6 +82,65 @@ var _ = Describe("refreshing public documentation", func() {
 		Expect(strings.Index(output, "`POST` | `/v1/sessions`")).To(BeNumerically("<", strings.Index(output, "`GET` | `/v1/sessions/{session_id}`")))
 	})
 
+	It("renders a documented public Go SDK symbol index from declared source files", func() {
+		manifest.Generated[0] = docsrefresh.Artifact{
+			Output: "website/docs/reference/generated/go-sdk-symbols.mdx",
+			Inputs: []string{
+				"sdk/go/client.go",
+				"sdk/go/doc.go",
+				"sdk/go/types.go",
+			},
+			Kind:         "go-sdk-symbol-index",
+			PublicStatus: "current public Go SDK contract",
+		}
+		files.content["sdk/go/doc.go"] = []byte("// Package agentruntime defines the stable Go contract.\npackage agentruntime\n")
+		files.content["sdk/go/client.go"] = []byte("package agentruntime\n\n// RuntimeClient is the public command contract.\ntype RuntimeClient interface {\n\t// CreateSession creates a durable Session.\n\tCreateSession()\n}\n\n// NewClient constructs the public client.\nfunc NewClient() {}\n")
+		files.content["sdk/go/types.go"] = []byte("package agentruntime\n\n// Session is a durable interaction.\ntype Session struct{}\n\n// Clone returns an independent Session snapshot.\nfunc (Session) Clone() Session { return Session{} }\n\n// SessionOpen accepts input.\nconst SessionOpen = \"open\"\n")
+
+		result, err := docsrefresh.Refresh(context.Background(), ".", manifest, files, changes, docsrefresh.Options{})
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(result.Changed).To(Equal([]string{"website/docs/reference/generated/go-sdk-symbols.mdx"}))
+		output := string(files.content[manifest.Generated[0].Output])
+		Expect(output).To(ContainSubstring("# Go SDK symbol index"))
+		Expect(output).To(ContainSubstring("`github.com/0x63616c/agent-runtime/sdk/go`"))
+		Expect(output).To(ContainSubstring("| `const` | `SessionOpen` | SessionOpen accepts input. |"))
+		Expect(output).To(ContainSubstring("| `func` | `NewClient` | NewClient constructs the public client. |"))
+		Expect(output).To(ContainSubstring("| `method` | `Session.Clone` | Clone returns an independent Session snapshot. |"))
+		Expect(output).To(ContainSubstring("| `method` | `RuntimeClient.CreateSession` | CreateSession creates a durable Session. |"))
+		Expect(output).To(ContainSubstring("| `type` | `RuntimeClient` | RuntimeClient is the public command contract. |"))
+		Expect(strings.Index(output, "`NewClient`")).To(BeNumerically("<", strings.Index(output, "`RuntimeClient`")))
+	})
+
+	It("rejects an undocumented public Go SDK symbol without writing", func() {
+		manifest.Generated[0] = docsrefresh.Artifact{
+			Output:       "website/docs/reference/generated/go-sdk-symbols.mdx",
+			Inputs:       []string{"sdk/go/doc.go", "sdk/go/types.go"},
+			Kind:         "go-sdk-symbol-index",
+			PublicStatus: "current public Go SDK contract",
+		}
+		files.content["sdk/go/doc.go"] = []byte("// Package agentruntime defines the stable Go contract.\npackage agentruntime\n")
+		files.content["sdk/go/types.go"] = []byte("package agentruntime\n\ntype Session struct{}\n")
+
+		_, err := docsrefresh.Refresh(context.Background(), ".", manifest, files, changes, docsrefresh.Options{})
+
+		Expect(err).To(MatchError(ContainSubstring("undocumented public Go SDK type Session")))
+		Expect(files.atomicWrites).To(BeEmpty())
+	})
+
+	It("rejects a Go SDK source manifest that omits a discovered package file", func() {
+		manifest.Generated[0] = docsrefresh.Artifact{
+			Output:       "website/docs/reference/generated/go-sdk-symbols.mdx",
+			Inputs:       []string{"sdk/go/doc.go", "sdk/go/types.go"},
+			Kind:         "go-sdk-symbol-index",
+			PublicStatus: "current public Go SDK contract",
+		}
+
+		err := docsrefresh.ValidateGoSDKSourceList(context.Background(), manifest, fakeGoSDKSourceLister{files: []string{"sdk/go/doc.go", "sdk/go/new-public-file.go", "sdk/go/types.go"}})
+
+		Expect(err).To(MatchError(ContainSubstring("Go SDK source manifest differs from go list")))
+	})
+
 	It("refuses an OpenAPI operation without a successful response before writing", func() {
 		manifest.Generated[0] = docsrefresh.Artifact{
 			Output:       "website/docs/reference/generated/http-operations.mdx",
@@ -422,4 +481,13 @@ type fakeChanges struct{ dirty map[string]bool }
 
 func (f *fakeChanges) Dirty(_ context.Context, path string) (bool, error) {
 	return f.dirty[path], nil
+}
+
+type fakeGoSDKSourceLister struct {
+	files []string
+	err   error
+}
+
+func (lister fakeGoSDKSourceLister) GoSDKFiles(context.Context) ([]string, error) {
+	return append([]string(nil), lister.files...), lister.err
 }

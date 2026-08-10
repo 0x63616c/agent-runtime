@@ -32,6 +32,9 @@ typed IDs, immutable revision/session snapshots, idempotent bounded Input,
 serialized Turn state, explicit cancellation, and ordered cursor replay. The
 HTTP/OpenAPI transport is implemented, while the runtime role still uses its
 explicitly labelled in-memory test store. The declared
+[Go SDK symbol index](./generated/go-sdk-symbols.mdx) is generated from the
+documented public `sdk/go` declarations and methods; it records source shape,
+not additional runtime evidence. The declared
 [PostgreSQL data-authority foundation](./postgresql-data-authority.mdx) now has
 reviewed bounded schema artifacts, a disposable PostgreSQL constraint proof,
 and a narrow internal first-admission repository seam. That seam is not wired

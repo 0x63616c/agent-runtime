@@ -45,6 +45,9 @@ func run(ctx context.Context, arguments []string) error {
 	if err != nil {
 		return err
 	}
+	if err := docsrefresh.ValidateGoSDKSourceList(ctx, manifest, goSDKSourceLister{root: root}); err != nil {
+		return err
+	}
 	result, err := docsrefresh.Refresh(ctx, root, manifest, docsrefresh.OSFiles{Root: root}, docsrefresh.GitChanges{Root: root}, docsrefresh.Options{Check: *check})
 	if err != nil {
 		if errors.Is(err, docsrefresh.ErrStale) {
@@ -68,6 +71,57 @@ func run(ctx context.Context, arguments []string) error {
 		return fmt.Errorf("show exact documentation diff: %w", err)
 	}
 	return nil
+}
+
+type goSDKSourceLister struct {
+	root string
+}
+
+const (
+	goSDKDocsTargetOS   = "linux"
+	goSDKDocsTargetArch = "amd64"
+)
+
+func (lister goSDKSourceLister) GoSDKFiles(ctx context.Context) ([]string, error) {
+	command := exec.CommandContext(ctx, "go", "list", "-f", "{{range .GoFiles}}{{.}}{{\"\\n\"}}{{end}}", "./sdk/go")
+	command.Dir = lister.root
+	command.Env = goSDKListEnvironment(os.Environ())
+	output, err := command.Output()
+	if err != nil {
+		return nil, fmt.Errorf("run go list ./sdk/go: %w", err)
+	}
+	lines := strings.Fields(string(output))
+	files := make([]string, 0, len(lines))
+	for _, line := range lines {
+		files = append(files, filepath.ToSlash(filepath.Join("sdk", "go", line)))
+	}
+	return files, nil
+}
+
+// goSDKListEnvironment makes public-reference discovery independent of the host Go build target and tags.
+func goSDKListEnvironment(base []string) []string {
+	blocked := map[string]struct{}{
+		"CGO_ENABLED": {},
+		"GOARCH":      {},
+		"GOFLAGS":     {},
+		"GOOS":        {},
+	}
+	environment := make([]string, 0, len(base)+4)
+	for _, value := range base {
+		name, _, found := strings.Cut(value, "=")
+		if !found {
+			continue
+		}
+		if _, excluded := blocked[name]; !excluded {
+			environment = append(environment, value)
+		}
+	}
+	return append(environment,
+		"GOOS="+goSDKDocsTargetOS,
+		"GOARCH="+goSDKDocsTargetArch,
+		"GOFLAGS=",
+		"CGO_ENABLED=0",
+	)
 }
 
 func showReviewDiff(ctx context.Context, root string) error {

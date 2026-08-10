@@ -2,11 +2,14 @@ package agentruntime
 
 import "time"
 
-// Public request limits keep durable records bounded before transport-specific limits apply.
 const (
-	MaxIdempotencyKeyBytes    = 128
-	MaxInputParts             = 32
-	MaxTextPartBytes          = 64 * 1024
+	// MaxIdempotencyKeyBytes bounds one public idempotency key before transport-specific limits apply.
+	MaxIdempotencyKeyBytes = 128
+	// MaxInputParts bounds the number of public Input parts accepted in one request.
+	MaxInputParts = 32
+	// MaxTextPartBytes bounds one public text Input part.
+	MaxTextPartBytes = 64 * 1024
+	// MaxSessionViewQueuedTurns bounds the queued Turns included in one Session inspection.
 	MaxSessionViewQueuedTurns = 100
 )
 
