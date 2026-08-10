@@ -51,6 +51,18 @@ var _ = Describe("M1 deployment safety boundaries", func() {
 		}
 	})
 
+	It("bootstraps the disposable NetworkPolicy harness before applying reviewed state", func() {
+		script := read("deploy/harness/run-k3s-networkpolicy-evidence.sh")
+		for _, required := range []string{
+			`bootstrap_capability_file="$harness_tmp/bootstrap-capability.json"`,
+			`stackctl bootstrap --stack-file "$v1" --stack issue10-work --profile ci --bootstrap-capability-file "$bootstrap_capability_file"`,
+			`stackctl apply --stack-file "$v1" --stack issue10-work --profile ci --bootstrap-capability-file "$bootstrap_capability_file"`,
+			`stackctl apply --stack-file "$v2" --stack issue10-work --profile ci --bootstrap-capability-file "$bootstrap_capability_file"`,
+		} {
+			Expect(script).To(ContainSubstring(required))
+		}
+	})
+
 	It("validates every AFK record and keeps integration-specific evidence outside that schema", func() {
 		paths, err := filepath.Glob(filepath.Join("..", "..", "evidence", "afk", "*.json"))
 		Expect(err).NotTo(HaveOccurred())
