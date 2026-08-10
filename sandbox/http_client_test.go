@@ -148,15 +148,33 @@ func TestHTTPClientMapsSafeFailureAndCancellationWithoutTransportCause(t *testin
 	}
 }
 
-func TestHTTPClientCloseCancelsAndWaitsForAnAttemptBeforeItCanReachTheServer(t *testing.T) {
+func TestApplyAuthorizationDoesNotCallCredentialSourceAfterCancellation(t *testing.T) {
+	cancelled, cancel := context.WithCancel(context.Background())
+	cancel()
+	called := false
+	_, err := applyAuthorization(cancelled, credentialSourceFunc(func(_ context.Context, sink CredentialSink) error {
+		called = true
+		return sink.SetAuthorization("Bearer", "late")
+	}))
+	failure, ok := AsFailure(err)
+	if !ok || failure.Code != FailureCancelled || !errors.Is(err, context.Canceled) {
+		t.Fatalf("applyAuthorization() failure = %#v, %v; want cancellation", failure, err)
+	}
+	if called {
+		t.Fatal("applyAuthorization() called credential source after cancellation")
+	}
+}
+
+func TestHTTPClientCloseFencesANonCooperativeCredentialSourceBeforeItCanReachTheServer(t *testing.T) {
 	enteredCredentials := make(chan struct{})
+	credentialMutation := make(chan error, 1)
 	requests := make(chan string, 2)
 	server := httptest.NewTLSServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		requests <- request.URL.Path
 		if request.URL.Path == bindRouteV1 {
 			writeTestJSON(t, writer, bindResponse{Version: controlV1, Kind: bindResponseKind, Assertion: "opaque-binding", ExpiresAt: time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC)})
 			return
 		}
+		requests <- request.URL.Path
 		writer.WriteHeader(http.StatusInternalServerError)
 	}))
 	t.Cleanup(server.Close)
@@ -167,7 +185,8 @@ func TestHTTPClientCloseCancelsAndWaitsForAnAttemptBeforeItCanReachTheServer(t *
 		}
 		close(enteredCredentials)
 		<-ctx.Done()
-		return ctx.Err()
+		credentialMutation <- sink.SetAuthorization("Bearer", "late")
+		return nil
 	})
 	result := make(chan error, 1)
 	go func() { _, err := client.GetOperation(context.Background(), "op_close"); result <- err }()
@@ -180,11 +199,12 @@ func TestHTTPClientCloseCancelsAndWaitsForAnAttemptBeforeItCanReachTheServer(t *
 	} else if failure, ok := AsFailure(err); !ok || failure.Code != FailureCancelled {
 		t.Fatalf("GetOperation() = %v, want cancelled failure", err)
 	}
+	if err := <-credentialMutation; err == nil {
+		t.Fatal("SetAuthorization() after Close cancellation = nil, want client-owned refusal")
+	}
 	select {
 	case path := <-requests:
-		if path != bindRouteV1 {
-			t.Fatalf("post-close request reached server: %s", path)
-		}
+		t.Fatalf("post-close request reached server: %s", path)
 	default:
 	}
 }

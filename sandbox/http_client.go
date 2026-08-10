@@ -113,15 +113,47 @@ func (client *httpControlClient) bind(ctx context.Context) error {
 }
 
 func applyAuthorization(ctx context.Context, source CredentialSource) (string, error) {
+	if err := contextFailure(ctx); err != nil {
+		return "", err
+	}
 	sink := &credentialSink{}
 	defer sink.ClearAuthorization()
-	if err := source.Apply(ctx, sink); err != nil {
+	if err := source.Apply(ctx, cancellationCredentialSink{ctx: ctx, sink: sink}); err != nil {
 		if contextErr := contextFailure(ctx); contextErr != nil {
 			return "", contextErr
 		}
 		return "", newFailure(FailureUnavailable, "sandbox credentials are unavailable", RetryAfterReconcile)
 	}
+	if err := contextFailure(ctx); err != nil {
+		return "", err
+	}
 	return sink.consumeAuthorization()
+}
+
+// cancellationCredentialSink rejects credentials that arrive after the owning
+// HTTP attempt has been cancelled. A non-cooperative credential source must not
+// be able to race Close and let a request reach the control service.
+type cancellationCredentialSink struct {
+	ctx  context.Context
+	sink *credentialSink
+}
+
+func (sink cancellationCredentialSink) SetAuthorization(scheme, value string) error {
+	if err := contextFailure(sink.ctx); err != nil {
+		return err
+	}
+	if err := sink.sink.SetAuthorization(scheme, value); err != nil {
+		return err
+	}
+	if err := contextFailure(sink.ctx); err != nil {
+		sink.sink.ClearAuthorization()
+		return err
+	}
+	return nil
+}
+
+func (sink cancellationCredentialSink) ClearAuthorization() {
+	sink.sink.ClearAuthorization()
 }
 
 func (client *httpControlClient) Submit(ctx context.Context, request OperationRequest) (OperationRef, error) {
