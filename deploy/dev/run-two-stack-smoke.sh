@@ -244,9 +244,17 @@ fi
 down_stack() {
   local stack="$1"
   local namespace="$2"
-  tilt down --context "$context" --namespace "$namespace" --delete-namespaces -- --stack="$stack" --profile="$profile" "${ci_tilt_args[@]}" >/dev/null
-  kubectl --context "$context" wait --for=delete "namespace/$namespace" --timeout=120s >/dev/null 2>&1 || true
+  local tilt_down_status=0
+  tilt down --context "$context" --namespace "$namespace" --delete-namespaces -- --stack="$stack" --profile="$profile" "${ci_tilt_args[@]}" >/dev/null || tilt_down_status=$?
+  if ! kubectl --context "$context" wait --for=delete "namespace/$namespace" --timeout=180s >/dev/null 2>&1; then
+    echo "contained Stack namespace did not delete within the bounded teardown window" >&2
+    return 1
+  fi
   remove_local_state "$stack"
+  if [[ "$tilt_down_status" != 0 ]] && kubectl --context "$context" get "namespace/$namespace" >/dev/null 2>&1; then
+    echo "Tilt teardown failed while the contained Stack namespace remained present" >&2
+    return "$tilt_down_status"
+  fi
 }
 
 cleanup() {
@@ -400,6 +408,11 @@ if kubectl --context "$context" get "namespace/$namespace_b" >/dev/null 2>&1; th
 fi
 echo "two local Stack instances remained isolated across first-instance teardown"
 if [[ -n "$evidence_file" ]]; then
+  evidence_temporary="$(mktemp "${evidence_file}.tmp.XXXXXX")"
+  if [[ -e "$evidence_file" ]]; then
+    echo "refusing to retain two-Stack evidence over an existing file" >&2
+    exit 1
+  fi
   jq -n \
     --arg utc_time "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
     --arg revision "$(git rev-parse HEAD)" \
@@ -425,6 +438,11 @@ if [[ -n "$evidence_file" ]]; then
       first_teardown_left_second_unchanged:true,
       cleanup:{namespaces_absent:true,local_state_absent:true},
       limitations:["does not claim Linux KVM or Firecracker isolation","does not mutate a production cluster"]
-    }' >"$evidence_file"
+    }' >"$evidence_temporary"
+  if ! jq -e '.command.result == "passed" and .cleanup.namespaces_absent == true and .cleanup.local_state_absent == true' "$evidence_temporary" >/dev/null; then
+    echo "refusing to retain two-Stack evidence before contained teardown is observed" >&2
+    exit 1
+  fi
+  mv -- "$evidence_temporary" "$evidence_file"
   echo "retained bounded two-Stack evidence at $evidence_file"
 fi
