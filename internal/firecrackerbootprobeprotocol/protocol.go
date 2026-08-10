@@ -21,6 +21,8 @@ var (
 	ErrInvalidCommand = errors.New("invalid Firecracker boot-probe v2 command")
 	// ErrInvalidObservation identifies a malformed, altered, delayed, or detached private boot-probe observation.
 	ErrInvalidObservation = errors.New("invalid Firecracker boot-probe v2 observation")
+	// ErrInvalidStageReady identifies a malformed, detached, untrusted, or expired M4 stage-ready record.
+	ErrInvalidStageReady = errors.New("invalid Firecracker boot-probe v2 stage-ready record")
 )
 
 const (
@@ -28,6 +30,8 @@ const (
 	Version = "sandbox.host-control/v2/firecracker-boot-probe"
 	// ObservationKind identifies the sole accepted signed host observation.
 	ObservationKind = "boot-observation"
+	// StageReadyKind identifies the sole M4-to-M3 pre-launch record.
+	StageReadyKind = "stage-ready"
 	// GuestProtocolPong is the sole guest observation a boot probe may report.
 	GuestProtocolPong = "pong"
 
@@ -72,6 +76,28 @@ type HostTrust struct {
 	ObservationPublicKey ed25519.PublicKey
 }
 
+// StageReady is the M4-owned pre-launch request. Its identity is produced by
+// the sealed local compiler, and its signature uses the separately enrolled
+// observation key rather than the M3 control-signing key.
+type StageReady struct {
+	ProtocolVersion       string                                   `json:"protocol_version"`
+	Kind                  string                                   `json:"kind"`
+	HostInstanceSessionID string                                   `json:"host_instance_session_id"`
+	ExpectedVersion       uint64                                   `json:"expected_version"`
+	Binding               firecrackerbootprobev2.Binding           `json:"binding"`
+	Delivery              firecrackerbootprobev2.Delivery          `json:"delivery"`
+	M4                    firecrackerlaunchgrant.TrustedM4Identity `json:"m4"`
+	GuestNonce            string                                   `json:"guest_nonce"`
+	Signature             string                                   `json:"signature"`
+}
+
+// VerifiedStageReady is the opaque result of VerifyStageReady. M3 must use it
+// with its locked persisted session rather than trust a caller-built record.
+type VerifiedStageReady struct{ stageReady StageReady }
+
+// StageReady returns a copy of the exact M4 record VerifyStageReady accepted.
+func (verified VerifiedStageReady) StageReady() StageReady { return verified.stageReady }
+
 // Observation is one M4-signed, bounded result for the exact command delivery.
 // Its identity is compared to the already verified command by VerifyObservation; an observation never grants launch authority.
 type Observation struct {
@@ -107,6 +133,59 @@ func SignCommand(session firecrackerbootprobev2.Session, grant firecrackerlaunch
 	}
 	command.Signature = base64.RawURLEncoding.EncodeToString(ed25519.Sign(privateKey, unsigned))
 	return encodeCommand(command)
+}
+
+// SignStageReady writes the canonical M4-to-M3 record after M4 has compiled
+// its exact staged identity. It neither grants nor starts a launch.
+func SignStageReady(snapshot firecrackerbootprobev2.Snapshot, identity firecracker.TrustedM4Identity, guestNonce string, privateKey ed25519.PrivateKey) ([]byte, error) {
+	m4, err := identity.LaunchGrantIdentity()
+	if err != nil {
+		return nil, errors.Wrap(ErrInvalidStageReady, "sign stage-ready with uncompiled M4 identity")
+	}
+	return signStageReady(snapshot, m4, guestNonce, privateKey)
+}
+
+func signStageReady(snapshot firecrackerbootprobev2.Snapshot, identity firecrackerlaunchgrant.TrustedM4Identity, guestNonce string, privateKey ed25519.PrivateKey) ([]byte, error) {
+	if snapshot.Version == 0 || snapshot.Session.Validate() != nil || snapshot.Session.Lifecycle.Phase != firecrackerbootprobev2.LifecyclePrepared || len(privateKey) != ed25519.PrivateKeySize {
+		return nil, errors.Wrap(ErrInvalidStageReady, "sign only a persisted prepared Firecracker boot-probe v2 session")
+	}
+	ready := StageReady{ProtocolVersion: Version, Kind: StageReadyKind, HostInstanceSessionID: snapshot.Session.Delivery.HostInstanceSessionID, ExpectedVersion: snapshot.Version, Binding: snapshot.Session.Delivery.Binding, Delivery: snapshot.Session.Delivery.Current, M4: identity, GuestNonce: guestNonce}
+	if err := validateStageReady(ready); err != nil {
+		return nil, errors.Wrap(ErrInvalidStageReady, "sign exact bounded Firecracker boot-probe v2 stage-ready record")
+	}
+	unsigned, err := json.Marshal(ready)
+	if err != nil {
+		return nil, errors.Wrap(ErrInvalidStageReady, "encode unsigned Firecracker boot-probe v2 stage-ready record")
+	}
+	ready.Signature = base64.RawURLEncoding.EncodeToString(ed25519.Sign(privateKey, unsigned))
+	return encodeStageReady(ready)
+}
+
+// VerifyStageReady verifies the distinct enrolled observation key and exact
+// prepared-delivery shape. It does not mutate a session or authorize launch.
+func VerifyStageReady(ctx context.Context, wire []byte, now time.Time, resolver HostTrustResolver) (VerifiedStageReady, error) {
+	if ctx == nil || resolver == nil || !validTime(now) {
+		return VerifiedStageReady{}, errors.Wrap(ErrInvalidStageReady, "verify Firecracker boot-probe v2 stage-ready dependencies")
+	}
+	ready, err := decodeStageReady(wire)
+	if err != nil || now.Before(ready.Delivery.IssuedAt) || !now.Before(ready.Delivery.ExpiresAt) {
+		return VerifiedStageReady{}, errors.Wrap(ErrInvalidStageReady, "verify exact Firecracker boot-probe v2 stage-ready record")
+	}
+	trust, err := resolver.ResolveBootProbeHostTrust(ctx, ready.Binding.HostID, ready.Binding.HostGeneration)
+	if err != nil || trust.HostID != ready.Binding.HostID || trust.HostGeneration != ready.Binding.HostGeneration || len(trust.ObservationPublicKey) != ed25519.PublicKeySize {
+		return VerifiedStageReady{}, errors.Wrap(ErrInvalidStageReady, "resolve enrolled Firecracker boot-probe v2 observation key")
+	}
+	signature, err := base64.RawURLEncoding.DecodeString(ready.Signature)
+	if err != nil || len(signature) != ed25519.SignatureSize {
+		return VerifiedStageReady{}, errors.Wrap(ErrInvalidStageReady, "decode Firecracker boot-probe v2 stage-ready signature")
+	}
+	unsigned := ready
+	unsigned.Signature = ""
+	unsignedWire, err := json.Marshal(unsigned)
+	if err != nil || !ed25519.Verify(trust.ObservationPublicKey, unsignedWire, signature) {
+		return VerifiedStageReady{}, errors.Wrap(ErrInvalidStageReady, "verify Firecracker boot-probe v2 stage-ready signature")
+	}
+	return VerifiedStageReady{stageReady: ready}, nil
 }
 
 // VerifyCommand strictly decodes and verifies an M3 command for the one enrolled host and locally compiled M4 identity.
@@ -225,6 +304,27 @@ func decodeObservation(wire []byte) (Observation, error) {
 	return observation, nil
 }
 
+func decodeStageReady(wire []byte) (StageReady, error) {
+	if len(wire) == 0 || len(wire) > maximumWireBytes {
+		return StageReady{}, ErrInvalidStageReady
+	}
+	decoder := json.NewDecoder(bytes.NewReader(wire))
+	decoder.DisallowUnknownFields()
+	var ready StageReady
+	if err := decoder.Decode(&ready); err != nil {
+		return StageReady{}, ErrInvalidStageReady
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
+		return StageReady{}, ErrInvalidStageReady
+	}
+	canonical, err := encodeStageReady(ready)
+	if err != nil || !bytes.Equal(canonical, wire) || ready.Signature == "" || validateStageReady(ready) != nil {
+		return StageReady{}, ErrInvalidStageReady
+	}
+	return ready, nil
+}
+
 func encodeCommand(command Command) ([]byte, error) {
 	wire, err := json.Marshal(command)
 	if err != nil || len(wire) > maximumWireBytes {
@@ -237,6 +337,14 @@ func encodeObservation(observation Observation) ([]byte, error) {
 	wire, err := json.Marshal(observation)
 	if err != nil || len(wire) > maximumWireBytes {
 		return nil, ErrInvalidObservation
+	}
+	return wire, nil
+}
+
+func encodeStageReady(ready StageReady) ([]byte, error) {
+	wire, err := json.Marshal(ready)
+	if err != nil || len(wire) > maximumWireBytes {
+		return nil, ErrInvalidStageReady
 	}
 	return wire, nil
 }
@@ -254,6 +362,20 @@ func validateCommand(command Command) error {
 	}
 	if command.GuestNonce == command.Delivery.Nonce {
 		return ErrInvalidCommand
+	}
+	return nil
+}
+
+func validateStageReady(ready StageReady) error {
+	if ready.ProtocolVersion != Version || ready.Kind != StageReadyKind || ready.ExpectedVersion == 0 || !validNonce(ready.GuestNonce) || ready.GuestNonce == ready.Delivery.Nonce {
+		return ErrInvalidStageReady
+	}
+	state, err := firecrackerbootprobev2.NewState(ready.Binding, ready.HostInstanceSessionID, ready.Delivery, ready.Delivery.IssuedAt)
+	if err != nil {
+		return ErrInvalidStageReady
+	}
+	if _, err := firecrackerlaunchgrant.New(envelopeTuple(state.Binding, state.Current), ready.M4); err != nil {
+		return ErrInvalidStageReady
 	}
 	return nil
 }
