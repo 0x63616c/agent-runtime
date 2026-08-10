@@ -97,11 +97,7 @@ type controlProcess struct {
 func startControlProcess(t *testing.T, binary, configPath, dsn, authorization, assertionKey string) *controlProcess {
 	t.Helper()
 	process := startCommand(t, binary, []string{"--config", configPath}, map[string]string{"TEST_DATABASE_DSN": dsn, "TEST_AUTHORIZATION": authorization, "TEST_ASSERTION_KEY": assertionKey})
-	// The service declares a ten-second graceful HTTP shutdown. The harness
-	// must not preempt that contract while a race-instrumented PostgreSQL
-	// request is draining; synthetic unresponsive-child tests retain the short
-	// default below.
-	process.grace = serviceProcessTerminationGrace
+	process.grace = 12 * time.Second
 	return process
 }
 
@@ -274,10 +270,7 @@ func (process *controlProcess) stop(t *testing.T, secrets ...string) {
 	}
 }
 
-const (
-	controlProcessTerminationGrace = time.Second
-	serviceProcessTerminationGrace = 12 * time.Second
-)
+const controlProcessTerminationGrace = time.Second
 
 func (process *controlProcess) terminate() (bool, error) {
 	select {

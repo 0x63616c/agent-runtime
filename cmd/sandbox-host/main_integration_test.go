@@ -302,10 +302,7 @@ func startProcess(t *testing.T, binary string, args []string, environment map[st
 	}
 	grace := hostProcessTerminationGrace
 	if len(args) > 0 && args[0] == "--config" {
-		// A real role may be draining an in-flight, race-instrumented control
-		// request. Its declared request timeout is longer than the synthetic
-		// harness grace, so do not turn orderly signal handling into SIGKILL.
-		grace = serviceProcessTerminationGrace
+		grace = 12 * time.Second
 	}
 	process := &process{command: command, stdout: stdout, stderr: stderr, redactions: redactionsFromEnvironment(environment), done: make(chan struct{}), grace: grace}
 	go func() {
@@ -372,10 +369,7 @@ func (process *process) stop(t *testing.T, expectSuccess bool, secrets ...string
 	}
 }
 
-const (
-	hostProcessTerminationGrace    = time.Second
-	serviceProcessTerminationGrace = 12 * time.Second
-)
+const hostProcessTerminationGrace = time.Second
 
 func (process *process) terminate() (bool, error) {
 	select {
