@@ -179,7 +179,7 @@ must be declared, owned, scoped, and lifecycle-documented.
 
 ## Test-driven evidence
 
-Work independent milestone streams in parallel; serialize only shared authority decisions, integration, and retained evidence gates.
+Work independent milestone streams in parallel; serialize only shared authority decisions, integration, and retained evidence gates. Each agent owns a complete milestone stream, self-tests continuously, and requests one independent review only when that whole milestone is ready—never after individual TDD slices or subcomponents.
 
 Write acceptance criteria and behavior tests before implementation. Begin each
 vertical slice by naming its approved seam and a small matrix: happy path, most
