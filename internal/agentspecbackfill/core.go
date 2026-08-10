@@ -1,0 +1,384 @@
+// Package agentspecbackfill owns the pure immutable request, verification, and archive seam for Agent-spec backfill.
+package agentspecbackfill
+
+import (
+	"bytes"
+	"context"
+	"crypto/sha256"
+	"encoding/base32"
+	"encoding/base64"
+	"encoding/hex"
+	"strings"
+	"time"
+
+	"github.com/cockroachdb/errors"
+)
+
+const (
+	maxRequestBytes = 1024
+	maxStatusBytes  = 2048
+	requestVersion  = 1
+)
+
+var (
+	// ErrStaleSnapshot reports a request whose frozen legacy snapshot no longer matches.
+	ErrStaleSnapshot = errors.New("agent spec backfill stale snapshot")
+	// ErrWrongOwner reports a legacy revision outside the verified owner boundary.
+	ErrWrongOwner = errors.New("agent spec backfill wrong owner")
+	// ErrContentIntegrity reports immutable content that does not verify against its reference.
+	ErrContentIntegrity = errors.New("agent spec backfill immutable content integrity")
+)
+
+// Request is the immutable, bounded controller request with no raw Agent specification or object key.
+type Request struct {
+	StackDigest              string
+	MigrationVersion         uint32
+	MigrationArtifactDigest  string
+	ManifestDigest           string
+	ControllerImageDigest    string
+	SnapshotFingerprint      string
+	SnapshotCount            uint64
+	FenceNonce               string
+	StaticReadinessDigest    string
+	DatabaseAuthorityDigest  string
+	BlobReadCapabilityDigest string
+	ExpiresAt                time.Time
+}
+
+// Digest returns the canonical request digest.
+func (request Request) Digest() (string, error) {
+	encoded, err := request.Canonical()
+	if err != nil {
+		return "", err
+	}
+	sum := sha256.Sum256(encoded)
+	return "sha256:" + hex.EncodeToString(sum[:]), nil
+}
+
+// Name returns the deterministic Kubernetes-safe request capability name.
+func (request Request) Name() (string, error) {
+	digest, err := request.Digest()
+	if err != nil {
+		return "", err
+	}
+	raw, err := hex.DecodeString(strings.TrimPrefix(digest, "sha256:"))
+	if err != nil {
+		return "", errors.Wrap(err, "decode request digest")
+	}
+	return "asb-" + strings.ToLower(base32.StdEncoding.WithPadding(base32.NoPadding).EncodeToString(raw)), nil
+}
+
+// Canonical returns the deterministic CBOR request envelope.
+func (request Request) Canonical() ([]byte, error) {
+	if err := request.validate(); err != nil {
+		return nil, err
+	}
+	var value bytes.Buffer
+	writeHead(&value, 4, 13)
+	writeUint(&value, requestVersion)
+	writeText(&value, request.StackDigest)
+	writeUint(&value, uint64(request.MigrationVersion))
+	writeText(&value, request.MigrationArtifactDigest)
+	writeText(&value, request.ManifestDigest)
+	writeText(&value, request.ControllerImageDigest)
+	writeText(&value, request.SnapshotFingerprint)
+	writeUint(&value, request.SnapshotCount)
+	nonce, _ := base64.RawURLEncoding.DecodeString(request.FenceNonce)
+	writeBytes(&value, nonce)
+	writeText(&value, request.StaticReadinessDigest)
+	writeText(&value, request.DatabaseAuthorityDigest)
+	writeText(&value, request.BlobReadCapabilityDigest)
+	writeText(&value, request.ExpiresAt.UTC().Format(time.RFC3339Nano))
+	if value.Len() > maxRequestBytes {
+		return nil, errors.New("canonical backfill request exceeds bound")
+	}
+	return value.Bytes(), nil
+}
+
+func (request Request) validate() error {
+	if request.MigrationVersion != 4 || request.SnapshotCount == 0 || request.ExpiresAt.IsZero() || request.ExpiresAt.Location() != time.UTC {
+		return errors.New("invalid backfill request fields")
+	}
+	for _, digest := range []string{request.StackDigest, request.MigrationArtifactDigest, request.ManifestDigest, request.ControllerImageDigest, request.SnapshotFingerprint, request.StaticReadinessDigest, request.DatabaseAuthorityDigest, request.BlobReadCapabilityDigest} {
+		if !validDigest(digest) {
+			return errors.New("invalid backfill digest")
+		}
+	}
+	nonce, err := base64.RawURLEncoding.DecodeString(request.FenceNonce)
+	if err != nil || len(nonce) != 16 {
+		return errors.New("invalid backfill fence nonce")
+	}
+	return nil
+}
+
+func validDigest(value string) bool {
+	if len(value) != len("sha256:")+64 || !strings.HasPrefix(value, "sha256:") {
+		return false
+	}
+	_, err := hex.DecodeString(strings.TrimPrefix(value, "sha256:"))
+	return err == nil
+}
+
+// Phase identifies one terminal or in-progress verification state.
+type Phase string
+
+const (
+	// PhasePending identifies a request not yet examined by the controller.
+	PhasePending Phase = "Pending"
+	// PhaseVerifying identifies an in-progress verification.
+	PhaseVerifying Phase = "Verifying"
+	// PhaseVerified identifies a successfully verified immutable legacy set.
+	PhaseVerified Phase = "Verified"
+	// PhaseRefused identifies a terminal safe refusal.
+	PhaseRefused Phase = "Refused"
+)
+
+// Reason is a bounded terminal refusal classification.
+type Reason string
+
+const (
+	// RefusalSnapshot identifies a stale or malformed frozen snapshot.
+	RefusalSnapshot Reason = "snapshot"
+	// RefusalContent identifies content or owner integrity failure.
+	RefusalContent Reason = "content"
+	// RefusalExpired identifies an expired request.
+	RefusalExpired Reason = "expired"
+)
+
+// Status is the bounded redacted result for one immutable request.
+type Status struct {
+	Phase               Phase
+	RequestDigest       string
+	SnapshotFingerprint string
+	SnapshotCount       uint64
+	Reason              Reason
+	CompletedAt         time.Time
+}
+
+// Canonical returns the deterministic bounded CBOR terminal-status envelope.
+func (status Status) Canonical() ([]byte, error) {
+	if (status.Phase != PhaseVerified && status.Phase != PhaseRefused) || !validDigest(status.RequestDigest) || !validDigest(status.SnapshotFingerprint) || status.SnapshotCount == 0 || status.CompletedAt.IsZero() || status.CompletedAt.Location() != time.UTC {
+		return nil, errors.New("invalid backfill status")
+	}
+	if (status.Phase == PhaseVerified && status.Reason != "") || (status.Phase == PhaseRefused && status.Reason == "") {
+		return nil, errors.New("invalid backfill terminal status")
+	}
+	var value bytes.Buffer
+	writeHead(&value, 4, 7)
+	writeUint(&value, requestVersion)
+	writeText(&value, string(status.Phase))
+	writeText(&value, status.RequestDigest)
+	writeText(&value, status.SnapshotFingerprint)
+	writeUint(&value, status.SnapshotCount)
+	writeText(&value, string(status.Reason))
+	writeText(&value, status.CompletedAt.UTC().Format(time.RFC3339Nano))
+	if value.Len() > maxStatusBytes {
+		return nil, errors.New("canonical backfill status exceeds bound")
+	}
+	return value.Bytes(), nil
+}
+
+// ValidateFor proves the status matches one request at an explicit time.
+func (status Status) ValidateFor(request Request, now time.Time) error {
+	digest, err := request.Digest()
+	if err != nil || status.RequestDigest != digest || status.SnapshotFingerprint != request.SnapshotFingerprint || status.SnapshotCount != request.SnapshotCount || status.CompletedAt.IsZero() || status.CompletedAt.Location() != time.UTC || status.CompletedAt.After(now.UTC()) {
+		return errors.New("invalid backfill status")
+	}
+	if status.Phase == PhaseVerified && status.Reason != "" {
+		return errors.New("verified backfill status has refusal reason")
+	}
+	if status.Phase == PhaseRefused && status.Reason == "" {
+		return errors.New("refused backfill status has no reason")
+	}
+	if status.Phase != PhaseVerified && status.Phase != PhaseRefused {
+		return errors.New("backfill status is not terminal")
+	}
+	if status.CompletedAt.After(request.ExpiresAt) && status.Phase == PhaseVerified {
+		return errors.New("verified backfill status is expired")
+	}
+	return nil
+}
+
+// ValidateTransitionFrom rejects any transition from a terminal status.
+func (status Status) ValidateTransitionFrom(previous Status) error {
+	if previous.Phase == PhaseVerified || previous.Phase == PhaseRefused {
+		return errors.New("terminal backfill status is immutable")
+	}
+	return nil
+}
+
+// Snapshot describes the deterministic frozen legacy set.
+type Snapshot struct {
+	Fingerprint string
+	Count       uint64
+}
+
+// LegacyRevision is one minimal immutable historical Agent revision reference.
+type LegacyRevision struct {
+	TenantID, AgentID, RevisionID, SpecificationDigest string
+	SpecificationSizeBytes                             int64
+}
+
+// FrozenLegacySet is read under the migration fence.
+type FrozenLegacySet struct {
+	Snapshot  Snapshot
+	Revisions []LegacyRevision
+}
+
+// FrozenLegacyReader reads the fenced historical revision set.
+type FrozenLegacyReader interface {
+	ReadFrozen(context.Context) (FrozenLegacySet, error)
+}
+
+// ImmutableContentVerifier validates one revision against its immutable content reference and manifest.
+type ImmutableContentVerifier interface {
+	VerifyImmutable(context.Context, LegacyRevision) error
+}
+
+// Verify reads and verifies a frozen set, returning only a bounded terminal status.
+func Verify(ctx context.Context, request Request, reader FrozenLegacyReader, verifier ImmutableContentVerifier, now time.Time) (Status, error) {
+	if err := request.validate(); err != nil {
+		return Status{}, errors.Wrap(err, "validate backfill request")
+	}
+	if reader == nil || verifier == nil {
+		return Status{}, errors.New("backfill reader and verifier are required")
+	}
+	set, err := reader.ReadFrozen(ctx)
+	if err != nil {
+		return Status{}, errors.Wrap(err, "read frozen legacy set")
+	}
+	digest, err := request.Digest()
+	if err != nil {
+		return Status{}, err
+	}
+	status := Status{RequestDigest: digest, SnapshotFingerprint: request.SnapshotFingerprint, SnapshotCount: request.SnapshotCount, CompletedAt: now.UTC()}
+	if now.UTC().After(request.ExpiresAt) {
+		status.Phase, status.Reason = PhaseRefused, RefusalExpired
+		return status, nil
+	}
+	if set.Snapshot.Fingerprint != request.SnapshotFingerprint || set.Snapshot.Count != request.SnapshotCount || uint64(len(set.Revisions)) != request.SnapshotCount {
+		status.Phase, status.Reason = PhaseRefused, RefusalSnapshot
+		return status, nil
+	}
+	for _, revision := range set.Revisions {
+		if revision.TenantID == "" || revision.AgentID == "" || revision.RevisionID == "" || revision.SpecificationSizeBytes < 0 || !validDigest(revision.SpecificationDigest) {
+			status.Phase, status.Reason = PhaseRefused, RefusalContent
+			return status, nil
+		}
+		if err := verifier.VerifyImmutable(ctx, revision); err != nil {
+			status.Phase, status.Reason = PhaseRefused, RefusalContent
+			return status, nil
+		}
+	}
+	status.Phase = PhaseVerified
+	return status, nil
+}
+
+// Audit is bounded redacted terminal evidence.
+type Audit struct{ Code string }
+
+// CertificateInput is the safe certificate projection when v4 committed.
+type CertificateInput struct{ Digest string }
+
+// ArchiveBundle is one immutable terminal request evidence bundle.
+type ArchiveBundle struct {
+	request     Request
+	status      Status
+	audit       Audit
+	certificate *CertificateInput
+}
+
+// NewArchiveBundle constructs one request-keyed terminal archive bundle.
+func NewArchiveBundle(request Request, status Status, audit Audit, certificate *CertificateInput) (ArchiveBundle, error) {
+	if err := status.ValidateFor(request, status.CompletedAt); err != nil {
+		return ArchiveBundle{}, errors.Wrap(err, "validate archive status")
+	}
+	if len(audit.Code) == 0 || len(audit.Code) > 64 {
+		return ArchiveBundle{}, errors.New("invalid archive audit code")
+	}
+	if certificate != nil && !validDigest(certificate.Digest) {
+		return ArchiveBundle{}, errors.New("invalid archive certificate")
+	}
+	if status.Phase != PhaseVerified && certificate != nil {
+		return ArchiveBundle{}, errors.New("refused archive has certificate")
+	}
+	return ArchiveBundle{request: request, status: status, audit: audit, certificate: certificate}, nil
+}
+
+// CertificatePresent reports whether the terminal request committed v4 certificate evidence.
+func (bundle ArchiveBundle) CertificatePresent() bool { return bundle.certificate != nil }
+
+// Key returns the deterministic archive object key under one declared prefix.
+func (bundle ArchiveBundle) Key(prefix string) string {
+	name, _ := bundle.request.Name()
+	digest, _ := bundle.request.Digest()
+	return strings.TrimSuffix(prefix, "/") + "/agentspecbackfill/v1/" + name + "/" + strings.Replace(digest, ":", "-", 1) + ".cbor"
+}
+
+// Canonical returns bounded redacted immutable archive bytes.
+func (bundle ArchiveBundle) Canonical() ([]byte, error) {
+	request, err := bundle.request.Canonical()
+	if err != nil {
+		return nil, err
+	}
+	var value bytes.Buffer
+	writeHead(&value, 4, 7)
+	writeUint(&value, 1)
+	writeBytes(&value, request)
+	writeText(&value, string(bundle.status.Phase))
+	writeText(&value, bundle.status.RequestDigest)
+	writeText(&value, string(bundle.status.Reason))
+	writeText(&value, bundle.audit.Code)
+	if bundle.certificate == nil {
+		value.WriteByte(0xf6)
+	} else {
+		writeText(&value, bundle.certificate.Digest)
+	}
+	if value.Len() > maxStatusBytes {
+		return nil, errors.New("canonical archive exceeds bound")
+	}
+	return value.Bytes(), nil
+}
+
+func writeUint(buffer *bytes.Buffer, value uint64) { writeHead(buffer, 0, value) }
+func writeText(buffer *bytes.Buffer, value string) {
+	writeHead(buffer, 3, uint64(len(value)))
+	buffer.WriteString(value)
+}
+func writeBytes(buffer *bytes.Buffer, value []byte) {
+	writeHead(buffer, 2, uint64(len(value)))
+	buffer.Write(value)
+}
+func writeHead(buffer *bytes.Buffer, major byte, value uint64) {
+	if value < 24 {
+		buffer.WriteByte(major<<5 | byte(value))
+		return
+	}
+	if value <= 0xff {
+		buffer.WriteByte(major<<5 | 24)
+		buffer.WriteByte(byte(value))
+		return
+	}
+	if value <= 0xffff {
+		buffer.WriteByte(major<<5 | 25)
+		buffer.WriteByte(byte(value >> 8))
+		buffer.WriteByte(byte(value))
+		return
+	}
+	if value <= 0xffffffff {
+		buffer.WriteByte(major<<5 | 26)
+		for shift := uint(24); ; shift -= 8 {
+			buffer.WriteByte(byte(value >> shift))
+			if shift == 0 {
+				return
+			}
+		}
+	}
+	buffer.WriteByte(major<<5 | 27)
+	for shift := uint(56); ; shift -= 8 {
+		buffer.WriteByte(byte(value >> shift))
+		if shift == 0 {
+			return
+		}
+	}
+}
