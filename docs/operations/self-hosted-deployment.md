@@ -200,13 +200,21 @@ K3s-in-container evidence and makes no KVM claim.
 
 ## M1 proof provenance and CI safety
 
-The retained local M1 artifacts bind two distinct immutable revisions: the
-runtime/render source candidate is
-`49d5b0de99ec2e2f989c069cf6471a68817480fb`; the later evidence-retention
-commit is `6b50b522120f1c794442baaa25710d6f7800dc2c`. Each current evidence
-envelope records the source commit/tree, retention commit, and SHA-256 of the
-historical retained artifact. This is provenance, not a claim that the local
-proof ran on the retention commit or on the current checkout.
+The retained local artifacts are explicit, bounded historical proof rather
+than a claim about an arbitrary checkout. The two-Stack proof source is
+`18a55a90827cf21abba274826262f002a1c111fb`, retained at
+`2626dbad3e4c66a76cd1f83138499497abe614e1` and provenance-bound at
+`d26fd8a`. The self-hosted proof source is
+`fa8ac05de0b347bffdf1b23c86f8f09acd6341f8`, retained at
+`c27b334ebfbbb3e496b88e216c9283addc8741e8` and provenance-bound at
+`6131c4f`. Each envelope records its source commit/tree, retention commit, and
+SHA-256. This is provenance, not a claim that either proof ran on its
+retention commit or on the current checkout.
+
+The reviewed rollback-transition code added after those local runs is covered
+by hermetic operator and digest-verified migration tests. A refreshed hosted
+CI proof that includes that transition remains required before INF-005 CI
+acceptance is claimed.
 
 The two-Stack CI lane refuses an existing generated k3d cluster or registry
 name before it starts creation. It records ownership only after each exact k3d create
