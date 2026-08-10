@@ -23,6 +23,29 @@ type Client struct {
 	dataConverter  converter.DataConverter
 }
 
+// ExecuteWorkflow starts one private runtime workflow through the configured client.
+func (client *Client) ExecuteWorkflow(ctx context.Context, options client.StartWorkflowOptions, workflow any, arguments ...any) (client.WorkflowRun, error) {
+	if client == nil || client.temporalClient == nil {
+		return nil, errors.New("execute runtime workflow: configured Temporal client is required")
+	}
+	return client.temporalClient.ExecuteWorkflow(ctx, options, workflow, arguments...)
+}
+
+// SignalWorkflow sends one private signal through the configured client.
+func (client *Client) SignalWorkflow(ctx context.Context, workflowID, runID, signal string, argument any) error {
+	if client == nil || client.temporalClient == nil {
+		return errors.New("signal runtime workflow: configured Temporal client is required")
+	}
+	return client.temporalClient.SignalWorkflow(ctx, workflowID, runID, signal, argument)
+}
+
+// Close closes the owned Temporal client.
+func (client *Client) Close() {
+	if client != nil && client.temporalClient != nil {
+		client.temporalClient.Close()
+	}
+}
+
 // NewFactory creates the only runtime-owned factory for Temporal converter configuration.
 func NewFactory(codec *temporalpayload.Codec) (*Factory, error) {
 	if codec == nil {
