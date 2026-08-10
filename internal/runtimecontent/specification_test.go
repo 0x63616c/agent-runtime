@@ -130,8 +130,8 @@ func TestStoreRejectsForeignAndMismatchedRepositoryCapabilities(t *testing.T) {
 	if _, err := reader.ReadAgentSpecification(context.Background(), tenant, wrongID, specification.RevisionID); !errors.Is(err, runtimecontent.ErrNotFoundOrDenied) {
 		t.Fatalf("expected mismatched capability refusal, got %v", err)
 	}
-	if len(objects.keys) != 1 {
-		t.Fatalf("expected no new writes, got keys %v", objects.keys)
+	if len(objects.keys) != 1 || objects.gets != 0 {
+		t.Fatalf("expected no object I/O for mismatched repository records, got writes=%v reads=%d", objects.keys, objects.gets)
 	}
 }
 
