@@ -36,7 +36,11 @@ func (coordinator *Coordinator) Create(ctx context.Context, binding Binding, hos
 	if err != nil {
 		return Snapshot{}, false, errors.Wrap(err, "seal initial Firecracker boot-probe v2 state")
 	}
-	snapshot, created, err := coordinator.store.LoadOrCreate(ctx, state)
+	session, err := NewSession(state)
+	if err != nil {
+		return Snapshot{}, false, errors.Wrap(err, "seal initial Firecracker boot-probe v2 session")
+	}
+	snapshot, created, err := coordinator.store.LoadOrCreate(ctx, session)
 	if err != nil {
 		return Snapshot{}, false, errors.Wrap(err, "persist initial Firecracker boot-probe v2 state")
 	}
@@ -54,7 +58,7 @@ func (coordinator *Coordinator) Load(ctx context.Context, hostInstanceSessionID 
 
 // RenewAuthenticated constructs and atomically persists exactly the next already-authenticated delivery from the expected recovery snapshot.
 func (coordinator *Coordinator) RenewAuthenticated(ctx context.Context, expected Snapshot, successor Delivery, now time.Time) (Snapshot, error) {
-	next, err := expected.State.AcceptAuthenticatedSuccessor(expected.State.HostInstanceSessionID, successor, now)
+	next, err := expected.Session.AcceptAuthenticatedSuccessor(successor, now)
 	if err != nil {
 		return Snapshot{}, errors.Wrap(err, "construct exact Firecracker boot-probe v2 successor")
 	}
@@ -77,11 +81,63 @@ func (coordinator *Coordinator) ClassifyAcknowledgement(ctx context.Context, ack
 	if !found {
 		return AcknowledgementResult{Classification: AcknowledgementUnknown}, nil
 	}
-	classification, err := snapshot.State.ClassifyAcknowledgement(acknowledgement)
+	classification, err := snapshot.Session.Delivery.ClassifyAcknowledgement(acknowledgement)
 	if err != nil {
 		return AcknowledgementResult{}, errors.Wrap(err, "classify Firecracker boot-probe v2 acknowledgement")
 	}
 	return AcknowledgementResult{Snapshot: snapshot, Found: true, Classification: classification}, nil
+}
+
+// AuthorizeLaunch atomically records a private launch authorization for the current unexpired delivery or converges expiry to cleanup-pending.
+func (coordinator *Coordinator) AuthorizeLaunch(ctx context.Context, expected Snapshot, now time.Time) (Snapshot, error) {
+	next, err := expected.Session.AuthorizeLaunch(now)
+	if err != nil {
+		return Snapshot{}, errors.Wrap(err, "authorize Firecracker boot-probe v2 launch")
+	}
+	snapshot, err := coordinator.store.CompareAndSwap(ctx, expected, next, now)
+	if err != nil {
+		return Snapshot{}, errors.Wrap(err, "persist Firecracker boot-probe v2 launch authorization")
+	}
+	return snapshot, nil
+}
+
+// RecordLaunchStarted atomically records one irreversible private launch start for the exact authorized current delivery.
+func (coordinator *Coordinator) RecordLaunchStarted(ctx context.Context, expected Snapshot, now time.Time) (Snapshot, error) {
+	next, err := expected.Session.RecordLaunchStarted(now)
+	if err != nil {
+		return Snapshot{}, errors.Wrap(err, "record Firecracker boot-probe v2 launch start")
+	}
+	snapshot, err := coordinator.store.CompareAndSwap(ctx, expected, next, now)
+	if err != nil {
+		return Snapshot{}, errors.Wrap(err, "persist Firecracker boot-probe v2 launch start")
+	}
+	return snapshot, nil
+}
+
+// BeginCleanup atomically marks the private session non-launchable while cleanup is required.
+func (coordinator *Coordinator) BeginCleanup(ctx context.Context, expected Snapshot, now time.Time) (Snapshot, error) {
+	next, err := expected.Session.BeginCleanup()
+	if err != nil {
+		return Snapshot{}, errors.Wrap(err, "begin Firecracker boot-probe v2 cleanup")
+	}
+	snapshot, err := coordinator.store.CompareAndSwap(ctx, expected, next, now)
+	if err != nil {
+		return Snapshot{}, errors.Wrap(err, "persist Firecracker boot-probe v2 cleanup")
+	}
+	return snapshot, nil
+}
+
+// ConfirmCleanup atomically records terminal private cleanup confirmation.
+func (coordinator *Coordinator) ConfirmCleanup(ctx context.Context, expected Snapshot, now time.Time) (Snapshot, error) {
+	next, err := expected.Session.ConfirmCleanup()
+	if err != nil {
+		return Snapshot{}, errors.Wrap(err, "confirm Firecracker boot-probe v2 cleanup")
+	}
+	snapshot, err := coordinator.store.CompareAndSwap(ctx, expected, next, now)
+	if err != nil {
+		return Snapshot{}, errors.Wrap(err, "persist Firecracker boot-probe v2 cleanup confirmation")
+	}
+	return snapshot, nil
 }
 
 func nilStateStore(store StateStore) bool {

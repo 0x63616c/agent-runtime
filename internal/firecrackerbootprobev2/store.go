@@ -19,23 +19,23 @@ var (
 	ErrVersionOverflow = errors.New("Firecracker boot-probe v2 state version overflow")
 )
 
-// Snapshot is one immutable recovery view of a private boot-probe v2 state record.
-// Wire is the exact canonical state encoding retained by the store; callers receive a copy.
+// Snapshot is one immutable recovery view of a private boot-probe v2 compound session record.
+// Wire is the exact canonical session encoding retained by the store; callers receive a copy.
 type Snapshot struct {
 	Version uint64
-	State   State
+	Session Session
 	Wire    []byte
 }
 
-// StateStore is the private persistence boundary for one host-instance boot-probe v2 lease chain.
-// It atomically creates an initial state and admits only the exact next authenticated successor through compare-and-swap.
+// StateStore is the private persistence boundary for one host-instance boot-probe v2 compound session.
+// It atomically creates the lifecycle with its delivery chain and admits exactly one validated session transition through compare-and-swap.
 type StateStore interface {
-	LoadOrCreate(context.Context, State) (Snapshot, bool, error)
+	LoadOrCreate(context.Context, Session) (Snapshot, bool, error)
 	Load(context.Context, string) (Snapshot, bool, error)
-	CompareAndSwap(context.Context, Snapshot, State, time.Time) (Snapshot, error)
+	CompareAndSwap(context.Context, Snapshot, Session, time.Time) (Snapshot, error)
 }
 
-// MemoryStateStore is a deterministic, hermetic StateStore implementation for private boot-probe v2 lifecycle tests.
+// MemoryStateStore is a deterministic, hermetic StateStore implementation for private boot-probe v2 compound-session tests.
 type MemoryStateStore struct {
 	mu      sync.Mutex
 	records map[string]memoryRecord
@@ -53,21 +53,21 @@ func NewMemoryStateStore() *MemoryStateStore {
 	return &MemoryStateStore{records: make(map[string]memoryRecord)}
 }
 
-// LoadOrCreate atomically persists an initial state or returns its identical existing recovery snapshot.
-func (store *MemoryStateStore) LoadOrCreate(ctx context.Context, initial State) (Snapshot, bool, error) {
+// LoadOrCreate atomically persists one prepared initial session or returns its identical existing recovery snapshot.
+func (store *MemoryStateStore) LoadOrCreate(ctx context.Context, initial Session) (Snapshot, bool, error) {
 	if err := ctx.Err(); err != nil {
 		return Snapshot{}, false, errors.Wrap(err, "load or create Firecracker boot-probe v2 state")
 	}
-	if len(initial.Superseded) != 0 {
-		return Snapshot{}, false, errors.Wrap(ErrSuccessorRefused, "refuse advanced initial Firecracker boot-probe v2 state")
+	if err := initial.Validate(); err != nil || initial.Lifecycle.Phase != LifecyclePrepared || initial.Lifecycle.LaunchDelivery != nil || len(initial.Delivery.Superseded) != 0 {
+		return Snapshot{}, false, errors.Wrap(ErrSuccessorRefused, "refuse non-initial Firecracker boot-probe v2 session")
 	}
-	wire, err := Encode(initial)
+	wire, err := EncodeSession(initial)
 	if err != nil {
 		return Snapshot{}, false, errors.Wrap(err, "encode initial Firecracker boot-probe v2 state")
 	}
 	store.mu.Lock()
 	defer store.mu.Unlock()
-	if record, exists := store.records[initial.HostInstanceSessionID]; exists {
+	if record, exists := store.records[initial.Delivery.HostInstanceSessionID]; exists {
 		snapshot, err := snapshotFromRecord(record)
 		if err != nil {
 			return Snapshot{}, false, errors.Wrap(err, "recover existing Firecracker boot-probe v2 state")
@@ -78,7 +78,7 @@ func (store *MemoryStateStore) LoadOrCreate(ctx context.Context, initial State) 
 		return snapshot, false, nil
 	}
 	record := memoryRecord{version: 1, wire: append([]byte(nil), wire...)}
-	store.records[initial.HostInstanceSessionID] = record
+	store.records[initial.Delivery.HostInstanceSessionID] = record
 	snapshot, err := snapshotFromRecord(record)
 	if err != nil {
 		return Snapshot{}, false, errors.Wrap(err, "recover created Firecracker boot-probe v2 state")
@@ -107,16 +107,16 @@ func (store *MemoryStateStore) Load(ctx context.Context, hostInstanceSessionID s
 	return snapshot, true, nil
 }
 
-// CompareAndSwap atomically stores precisely one next authenticated successor of expected or refuses without mutation.
-func (store *MemoryStateStore) CompareAndSwap(ctx context.Context, expected Snapshot, successor State, now time.Time) (Snapshot, error) {
+// CompareAndSwap atomically stores precisely one next compound-session transition of expected or refuses without mutation.
+func (store *MemoryStateStore) CompareAndSwap(ctx context.Context, expected Snapshot, successor Session, now time.Time) (Snapshot, error) {
 	if err := ctx.Err(); err != nil {
 		return Snapshot{}, errors.Wrap(err, "compare and swap Firecracker boot-probe v2 state")
 	}
-	expectedWire, err := Encode(expected.State)
+	expectedWire, err := EncodeSession(expected.Session)
 	if err != nil || !bytes.Equal(expected.Wire, expectedWire) {
 		return Snapshot{}, errors.Wrap(ErrVersionConflict, "validate expected canonical Firecracker boot-probe v2 snapshot")
 	}
-	if successor.HostInstanceSessionID != expected.State.HostInstanceSessionID {
+	if successor.Delivery.HostInstanceSessionID != expected.Session.Delivery.HostInstanceSessionID {
 		return Snapshot{}, errors.Wrap(ErrSuccessorRefused, "refuse cross-instance Firecracker boot-probe v2 successor")
 	}
 	if err := successor.Validate(); err != nil {
@@ -124,7 +124,7 @@ func (store *MemoryStateStore) CompareAndSwap(ctx context.Context, expected Snap
 	}
 	store.mu.Lock()
 	defer store.mu.Unlock()
-	record, exists := store.records[expected.State.HostInstanceSessionID]
+	record, exists := store.records[expected.Session.Delivery.HostInstanceSessionID]
 	if !exists {
 		return Snapshot{}, errors.Wrap(ErrVersionConflict, "compare absent Firecracker boot-probe v2 state")
 	}
@@ -135,23 +135,18 @@ func (store *MemoryStateStore) CompareAndSwap(ctx context.Context, expected Snap
 	if err != nil {
 		return Snapshot{}, errors.Wrap(err, "recover compared Firecracker boot-probe v2 state")
 	}
-	next, err := current.State.AcceptAuthenticatedSuccessor(current.State.HostInstanceSessionID, successor.Current, now)
-	if err != nil {
-		return Snapshot{}, errors.Wrap(ErrSuccessorRefused, "accept compared Firecracker boot-probe v2 successor")
+	if err := validateSessionSuccessor(current.Session, successor, now); err != nil {
+		return Snapshot{}, errors.Wrap(ErrSuccessorRefused, "accept compared Firecracker boot-probe v2 session transition")
 	}
-	nextWire, err := Encode(next)
+	nextWire, err := EncodeSession(successor)
 	if err != nil {
-		return Snapshot{}, errors.Wrap(ErrSuccessorRefused, "encode compared Firecracker boot-probe v2 successor")
-	}
-	successorWire, err := Encode(successor)
-	if err != nil || !bytes.Equal(successorWire, nextWire) {
-		return Snapshot{}, errors.Wrap(ErrSuccessorRefused, "refuse non-exact Firecracker boot-probe v2 successor")
+		return Snapshot{}, errors.Wrap(ErrSuccessorRefused, "encode compared Firecracker boot-probe v2 session transition")
 	}
 	if record.version == math.MaxUint64 {
 		return Snapshot{}, errors.Wrap(ErrVersionOverflow, "advance Firecracker boot-probe v2 state version")
 	}
 	record = memoryRecord{version: record.version + 1, wire: append([]byte(nil), nextWire...)}
-	store.records[current.State.HostInstanceSessionID] = record
+	store.records[current.Session.Delivery.HostInstanceSessionID] = record
 	snapshot, err := snapshotFromRecord(record)
 	if err != nil {
 		return Snapshot{}, errors.Wrap(err, "recover advanced Firecracker boot-probe v2 state")
@@ -163,9 +158,70 @@ func snapshotFromRecord(record memoryRecord) (Snapshot, error) {
 	if record.version == 0 {
 		return Snapshot{}, errors.Wrap(ErrInvalidState, "validate Firecracker boot-probe v2 state version")
 	}
-	state, err := Decode(record.wire)
+	session, err := DecodeSession(record.wire)
 	if err != nil {
 		return Snapshot{}, err
 	}
-	return Snapshot{Version: record.version, State: state, Wire: append([]byte(nil), record.wire...)}, nil
+	return Snapshot{Version: record.version, Session: session, Wire: append([]byte(nil), record.wire...)}, nil
+}
+
+func validateSessionSuccessor(previous, successor Session, now time.Time) error {
+	if err := previous.Validate(); err != nil {
+		return err
+	}
+	if err := successor.Validate(); err != nil {
+		return err
+	}
+	if previous.Delivery.HostInstanceSessionID != successor.Delivery.HostInstanceSessionID || previous.Delivery.Binding != successor.Delivery.Binding {
+		return errors.Wrap(ErrSuccessorRefused, "validate Firecracker boot-probe v2 session identity")
+	}
+	if sameState(previous.Delivery, successor.Delivery) {
+		if validLifecycleSuccessor(previous.Lifecycle, successor.Lifecycle, previous.Delivery, now) {
+			return nil
+		}
+		return errors.Wrap(ErrSuccessorRefused, "validate Firecracker boot-probe v2 lifecycle transition")
+	}
+	if previous.Lifecycle.Phase == LifecycleCleanupConfirmed {
+		return errors.Wrap(ErrSuccessorRefused, "refuse Firecracker boot-probe v2 delivery renewal after cleanup")
+	}
+	next, err := previous.AcceptAuthenticatedSuccessor(successor.Delivery.Current, now)
+	if err != nil || !sameSession(next, successor) {
+		return errors.Wrap(ErrSuccessorRefused, "validate exact Firecracker boot-probe v2 delivery successor")
+	}
+	return nil
+}
+
+func validLifecycleSuccessor(previous, successor Lifecycle, delivery State, now time.Time) bool {
+	if previous.Phase == LifecyclePrepared && successor.Phase == LifecycleLaunchAuthorized && successor.LaunchDelivery != nil && sameDelivery(*successor.LaunchDelivery, delivery.Current) {
+		return previous.LaunchDelivery == nil && validTimestamp(now) && !now.Before(delivery.Current.IssuedAt) && now.Before(delivery.Current.ExpiresAt)
+	}
+	if previous.Phase == LifecyclePrepared && successor.Phase == LifecycleCleanupPending && previous.LaunchDelivery == nil && successor.LaunchDelivery == nil {
+		return true
+	}
+	if previous.Phase == LifecycleLaunchAuthorized && successor.Phase == LifecycleLaunchStarted && previous.LaunchDelivery != nil && successor.LaunchDelivery != nil && sameDelivery(*previous.LaunchDelivery, *successor.LaunchDelivery) {
+		return validTimestamp(now) && !now.Before(delivery.Current.IssuedAt) && now.Before(delivery.Current.ExpiresAt)
+	}
+	if (previous.Phase == LifecycleLaunchAuthorized || previous.Phase == LifecycleLaunchStarted) && successor.Phase == LifecycleCleanupPending && sameLifecycleDelivery(previous, successor) {
+		return true
+	}
+	return previous.Phase == LifecycleCleanupPending && successor.Phase == LifecycleCleanupConfirmed && sameLifecycleDelivery(previous, successor)
+}
+
+func sameState(left, right State) bool {
+	leftWire, leftErr := Encode(left)
+	rightWire, rightErr := Encode(right)
+	return leftErr == nil && rightErr == nil && bytes.Equal(leftWire, rightWire)
+}
+
+func sameSession(left, right Session) bool {
+	leftWire, leftErr := EncodeSession(left)
+	rightWire, rightErr := EncodeSession(right)
+	return leftErr == nil && rightErr == nil && bytes.Equal(leftWire, rightWire)
+}
+
+func sameLifecycleDelivery(left, right Lifecycle) bool {
+	if left.LaunchDelivery == nil || right.LaunchDelivery == nil {
+		return left.LaunchDelivery == nil && right.LaunchDelivery == nil
+	}
+	return sameDelivery(*left.LaunchDelivery, *right.LaunchDelivery)
 }

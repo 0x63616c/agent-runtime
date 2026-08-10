@@ -10,210 +10,197 @@ import (
 	"time"
 )
 
-func TestMemoryStateStoreAtomicallyLoadsOrCreatesACanonicalRecoverySnapshot(t *testing.T) {
+func TestMemoryStateStoreAtomicallyLoadsOrCreatesOneCanonicalCompoundSessionSnapshot(t *testing.T) {
 	ctx := context.Background()
 	now := time.Date(2026, time.August, 10, 16, 0, 0, 0, time.UTC)
-	initial, err := NewState(validBinding(), "host-session-01", validDelivery(now), now)
+	delivery, err := NewState(validBinding(), "host-session-01", validDelivery(now), now)
 	if err != nil {
 		t.Fatalf("NewState() error = %v", err)
+	}
+	initial, err := NewSession(delivery)
+	if err != nil {
+		t.Fatalf("NewSession() error = %v", err)
 	}
 	store := NewMemoryStateStore()
 
 	created, didCreate, err := store.LoadOrCreate(ctx, initial)
-	if err != nil {
-		t.Fatalf("LoadOrCreate() error = %v", err)
+	if err != nil || !didCreate || created.Version != 1 || !reflect.DeepEqual(created.Session, initial) {
+		t.Fatalf("LoadOrCreate() = (%#v, %t, %v), want version-one initial compound snapshot", created, didCreate, err)
 	}
-	if !didCreate || created.Version != 1 || !reflect.DeepEqual(created.State, initial) {
-		t.Fatalf("LoadOrCreate() = (%#v, %t), want version-one initial snapshot and create", created, didCreate)
+	wantWire, err := EncodeSession(initial)
+	if err != nil || !bytes.Equal(created.Wire, wantWire) {
+		t.Fatalf("LoadOrCreate() wire = %q, want canonical compound wire %q (error %v)", created.Wire, wantWire, err)
 	}
-	wantWire, err := Encode(initial)
-	if err != nil {
-		t.Fatalf("Encode(initial) error = %v", err)
+	created.Wire[0] ^= 1
+	created.Session.Delivery.Current.DeliveryID = "caller-mutation"
+	recovered, found, err := store.Load(ctx, initial.Delivery.HostInstanceSessionID)
+	if err != nil || !found || !reflect.DeepEqual(recovered.Session, initial) {
+		t.Fatalf("Load() after caller mutation = (%#v, %t, %v), want original compound session", recovered, found, err)
 	}
-	if !bytes.Equal(created.Wire, wantWire) {
-		t.Fatalf("LoadOrCreate() wire = %q, want canonical %q", created.Wire, wantWire)
-	}
-
-	loaded, found, err := store.Load(ctx, initial.HostInstanceSessionID)
-	if err != nil {
-		t.Fatalf("Load() error = %v", err)
-	}
-	if !found || !reflect.DeepEqual(loaded, created) {
-		t.Fatalf("Load() = (%#v, %t), want (%#v, true)", loaded, found, created)
-	}
-	loaded.Wire[0] ^= 1
-	loaded.State.Current.DeliveryID = "caller-mutation"
-	recovered, found, err := store.Load(ctx, initial.HostInstanceSessionID)
-	if err != nil || !found || !reflect.DeepEqual(recovered, created) {
-		t.Fatalf("Load() after caller mutation = (%#v, %t, %v), want original immutable snapshot", recovered, found, err)
-	}
-
 	prior, didCreate, err := store.LoadOrCreate(ctx, initial)
-	if err != nil {
-		t.Fatalf("LoadOrCreate(existing) error = %v", err)
-	}
-	if didCreate || !reflect.DeepEqual(prior, created) {
-		t.Fatalf("LoadOrCreate(existing) = (%#v, %t), want existing snapshot without create", prior, didCreate)
+	if err != nil || didCreate || !reflect.DeepEqual(prior, recovered) {
+		t.Fatalf("LoadOrCreate(existing) = (%#v, %t, %v), want existing snapshot", prior, didCreate, err)
 	}
 }
 
-func TestMemoryStateStoreCompareAndSwapPersistsOnlyOneExactSuccessorAndRetainsAcknowledgementHistory(t *testing.T) {
+func TestMemoryStateStoreCASPersistsLifecycleAndDeliveryTransitionsInOneRecord(t *testing.T) {
 	ctx := context.Background()
 	now := time.Date(2026, time.August, 10, 16, 0, 0, 0, time.UTC)
-	initial, err := NewState(validBinding(), "host-session-01", validDelivery(now), now)
+	delivery, err := NewState(validBinding(), "host-session-01", validDelivery(now), now)
 	if err != nil {
 		t.Fatalf("NewState() error = %v", err)
 	}
+	initial, err := NewSession(delivery)
+	if err != nil {
+		t.Fatalf("NewSession() error = %v", err)
+	}
 	store := NewMemoryStateStore()
-	before, _, err := store.LoadOrCreate(ctx, initial)
+	prepared, _, err := store.LoadOrCreate(ctx, initial)
 	if err != nil {
 		t.Fatalf("LoadOrCreate() error = %v", err)
 	}
-
-	successor := exactSuccessor(initial.Current, now.Add(time.Minute))
-	next, err := initial.AcceptAuthenticatedSuccessor(initial.HostInstanceSessionID, successor, now.Add(time.Minute))
+	authorizedSession, err := prepared.Session.AuthorizeLaunch(now)
+	if err != nil {
+		t.Fatalf("AuthorizeLaunch() error = %v", err)
+	}
+	authorized, err := store.CompareAndSwap(ctx, prepared, authorizedSession, now)
+	if err != nil || authorized.Version != prepared.Version+1 || authorized.Session.Lifecycle.Phase != LifecycleLaunchAuthorized {
+		t.Fatalf("CompareAndSwap(authorize) = (%#v, %v), want persisted launch authorization", authorized, err)
+	}
+	startedSession, err := authorized.Session.RecordLaunchStarted(now)
+	if err != nil {
+		t.Fatalf("RecordLaunchStarted() error = %v", err)
+	}
+	started, err := store.CompareAndSwap(ctx, authorized, startedSession, now)
+	if err != nil || started.Version != authorized.Version+1 || started.Session.Lifecycle.Phase != LifecycleLaunchStarted {
+		t.Fatalf("CompareAndSwap(start) = (%#v, %v), want persisted launch start", started, err)
+	}
+	renewedSession, err := started.Session.AcceptAuthenticatedSuccessor(exactSuccessor(started.Session.Delivery.Current, now.Add(time.Minute)), now.Add(time.Minute))
 	if err != nil {
 		t.Fatalf("AcceptAuthenticatedSuccessor() error = %v", err)
 	}
-	after, err := store.CompareAndSwap(ctx, before, next, now.Add(time.Minute))
-	if err != nil {
-		t.Fatalf("CompareAndSwap() error = %v", err)
+	renewed, err := store.CompareAndSwap(ctx, started, renewedSession, now.Add(time.Minute))
+	if err != nil || renewed.Version != started.Version+1 || renewed.Session.Lifecycle.Phase != LifecycleLaunchStarted || len(renewed.Session.Delivery.Superseded) != 1 {
+		t.Fatalf("CompareAndSwap(renewal) = (%#v, %v), want one atomic delivery/lifecycle recovery record", renewed, err)
 	}
-	if after.Version != before.Version+1 || !reflect.DeepEqual(after.State, next) {
-		t.Fatalf("CompareAndSwap() = %#v, want exact version successor %#v", after, next)
-	}
-	classification, err := after.State.ClassifyAcknowledgement(Acknowledgement{HostInstanceSessionID: initial.HostInstanceSessionID, DeliveryID: initial.Current.DeliveryID, Nonce: initial.Current.Nonce, LeaseEpoch: initial.Current.LeaseEpoch, FencingToken: initial.Current.FencingToken})
+	classification, err := renewed.Session.Delivery.ClassifyAcknowledgement(acknowledgementFor(started.Session.Delivery))
 	if err != nil || classification != AcknowledgementKnownSuperseded {
-		t.Fatalf("recovered ClassifyAcknowledgement(delayed) = (%q, %v), want (%q, nil)", classification, err, AcknowledgementKnownSuperseded)
-	}
-	classification, err = after.State.ClassifyAcknowledgement(Acknowledgement{HostInstanceSessionID: initial.HostInstanceSessionID, DeliveryID: successor.DeliveryID, Nonce: successor.Nonce, LeaseEpoch: successor.LeaseEpoch, FencingToken: successor.FencingToken})
-	if err != nil || classification != AcknowledgementCurrent {
-		t.Fatalf("recovered ClassifyAcknowledgement(current) = (%q, %v), want (%q, nil)", classification, err, AcknowledgementCurrent)
+		t.Fatalf("ClassifyAcknowledgement(delayed) = (%q, %v), want known-superseded", classification, err)
 	}
 }
 
-func TestMemoryStateStoreRefusesStaleForkedCrossInstanceAndOverflowWritesWithoutMutation(t *testing.T) {
+func TestMemoryStateStoreRefusesRecreatedLaunchAndForgedOrStaleTransitionsWithoutMutation(t *testing.T) {
 	ctx := context.Background()
 	now := time.Date(2026, time.August, 10, 16, 0, 0, 0, time.UTC)
-	initial, err := NewState(validBinding(), "host-session-01", validDelivery(now), now)
+	delivery, err := NewState(validBinding(), "host-session-01", validDelivery(now), now)
 	if err != nil {
 		t.Fatalf("NewState() error = %v", err)
 	}
+	initial, err := NewSession(delivery)
+	if err != nil {
+		t.Fatalf("NewSession() error = %v", err)
+	}
 	store := NewMemoryStateStore()
-	before, _, err := store.LoadOrCreate(ctx, initial)
+	prepared, _, err := store.LoadOrCreate(ctx, initial)
 	if err != nil {
 		t.Fatalf("LoadOrCreate() error = %v", err)
 	}
-	successor := exactSuccessor(initial.Current, now.Add(time.Minute))
-	next, err := initial.AcceptAuthenticatedSuccessor(initial.HostInstanceSessionID, successor, now.Add(time.Minute))
+	authorizedSession, err := prepared.Session.AuthorizeLaunch(now)
+	if err != nil {
+		t.Fatalf("AuthorizeLaunch() error = %v", err)
+	}
+	authorized, err := store.CompareAndSwap(ctx, prepared, authorizedSession, now)
+	if err != nil {
+		t.Fatalf("CompareAndSwap(authorize) error = %v", err)
+	}
+
+	staleStart, err := authorized.Session.RecordLaunchStarted(now)
+	if err != nil {
+		t.Fatalf("RecordLaunchStarted() error = %v", err)
+	}
+	stale := prepared
+	assertStoreRefusalWithoutMutation(t, store, ctx, authorized, stale, staleStart, now, ErrVersionConflict)
+
+	forged := authorized.Session
+	forged.Lifecycle.Phase = LifecycleLaunchStarted
+	forged.Lifecycle.LaunchDelivery = nil
+	assertStoreRefusalWithoutMutation(t, store, ctx, authorized, authorized, forged, now, ErrSuccessorRefused)
+
+	cleanup, err := authorized.Session.BeginCleanup()
+	if err != nil {
+		t.Fatalf("BeginCleanup() error = %v", err)
+	}
+	cleaned, err := store.CompareAndSwap(ctx, authorized, cleanup, now)
+	if err != nil {
+		t.Fatalf("CompareAndSwap(cleanup) error = %v", err)
+	}
+	if _, err := cleaned.Session.AuthorizeLaunch(now.Add(time.Minute)); !errors.Is(err, ErrLifecycleTransitionRefused) {
+		t.Fatalf("AuthorizeLaunch(cleanup) error = %v, want ErrLifecycleTransitionRefused", err)
+	}
+
+	expiredStore := NewMemoryStateStore()
+	expiredPrepared, _, err := expiredStore.LoadOrCreate(ctx, initial)
+	if err != nil {
+		t.Fatalf("LoadOrCreate(expired authorization fixture) error = %v", err)
+	}
+	expiredAuthorization := expiredPrepared.Session
+	expiredDelivery := expiredAuthorization.Delivery.Current
+	expiredAuthorization.Lifecycle = Lifecycle{Phase: LifecycleLaunchAuthorized, LaunchDelivery: &expiredDelivery}
+	assertStoreRefusalWithoutMutation(t, expiredStore, ctx, expiredPrepared, expiredPrepared, expiredAuthorization, now.Add(3*time.Minute), ErrSuccessorRefused)
+	expiredAuthorized, err := expiredStore.CompareAndSwap(ctx, expiredPrepared, expiredAuthorization, now)
+	if err != nil {
+		t.Fatalf("CompareAndSwap(non-expired authorization) error = %v", err)
+	}
+	expiredStart := expiredAuthorized.Session
+	expiredStart.Lifecycle.Phase = LifecycleLaunchStarted
+	assertStoreRefusalWithoutMutation(t, expiredStore, ctx, expiredAuthorized, expiredAuthorized, expiredStart, now.Add(3*time.Minute), ErrSuccessorRefused)
+
+	advanced, err := delivery.AcceptAuthenticatedSuccessor(delivery.HostInstanceSessionID, exactSuccessor(delivery.Current, now.Add(time.Minute)), now.Add(time.Minute))
 	if err != nil {
 		t.Fatalf("AcceptAuthenticatedSuccessor() error = %v", err)
 	}
-
-	stale := before
-	stale.Version--
-	assertStoreRefusalWithoutMutation(t, store, ctx, before, stale, next, now.Add(time.Minute), ErrVersionConflict)
-
-	forked := next
-	forked.Current.FencingToken++
-	assertStoreRefusalWithoutMutation(t, store, ctx, before, before, forked, now.Add(time.Minute), ErrSuccessorRefused)
-
-	crossInstance := next
-	crossInstance.HostInstanceSessionID = "host-session-02"
-	assertStoreRefusalWithoutMutation(t, store, ctx, before, before, crossInstance, now.Add(time.Minute), ErrSuccessorRefused)
-
-	overflowDelivery := validDelivery(now)
-	overflowDelivery.LeaseEpoch = math.MaxUint64
-	overflowDelivery.FencingToken = math.MaxUint64
-	overflowInitial, err := NewState(validBinding(), "host-session-overflow", overflowDelivery, now)
-	if err != nil {
-		t.Fatalf("NewState(maximum fence) error = %v", err)
-	}
-	overflowStore := NewMemoryStateStore()
-	overflowBefore, _, err := overflowStore.LoadOrCreate(ctx, overflowInitial)
-	if err != nil {
-		t.Fatalf("LoadOrCreate(maximum fence) error = %v", err)
-	}
-	overflowNext := overflowInitial
-	overflowNext.Current = Delivery{DeliveryID: "delivery-overflow", Nonce: "YWJjZGVmZ2hpamtsbW5vcA", IssuedAt: now.Add(time.Minute), ExpiresAt: now.Add(3 * time.Minute), LeaseEpoch: math.MaxUint64, FencingToken: math.MaxUint64}
-	assertStoreRefusalWithoutMutation(t, overflowStore, ctx, overflowBefore, overflowBefore, overflowNext, now.Add(time.Minute), ErrSuccessorRefused)
-
-	forgedState := before
-	forgedState.State.Current.DeliveryID = "forged-delivery"
-	forgedState.Wire, err = Encode(forgedState.State)
-	if err != nil {
-		t.Fatalf("Encode(forged expected state) error = %v", err)
-	}
-	assertStoreRefusalWithoutMutation(t, store, ctx, before, forgedState, next, now.Add(time.Minute), ErrVersionConflict)
-
-	forgedWire := before
-	forgedWire.Wire = append([]byte(" "), forgedWire.Wire...)
-	assertStoreRefusalWithoutMutation(t, store, ctx, before, forgedWire, next, now.Add(time.Minute), ErrVersionConflict)
-
-	conflicting := initial
-	conflicting.Binding.AssignmentID = "assignment-other"
-	if _, _, err := store.LoadOrCreate(ctx, conflicting); !errors.Is(err, ErrStateConflict) {
-		t.Fatalf("LoadOrCreate(conflicting initial) error = %v, want ErrStateConflict", err)
-	}
-	loaded, found, err := store.Load(ctx, initial.HostInstanceSessionID)
-	if err != nil || !found || !reflect.DeepEqual(loaded, before) {
-		t.Fatalf("Load() after conflicting create = (%#v, %t, %v), want unchanged %#v", loaded, found, err, before)
-	}
-}
-
-func TestMemoryStateStoreRefusesAnAlreadyAdvancedInitialStateWithoutMutation(t *testing.T) {
-	ctx := context.Background()
-	now := time.Date(2026, time.August, 10, 16, 0, 0, 0, time.UTC)
-	initial, err := NewState(validBinding(), "host-session-01", validDelivery(now), now)
-	if err != nil {
-		t.Fatalf("NewState() error = %v", err)
-	}
-	advanced, err := initial.AcceptAuthenticatedSuccessor(initial.HostInstanceSessionID, exactSuccessor(initial.Current, now.Add(time.Minute)), now.Add(time.Minute))
-	if err != nil {
-		t.Fatalf("AcceptAuthenticatedSuccessor() error = %v", err)
-	}
-	store := NewMemoryStateStore()
-	if _, _, err := store.LoadOrCreate(ctx, advanced); !errors.Is(err, ErrSuccessorRefused) {
-		t.Fatalf("LoadOrCreate(already advanced) error = %v, want ErrSuccessorRefused", err)
-	}
-	loaded, found, err := store.Load(ctx, initial.HostInstanceSessionID)
-	if err != nil || found {
-		t.Fatalf("Load() after refused create = (%#v, %t, %v), want absent state", loaded, found, err)
+	recreated := Session{Version: sessionVersion, Delivery: advanced, Lifecycle: Lifecycle{Phase: LifecyclePrepared}}
+	if _, _, err := NewMemoryStateStore().LoadOrCreate(ctx, recreated); !errors.Is(err, ErrSuccessorRefused) {
+		t.Fatalf("LoadOrCreate(recreated after renewal) error = %v, want ErrSuccessorRefused", err)
 	}
 }
 
 func TestMemoryStateStoreRefusesVersionCounterOverflowWithoutMutation(t *testing.T) {
 	ctx := context.Background()
 	now := time.Date(2026, time.August, 10, 16, 0, 0, 0, time.UTC)
-	initial, err := NewState(validBinding(), "host-session-01", validDelivery(now), now)
+	delivery, err := NewState(validBinding(), "host-session-01", validDelivery(now), now)
 	if err != nil {
 		t.Fatalf("NewState() error = %v", err)
+	}
+	initial, err := NewSession(delivery)
+	if err != nil {
+		t.Fatalf("NewSession() error = %v", err)
 	}
 	store := NewMemoryStateStore()
 	before, _, err := store.LoadOrCreate(ctx, initial)
 	if err != nil {
 		t.Fatalf("LoadOrCreate() error = %v", err)
 	}
-	store.records[initial.HostInstanceSessionID] = memoryRecord{version: math.MaxUint64, wire: append([]byte(nil), before.Wire...)}
+	store.records[delivery.HostInstanceSessionID] = memoryRecord{version: math.MaxUint64, wire: append([]byte(nil), before.Wire...)}
 	maximum := before
 	maximum.Version = math.MaxUint64
-	next, err := initial.AcceptAuthenticatedSuccessor(initial.HostInstanceSessionID, exactSuccessor(initial.Current, now.Add(time.Minute)), now.Add(time.Minute))
+	authorized, err := initial.AuthorizeLaunch(now)
 	if err != nil {
-		t.Fatalf("AcceptAuthenticatedSuccessor() error = %v", err)
+		t.Fatalf("AuthorizeLaunch() error = %v", err)
 	}
-	assertStoreRefusalWithoutMutation(t, store, ctx, maximum, maximum, next, now.Add(time.Minute), ErrVersionOverflow)
+	assertStoreRefusalWithoutMutation(t, store, ctx, maximum, maximum, authorized, now, ErrVersionOverflow)
 }
 
-func assertStoreRefusalWithoutMutation(t *testing.T, store *MemoryStateStore, ctx context.Context, identity Snapshot, expected Snapshot, candidate State, now time.Time, want error) {
+func assertStoreRefusalWithoutMutation(t *testing.T, store *MemoryStateStore, ctx context.Context, identity Snapshot, expected Snapshot, candidate Session, now time.Time, want error) {
 	t.Helper()
-	before, found, err := store.Load(ctx, identity.State.HostInstanceSessionID)
+	before, found, err := store.Load(ctx, identity.Session.Delivery.HostInstanceSessionID)
 	if err != nil || !found {
-		t.Fatalf("Load(before refusal) = (%#v, %t, %v), want existing state", before, found, err)
+		t.Fatalf("Load(before refusal) = (%#v, %t, %v), want existing session", before, found, err)
 	}
 	if _, err := store.CompareAndSwap(ctx, expected, candidate, now); !errors.Is(err, want) {
 		t.Fatalf("CompareAndSwap() error = %v, want %v", err, want)
 	}
-	after, found, err := store.Load(ctx, identity.State.HostInstanceSessionID)
+	after, found, err := store.Load(ctx, identity.Session.Delivery.HostInstanceSessionID)
 	if err != nil || !found || !reflect.DeepEqual(after, before) {
 		t.Fatalf("Load(after refusal) = (%#v, %t, %v), want unchanged %#v", after, found, err, before)
 	}
