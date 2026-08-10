@@ -200,21 +200,30 @@ K3s-in-container evidence and makes no KVM claim.
 
 ## M1 proof provenance and CI safety
 
-The retained local artifacts are explicit, bounded historical proof rather
-than a claim about an arbitrary checkout. The two-Stack proof source is
-`18a55a90827cf21abba274826262f002a1c111fb`, retained at
-`2626dbad3e4c66a76cd1f83138499497abe614e1` and provenance-bound at
-`d26fd8a`. The self-hosted proof source is
+The retained artifacts are explicit, bounded proof rather than a claim about
+an arbitrary checkout. The final hosted two-Stack proof source is
+`6bb0da69befd89adffbf3aefd5068194607cfca9`, retained at
+`8b9d57a30800e0b9fcaf3f19631ec31e689c6ab0` and provenance-bound at
+`97c2229`. Its companion hosted contract record from the same source proves
+the local/CI/production profile, schema/policy/ownership, migration
+upgrade/rollback, RBAC-negative, and NetworkPolicy-admission matrix; it is
+retained at `7ae871a` and provenance-bound at `b2ab54e`. The self-hosted proof source is
 `fa8ac05de0b347bffdf1b23c86f8f09acd6341f8`, retained at
 `c27b334ebfbbb3e496b88e216c9283addc8741e8` and provenance-bound at
 `6131c4f`. Each envelope records its source commit/tree, retention commit, and
 SHA-256. This is provenance, not a claim that either proof ran on its
 retention commit or on the current checkout.
 
-The reviewed rollback-transition code added after those local runs is covered
-by hermetic operator and digest-verified migration tests. A refreshed hosted
-CI proof that includes that transition remains required before INF-005 CI
-acceptance is claimed.
+The final hosted job is
+[`31441677625`](https://github.com/0x63616c/agent-runtime/actions/runs/31441677625),
+whose successful isolated job retained the two bounded records under artifact
+`two-stack-isolation-6bb0da69befd89adffbf3aefd5068194607cfca9`. It proves
+the reviewed rollback transition through the contract gate and then proves the
+two concurrently live Stack instances through Tilt. Its top-level workflow is
+not release-green: the separate docs job is blocked by the locked transitive
+`image-size` audit finding with no available upstream fix, and the generic
+check job is blocked by existing repository-wide Firecracker lint findings.
+Neither red job is relabelled as a passing M1 proof.
 
 The two-Stack CI lane refuses an existing generated k3d cluster or registry
 name before it starts creation. It records ownership only after each exact k3d create
@@ -228,5 +237,4 @@ same-named resource. This permits fully owned per-run infrastructure without
 adopting or deleting user-owned k3d resources. CI retains only schema-validated diagnostic summaries
 (identity, bounded readiness counts, and Tilt exit code); it never publishes
 workload logs, raw Tilt snapshots, arbitrary Kubernetes object dumps, or K3s
-server logs. A hosted run of this exact revised lane remains required before
-M1 isolation acceptance can be claimed.
+server logs.

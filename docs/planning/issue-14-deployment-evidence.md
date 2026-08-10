@@ -1,9 +1,10 @@
 # Issue #14 deployment-role evidence
 
 Status: local composition, declarative-render, immutable multi-architecture
-image publication, and disposable Kubernetes/Temporal/blob integration proof.
-This is local operator evidence, not a claim that a production cluster was
-mutated or that backup/restore and production perimeter policy are complete.
+image publication, disposable Kubernetes/Temporal/blob integration proof, and
+hosted CI Stack-contract/two-stack proof. This is not a claim that a production
+cluster was mutated or that backup/restore and production perimeter policy are
+complete.
 
 ## Published image proof
 
@@ -56,6 +57,31 @@ newline-free, telemetry health uses EndpointSlice, database verification uses
 the workload's declared `POSTGRES_USER`, and idempotent blob reconciliation has
 finite capacity plus a bounded retry. The earlier dual-stack Temporal bind
 correction remains locked by the production contract test.
+
+## Final hosted M1 contract and two-Stack proof
+
+On 2026-08-10, the successful isolated job of GitHub Actions run
+[`31441677625`](https://github.com/0x63616c/agent-runtime/actions/runs/31441677625)
+ran source `6bb0da69befd89adffbf3aefd5068194607cfca9`. It first ran the
+focused Stack contract gate and retained a bounded record proving all three
+profiles (`local`, `ci`, and `production`), schema/policy/ownership checks,
+migration upgrade/rollback, RBAC-negative behavior, and NetworkPolicy
+admission. It then used a generated private kubeconfig, generated k3d cluster
+and registry identities, the registry's in-cluster port `5000`, and the
+same CI profile to prove two full Stack instances concurrently. Both stacks
+became ready, had distinct namespace/workload/private-state identities, passed
+three declared-egress and three default-deny probes, and left no namespace or
+local state after teardown.
+
+The bounded records are retained as
+`evidence/issue-14-m1-stack-contract-e2e.json` and
+`evidence/issue-14-two-stack-e2e.json`; each has source-tree, retention, and
+SHA-256 provenance. The successful CI job artifact is
+`two-stack-isolation-6bb0da69befd89adffbf3aefd5068194607cfca9`. The overall
+workflow is still red for separately tracked non-M1 blockers: the docs job's
+locked transitive `image-size` audit finding has no upstream fix, and the
+generic lint job has existing repository-wide Firecracker findings. Those red
+jobs are not used as passing M1 evidence.
 
 ## Retained local proof
 
@@ -115,5 +141,6 @@ profile of the Stack:
 - The final production egress perimeter and DNS/CA policy requires a real
   operator environment; Kubernetes NetworkPolicy alone is not cited as FQDN
   enforcement.
-- Documentation manifest/website integration is pending concurrent M1/M2/M3
-  generated-output reconciliation.
+- The documentation source inventory is refreshed from its explicit manifest;
+  the full docs build remains blocked by the separately recorded no-fix
+  `image-size` audit finding.

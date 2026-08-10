@@ -37,6 +37,7 @@
         "docs/reference/runtime-http-api.md",
         "docs/reference/temporal-payloads.md",
         "evidence/issue-14-deployment-e2e.json",
+        "evidence/issue-14-m1-stack-contract-e2e.json",
         "evidence/issue-14-two-stack-e2e.json",
         "evidence/requirements-ledger.json",
         "sandbox/api.go",
