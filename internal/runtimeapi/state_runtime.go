@@ -1,10 +1,13 @@
 package runtimeapi
 
 import (
-	"errors"
+	"context"
+	"sort"
 
 	"github.com/0x63616c/agent-runtime/internal/runtimecontent"
 	"github.com/0x63616c/agent-runtime/internal/runtimestate"
+	agentruntime "github.com/0x63616c/agent-runtime/sdk/go"
+	"github.com/cockroachdb/errors"
 )
 
 // StateRuntimeConfig supplies the complete metadata/content authority required
@@ -14,6 +17,8 @@ type StateRuntimeConfig struct {
 	Compiler *runtimestate.Compiler
 	Planner  *runtimestate.RuntimeStatePlanner
 	Store    runtimestate.RuntimeStateStore
+	// ModelProfiles is the explicit allow-list for public Agent specifications.
+	ModelProfiles []string
 }
 
 // StateRuntime is the application seam that will route every public operation
@@ -23,6 +28,7 @@ type StateRuntime struct {
 	compiler *runtimestate.Compiler
 	planner  *runtimestate.RuntimeStatePlanner
 	store    runtimestate.RuntimeStateStore
+	profiles map[string]struct{}
 }
 
 // NewStateRuntime validates the non-fallback durable runtime composition.
@@ -30,5 +36,384 @@ func NewStateRuntime(config StateRuntimeConfig) (*StateRuntime, error) {
 	if config.Content == nil || config.Compiler == nil || config.Planner == nil || config.Store == nil {
 		return nil, errors.New("create state runtime: content, compiler, planner, and state store are required")
 	}
-	return &StateRuntime{content: config.Content, compiler: config.Compiler, planner: config.Planner, store: config.Store}, nil
+	profiles := make(map[string]struct{}, len(config.ModelProfiles))
+	for _, profile := range config.ModelProfiles {
+		if profile == "" || len(profile) > 128 {
+			return nil, errors.New("create state runtime: model profile is invalid")
+		}
+		profiles[profile] = struct{}{}
+	}
+	if len(profiles) == 0 {
+		return nil, errors.New("create state runtime: at least one model profile is required")
+	}
+	return &StateRuntime{content: config.Content, compiler: config.Compiler, planner: config.Planner, store: config.Store, profiles: profiles}, nil
+}
+
+var _ Runtime = (*StateRuntime)(nil)
+
+// CreateAgent stages the immutable specification body before atomically registering its metadata revision.
+func (runtime *StateRuntime) CreateAgent(ctx context.Context, identity Identity, request agentruntime.CreateAgentRequest) (agentruntime.AgentSpecification, error) {
+	scope, err := administratorScope(identity)
+	if err != nil {
+		return agentruntime.AgentSpecification{}, err
+	}
+	if err := runtime.validateProfile(request.ModelProfile); err != nil {
+		return agentruntime.AgentSpecification{}, err
+	}
+	handoff, err := runtime.content.StageAgentSpecificationBody(ctx, scope.Tenant, runtimecontent.AgentSpecificationBody{Name: request.Name, ModelProfile: request.ModelProfile, Instructions: request.Instructions, Tools: append([]agentruntime.ToolDefinition(nil), request.Tools...)})
+	if err != nil {
+		return agentruntime.AgentSpecification{}, stageFailure(err)
+	}
+	plan, err := runtime.apply(ctx, scope, func() (runtimestate.CompiledMutation, error) {
+		return runtime.compiler.CompileRegisterAgentRevision(runtimestate.RegisterAgentRevisionCommand{Scope: scope, IdempotencyKey: request.IdempotencyKey, Specification: handoff})
+	})
+	if err != nil {
+		return agentruntime.AgentSpecification{}, runtimeFailure("create Agent", err)
+	}
+	return runtime.readAgentSpecification(ctx, scope.Tenant, plan.Result().Revision.AgentID, plan.Result().Revision.RevisionID)
+}
+
+// ReviseAgent stages a replacement immutable body and records the next revision under optimistic concurrency.
+func (runtime *StateRuntime) ReviseAgent(ctx context.Context, identity Identity, request agentruntime.ReviseAgentRequest) (agentruntime.AgentSpecification, error) {
+	scope, err := administratorScope(identity)
+	if err != nil {
+		return agentruntime.AgentSpecification{}, err
+	}
+	if err := runtime.validateProfile(request.ModelProfile); err != nil {
+		return agentruntime.AgentSpecification{}, err
+	}
+	state, err := runtime.store.LoadRuntimeState(ctx, scope)
+	if err != nil {
+		return agentruntime.AgentSpecification{}, runtimeFailure("load Agent revision", err)
+	}
+	latest, found := latestRevision(state, scope.Tenant, request.AgentID)
+	if !found {
+		return agentruntime.AgentSpecification{}, runtimeFailure("revise Agent", runtimestate.ErrNotFoundOrDenied)
+	}
+	handoff, err := runtime.content.StageAgentSpecificationBody(ctx, scope.Tenant, runtimecontent.AgentSpecificationBody{Name: latest.Name, ModelProfile: request.ModelProfile, Instructions: request.Instructions, Tools: append([]agentruntime.ToolDefinition(nil), request.Tools...)})
+	if err != nil {
+		return agentruntime.AgentSpecification{}, stageFailure(err)
+	}
+	plan, err := runtime.apply(ctx, scope, func() (runtimestate.CompiledMutation, error) {
+		return runtime.compiler.CompileRegisterAgentRevision(runtimestate.RegisterAgentRevisionCommand{Scope: scope, IdempotencyKey: request.IdempotencyKey, AgentID: request.AgentID, ExpectedRevision: latest.Revision, Specification: handoff})
+	})
+	if err != nil {
+		return agentruntime.AgentSpecification{}, runtimeFailure("revise Agent", err)
+	}
+	result := plan.Result().Revision
+	return runtime.readAgentSpecification(ctx, scope.Tenant, result.AgentID, result.RevisionID)
+}
+
+// GetAgentRevision reads one immutable Agent revision through the state-authorized content reader.
+func (runtime *StateRuntime) GetAgentRevision(ctx context.Context, identity Identity, agentID agentruntime.AgentID, revisionID agentruntime.AgentRevisionID) (agentruntime.AgentSpecification, error) {
+	scope, err := administratorScope(identity)
+	if err != nil {
+		return agentruntime.AgentSpecification{}, err
+	}
+	return runtime.readAgentSpecification(ctx, scope.Tenant, agentID, revisionID)
+}
+
+// CreateSession pins a principal-owned Session to one existing immutable revision.
+func (runtime *StateRuntime) CreateSession(ctx context.Context, identity Identity, request agentruntime.CreateSessionRequest) (agentruntime.Session, error) {
+	scope, err := ownerScope(identity)
+	if err != nil {
+		return agentruntime.Session{}, err
+	}
+	plan, err := runtime.apply(ctx, scope, func() (runtimestate.CompiledMutation, error) {
+		return runtime.compiler.CompileCreateSession(runtimestate.CreateSessionCommand{Scope: scope, IdempotencyKey: request.IdempotencyKey, RevisionID: request.AgentRevision})
+	})
+	if err != nil {
+		return agentruntime.Session{}, runtimeFailure("create Session", err)
+	}
+	return publicSession(plan.Result().Session), nil
+}
+
+// SendInput stages its immutable envelope and atomically admits one Input and Turn.
+func (runtime *StateRuntime) SendInput(ctx context.Context, identity Identity, request agentruntime.SendInputRequest) (agentruntime.SendInputResult, error) {
+	scope, err := ownerScope(identity)
+	if err != nil {
+		return agentruntime.SendInputResult{}, err
+	}
+	handoff, err := runtime.content.StageInputEnvelope(ctx, scope.Tenant, request.Parts)
+	if err != nil {
+		return agentruntime.SendInputResult{}, stageFailure(err)
+	}
+	plan, err := runtime.apply(ctx, scope, func() (runtimestate.CompiledMutation, error) {
+		return runtime.compiler.CompileAdmitInput(runtimestate.AdmitInputCommand{Scope: scope, IdempotencyKey: request.IdempotencyKey, SessionID: request.SessionID, Input: handoff})
+	})
+	if err != nil {
+		return agentruntime.SendInputResult{}, runtimeFailure("send Input", err)
+	}
+	result := plan.Result()
+	parts, err := runtime.readInputEnvelope(ctx, scope, result.Input.SessionID, result.Input.InputID)
+	if err != nil {
+		return agentruntime.SendInputResult{}, err
+	}
+	return agentruntime.SendInputResult{Input: agentruntime.Input{ID: result.Input.InputID, Parts: parts, AcceptedAt: result.Input.AcceptedAt}, Turn: publicTurn(result.Turn)}, nil
+}
+
+// InspectSession returns the bounded principal-scoped public projection.
+func (runtime *StateRuntime) InspectSession(ctx context.Context, identity Identity, sessionID agentruntime.SessionID) (agentruntime.SessionView, error) {
+	scope, err := ownerScope(identity)
+	if err != nil {
+		return agentruntime.SessionView{}, err
+	}
+	view, err := runtime.store.GetSessionView(ctx, runtimestate.SessionViewQuery{Scope: scope, SessionID: sessionID, RecentEventLimit: 20, QueuedTurnLimit: agentruntime.MaxSessionViewQueuedTurns})
+	if err != nil {
+		return agentruntime.SessionView{}, runtimeFailure("inspect Session", err)
+	}
+	result := agentruntime.SessionView{Session: publicSession(view.Session), QueuedTurnCount: view.QueuedTurnCount, QueuedTurnsTruncated: view.QueuedTruncated, RecentEvents: publicEvents(view.RecentEvents)}
+	if view.ActiveTurn != nil {
+		turn := publicTurn(*view.ActiveTurn)
+		result.ActiveTurn = &turn
+	}
+	for _, turn := range view.QueuedTurns {
+		result.QueuedTurns = append(result.QueuedTurns, publicTurn(turn))
+	}
+	return result, nil
+}
+
+// InspectTurn returns one exact principal-owned Turn.
+func (runtime *StateRuntime) InspectTurn(ctx context.Context, identity Identity, sessionID agentruntime.SessionID, turnID agentruntime.TurnID) (agentruntime.Turn, error) {
+	scope, err := ownerScope(identity)
+	if err != nil {
+		return agentruntime.Turn{}, err
+	}
+	record, err := runtime.store.GetTurn(ctx, runtimestate.TurnQuery{Scope: scope, SessionID: sessionID, TurnID: turnID})
+	if err != nil {
+		return agentruntime.Turn{}, runtimeFailure("inspect Turn", err)
+	}
+	return publicTurn(record), nil
+}
+
+// Events reads a bounded cursor-resumable page of principal-scoped Product events.
+func (runtime *StateRuntime) Events(ctx context.Context, identity Identity, sessionID agentruntime.SessionID, after agentruntime.Cursor, limit int) (agentruntime.EventPage, error) {
+	scope, err := ownerScope(identity)
+	if err != nil {
+		return agentruntime.EventPage{}, err
+	}
+	if limit < 1 || limit > 1000 {
+		return agentruntime.EventPage{}, invalidFailure("event page limit is outside the supported range")
+	}
+	page, err := runtime.store.ReadEvents(ctx, runtimestate.EventsQuery{Scope: scope, SessionID: sessionID, After: after, Limit: uint32(limit)})
+	if err != nil {
+		return agentruntime.EventPage{}, runtimeFailure("read events", err)
+	}
+	return agentruntime.EventPage{Events: publicEvents(page.Events), NextCursor: page.NextCursor, Gap: page.Gap}, nil
+}
+
+// CancelTurn atomically records a caller-authorized terminal cancellation.
+func (runtime *StateRuntime) CancelTurn(ctx context.Context, identity Identity, request agentruntime.CancelTurnRequest) (agentruntime.Turn, error) {
+	scope, err := ownerScope(identity)
+	if err != nil {
+		return agentruntime.Turn{}, err
+	}
+	plan, err := runtime.apply(ctx, scope, func() (runtimestate.CompiledMutation, error) {
+		return runtime.compiler.CompileCancelTurn(runtimestate.CancelTurnCommand{Scope: scope, IdempotencyKey: request.IdempotencyKey, SessionID: request.SessionID, TurnID: request.TurnID})
+	})
+	if err != nil {
+		return agentruntime.Turn{}, runtimeFailure("cancel Turn", err)
+	}
+	return publicTurn(plan.Result().Turn), nil
+}
+
+// CloseSession durably rejects future Input while allowing accepted work to drain.
+func (runtime *StateRuntime) CloseSession(ctx context.Context, identity Identity, request agentruntime.CloseSessionRequest) (agentruntime.Session, error) {
+	scope, err := ownerScope(identity)
+	if err != nil {
+		return agentruntime.Session{}, err
+	}
+	plan, err := runtime.apply(ctx, scope, func() (runtimestate.CompiledMutation, error) {
+		return runtime.compiler.CompileCloseSession(runtimestate.CloseSessionCommand{Scope: scope, IdempotencyKey: request.IdempotencyKey, SessionID: request.SessionID})
+	})
+	if err != nil {
+		return agentruntime.Session{}, runtimeFailure("close Session", err)
+	}
+	return publicSession(plan.Result().Session), nil
+}
+
+func (runtime *StateRuntime) apply(ctx context.Context, scope runtimestate.MutationScope, compile func() (runtimestate.CompiledMutation, error)) (runtimestate.TransitionPlan, error) {
+	for attempt := 0; attempt < 3; attempt++ {
+		if err := contextError(ctx); err != nil {
+			return runtimestate.TransitionPlan{}, err
+		}
+		mutation, err := compile()
+		if err != nil {
+			return runtimestate.TransitionPlan{}, err
+		}
+		prior, err := runtime.store.LoadRuntimeState(ctx, scope)
+		if err != nil {
+			return runtimestate.TransitionPlan{}, err
+		}
+		plan, err := runtime.planner.Plan(ctx, prior, mutation)
+		if err != nil {
+			return runtimestate.TransitionPlan{}, err
+		}
+		if err := runtime.store.PersistTransitionPlan(ctx, plan); err == nil {
+			return plan, nil
+		} else if !errors.Is(err, runtimestate.ErrConflict) || attempt == 2 {
+			return runtimestate.TransitionPlan{}, err
+		}
+	}
+	return runtimestate.TransitionPlan{}, runtimestate.ErrConflict
+}
+
+func (runtime *StateRuntime) readAgentSpecification(ctx context.Context, tenant runtimecontent.TenantID, agentID agentruntime.AgentID, revisionID agentruntime.AgentRevisionID) (agentruntime.AgentSpecification, error) {
+	reader, err := runtimecontent.NewAgentSpecificationBodyReader(runtime.content, stateAgentBodyRepository{compiler: runtime.compiler, store: runtime.store})
+	if err != nil {
+		return agentruntime.AgentSpecification{}, runtimeFailure("read Agent revision", err)
+	}
+	result, err := reader.ReadAgentSpecification(ctx, tenant, agentID, revisionID)
+	if err != nil {
+		return agentruntime.AgentSpecification{}, contentReadFailure("read Agent revision", err)
+	}
+	return result, nil
+}
+
+func (runtime *StateRuntime) readInputEnvelope(ctx context.Context, scope runtimestate.MutationScope, sessionID agentruntime.SessionID, inputID agentruntime.InputID) ([]agentruntime.ContentPart, error) {
+	reader, err := runtimecontent.NewInputEnvelopeReader(runtime.content, stateInputRepository{compiler: runtime.compiler, store: runtime.store})
+	if err != nil {
+		return nil, runtimeFailure("read Input", err)
+	}
+	parts, err := reader.ReadInputEnvelope(ctx, scope.Tenant, scope.Principal, sessionID, inputID)
+	if err != nil {
+		return nil, contentReadFailure("read Input", err)
+	}
+	return parts, nil
+}
+
+type stateAgentBodyRepository struct {
+	compiler *runtimestate.Compiler
+	store    runtimestate.RuntimeStateStore
+}
+
+func (repository stateAgentBodyRepository) AuthorizeAgentSpecificationBodyRead(ctx context.Context, tenant runtimecontent.TenantID, agentID agentruntime.AgentID, revisionID agentruntime.AgentRevisionID) (runtimecontent.AgentSpecificationBodyRecord, error) {
+	authorization, err := repository.compiler.CompileAuthorizeAgentSpecificationBodyRead(runtimestate.AgentSpecificationBodyReadCommand{Scope: runtimestate.MutationScope{Tenant: tenant, Authority: runtimestate.AuthorityTenantAdministrator}, AgentID: agentID, RevisionID: revisionID})
+	if err != nil {
+		return runtimecontent.AgentSpecificationBodyRecord{}, err
+	}
+	return repository.store.AuthorizeAgentSpecificationBodyRead(ctx, authorization)
+}
+
+type stateInputRepository struct {
+	compiler *runtimestate.Compiler
+	store    runtimestate.RuntimeStateStore
+}
+
+func (repository stateInputRepository) AuthorizeInputEnvelopeRead(ctx context.Context, tenant runtimecontent.TenantID, principal runtimecontent.PrincipalID, sessionID agentruntime.SessionID, inputID agentruntime.InputID) (runtimecontent.InputEnvelopeRecord, error) {
+	authorization, err := repository.compiler.CompileAuthorizeInputEnvelopeRead(runtimestate.InputEnvelopeReadCommand{Scope: runtimestate.MutationScope{Tenant: tenant, Principal: principal, Authority: runtimestate.AuthoritySessionOwner}, SessionID: sessionID, InputID: inputID})
+	if err != nil {
+		return runtimecontent.InputEnvelopeRecord{}, err
+	}
+	return repository.store.AuthorizeInputEnvelopeRead(ctx, authorization)
+}
+
+func administratorScope(identity Identity) (runtimestate.MutationScope, error) {
+	tenant, err := runtimecontent.ParseTenantID(identity.Tenant)
+	if err != nil {
+		return runtimestate.MutationScope{}, invalidFailure("invalid authenticated identity")
+	}
+	return runtimestate.MutationScope{Tenant: tenant, Authority: runtimestate.AuthorityTenantAdministrator}, nil
+}
+
+func ownerScope(identity Identity) (runtimestate.MutationScope, error) {
+	tenant, err := runtimecontent.ParseTenantID(identity.Tenant)
+	if err != nil {
+		return runtimestate.MutationScope{}, invalidFailure("invalid authenticated identity")
+	}
+	principal, err := runtimecontent.ParsePrincipalID(identity.Principal)
+	if err != nil {
+		return runtimestate.MutationScope{}, invalidFailure("invalid authenticated identity")
+	}
+	return runtimestate.MutationScope{Tenant: tenant, Principal: principal, Authority: runtimestate.AuthoritySessionOwner}, nil
+}
+
+func (runtime *StateRuntime) validateProfile(profile string) error {
+	if _, exists := runtime.profiles[profile]; !exists {
+		return invalidFailure("model profile is not configured")
+	}
+	return nil
+}
+
+func latestRevision(state runtimestate.RuntimeState, tenant runtimecontent.TenantID, agentID agentruntime.AgentID) (runtimestate.AgentRevisionRecord, bool) {
+	revisions := append([]runtimestate.AgentRevisionRecord(nil), state.Revisions...)
+	sort.Slice(revisions, func(left, right int) bool { return revisions[left].Revision > revisions[right].Revision })
+	for _, revision := range revisions {
+		if revision.Tenant == tenant && revision.AgentID == agentID {
+			return revision, true
+		}
+	}
+	return runtimestate.AgentRevisionRecord{}, false
+}
+
+func publicSession(record runtimestate.SessionRecord) agentruntime.Session {
+	return agentruntime.Session{ID: record.SessionID, AgentID: record.AgentID, AgentRevision: record.RevisionID, State: record.State, CreatedAt: record.CreatedAt, UpdatedAt: record.UpdatedAt}
+}
+
+func publicTurn(record runtimestate.TurnRecord) agentruntime.Turn {
+	return agentruntime.Turn{ID: record.TurnID, InputID: record.InputID, Position: record.Position, State: record.State, StartedAt: record.StartedAt, CompletedAt: record.CompletedAt, Failure: record.Failure.Clone()}
+}
+
+func publicEvents(records []runtimestate.ProductEventRecord) []agentruntime.Event {
+	events := make([]agentruntime.Event, len(records))
+	for index, record := range records {
+		events[index] = agentruntime.Event{ID: record.EventID, Cursor: record.Cursor, Sequence: record.Sequence, Kind: record.Kind, SessionID: record.SessionID, InputID: record.InputID, TurnID: record.TurnID, OccurredAt: record.OccurredAt}
+	}
+	return events
+}
+
+func contextError(ctx context.Context) error {
+	if ctx == nil {
+		return errors.New("runtime context is required")
+	}
+	return ctx.Err()
+}
+
+func invalidFailure(message string) error {
+	return &agentruntime.Error{Failure: agentruntime.Failure{Code: agentruntime.FailureInvalidInput, Message: message}}
+}
+
+func stageFailure(err error) error {
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return err
+	}
+	if errors.Is(err, runtimecontent.ErrUnavailable) {
+		return &agentruntime.Error{Failure: agentruntime.Failure{Code: agentruntime.FailureUnavailable, Message: "runtime content is unavailable", Retryable: true}}
+	}
+	if errors.Is(err, runtimecontent.ErrIntegrity) {
+		return &agentruntime.Error{Failure: agentruntime.Failure{Code: agentruntime.FailureInternal, Message: "runtime content integrity check failed"}}
+	}
+	return invalidFailure("request content is invalid")
+}
+
+func contentReadFailure(action string, err error) error {
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return err
+	}
+	if errors.Is(err, runtimecontent.ErrNotFoundOrDenied) {
+		return &agentruntime.Error{Failure: agentruntime.Failure{Code: agentruntime.FailureNotFound, Message: "resource not found"}}
+	}
+	if errors.Is(err, runtimecontent.ErrUnavailable) {
+		return &agentruntime.Error{Failure: agentruntime.Failure{Code: agentruntime.FailureUnavailable, Message: "runtime content is unavailable", Retryable: true}}
+	}
+	_ = action
+	return &agentruntime.Error{Failure: agentruntime.Failure{Code: agentruntime.FailureInternal, Message: "request failed"}}
+}
+
+func runtimeFailure(action string, err error) error {
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return err
+	}
+	switch {
+	case errors.Is(err, runtimestate.ErrConflict), errors.Is(err, runtimestate.ErrReceiptExpired):
+		return &agentruntime.Error{Failure: agentruntime.Failure{Code: agentruntime.FailureConflict, Message: action + " conflicts with current state"}}
+	case errors.Is(err, runtimestate.ErrNotFoundOrDenied):
+		return &agentruntime.Error{Failure: agentruntime.Failure{Code: agentruntime.FailureNotFound, Message: "resource not found"}}
+	case errors.Is(err, runtimestate.ErrUnavailable):
+		return &agentruntime.Error{Failure: agentruntime.Failure{Code: agentruntime.FailureUnavailable, Message: "durable runtime is unavailable", Retryable: true}}
+	case errors.Is(err, runtimestate.ErrIntegrity):
+		return &agentruntime.Error{Failure: agentruntime.Failure{Code: agentruntime.FailureInternal, Message: "request failed"}}
+	default:
+		return &agentruntime.Error{Failure: agentruntime.Failure{Code: agentruntime.FailureInvalidInput, Message: action + " request is invalid"}}
+	}
 }

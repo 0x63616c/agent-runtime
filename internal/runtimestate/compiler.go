@@ -84,10 +84,9 @@ func (compiler *Compiler) CompileRegisterAgentRevision(command RegisterAgentRevi
 	}
 	return compiler.compile(CommandRegisterAgentRevision, command.Scope, command.IdempotencyKey, struct {
 		AgentID       string
-		Expected      uint64
 		Reference     runtimecontent.Reference
 		Name, Profile string
-	}{command.AgentID.String(), command.ExpectedRevision, commitment.Reference, commitment.Name, commitment.ModelProfile}, compiledRegister{command: command, commitment: commitment})
+	}{command.AgentID.String(), commitment.Reference, commitment.Name, commitment.ModelProfile}, compiledRegister{command: command, commitment: commitment})
 }
 
 // CompileCreateSession validates a principal-owned revision-pinned Session command.
