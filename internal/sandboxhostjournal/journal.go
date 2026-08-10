@@ -10,9 +10,15 @@ import (
 	"path/filepath"
 	"sort"
 	"sync"
+	"syscall"
 
 	"github.com/0x63616c/agent-runtime/internal/sandboxhostprotocol"
 	"github.com/cockroachdb/errors"
+)
+
+var (
+	// ErrLocked refuses a second concurrent host process sharing one journal.
+	ErrLocked = errors.New("sandbox host journal is already locked")
 )
 
 // Entry is one immutable accepted receipt key and reference execution marker.
@@ -44,10 +50,11 @@ type document struct {
 
 // Journal is a bounded fsync-and-rename receipt journal.
 type Journal struct {
-	mu      sync.Mutex
-	path    string
-	maximum int
-	entries map[string]Entry
+	mu       sync.Mutex
+	path     string
+	maximum  int
+	entries  map[string]Entry
+	lockFile *os.File
 }
 
 // Open loads an existing canonical journal or initializes an empty one. Its
@@ -56,9 +63,20 @@ func Open(path string, maximum int) (*Journal, error) {
 	if !filepath.IsAbs(path) || maximum <= 0 || maximum > 100000 {
 		return nil, errors.New("open sandbox host journal: absolute path and finite maximum are required")
 	}
-	journal := &Journal{path: path, maximum: maximum, entries: make(map[string]Entry)}
+	lockFile, err := lock(path)
+	if err != nil {
+		return nil, err
+	}
+	journal := &Journal{path: path, maximum: maximum, entries: make(map[string]Entry), lockFile: lockFile}
+	opened := false
+	defer func() {
+		if !opened {
+			_ = journal.Close()
+		}
+	}()
 	wire, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
+		opened = true
 		return journal, nil
 	}
 	if err != nil {
@@ -89,7 +107,47 @@ func Open(path string, maximum int) (*Journal, error) {
 		journal.entries[entry.ReceiptKey] = entry
 		prior = entry.ReceiptKey
 	}
+	opened = true
 	return journal, nil
+}
+
+// Close releases the exclusive host-instance journal lock.
+func (journal *Journal) Close() error {
+	if journal == nil {
+		return nil
+	}
+	journal.mu.Lock()
+	defer journal.mu.Unlock()
+	if journal.lockFile == nil {
+		return nil
+	}
+	lockFile := journal.lockFile
+	journal.lockFile = nil
+	unlockErr := syscall.Flock(int(lockFile.Fd()), syscall.LOCK_UN)
+	closeErr := lockFile.Close()
+	if unlockErr != nil {
+		return errors.Wrap(unlockErr, "unlock sandbox host journal")
+	}
+	return errors.Wrap(closeErr, "close sandbox host journal lock")
+}
+
+func lock(path string) (*os.File, error) {
+	lockFile, err := os.OpenFile(path+".lock", os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return nil, errors.Wrap(err, "open sandbox host journal lock")
+	}
+	if err := lockFile.Chmod(0o600); err != nil {
+		_ = lockFile.Close()
+		return nil, errors.Wrap(err, "protect sandbox host journal lock")
+	}
+	if err := syscall.Flock(int(lockFile.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		_ = lockFile.Close()
+		if err == syscall.EWOULDBLOCK || err == syscall.EAGAIN {
+			return nil, errors.Wrap(ErrLocked, "open sandbox host journal")
+		}
+		return nil, errors.Wrap(err, "lock sandbox host journal")
+	}
+	return lockFile, nil
 }
 
 // StageStarted fsyncs the stable signed started observation before an executor
@@ -400,7 +458,10 @@ func validResultState(entry Entry) bool {
 
 func validExecutionState(entry Entry) bool {
 	if entry.StartedDigest == "" {
-		return len(entry.StartedWire) == 0 && !entry.StartedAcknowledged && entry.ResultDigest == ""
+		// v1 journals created before durable started-intent support contain a
+		// terminal wire only. They remain replayable but StageResult can no
+		// longer create that shape.
+		return len(entry.StartedWire) == 0 && !entry.StartedAcknowledged
 	}
 	return len(entry.StartedWire) > 0 && len(entry.StartedWire) <= 1<<20 && sandboxhostprotocol.Digest(entry.StartedWire) == entry.StartedDigest
 }

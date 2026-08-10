@@ -77,10 +77,11 @@ func TestReferenceHostMultiProcessLostAckQuarantineCleanupAndReassignment(t *tes
 
 	resumeConfig := writeHostConfig(t, directory, "host-resume.json", hostAddress, identities, 1, journalPath, false, false, false)
 	resumed := startProcess(t, hostBinary, hostArguments(resumeConfig), map[string]string{"TEST_CONTROL_PUBLIC_KEY": controlVerify, "TEST_HOST_SIGNING_KEY": hostSigning1})
-	waitForOperationState(t, client, request.ID, sandbox.OperationSucceeded)
+	waitForOperationState(t, client, request.ID, sandbox.OperationUncertain)
 	resumed.stop(t, true, controlVerify, hostSigning1)
+	requeueUncertainOperation(t, ledger, request.ID)
 	got, err := client.GetOperation(context.Background(), request.ID)
-	if err != nil || got.State != sandbox.OperationSucceeded {
+	if err != nil || got.State != sandbox.OperationAccepted {
 		t.Fatalf("operation after lost-ack host restart = %#v, %v", got, err)
 	}
 	journalWire, err := os.ReadFile(journalPath)
@@ -98,10 +99,11 @@ func TestReferenceHostMultiProcessLostAckQuarantineCleanupAndReassignment(t *tes
 	resultFault.stop(t, false, controlVerify, hostSigning1)
 	resultResumeConfig := writeHostConfig(t, directory, "host-result-resume.json", hostAddress, identities, 1, resultJournalPath, false, false, false)
 	resultResumed := startProcess(t, hostBinary, hostArguments(resultResumeConfig), map[string]string{"TEST_CONTROL_PUBLIC_KEY": controlVerify, "TEST_HOST_SIGNING_KEY": hostSigning1})
-	waitForOperationState(t, client, resultRetryRequest.ID, sandbox.OperationSucceeded)
+	waitForOperationState(t, client, resultRetryRequest.ID, sandbox.OperationUncertain)
 	resultResumed.stop(t, true, controlVerify, hostSigning1)
+	requeueUncertainOperation(t, ledger, resultRetryRequest.ID)
 	got, err = client.GetOperation(context.Background(), resultRetryRequest.ID)
-	if err != nil || got.State != sandbox.OperationSucceeded {
+	if err != nil || got.State != sandbox.OperationAccepted {
 		t.Fatalf("operation after lost-result host restart = %#v, %v", got, err)
 	}
 	resultJournalWire, err := os.ReadFile(resultJournalPath)
@@ -139,11 +141,22 @@ func TestReferenceHostMultiProcessLostAckQuarantineCleanupAndReassignment(t *tes
 	}
 	reassignedConfig := writeHostConfig(t, directory, "host-reassigned.json", hostAddress, identities, 2, filepath.Join(directory, "reassigned-receipts.json"), false, false, false)
 	reassigned := startProcess(t, hostBinary, hostArguments(reassignedConfig), map[string]string{"TEST_CONTROL_PUBLIC_KEY": controlVerify, "TEST_HOST_SIGNING_KEY": base64.RawStdEncoding.EncodeToString(hostPrivate2)})
-	waitForOperationState(t, client, quarantineRequest.ID, sandbox.OperationSucceeded)
+	waitForOperationState(t, client, quarantineRequest.ID, sandbox.OperationUncertain)
 	reassigned.stop(t, true, controlVerify)
 	got, err = client.GetOperation(context.Background(), quarantineRequest.ID)
-	if err != nil || got.State != sandbox.OperationSucceeded {
+	if err != nil || got.State != sandbox.OperationUncertain {
 		t.Fatalf("operation after cleanup/reassignment = %#v, %v", got, err)
+	}
+}
+
+func requeueUncertainOperation(t *testing.T, ledger *sandboxcontrol.PostgresLedger, id sandbox.OperationID) {
+	t.Helper()
+	operation, err := ledger.Get(context.Background(), "tenant_01:runtime_01", string(id))
+	if err != nil || operation.State != sandboxcontrol.StateUncertain || operation.Assignment.HostID != "" {
+		t.Fatalf("uncertain operation before cleanup = %#v, %v", operation, err)
+	}
+	if _, err := ledger.ConfirmHostCleanupAndRequeue(context.Background(), operation.Principal, operation.ID, operation.Version, time.Now().UTC()); err != nil {
+		t.Fatalf("ConfirmHostCleanupAndRequeue: %v", err)
 	}
 }
 
