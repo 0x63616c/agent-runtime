@@ -224,6 +224,10 @@ var _ = Describe("M1 deployment safety boundaries", func() {
 			`both_stacks_concurrently_ready:true`,
 			`first_teardown_left_second_unchanged:true`,
 			`"does not claim Linux KVM or Firecracker isolation"`,
+			`tilt_down_status=0`,
+			`if [[ "$tilt_down_status" != 0 ]] && kubectl --context "$context" get "namespace/$namespace" >/dev/null 2>&1; then`,
+			`refusing to retain two-Stack evidence before contained teardown is observed`,
+			`mv -- "$evidence_temporary" "$evidence_file"`,
 		} {
 			Expect(twoStackScript).To(ContainSubstring(required))
 		}
