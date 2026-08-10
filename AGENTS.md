@@ -179,7 +179,7 @@ must be declared, owned, scoped, and lifecycle-documented.
 
 ## Test-driven evidence
 
-Work independent milestone streams in parallel; serialize only shared authority decisions, integration, and retained evidence gates. Each agent owns a complete milestone stream, self-tests continuously, and requests one independent review only when that whole milestone is ready—never after individual TDD slices or subcomponents.
+Work independent milestone streams in parallel; serialize only shared authority decisions, integration, and retained evidence gates. Assign each milestone one continuing implementation owner and one continuing independent reviewer: the owner self-tests through the whole milestone, then the reviewer assesses the complete milestone and works back-and-forth with that same owner until clear. Do not create agents for individual TDD slices, components, or checkpoints. Keep a reviewer dormant until its milestone is ready so concurrency capacity is spent on implementation, not idle review.
 
 Write acceptance criteria and behavior tests before implementation. Begin each
 vertical slice by naming its approved seam and a small matrix: happy path, most
