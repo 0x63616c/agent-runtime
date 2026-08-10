@@ -495,7 +495,7 @@ func fencePostgresHost(ctx context.Context, tx pgx.Tx, hostID string, generation
 			sessions.Close()
 			return nil, errors.Wrap(err, "decode fenced v2 boot-probe session")
 		}
-		if session.Lifecycle.Phase == firecrackerbootprobev2.LifecycleCleanupConfirmed {
+		if session.Lifecycle.Phase == firecrackerbootprobev2.LifecycleCleanupConfirmed || session.Lifecycle.Phase == firecrackerbootprobev2.LifecycleCleanupPending {
 			continue
 		}
 		clean, err := session.BeginCleanup()
