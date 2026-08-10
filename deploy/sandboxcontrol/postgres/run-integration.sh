@@ -26,5 +26,9 @@ export AR_SANDBOXCONTROL_POSTGRES_DSN="postgres://sandbox_control:${password}@12
 binary_root=$(mktemp -d)
 trap 'rm -rf "$binary_root"; cleanup' EXIT
 go build -race -o "$binary_root/sandbox-control" ./cmd/sandbox-control
+go build -race -o "$binary_root/sandbox-host" ./cmd/sandbox-host
 export AR_SANDBOXCONTROL_BINARY="$binary_root/sandbox-control"
-go test -race -tags=integration ./internal/sandboxcontrol ./cmd/sandbox-control
+export AR_SANDBOXHOST_BINARY="$binary_root/sandbox-host"
+go test -race -tags=integration ./internal/sandboxcontrol
+go test -race -tags=integration ./cmd/sandbox-control
+go test -race -tags=integration ./cmd/sandbox-host

@@ -30,21 +30,53 @@ type Config struct {
 	retention              time.Duration
 	waitInterval           time.Duration
 	admission              sandbox.OperationAdmissionPolicy
+	hostControl            *hostControlConfig
 }
 
 type document struct {
-	Version                int               `json:"version"`
-	ListenAddress          string            `json:"listen_address"`
-	TLSCertificateFile     string            `json:"tls_certificate_file"`
-	TLSPrivateKeyFile      string            `json:"tls_private_key_file"`
-	DatabaseDSNEnvironment string            `json:"database_dsn_environment"`
-	AuthorizationEnv       string            `json:"authorization_environment"`
-	AssertionKeyEnv        string            `json:"assertion_key_environment"`
-	Identity               identityDocument  `json:"identity"`
-	BindingLifetimeSeconds uint32            `json:"binding_lifetime_seconds"`
-	RetentionSeconds       uint32            `json:"retention_seconds"`
-	WaitIntervalMillis     uint32            `json:"wait_interval_millis"`
-	Admission              admissionDocument `json:"admission"`
+	Version                int                  `json:"version"`
+	ListenAddress          string               `json:"listen_address"`
+	TLSCertificateFile     string               `json:"tls_certificate_file"`
+	TLSPrivateKeyFile      string               `json:"tls_private_key_file"`
+	DatabaseDSNEnvironment string               `json:"database_dsn_environment"`
+	AuthorizationEnv       string               `json:"authorization_environment"`
+	AssertionKeyEnv        string               `json:"assertion_key_environment"`
+	Identity               identityDocument     `json:"identity"`
+	BindingLifetimeSeconds uint32               `json:"binding_lifetime_seconds"`
+	RetentionSeconds       uint32               `json:"retention_seconds"`
+	WaitIntervalMillis     uint32               `json:"wait_interval_millis"`
+	Admission              admissionDocument    `json:"admission"`
+	HostControl            *hostControlDocument `json:"host_control"`
+}
+
+type hostControlDocument struct {
+	ListenAddress                string    `json:"listen_address"`
+	TLSCertificateFile           string    `json:"tls_certificate_file"`
+	TLSPrivateKeyFile            string    `json:"tls_private_key_file"`
+	ClientCAFile                 string    `json:"client_ca_file"`
+	ControlTrustVersion          uint64    `json:"control_trust_version"`
+	ControlRevocationEpoch       uint64    `json:"control_revocation_epoch"`
+	ControlKeyID                 string    `json:"control_key_id"`
+	ControlKeyVersion            uint64    `json:"control_key_version"`
+	ControlKeyNotBefore          time.Time `json:"control_key_not_before"`
+	ControlKeyNotAfter           time.Time `json:"control_key_not_after"`
+	ControlSigningKeyEnvironment string    `json:"control_signing_key_environment"`
+	LeaseSeconds                 uint32    `json:"lease_seconds"`
+}
+
+type hostControlConfig struct {
+	listenAddress                string
+	tlsCertificateFile           string
+	tlsPrivateKeyFile            string
+	clientCAFile                 string
+	trustVersion                 uint64
+	revocationEpoch              uint64
+	controlKeyID                 string
+	keyVersion                   uint64
+	keyNotBefore                 time.Time
+	keyNotAfter                  time.Time
+	controlSigningKeyEnvironment string
+	lease                        time.Duration
 }
 
 type identityDocument struct {
@@ -118,8 +150,11 @@ func Parse(input io.Reader) (Config, error) {
 	if err := decoder.Decode(&trailing); err != io.EOF {
 		return Config{}, errors.New("parse sandbox-control configuration: exactly one document is required")
 	}
-	if decoded.Version != 1 {
-		return Config{}, errors.New("validate sandbox-control configuration: version must be 1")
+	if decoded.Version != 1 && decoded.Version != 2 {
+		return Config{}, errors.New("validate sandbox-control configuration: version must be 1 or 2")
+	}
+	if decoded.Version == 1 && decoded.HostControl != nil {
+		return Config{}, errors.New("validate sandbox-control configuration: version 1 host_control cannot bind versioned envelope trust; migrate to version 2")
 	}
 	host, port, err := net.SplitHostPort(decoded.ListenAddress)
 	if err != nil || (host != "127.0.0.1" && host != "0.0.0.0" && host != "::1" && host != "::") || port == "" {
@@ -139,11 +174,39 @@ func Parse(input io.Reader) (Config, error) {
 	if bindingLifetime <= 0 || bindingLifetime > time.Hour || retention <= 0 || retention > 365*24*time.Hour || waitInterval <= 0 || waitInterval > time.Second {
 		return Config{}, errors.New("validate sandbox-control configuration: lifetimes and wait interval must be finite")
 	}
+	hostControl, err := parseHostControl(decoded.HostControl, decoded.ListenAddress, decoded.TLSCertificateFile, decoded.TLSPrivateKeyFile)
+	if err != nil {
+		return Config{}, err
+	}
 	return Config{
 		listenAddress: decoded.ListenAddress, tlsCertificateFile: decoded.TLSCertificateFile,
 		tlsPrivateKeyFile: decoded.TLSPrivateKeyFile, databaseDSNEnvironment: decoded.DatabaseDSNEnvironment,
 		authorizationEnv: decoded.AuthorizationEnv, assertionKeyEnv: decoded.AssertionKeyEnv,
 		identity: decoded.Identity.apiIdentity(), bindingLifetime: bindingLifetime, retention: retention, waitInterval: waitInterval,
-		admission: sandbox.OperationAdmissionPolicy{Version: decoded.Admission.Version, CanonicalizerVersion: decoded.Admission.CanonicalizerVersion, CapabilityVersion: decoded.Admission.CapabilityVersion, ImageAdmissionVersion: decoded.Admission.ImageAdmissionVersion, Defaults: decoded.Admission.Defaults.resourceLimits(), Maximum: decoded.Admission.Maximum.resourceLimits(), Capabilities: decoded.Admission.Capabilities, AdmittedImages: decoded.Admission.AdmittedImages},
+		admission:   sandbox.OperationAdmissionPolicy{Version: decoded.Admission.Version, CanonicalizerVersion: decoded.Admission.CanonicalizerVersion, CapabilityVersion: decoded.Admission.CapabilityVersion, ImageAdmissionVersion: decoded.Admission.ImageAdmissionVersion, Defaults: decoded.Admission.Defaults.resourceLimits(), Maximum: decoded.Admission.Maximum.resourceLimits(), Capabilities: decoded.Admission.Capabilities, AdmittedImages: decoded.Admission.AdmittedImages},
+		hostControl: hostControl,
 	}, nil
+}
+
+func parseHostControl(decoded *hostControlDocument, publicAddress, publicCertificate, publicKey string) (*hostControlConfig, error) {
+	if decoded == nil {
+		return nil, nil
+	}
+	host, port, err := net.SplitHostPort(decoded.ListenAddress)
+	if err != nil || (host != "127.0.0.1" && host != "0.0.0.0" && host != "::1" && host != "::") || port == "" || decoded.ListenAddress == publicAddress {
+		return nil, errors.New("validate sandbox-control configuration: host_control requires a distinct explicit bind address")
+	}
+	for _, path := range []string{decoded.TLSCertificateFile, decoded.TLSPrivateKeyFile, decoded.ClientCAFile} {
+		if !filepath.IsAbs(path) {
+			return nil, errors.New("validate sandbox-control configuration: host_control requires absolute TLS paths")
+		}
+	}
+	if decoded.TLSCertificateFile == decoded.TLSPrivateKeyFile || decoded.TLSCertificateFile == publicCertificate || decoded.TLSPrivateKeyFile == publicKey || !environmentName.MatchString(decoded.ControlSigningKeyEnvironment) || decoded.ControlKeyID == "" || len(decoded.ControlKeyID) > 128 || decoded.ControlTrustVersion == 0 || decoded.ControlRevocationEpoch == 0 || decoded.ControlKeyVersion == 0 || decoded.ControlKeyNotBefore.Location() != time.UTC || decoded.ControlKeyNotAfter.Location() != time.UTC || !decoded.ControlKeyNotAfter.After(decoded.ControlKeyNotBefore) {
+		return nil, errors.New("validate sandbox-control configuration: host_control identity and signing authority are invalid")
+	}
+	lease := time.Duration(decoded.LeaseSeconds) * time.Second
+	if lease <= 0 || lease > time.Hour {
+		return nil, errors.New("validate sandbox-control configuration: host_control lease must be finite")
+	}
+	return &hostControlConfig{listenAddress: decoded.ListenAddress, tlsCertificateFile: decoded.TLSCertificateFile, tlsPrivateKeyFile: decoded.TLSPrivateKeyFile, clientCAFile: decoded.ClientCAFile, trustVersion: decoded.ControlTrustVersion, revocationEpoch: decoded.ControlRevocationEpoch, controlKeyID: decoded.ControlKeyID, keyVersion: decoded.ControlKeyVersion, keyNotBefore: decoded.ControlKeyNotBefore, keyNotAfter: decoded.ControlKeyNotAfter, controlSigningKeyEnvironment: decoded.ControlSigningKeyEnvironment, lease: lease}, nil
 }

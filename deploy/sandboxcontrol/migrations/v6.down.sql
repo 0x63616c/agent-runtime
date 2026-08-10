@@ -1,0 +1,10 @@
+DROP TABLE runtime.sandbox_host_outputs;
+DROP TABLE runtime.sandbox_host_dispatches;
+DROP TABLE runtime.sandbox_host_enrollments;
+DROP INDEX runtime.sandbox_operations_host_eligible_idx;
+DROP INDEX runtime.sandbox_operations_host_assignment_idx;
+DROP INDEX runtime.sandbox_operations_assignment_id_idx;
+ALTER TABLE runtime.sandbox_operations
+    DROP COLUMN assignment_lease_epoch,
+    DROP COLUMN assignment_id,
+    DROP COLUMN assignment_host_generation;

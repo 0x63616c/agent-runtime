@@ -4,6 +4,7 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"log/slog"
 	"os"
 	"os/signal"
 	"syscall"
@@ -41,5 +42,12 @@ func run() error {
 	}
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
-	return sandboxcontrolprocess.Run(ctx, config, os.LookupEnv)
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
+	return sandboxcontrolprocess.RunWithReady(ctx, config, os.LookupEnv, func(addresses sandboxcontrolprocess.BoundAddresses) {
+		logReady(logger, addresses)
+	})
+}
+
+func logReady(logger *slog.Logger, addresses sandboxcontrolprocess.BoundAddresses) {
+	logger.Info("sandbox control ready", "role", "sandbox-control", "public_address", addresses.Public, "host_control_address", addresses.HostControl)
 }

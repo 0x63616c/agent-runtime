@@ -56,6 +56,47 @@ func TestRequiredSecretDoesNotDiscloseValues(t *testing.T) {
 	}
 }
 
+func TestParseHostControlRequiresDistinctExplicitAuthority(t *testing.T) {
+	t.Parallel()
+
+	withHost := strings.Replace(strings.TrimSuffix(validDocument, "\n}"), `"version": 1`, `"version": 2`, 1) + `,
+  "host_control": {
+    "listen_address": "127.0.0.1:9443",
+    "tls_certificate_file": "/run/host-control/tls.crt",
+    "tls_private_key_file": "/run/host-control/tls.key",
+    "client_ca_file": "/run/host-control/client-ca.crt",
+    "control_trust_version": 3,
+    "control_revocation_epoch": 9,
+    "control_key_id": "control_01",
+    "control_key_version": 4,
+    "control_key_not_before": "2026-08-08T00:00:00Z",
+    "control_key_not_after": "2026-08-09T00:00:00Z",
+    "control_signing_key_environment": "SANDBOX_CONTROL_SIGNING_KEY",
+    "lease_seconds": 60
+  }
+}`
+	config, err := Parse(strings.NewReader(withHost))
+	if err != nil || config.hostControl == nil || config.hostControl.lease != time.Minute || config.hostControl.trustVersion != 3 || config.hostControl.keyVersion != 4 || config.hostControl.revocationEpoch != 9 {
+		t.Fatalf("Parse(host control) = %#v, %v", config.hostControl, err)
+	}
+	invalid := strings.Replace(withHost, `"127.0.0.1:9443"`, `"127.0.0.1:8443"`, 1)
+	if _, err := Parse(strings.NewReader(invalid)); err == nil {
+		t.Fatal("Parse() accepted shared public/host listener")
+	}
+	legacy := strings.Replace(withHost, `"version": 2`, `"version": 1`, 1)
+	if _, err := Parse(strings.NewReader(legacy)); err == nil || !strings.Contains(err.Error(), "migrate to version 2") {
+		t.Fatalf("Parse(version 1 host control) error = %v, want explicit version 2 migration", err)
+	}
+}
+
+func TestParseVersionOneWithoutHostControlRemainsCompatible(t *testing.T) {
+	t.Parallel()
+
+	if _, err := Parse(strings.NewReader(validDocument)); err != nil {
+		t.Fatalf("Parse(version 1 public-only control) error = %v", err)
+	}
+}
+
 const validDocument = `{
   "version": 1,
   "listen_address": "127.0.0.1:8443",

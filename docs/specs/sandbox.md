@@ -160,7 +160,7 @@ canonical body. It contains at least:
 
 ~~~text
 protocol_version, envelope_id, delivery_id, issued_at, expires_at,
-control_key_id, host_id, host_enrollment_generation, assignment_id,
+control_key_id, control_key_version, control_revocation_epoch, host_id, host_enrollment_generation, assignment_id,
 lease_epoch_and_fencing_token, tenant_and_principal_scope, sandbox_id,
 process_id_if_any, operation_id, operation_kind, effective_spec_digest,
 capability_snapshot_digest, canonical_request_digest, sequence_contract,
@@ -183,7 +183,8 @@ receipt; it can never cause a second command, widen authority or cross tenants.
 
 The signature input is the exact `sandbox.host-control/v1` canonical envelope
 object with `signature` omitted, including protocol version, every listed
-binding field, `control_key_id`, nonce, delivery identity and payload digest.
+binding field, `control_key_id`, `control_key_version`,
+`control_revocation_epoch`, nonce, delivery identity and payload digest.
 There is no alternate JSON, map ordering, Unicode or `host:port` textual form
 that verifies. Envelope IDs/nonces, key IDs and receipt entries have declared
 finite retention no shorter than the maximum envelope TTL plus lost-ack retry

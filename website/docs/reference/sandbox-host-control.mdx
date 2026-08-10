@@ -1,0 +1,50 @@
+---
+title: Sandbox host control
+description: Private enrolled-host trust, fencing, recovery, and honest M3 limits.
+---
+
+# Sandbox host control
+
+Agent Runtime keeps host topology out of its public Go and HTTP contracts. A
+distinct private `sandbox.host-control/v1` listener routes already-authorized,
+immutable Sandbox Operations to durably enrolled hosts.
+
+Implemented M3 behavior includes:
+
+- TLS 1.3 mutual authentication against exact enrolled certificate generation;
+- overlapping certificate rotation followed by per-generation revocation;
+- canonical control-signed assignment envelopes bound to tenant, Principal,
+  Operation, Effective Spec, capability snapshot, lease, fence, expiry,
+  signing-key version, and revocation epoch;
+- atomically replaced current/next verification trust with validity and
+  legacy-zero-binding refusal; retirement lineage exists only for one running
+  `AtomicTrust` instance and is not restart-persistent without authenticated
+  persisted trust history;
+- persisted exact-envelope replay across control or host restart;
+- a journal-before-effect reference host with exact lost-ack replay and
+  fail-closed `uncertain` recovery after durable `started` intent;
+- a cancellable host daemon with an explicit poll interval, healthy verified
+  no-work observation, and bounded transient control retry;
+- host-signed results and ordered stdout/stderr integrity headers;
+- stale fence, rogue signature, altered duplicate, and sequence-gap refusal;
+- quarantine to an explicit uncertain state; and
+- operator-confirmed cleanup before safe reassignment.
+
+Enrollment stores invoke an explicit verifier predicate over transient raw
+evidence and persist only its digest and safe outcome. Failed evidence is
+durably refused. The local-unsafe profile is explicitly `metadata-only`, not
+hardware-attestation verification.
+
+The reference host performs no guest or VM execution. This proves the durable
+protocol, not hostile-tenant isolation, cgroups, network policy, mounts, image
+admission, Jailer, KVM, or Firecracker. TLS provides transport confidentiality;
+there is no additional application-layer envelope encryption in M3. Stored
+attestation outcomes do not prove the Linux/KVM trust boundary.
+
+Repository references:
+
+- `docs/reference/sandbox-host-control-v1.md` — exact trust and wire contract;
+- `docs/operations/sandbox-host-routing.md` — authority, deployment, rotation,
+  recovery, cleanup, and disposable PostgreSQL proof; and
+- `deploy/sandboxhost/reference.example.json` — strict reference-host
+  declaration.

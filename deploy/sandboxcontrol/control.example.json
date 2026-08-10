@@ -1,6 +1,6 @@
 {
-  "version": 1,
-  "listen_address": "0.0.0.0:9443",
+  "version": 2,
+  "listen_address": "0.0.0.0:8443",
   "tls_certificate_file": "/run/sandbox-control/tls/tls.crt",
   "tls_private_key_file": "/run/sandbox-control/tls/tls.key",
   "database_dsn_environment": "SANDBOX_DATABASE_DSN",
@@ -10,7 +10,7 @@
     "authority": "development",
     "tenant": "tenant_local",
     "subject": "runtime_local",
-    "principal": "principal_local"
+    "principal": "tenant_local:runtime_local"
   },
   "binding_lifetime_seconds": 300,
   "retention_seconds": 86400,
@@ -24,5 +24,19 @@
     "maximum": {"milli_cpu": 4000, "memory_bytes": 8589934592, "root_disk_bytes": 107374182400, "tmpfs_bytes": 2147483648, "pids": 4096, "process_count": 2048, "open_files": 65536, "inodes": 10000000, "files": 10000000, "lifetime_seconds": 86400, "produced_output_bytes": 1073741824, "retained_output_bytes": 268435456, "transfer_bytes": 107374182400, "network_connections": 4096, "volume_bytes": 1099511627776, "snapshot_bytes": 1099511627776},
     "capabilities": {},
     "admitted_images": {}
+  },
+  "host_control": {
+    "listen_address": "0.0.0.0:9443",
+    "tls_certificate_file": "/run/sandbox-control/host-tls/tls.crt",
+    "tls_private_key_file": "/run/sandbox-control/host-tls/tls.key",
+    "client_ca_file": "/run/sandbox-control/host-client-ca/ca.crt",
+    "control_trust_version": 1,
+    "control_revocation_epoch": 1,
+    "control_key_id": "control_signing_2026_01",
+    "control_key_version": 1,
+    "control_key_not_before": "2026-08-08T00:00:00Z",
+    "control_key_not_after": "2026-08-09T00:00:00Z",
+    "control_signing_key_environment": "SANDBOX_CONTROL_SIGNING_KEY",
+    "lease_seconds": 60
   }
 }

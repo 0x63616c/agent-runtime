@@ -170,7 +170,7 @@ func (server *server) submit(writer http.ResponseWriter, request *http.Request) 
 		writeError(writer, err)
 		return
 	}
-	operation := toRecord(identity.Principal, resolved)
+	operation := toRecord(identity.Tenant, identity.Principal, body, resolved)
 	stored, _, err := server.config.Store.Accept(request.Context(), operation)
 	if err != nil {
 		writeStoreError(writer, err)
@@ -325,17 +325,17 @@ func readCanonicalBody(writer http.ResponseWriter, request *http.Request) ([]byt
 }
 
 func validIdentity(identity Identity) bool {
-	return bounded(identity.Authority, 256) && bounded(identity.Tenant, 256) && bounded(identity.Subject, 256) && bounded(identity.Principal, 512)
+	return bounded(identity.Authority, 256) && bounded(identity.Tenant, 256) && bounded(identity.Subject, 256) && bounded(identity.Principal, 512) && strings.HasPrefix(identity.Principal, identity.Tenant+":")
 }
 
 func bounded(value string, limit int) bool {
 	return value != "" && len(value) <= limit && !strings.ContainsAny(value, "\x00\r\n")
 }
 
-func toRecord(principal string, resolved sandbox.ResolvedOperation) sandboxcontrol.Operation {
+func toRecord(tenant, principal string, dispatchBody []byte, resolved sandbox.ResolvedOperation) sandboxcontrol.Operation {
 	operation := resolved.Operation
 	targetKind, targetID := flattenTarget(operation.Target)
-	return sandboxcontrol.Operation{Principal: principal, ID: string(operation.Ref.ID), Kind: string(operation.Kind), TargetKind: targetKind, TargetID: targetID, InputDigest: string(resolved.InputDigest), CanonicalDigest: string(operation.CanonicalDigest), EffectiveSpecDigest: string(operation.EffectiveSpecDigest), CapabilityDigest: string(operation.CapabilityDigest), AcceptedAt: operation.Ref.AcceptedAt, RetentionExpiresAt: operation.RetentionExpiresAt, CleanupRequired: resolved.CleanupRequired}
+	return sandboxcontrol.Operation{Principal: principal, Tenant: tenant, ID: string(operation.Ref.ID), Kind: string(operation.Kind), TargetKind: targetKind, TargetID: targetID, InputDigest: string(resolved.InputDigest), CanonicalDigest: string(operation.CanonicalDigest), EffectiveSpecDigest: string(operation.EffectiveSpecDigest), CapabilityDigest: string(operation.CapabilityDigest), DispatchBody: string(dispatchBody), AcceptedAt: operation.Ref.AcceptedAt, RetentionExpiresAt: operation.RetentionExpiresAt, CleanupRequired: resolved.CleanupRequired}
 }
 
 func fromRecord(record sandboxcontrol.Operation) sandbox.Operation {
