@@ -70,6 +70,8 @@ func NewHandler(config Config) (http.Handler, error) {
 	mux.HandleFunc(openAPIMethodReviseAgent+" "+openAPIPathReviseAgent, server.reviseAgent)
 	mux.HandleFunc(openAPIMethodGetAgentRevision+" "+openAPIPathGetAgentRevision, server.getAgentRevision)
 	mux.HandleFunc(openAPIMethodReadArtifact+" "+openAPIPathReadArtifact, server.readArtifact)
+	mux.HandleFunc(openAPIMethodInspectApproval+" "+openAPIPathInspectApproval, server.inspectApproval)
+	mux.HandleFunc(openAPIMethodDecideApproval+" "+openAPIPathDecideApproval, server.decideApproval)
 	mux.HandleFunc(openAPIMethodIdempotencyStatus+" "+openAPIPathIdempotencyStatus, server.idempotencyStatus)
 	mux.HandleFunc(openAPIMethodCreateSession+" "+openAPIPathCreateSession, server.createSession)
 	mux.HandleFunc(openAPIMethodSendInput+" "+openAPIPathSendInput, server.sendInput)
@@ -259,6 +261,33 @@ func (server *server) readArtifact(writer http.ResponseWriter, request *http.Req
 	writer.Header().Set("Digest", "sha-256="+result.Artifact.SHA256)
 	writer.WriteHeader(http.StatusOK)
 	_, _ = writer.Write(result.Body)
+}
+
+func (server *server) inspectApproval(writer http.ResponseWriter, request *http.Request) {
+	contextValue := request.Context().Value(requestContextKey{}).(requestContext)
+	approvalID, err := agentruntime.ParseApprovalID(request.PathValue("approval_id"))
+	if err != nil {
+		server.writeInvalid(writer, contextValue.requestID)
+		return
+	}
+	result, callErr := server.runtime.InspectApproval(request.Context(), contextValue.identity, approvalID)
+	server.writeResult(writer, contextValue.requestID, http.StatusOK, result, callErr)
+}
+
+func (server *server) decideApproval(writer http.ResponseWriter, request *http.Request) {
+	contextValue := request.Context().Value(requestContextKey{}).(requestContext)
+	approvalID, err := agentruntime.ParseApprovalID(request.PathValue("approval_id"))
+	var body struct {
+		Decision agentruntime.ApprovalState `json:"decision"`
+	}
+	if err != nil || !server.decodeMutation(writer, request, contextValue.requestID, &body) {
+		if err != nil {
+			server.writeInvalid(writer, contextValue.requestID)
+		}
+		return
+	}
+	result, callErr := server.runtime.DecideApproval(request.Context(), contextValue.identity, agentruntime.DecideApprovalRequest{ApprovalID: approvalID, Decision: body.Decision, IdempotencyKey: request.Header.Get("Idempotency-Key")})
+	server.writeResult(writer, contextValue.requestID, http.StatusOK, result, callErr)
 }
 
 func (server *server) idempotencyStatus(writer http.ResponseWriter, request *http.Request) {

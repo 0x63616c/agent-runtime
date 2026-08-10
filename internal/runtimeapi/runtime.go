@@ -12,6 +12,8 @@ type Runtime interface {
 	ReviseAgent(context.Context, Identity, agentruntime.ReviseAgentRequest) (agentruntime.AgentSpecification, error)
 	GetAgentRevision(context.Context, Identity, agentruntime.AgentID, agentruntime.AgentRevisionID) (agentruntime.AgentSpecification, error)
 	ReadArtifact(context.Context, Identity, agentruntime.ArtifactID) (agentruntime.ArtifactDownload, error)
+	InspectApproval(context.Context, Identity, agentruntime.ApprovalID) (agentruntime.Approval, error)
+	DecideApproval(context.Context, Identity, agentruntime.DecideApprovalRequest) (agentruntime.Approval, error)
 	IdempotencyStatus(context.Context, Identity, string) (agentruntime.IdempotencyStatus, error)
 	CreateSession(context.Context, Identity, agentruntime.CreateSessionRequest) (agentruntime.Session, error)
 	SendInput(context.Context, Identity, agentruntime.SendInputRequest) (agentruntime.SendInputResult, error)

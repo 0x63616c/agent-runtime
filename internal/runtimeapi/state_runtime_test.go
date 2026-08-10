@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -123,6 +124,58 @@ func TestStateRuntimeReadsOnlyStateAuthorizedArtifactBytes(t *testing.T) {
 	}
 	if _, err := runtime.ReadArtifact(ctx, bob, plan.Result().Artifact.ArtifactID); !hasFailure(err, agentruntime.FailureNotFound) {
 		t.Fatalf("cross-principal artifact read error = %v, want safe not-found", err)
+	}
+}
+
+func TestStateRuntimeInspectsAndDecidesOwnerApprovalIdempotently(t *testing.T) {
+	runtime, _, compiler, store := newMemoryStateAuthority(t)
+	ctx := context.Background()
+	admin := runtimeapi.Identity{Tenant: "tenant-a", Principal: "admin", Admin: true}
+	alice := runtimeapi.Identity{Tenant: "tenant-a", Principal: "alice"}
+	bob := runtimeapi.Identity{Tenant: "tenant-a", Principal: "bob"}
+	agent, err := runtime.CreateAgent(ctx, admin, agentruntime.CreateAgentRequest{IdempotencyKey: "approval-agent", Name: "assistant", ModelProfile: "balanced", Instructions: "safe"})
+	if err != nil {
+		t.Fatalf("create Agent: %v", err)
+	}
+	session, err := runtime.CreateSession(ctx, alice, agentruntime.CreateSessionRequest{IdempotencyKey: "approval-session", AgentRevision: agent.RevisionID})
+	if err != nil {
+		t.Fatalf("create Session: %v", err)
+	}
+	accepted, err := runtime.SendInput(ctx, alice, agentruntime.SendInputRequest{SessionID: session.ID, IdempotencyKey: "approval-input", Parts: []agentruntime.ContentPart{{Kind: agentruntime.ContentText, Text: "write file"}}})
+	if err != nil {
+		t.Fatalf("send Input: %v", err)
+	}
+	tenant, _ := runtimecontent.ParseTenantID("tenant-a")
+	principal, _ := runtimecontent.ParsePrincipalID("alice")
+	digest := "sha256:" + strings.Repeat("a", 64)
+	intent, err := compiler.CompileRecordToolIntent(runtimestate.RecordToolIntentCommand{Scope: runtimestate.MutationScope{Tenant: tenant, Principal: principal, Authority: runtimestate.AuthorityRuntimeWorker}, IdempotencyKey: "approval-intent", SessionID: session.ID, TurnID: accepted.Turn.ID, ToolCallID: "tcall_1234567890ABCDEF", ToolName: "write", ActionDigest: digest, PolicyRevisionDigest: digest})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Apply(ctx, intent); err != nil {
+		t.Fatal(err)
+	}
+	request, err := compiler.CompileRequestApproval(runtimestate.RequestApprovalCommand{Scope: runtimestate.MutationScope{Tenant: tenant, Principal: principal, Authority: runtimestate.AuthorityRuntimeWorker}, IdempotencyKey: "approval-request", SessionID: session.ID, TurnID: accepted.Turn.ID, ToolCallID: "tcall_1234567890ABCDEF", ApprovalID: "appr_1234567890ABCDEF", ActionDigest: digest, PolicyRevisionDigest: digest, CapabilityDigest: digest, MaximumUses: 1, ExpiresAt: time.Date(2026, 8, 10, 13, 0, 0, 0, time.UTC)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Apply(ctx, request); err != nil {
+		t.Fatal(err)
+	}
+	approvalID, _ := agentruntime.ParseApprovalID("appr_1234567890ABCDEF")
+	pending, err := runtime.InspectApproval(ctx, alice, approvalID)
+	if err != nil || pending.State != agentruntime.ApprovalPending || pending.SessionID != session.ID || pending.TurnID != accepted.Turn.ID {
+		t.Fatalf("inspect pending Approval = %#v, %v", pending, err)
+	}
+	if _, err := runtime.InspectApproval(ctx, bob, approvalID); !hasFailure(err, agentruntime.FailureNotFound) {
+		t.Fatalf("cross-principal inspect Approval error = %v, want safe not-found", err)
+	}
+	decision, err := runtime.DecideApproval(ctx, alice, agentruntime.DecideApprovalRequest{ApprovalID: approvalID, Decision: agentruntime.ApprovalApproved, IdempotencyKey: "approval-decision"})
+	if err != nil || decision.State != agentruntime.ApprovalApproved {
+		t.Fatalf("approve = %#v, %v", decision, err)
+	}
+	if replay, err := runtime.DecideApproval(ctx, alice, agentruntime.DecideApprovalRequest{ApprovalID: approvalID, Decision: agentruntime.ApprovalApproved, IdempotencyKey: "approval-decision"}); err != nil || !reflect.DeepEqual(replay, decision) {
+		t.Fatalf("replay decision = %#v, %v; want %#v, nil", replay, err, decision)
 	}
 }
 

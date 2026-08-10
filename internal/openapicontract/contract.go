@@ -89,6 +89,8 @@ func CollectRoutes(paths map[string]map[string]Operation) ([]Route, error) {
 		"reviseAgent":       {Method: "POST", Path: "/v1/admin/agents/{agent_id}/revisions", Status: "201", Mutation: true},
 		"getAgentRevision":  {Method: "GET", Path: "/v1/admin/agents/{agent_id}/revisions/{revision_id}", Status: "200"},
 		"readArtifact":      {Method: "GET", Path: "/v1/artifacts/{artifact_id}", Status: "200"},
+		"inspectApproval":   {Method: "GET", Path: "/v1/approvals/{approval_id}", Status: "200"},
+		"decideApproval":    {Method: "POST", Path: "/v1/approvals/{approval_id}/decide", Status: "200", Mutation: true},
 		"idempotencyStatus": {Method: "GET", Path: "/v1/idempotency", Status: "200", Idempotency: true},
 		"createSession":     {Method: "POST", Path: "/v1/sessions", Status: "201", Mutation: true},
 		"inspectSession":    {Method: "GET", Path: "/v1/sessions/{session_id}", Status: "200"},

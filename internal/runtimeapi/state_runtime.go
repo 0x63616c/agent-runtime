@@ -137,6 +137,44 @@ func (runtime *StateRuntime) ReadArtifact(ctx context.Context, identity Identity
 	return agentruntime.ArtifactDownload{Artifact: publicArtifact(record), Body: body}, nil
 }
 
+// InspectApproval returns the caller-owned projection of one approval without
+// exposing the tool action, policy digest, or capability metadata.
+func (runtime *StateRuntime) InspectApproval(ctx context.Context, identity Identity, approvalID agentruntime.ApprovalID) (agentruntime.Approval, error) {
+	scope, err := ownerScope(identity)
+	if err != nil {
+		return agentruntime.Approval{}, err
+	}
+	state, err := runtime.store.LoadRuntimeState(ctx, scope)
+	if err != nil {
+		return agentruntime.Approval{}, runtimeFailure("inspect Approval", err)
+	}
+	for _, record := range state.Approvals {
+		if record.Tenant == scope.Tenant && record.Principal == scope.Principal && record.ApprovalID == approvalID.String() {
+			return publicApproval(record), nil
+		}
+	}
+	return agentruntime.Approval{}, runtimeFailure("inspect Approval", runtimestate.ErrNotFoundOrDenied)
+}
+
+// DecideApproval atomically records one owner decision. A successful approval
+// creates an internal bounded grant; the public result never carries it.
+func (runtime *StateRuntime) DecideApproval(ctx context.Context, identity Identity, request agentruntime.DecideApprovalRequest) (agentruntime.Approval, error) {
+	scope, err := ownerScope(identity)
+	if err != nil {
+		return agentruntime.Approval{}, err
+	}
+	if request.Decision != agentruntime.ApprovalApproved && request.Decision != agentruntime.ApprovalDenied {
+		return agentruntime.Approval{}, invalidFailure("approval decision is invalid")
+	}
+	_, err = runtime.apply(ctx, scope, func() (runtimestate.CompiledMutation, error) {
+		return runtime.compiler.CompileDecideApproval(runtimestate.DecideApprovalCommand{Scope: scope, IdempotencyKey: request.IdempotencyKey, ApprovalID: request.ApprovalID.String(), Decision: string(request.Decision)})
+	})
+	if err != nil {
+		return agentruntime.Approval{}, runtimeFailure("decide Approval", err)
+	}
+	return runtime.InspectApproval(ctx, identity, request.ApprovalID)
+}
+
 // IdempotencyStatus safely returns a retained receipt for the caller's exact
 // durable scope. It is an observation only: no command is compiled or replayed.
 func (runtime *StateRuntime) IdempotencyStatus(ctx context.Context, identity Identity, key string) (agentruntime.IdempotencyStatus, error) {
@@ -416,6 +454,12 @@ func publicTurn(record runtimestate.TurnRecord) agentruntime.Turn {
 
 func publicArtifact(record runtimestate.ArtifactRecord) agentruntime.ArtifactReference {
 	return agentruntime.ArtifactReference{ID: record.ArtifactID, MediaType: record.Reference.MediaType, SizeBytes: record.Reference.SizeBytes, SHA256: strings.TrimPrefix(record.Reference.Digest, "sha256:")}
+}
+
+func publicApproval(record runtimestate.ApprovalRecord) agentruntime.Approval {
+	id, _ := agentruntime.ParseApprovalID(record.ApprovalID)
+	state := agentruntime.ApprovalState(record.State)
+	return agentruntime.Approval{ID: id, SessionID: record.SessionID, TurnID: record.TurnID, State: state, ExpiresAt: record.ExpiresAt, DecidedAt: record.DecidedAt}
 }
 
 func publicEvents(records []runtimestate.ProductEventRecord) []agentruntime.Event {

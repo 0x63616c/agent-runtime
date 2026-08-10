@@ -29,6 +29,10 @@ type RuntimeClient interface {
 	GetAgentRevision(context.Context, AgentID, AgentRevisionID) (AgentSpecification, error)
 	// ReadArtifact downloads one caller-authorized immutable artifact.
 	ReadArtifact(context.Context, ArtifactID) (ArtifactDownload, error)
+	// InspectApproval returns the caller-authorized state of one Approval.
+	InspectApproval(context.Context, ApprovalID) (Approval, error)
+	// DecideApproval records one idempotent owner decision for a pending Approval.
+	DecideApproval(context.Context, DecideApprovalRequest) (Approval, error)
 	// IdempotencyStatus reads one retained receipt without re-executing work.
 	IdempotencyStatus(context.Context, string) (IdempotencyStatus, error)
 	// CreateSession creates a principal-owned Session pinned to one Agent revision.
@@ -177,6 +181,25 @@ func (client *Client) ReadArtifact(ctx context.Context, artifactID ArtifactID) (
 		return ArtifactDownload{}, errors.New("read Artifact: invalid artifact ID")
 	}
 	return doArtifact(client, ctx, replacePath(openAPIPathReadArtifact, "artifact_id", artifactID.String()), artifactID)
+}
+
+// InspectApproval returns the caller-authorized state of one Approval.
+func (client *Client) InspectApproval(ctx context.Context, approvalID ApprovalID) (Approval, error) {
+	if _, err := ParseApprovalID(approvalID.String()); err != nil {
+		return Approval{}, errors.New("inspect Approval: invalid approval ID")
+	}
+	return doJSON[Approval](client, ctx, openAPIMethodInspectApproval, replacePath(openAPIPathInspectApproval, "approval_id", approvalID.String()), "", nil)
+}
+
+// DecideApproval records one idempotent owner decision for a pending Approval.
+func (client *Client) DecideApproval(ctx context.Context, request DecideApprovalRequest) (Approval, error) {
+	if _, err := ParseApprovalID(request.ApprovalID.String()); err != nil || (request.Decision != ApprovalApproved && request.Decision != ApprovalDenied) {
+		return Approval{}, errors.New("decide Approval: request is invalid")
+	}
+	path := replacePath(openAPIPathDecideApproval, "approval_id", request.ApprovalID.String())
+	return doJSON[Approval](client, ctx, openAPIMethodDecideApproval, path, request.IdempotencyKey, struct {
+		Decision ApprovalState `json:"decision"`
+	}{Decision: request.Decision})
 }
 
 // IdempotencyStatus reads the caller-scoped durable status of one mutation key.

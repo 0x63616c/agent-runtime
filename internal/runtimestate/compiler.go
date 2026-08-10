@@ -164,14 +164,14 @@ func (compiler *Compiler) CompileRecordToolIntent(command RecordToolIntentComman
 }
 func (compiler *Compiler) CompileRequestApproval(command RequestApprovalCommand) (CompiledMutation, error) {
 	command = command.Owned()
-	if err := validateWorkerCommand(command.Scope, command.SessionID, command.TurnID, OperationID(command.ToolCallID)); err != nil || !validOpaque(command.ApprovalID, 128) || !validDigest(command.ActionDigest) || !validDigest(command.PolicyRevisionDigest) || !validDigest(command.CapabilityDigest) || command.MaximumUses == 0 || command.MaximumUses > 32 || command.ExpiresAt.IsZero() {
+	if _, parseErr := agentruntime.ParseApprovalID(command.ApprovalID); parseErr != nil || validateWorkerCommand(command.Scope, command.SessionID, command.TurnID, OperationID(command.ToolCallID)) != nil || !validDigest(command.ActionDigest) || !validDigest(command.PolicyRevisionDigest) || !validDigest(command.CapabilityDigest) || command.MaximumUses == 0 || command.MaximumUses > 32 || command.ExpiresAt.IsZero() {
 		return CompiledMutation{}, errors.New("compile approval request: invalid command")
 	}
 	return compiler.compile(CommandRequestApproval, command.Scope, command.IdempotencyKey, command, command)
 }
 func (compiler *Compiler) CompileDecideApproval(command DecideApprovalCommand) (CompiledMutation, error) {
 	command = command.Owned()
-	if err := validateScope(command.Scope, AuthoritySessionOwner, true); err != nil || !validOpaque(command.ApprovalID, 128) || (command.Decision != "approved" && command.Decision != "denied") {
+	if _, parseErr := agentruntime.ParseApprovalID(command.ApprovalID); parseErr != nil || validateScope(command.Scope, AuthoritySessionOwner, true) != nil || (command.Decision != "approved" && command.Decision != "denied") {
 		return CompiledMutation{}, errors.New("compile approval decision: invalid command")
 	}
 	return compiler.compile(CommandDecideApproval, command.Scope, command.IdempotencyKey, command, command)

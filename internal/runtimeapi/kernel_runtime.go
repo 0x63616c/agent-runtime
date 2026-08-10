@@ -42,6 +42,18 @@ func (runtime kernelRuntime) ReadArtifact(context.Context, Identity, agentruntim
 	return agentruntime.ArtifactDownload{}, &agentruntime.Error{Failure: agentruntime.Failure{Code: agentruntime.FailureNotFound, Message: "resource not found"}}
 }
 
+// InspectApproval is unavailable in the legacy memory-only kernel. Durable
+// approval inspection requires the state authority.
+func (runtime kernelRuntime) InspectApproval(context.Context, Identity, agentruntime.ApprovalID) (agentruntime.Approval, error) {
+	return agentruntime.Approval{}, &agentruntime.Error{Failure: agentruntime.Failure{Code: agentruntime.FailureNotFound, Message: "resource not found"}}
+}
+
+// DecideApproval is unavailable in the legacy memory-only kernel. Durable
+// approval decisions require the state authority.
+func (runtime kernelRuntime) DecideApproval(context.Context, Identity, agentruntime.DecideApprovalRequest) (agentruntime.Approval, error) {
+	return agentruntime.Approval{}, &agentruntime.Error{Failure: agentruntime.Failure{Code: agentruntime.FailureNotFound, Message: "resource not found"}}
+}
+
 // IdempotencyStatus requires the durable state receipt authority.
 func (runtime kernelRuntime) IdempotencyStatus(context.Context, Identity, string) (agentruntime.IdempotencyStatus, error) {
 	return agentruntime.IdempotencyStatus{}, &agentruntime.Error{Failure: agentruntime.Failure{Code: agentruntime.FailureNotFound, Message: "resource not found"}}

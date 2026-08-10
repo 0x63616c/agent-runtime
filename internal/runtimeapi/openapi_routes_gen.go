@@ -3,7 +3,7 @@
 package runtimeapi
 
 const (
-	openAPIContractSHA256          = "598a8851bb7becb4e1b4055012cd7bfc10ea57e369d7194bec68dff467d394ca"
+	openAPIContractSHA256          = "a5aadb169074938e7ff23e4827f3146a92a98cb89ca7ab75f90b2c4ee83577ca"
 	openAPIMethodCancelTurn        = "POST"
 	openAPIPathCancelTurn          = "/v1/sessions/{session_id}/turns/{turn_id}/cancel"
 	openAPIMethodCloseSession      = "POST"
@@ -12,10 +12,14 @@ const (
 	openAPIPathCreateAgent         = "/v1/admin/agents"
 	openAPIMethodCreateSession     = "POST"
 	openAPIPathCreateSession       = "/v1/sessions"
+	openAPIMethodDecideApproval    = "POST"
+	openAPIPathDecideApproval      = "/v1/approvals/{approval_id}/decide"
 	openAPIMethodGetAgentRevision  = "GET"
 	openAPIPathGetAgentRevision    = "/v1/admin/agents/{agent_id}/revisions/{revision_id}"
 	openAPIMethodIdempotencyStatus = "GET"
 	openAPIPathIdempotencyStatus   = "/v1/idempotency"
+	openAPIMethodInspectApproval   = "GET"
+	openAPIPathInspectApproval     = "/v1/approvals/{approval_id}"
 	openAPIMethodInspectSession    = "GET"
 	openAPIPathInspectSession      = "/v1/sessions/{session_id}"
 	openAPIMethodInspectTurn       = "GET"

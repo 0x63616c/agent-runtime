@@ -424,6 +424,8 @@ func validOpenAPIContract(infoVersion string) []byte {
 		{"reviseAgent", "post", "/v1/admin/agents/{agent_id}/revisions", "201", true, true},
 		{"getAgentRevision", "get", "/v1/admin/agents/{agent_id}/revisions/{revision_id}", "200", false, false},
 		{"readArtifact", "get", "/v1/artifacts/{artifact_id}", "200", false, false},
+		{"inspectApproval", "get", "/v1/approvals/{approval_id}", "200", false, false},
+		{"decideApproval", "post", "/v1/approvals/{approval_id}/decide", "200", true, true},
 		{"idempotencyStatus", "get", "/v1/idempotency", "200", false, true},
 		{"createSession", "post", "/v1/sessions", "201", true, true},
 		{"inspectSession", "get", "/v1/sessions/{session_id}", "200", false, false},

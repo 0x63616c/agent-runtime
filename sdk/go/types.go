@@ -146,6 +146,47 @@ type IdempotencyStatus struct {
 	AcceptedAt  time.Time  `json:"accepted_at"`
 }
 
+// ApprovalState is the public lifecycle state of one human decision request.
+type ApprovalState string
+
+const (
+	// ApprovalPending awaits an owner decision before any tool execution may be authorized.
+	ApprovalPending ApprovalState = "pending"
+	// ApprovalApproved records an owner decision that created a bounded internal grant.
+	ApprovalApproved ApprovalState = "approved"
+	// ApprovalDenied records an owner decision that forbids the requested effect.
+	ApprovalDenied ApprovalState = "denied"
+	// ApprovalExpired records that the decision window elapsed before a decision.
+	ApprovalExpired ApprovalState = "expired"
+)
+
+// Approval is a caller-safe immutable projection of a pending or terminal human decision.
+type Approval struct {
+	ID        ApprovalID    `json:"id"`
+	SessionID SessionID     `json:"session_id"`
+	TurnID    TurnID        `json:"turn_id"`
+	State     ApprovalState `json:"state"`
+	ExpiresAt time.Time     `json:"expires_at"`
+	DecidedAt *time.Time    `json:"decided_at,omitempty"`
+}
+
+// Clone returns an independent Approval snapshot.
+func (approval Approval) Clone() Approval {
+	clone := approval
+	if approval.DecidedAt != nil {
+		value := *approval.DecidedAt
+		clone.DecidedAt = &value
+	}
+	return clone
+}
+
+// DecideApprovalRequest idempotently records one owner decision for a pending Approval.
+type DecideApprovalRequest struct {
+	ApprovalID     ApprovalID    `json:"approval_id"`
+	Decision       ApprovalState `json:"decision"`
+	IdempotencyKey string        `json:"idempotency_key"`
+}
+
 // ContentPart carries either bounded text or an Artifact reference.
 type ContentPart struct {
 	Kind     ContentPartKind    `json:"kind"`

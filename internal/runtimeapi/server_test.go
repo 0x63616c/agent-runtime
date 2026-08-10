@@ -381,6 +381,9 @@ type recordingRuntime struct {
 	createSessionErr    error
 	artifact            agentruntime.ArtifactDownload
 	artifactErr         error
+	approval            agentruntime.Approval
+	approvalErr         error
+	decision            agentruntime.DecideApprovalRequest
 }
 
 func (runtime *recordingRuntime) CreateAgent(ctx context.Context, identity runtimeapi.Identity, _ agentruntime.CreateAgentRequest) (agentruntime.AgentSpecification, error) {
@@ -403,6 +406,35 @@ func (runtime *recordingRuntime) GetAgentRevision(context.Context, runtimeapi.Id
 
 func (runtime *recordingRuntime) ReadArtifact(context.Context, runtimeapi.Identity, agentruntime.ArtifactID) (agentruntime.ArtifactDownload, error) {
 	return runtime.artifact.Clone(), runtime.artifactErr
+}
+
+func (runtime *recordingRuntime) InspectApproval(context.Context, runtimeapi.Identity, agentruntime.ApprovalID) (agentruntime.Approval, error) {
+	return runtime.approval.Clone(), runtime.approvalErr
+}
+
+func (runtime *recordingRuntime) DecideApproval(_ context.Context, _ runtimeapi.Identity, request agentruntime.DecideApprovalRequest) (agentruntime.Approval, error) {
+	runtime.decision = request
+	return runtime.approval.Clone(), runtime.approvalErr
+}
+
+func TestApprovalHTTPRoutesExposeOwnerDecisionContract(t *testing.T) {
+	now := time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC)
+	runtime := &recordingRuntime{approval: agentruntime.Approval{ID: "appr_0000000000000001", SessionID: "sess_0000000000000001", TurnID: "turn_0000000000000001", State: agentruntime.ApprovalPending, ExpiresAt: now.Add(time.Hour)}}
+	handler, err := runtimeapi.NewHandler(runtimeapi.Config{Runtime: runtime, Authenticator: staticAuth{identities: map[string]runtimeapi.Identity{"alice-token-000000": {Tenant: "tenant-a", Principal: "alice"}}}, RequestIDs: &requestIDs{}})
+	if err != nil {
+		t.Fatalf("new handler: %v", err)
+	}
+	server := httptest.NewServer(handler)
+	defer server.Close()
+	client := newClient(server.URL, "alice-token-000000", &requestIDs{})
+	approval, err := client.InspectApproval(context.Background(), runtime.approval.ID)
+	if err != nil || approval != runtime.approval {
+		t.Fatalf("inspect Approval = %#v, %v", approval, err)
+	}
+	approved, err := client.DecideApproval(context.Background(), agentruntime.DecideApprovalRequest{ApprovalID: runtime.approval.ID, Decision: agentruntime.ApprovalApproved, IdempotencyKey: "approval-decision"})
+	if err != nil || approved != runtime.approval || runtime.decision.Decision != agentruntime.ApprovalApproved || runtime.decision.IdempotencyKey != "approval-decision" {
+		t.Fatalf("decide Approval = %#v, %#v, %v", approved, runtime.decision, err)
+	}
 }
 
 func (runtime *recordingRuntime) IdempotencyStatus(context.Context, runtimeapi.Identity, string) (agentruntime.IdempotencyStatus, error) {
