@@ -525,8 +525,8 @@ func validateBootstrapAuthority(authority BootstrapAuthority, document renderedD
 	if authority.NamespaceUID == "" || authority.Nonce == "" {
 		return errors.New("validate bootstrap authority: bootstrap authority is required")
 	}
-	if authority.Stack != document.Stack || authority.Profile != document.Profile || authority.Namespace != document.Namespace {
-		return errors.New("validate bootstrap authority: Stack identity does not match reviewed rendered state")
+	if authority.Stack != document.Stack || authority.Profile != document.Profile || authority.Namespace != document.Namespace || authority.RenderDigest != document.Digest {
+		return errors.New("validate bootstrap authority: Stack identity or render digest does not match reviewed rendered state")
 	}
 	return nil
 }

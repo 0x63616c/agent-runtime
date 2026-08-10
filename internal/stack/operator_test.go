@@ -110,6 +110,28 @@ var _ = Describe("Audited Kubernetes operator", func() {
 		Expect(adapter.teardowns).To(Equal(0))
 	})
 
+	It("refuses apply, reconcile, and teardown when authority was bootstrapped for another rendering", func() {
+		spec, err := stack.Parse(strings.NewReader(validIdentityStack))
+		Expect(err).NotTo(HaveOccurred())
+		rendered, err := stack.Render(spec, stack.ProfileLocal)
+		Expect(err).NotTo(HaveOccurred())
+		adapter := &fakeKubernetesOperator{changes: []stack.Change{{Resource: "api"}}}
+		operator, err := stack.NewKubernetesOperator(adapter, &recordedAudit{})
+		Expect(err).NotTo(HaveOccurred())
+		request := operatorRequest(rendered)
+		request.BootstrapAuthority.RenderDigest = "sha256:" + strings.Repeat("0", 64)
+
+		_, applyErr := operator.Apply(context.Background(), request, rendered)
+		_, reconcileErr := operator.Reconcile(context.Background(), request, rendered)
+		teardownErr := operator.Teardown(context.Background(), request, rendered)
+
+		Expect(applyErr).To(MatchError(ContainSubstring("render digest")))
+		Expect(reconcileErr).To(MatchError(ContainSubstring("render digest")))
+		Expect(teardownErr).To(MatchError(ContainSubstring("render digest")))
+		Expect(adapter.applies).To(BeZero())
+		Expect(adapter.teardowns).To(BeZero())
+	})
+
 	It("reconciles and accounts for every declared non-Kubernetes resource", func() {
 		spec, err := stack.Parse(strings.NewReader(validIdentityStack))
 		Expect(err).NotTo(HaveOccurred())
