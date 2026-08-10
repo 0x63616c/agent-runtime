@@ -33,6 +33,7 @@ if "$docker_bin" container inspect "$K3S_CONTAINER" >/dev/null 2>&1; then
 fi
 
 harness_tmp=$(mktemp -d "${TMPDIR:-/tmp}/agent-runtime-issue10-k3s.XXXXXX")
+bootstrap_capability_file="$harness_tmp/bootstrap-capability.json"
 cleanup() {
   "$docker_bin" rm -f "$K3S_CONTAINER" >/dev/null 2>&1 || true
   rm -rf "$harness_tmp"
@@ -69,7 +70,8 @@ stackctl() {
   go run ./cmd/stackctl "$@" --kubeconfig "$kubeconfig_path" --context "$K3S_CONTEXT" --actor platform-operator --audit-file "$audit_path" --migration-root "$repo_root"
 }
 
-stackctl apply --stack-file "$v1" --stack issue10-work --profile ci
+stackctl bootstrap --stack-file "$v1" --stack issue10-work --profile ci --bootstrap-capability-file "$bootstrap_capability_file"
+stackctl apply --stack-file "$v1" --stack issue10-work --profile ci --bootstrap-capability-file "$bootstrap_capability_file"
 service_ip=$("$kubectl_bin" --kubeconfig "$kubeconfig_path" --context "$K3S_CONTEXT" --namespace ar-ci-issue10-work get service database-service -o jsonpath='{.spec.clusterIP}')
 
 denied_observations=0
@@ -89,7 +91,7 @@ for attempt in $(seq 1 45); do
   sleep 1
 done
 
-stackctl apply --stack-file "$v2" --stack issue10-work --profile ci
+stackctl apply --stack-file "$v2" --stack issue10-work --profile ci --bootstrap-capability-file "$bootstrap_capability_file"
 allowed_observations=0
 for attempt in $(seq 1 45); do
   if "$kubectl_bin" --kubeconfig "$kubeconfig_path" --context "$K3S_CONTEXT" --namespace ar-ci-issue10-work exec deployment/probe -- pg_isready -h "$service_ip" -p 5432 -U postgres >/dev/null 2>&1; then
