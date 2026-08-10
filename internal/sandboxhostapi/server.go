@@ -30,7 +30,6 @@ const (
 	outputPath           = "/sandbox.host-control/v1/output"
 	resultPath           = "/sandbox.host-control/v1/result"
 	bootProbePreparePath = "/sandbox.host-control/v2/firecracker-boot-probe/prepare"
-	bootProbeStartedPath = "/sandbox.host-control/v2/firecracker-boot-probe/launch-started"
 	maxBodyBytes         = 1 << 20
 )
 
@@ -66,11 +65,6 @@ type bootProbePrepareRequest struct {
 	OperationID           string `json:"operation_id"`
 	HostInstanceSessionID string `json:"host_instance_session_id"`
 }
-type bootProbeStartedRequest struct {
-	ProtocolVersion       string `json:"protocol_version"`
-	HostInstanceSessionID string `json:"host_instance_session_id"`
-	Version               uint64 `json:"version"`
-}
 
 // NewHandler constructs the bounded host API without opening listeners or
 // provisioning enrollment, database, certificates or signing keys.
@@ -88,7 +82,6 @@ func NewHandler(config Config) (http.Handler, error) {
 	mux.HandleFunc("POST "+resultPath, server.result)
 	if config.BootProbeStore != nil {
 		mux.HandleFunc("POST "+bootProbePreparePath, server.bootProbePrepare)
-		mux.HandleFunc("POST "+bootProbeStartedPath, server.bootProbeStarted)
 	}
 	return secureHeaders(mux), nil
 }
@@ -121,39 +114,6 @@ func (server *server) bootProbePrepare(writer http.ResponseWriter, request *http
 	delivery.LeaseEpoch = op.Assignment.LeaseEpoch
 	delivery.FencingToken = op.Assignment.FencingToken
 	snapshot, _, err := server.config.BootProbeStore.CreateBootProbeSession(request.Context(), identity, body.Principal, body.OperationID, body.HostInstanceSessionID, delivery, now)
-	if err != nil {
-		writeStoreError(writer, err)
-		return
-	}
-	snapshot, err = server.config.BootProbeStore.AuthorizeBootProbeLaunch(request.Context(), identity, snapshot, now)
-	if err != nil {
-		writeStoreError(writer, err)
-		return
-	}
-	writeJSON(writer, http.StatusOK, snapshot)
-}
-
-func (server *server) bootProbeStarted(writer http.ResponseWriter, request *http.Request) {
-	identity, _, ok := server.authenticatePeer(writer, request)
-	if !ok {
-		return
-	}
-	var body bootProbeStartedRequest
-	if !decodeCanonical(request, &body) || body.ProtocolVersion != "sandbox.host-control/v2/firecracker-boot-probe" || !bounded(body.HostInstanceSessionID, 128) || body.Version == 0 {
-		writeDenied(writer)
-		return
-	}
-	now := server.config.Clock.Now().UTC()
-	snapshot, err := server.config.BootProbeStore.LoadBootProbeSession(request.Context(), body.HostInstanceSessionID)
-	if err != nil {
-		writeDenied(writer)
-		return
-	}
-	if snapshot.Version != body.Version {
-		snapshot, err = server.config.BootProbeStore.RecoverBootProbeLaunchStarted(request.Context(), identity, body.HostInstanceSessionID, body.Version, now)
-	} else {
-		snapshot, err = server.config.BootProbeStore.RecordBootProbeLaunchStarted(request.Context(), identity, snapshot, now)
-	}
 	if err != nil {
 		writeStoreError(writer, err)
 		return

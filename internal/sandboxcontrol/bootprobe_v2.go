@@ -25,7 +25,7 @@ func (ledger *PostgresLedger) CreateBootProbeSession(ctx context.Context, identi
 		if err != nil {
 			return err
 		}
-		if op.Kind != "firecracker-boot-probe" || op.CapabilityDigest != host.CapabilityDigest {
+		if op.Tenant != host.Tenant || op.Kind != "firecracker-boot-probe" || op.CapabilityDigest != host.CapabilityDigest {
 			return ErrHostDenied
 		}
 		if op.State == StateAccepted {
@@ -45,25 +45,36 @@ func (ledger *PostgresLedger) CreateBootProbeSession(ctx context.Context, identi
 			initial.FencingToken = op.Assignment.FencingToken
 		}
 		binding := firecrackerbootprobev2.Binding{HostID: host.HostID, HostGeneration: host.Generation, AssignmentID: op.Assignment.AssignmentID, Tenant: op.Tenant, Principal: op.Principal, SandboxID: op.TargetID, OperationID: op.ID, OperationKind: op.Kind, EffectiveSpecDigest: digestToSandbox(op.EffectiveSpecDigest), CapabilityDigest: digestToSandbox(op.CapabilityDigest), CanonicalRequestDigest: digestToSandbox(op.CanonicalDigest)}
-		if op.Assignment.HostID != host.HostID || op.Assignment.HostGeneration != host.Generation || op.Assignment.LeaseEpoch != initial.LeaseEpoch || op.Assignment.FencingToken != initial.FencingToken || !now.Before(op.Assignment.LeaseExpiresAt) {
-			return ErrStaleFence
-		}
-		state, err := firecrackerbootprobev2.NewState(binding, hostInstanceSessionID, initial, now)
-		if err != nil {
-			return err
-		}
-		session, err := firecrackerbootprobev2.NewSession(state)
-		if err != nil {
-			return err
-		}
-		wire, err := firecrackerbootprobev2.EncodeSession(session)
-		if err != nil {
-			return err
-		}
 		var prior []byte
 		var version int64
 		err = tx.QueryRow(ctx, `SELECT version, session_body FROM runtime.firecracker_boot_probe_sessions WHERE host_instance_session_id=$1 FOR UPDATE`, hostInstanceSessionID).Scan(&version, &prior)
+		if err == nil {
+			priorSession, decodeErr := firecrackerbootprobev2.DecodeSession(prior)
+			if decodeErr != nil || priorSession.Lifecycle.Phase != firecrackerbootprobev2.LifecyclePrepared || priorSession.Delivery.Binding != binding {
+				return errors.New("create v2 boot-probe session: conflicting host-instance session")
+			}
+			if err := ledger.validateBootProbeAuthority(ctx, tx, identity, priorSession, now); err != nil {
+				return err
+			}
+			snapshot = firecrackerbootprobev2.Snapshot{Version: uint64(version), Session: priorSession, Wire: append([]byte(nil), prior...)}
+			return nil
+		}
 		if errors.Is(err, pgx.ErrNoRows) {
+			if op.Assignment.HostID != host.HostID || op.Assignment.HostGeneration != host.Generation || op.Assignment.LeaseEpoch != initial.LeaseEpoch || op.Assignment.FencingToken != initial.FencingToken || !now.Before(op.Assignment.LeaseExpiresAt) {
+				return ErrStaleFence
+			}
+			state, err := firecrackerbootprobev2.NewState(binding, hostInstanceSessionID, initial, now)
+			if err != nil {
+				return err
+			}
+			session, err := firecrackerbootprobev2.NewSession(state)
+			if err != nil {
+				return err
+			}
+			wire, err := firecrackerbootprobev2.EncodeSession(session)
+			if err != nil {
+				return err
+			}
 			if _, err := tx.Exec(ctx, `INSERT INTO runtime.firecracker_boot_probe_sessions (host_instance_session_id,host_id,host_generation,principal,operation_id,assignment_id,lease_epoch,fencing_token,version,session_body,created_at,updated_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,1,$9,$10,$10)`, hostInstanceSessionID, binding.HostID, int64(binding.HostGeneration), binding.Principal, binding.OperationID, binding.AssignmentID, int64(initial.LeaseEpoch), int64(initial.FencingToken), wire, now.UTC()); err != nil {
 				return err
 			}
@@ -74,12 +85,7 @@ func (ledger *PostgresLedger) CreateBootProbeSession(ctx context.Context, identi
 		if err != nil {
 			return errors.Wrap(err, "load v2 boot-probe session")
 		}
-		priorSession, err := firecrackerbootprobev2.DecodeSession(prior)
-		if err != nil || !bytes.Equal(prior, wire) {
-			return errors.New("create v2 boot-probe session: conflicting host-instance session")
-		}
-		snapshot = firecrackerbootprobev2.Snapshot{Version: uint64(version), Session: priorSession, Wire: append([]byte(nil), prior...)}
-		return nil
+		return errors.Wrap(err, "load v2 boot-probe session")
 	})
 	return snapshot, created, err
 }
@@ -94,57 +100,6 @@ func (ledger *PostgresLedger) RenewBootProbeSession(ctx context.Context, identit
 		return firecrackerbootprobev2.Snapshot{}, err
 	}
 	return ledger.casBootProbeSession(ctx, identity, expected, next, now)
-}
-
-// AuthorizeBootProbeLaunch persistently authorizes the one current v2 delivery.
-func (ledger *PostgresLedger) AuthorizeBootProbeLaunch(ctx context.Context, identity HostIdentity, expected firecrackerbootprobev2.Snapshot, now time.Time) (firecrackerbootprobev2.Snapshot, error) {
-	next, err := expected.Session.AuthorizeLaunch(now)
-	if err != nil {
-		return firecrackerbootprobev2.Snapshot{}, err
-	}
-	return ledger.casBootProbeSession(ctx, identity, expected, next, now)
-}
-
-// RecordBootProbeLaunchStarted is called only after the host-instance journal
-// fsyncs the exact authorized delivery; stale or revoked authority is refused.
-func (ledger *PostgresLedger) RecordBootProbeLaunchStarted(ctx context.Context, identity HostIdentity, expected firecrackerbootprobev2.Snapshot, now time.Time) (firecrackerbootprobev2.Snapshot, error) {
-	next, err := expected.Session.RecordLaunchStarted(now)
-	if err != nil {
-		return firecrackerbootprobev2.Snapshot{}, err
-	}
-	return ledger.casBootProbeSession(ctx, identity, expected, next, now)
-}
-
-// RecoverBootProbeLaunchStarted acknowledges a lost host response without
-// permitting a second launch.  The caller may present only the immediately
-// preceding journaled authorization version, and the durable record must
-// already be the matching launch-started successor under currently valid host
-// and assignment authority.
-func (ledger *PostgresLedger) RecoverBootProbeLaunchStarted(ctx context.Context, identity HostIdentity, hostInstanceSessionID string, journalVersion uint64, now time.Time) (firecrackerbootprobev2.Snapshot, error) {
-	if journalVersion == 0 {
-		return firecrackerbootprobev2.Snapshot{}, errors.New("recover PostgreSQL v2 boot-probe launch: journal version required")
-	}
-	var snapshot firecrackerbootprobev2.Snapshot
-	err := ledger.transaction(ctx, "recover PostgreSQL v2 boot-probe launch", func(tx pgx.Tx) error {
-		var version int64
-		var wire []byte
-		if err := tx.QueryRow(ctx, `SELECT version,session_body FROM runtime.firecracker_boot_probe_sessions WHERE host_instance_session_id=$1 FOR UPDATE`, hostInstanceSessionID).Scan(&version, &wire); err != nil {
-			return errors.Wrap(err, "load v2 boot-probe launch recovery")
-		}
-		if uint64(version) != journalVersion+1 {
-			return errors.New("recover PostgreSQL v2 boot-probe launch: stale journal version")
-		}
-		session, err := firecrackerbootprobev2.DecodeSession(wire)
-		if err != nil || session.Lifecycle.Phase != firecrackerbootprobev2.LifecycleLaunchStarted {
-			return errors.New("recover PostgreSQL v2 boot-probe launch: persisted launch is not recoverable")
-		}
-		if err := ledger.validateBootProbeAuthority(ctx, tx, identity, session, now); err != nil {
-			return err
-		}
-		snapshot = firecrackerbootprobev2.Snapshot{Version: uint64(version), Session: session, Wire: append([]byte(nil), wire...)}
-		return nil
-	})
-	return snapshot, err
 }
 
 // LoadBootProbeSession recovers the canonical v2 session for a host instance.
@@ -206,7 +161,7 @@ func (ledger *PostgresLedger) validateBootProbeAuthority(ctx context.Context, tx
 	if err != nil {
 		return err
 	}
-	if op.Tenant != b.Tenant || op.Assignment.HostID != host.HostID || op.Assignment.HostGeneration != host.Generation || op.Assignment.AssignmentID != b.AssignmentID || op.Assignment.LeaseEpoch != session.Delivery.Current.LeaseEpoch || op.Assignment.FencingToken != session.Delivery.Current.FencingToken || !now.Before(op.Assignment.LeaseExpiresAt) {
+	if op.Tenant != host.Tenant || op.Tenant != b.Tenant || op.Assignment.HostID != host.HostID || op.Assignment.HostGeneration != host.Generation || op.Assignment.AssignmentID != b.AssignmentID || op.Assignment.LeaseEpoch != session.Delivery.Current.LeaseEpoch || op.Assignment.FencingToken != session.Delivery.Current.FencingToken || !now.Before(op.Assignment.LeaseExpiresAt) {
 		return ErrStaleFence
 	}
 	return nil
