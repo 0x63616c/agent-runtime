@@ -35,6 +35,7 @@ type Config struct {
 	testFaultAfterJournal     bool
 	testFaultAfterReceipt     bool
 	testFaultAfterResultSend  bool
+	bootProbe                 *bootProbeConfig
 }
 
 type document struct {
@@ -56,7 +57,15 @@ type document struct {
 	TestFaultAfterJournal       bool                 `json:"test_fault_after_journal"`
 	TestFaultAfterReceipt       bool                 `json:"test_fault_after_receipt"`
 	TestFaultAfterResultSend    bool                 `json:"test_fault_after_result_send"`
+	BootProbe                   *bootProbeDocument   `json:"boot_probe"`
 }
+type bootProbeDocument struct {
+	Principal             string `json:"principal"`
+	OperationID           string `json:"operation_id"`
+	HostInstanceSessionID string `json:"host_instance_session_id"`
+	JournalFile           string `json:"journal_file"`
+}
+type bootProbeConfig struct{ principal, operationID, hostInstanceSessionID, journalFile string }
 
 type controlTrustDocument struct {
 	Version         uint64                   `json:"version"`
@@ -136,8 +145,17 @@ func Parse(input io.Reader) (Config, error) {
 	if timeout <= 0 || timeout > time.Minute {
 		return Config{}, errors.New("validate sandbox-host configuration: finite request timeout is required")
 	}
-	return Config{controlURL: decoded.ControlURL, serverName: decoded.ServerName, trustBundleFile: decoded.TrustBundleFile, clientCertificateFile: decoded.ClientCertificateFile, clientPrivateKeyFile: decoded.ClientPrivateKeyFile, hostID: decoded.HostID, hostGeneration: decoded.HostGeneration, journalFile: decoded.JournalFile, maximumReceipts: decoded.MaximumReceipts, controlTrust: controlTrust, hostSigningKeyEnvironment: decoded.HostSigningKeyEnvironment, requestTimeout: timeout, testFaultAfterJournal: decoded.TestFaultAfterJournal, testFaultAfterReceipt: decoded.TestFaultAfterReceipt, testFaultAfterResultSend: decoded.TestFaultAfterResultSend}, nil
+	var boot *bootProbeConfig
+	if decoded.BootProbe != nil {
+		value := decoded.BootProbe
+		if !bounded(value.Principal, 512) || !bounded(value.OperationID, 128) || !bounded(value.HostInstanceSessionID, 128) || !filepath.IsAbs(value.JournalFile) {
+			return Config{}, errors.New("validate sandbox-host configuration: boot_probe is invalid")
+		}
+		boot = &bootProbeConfig{value.Principal, value.OperationID, value.HostInstanceSessionID, value.JournalFile}
+	}
+	return Config{controlURL: decoded.ControlURL, serverName: decoded.ServerName, trustBundleFile: decoded.TrustBundleFile, clientCertificateFile: decoded.ClientCertificateFile, clientPrivateKeyFile: decoded.ClientPrivateKeyFile, hostID: decoded.HostID, hostGeneration: decoded.HostGeneration, journalFile: decoded.JournalFile, maximumReceipts: decoded.MaximumReceipts, controlTrust: controlTrust, hostSigningKeyEnvironment: decoded.HostSigningKeyEnvironment, requestTimeout: timeout, testFaultAfterJournal: decoded.TestFaultAfterJournal, testFaultAfterReceipt: decoded.TestFaultAfterReceipt, testFaultAfterResultSend: decoded.TestFaultAfterResultSend, bootProbe: boot}, nil
 }
+func bounded(value string, maximum int) bool { return value != "" && len(value) <= maximum }
 
 func parseControlTrust(document controlTrustDocument) (controlTrustConfig, error) {
 	current, err := parseControlTrustKey(document.Current)
