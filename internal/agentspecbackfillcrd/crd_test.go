@@ -142,9 +142,11 @@ func TestPinnedKubernetesCELRefusesStatusThatDoesNotBindItsRequest(t *testing.T)
 		t.Fatal("expected terminal status mutation to be refused")
 	}
 	updated = cloneObject(object)
+	delete(updated, "status")
 	updated["spec"].(map[string]any)["manifestDigest"] = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-	updated["status"].(map[string]any)["manifestDigest"] = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-	if errs, _ := validator.Validate(t.Context(), field.NewPath("root"), structural, updated, object, celconfig.RuntimeCELCostBudget); len(errs) == 0 {
+	previous := cloneObject(object)
+	delete(previous, "status")
+	if errs, _ := validator.Validate(t.Context(), field.NewPath("root"), structural, updated, previous, celconfig.RuntimeCELCostBudget); len(errs) == 0 {
 		t.Fatal("expected immutable spec mutation to be refused")
 	}
 }
