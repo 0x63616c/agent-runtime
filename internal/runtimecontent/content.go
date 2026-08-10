@@ -60,13 +60,28 @@ type ImmutableObjectStore interface {
 	Get(context.Context, string, int) ([]byte, error)
 }
 
-// AgentSpecificationLocatorIssuer issues opaque repository capabilities for Agent specifications.
-type AgentSpecificationLocatorIssuer interface {
-	IssueAgentSpecificationLocator(TenantID, agentruntime.AgentID, agentruntime.AgentRevisionID, uint64, Reference) (AgentSpecificationLocator, error)
+// AgentSpecificationRecord is the exact durable metadata returned by a repository authorization check.
+type AgentSpecificationRecord struct {
+	Tenant     TenantID
+	AgentID    agentruntime.AgentID
+	RevisionID agentruntime.AgentRevisionID
+	Revision   uint64
+	Reference  Reference
 }
 
-// AgentSpecificationLocator is an opaque repository-issued capability for one immutable Agent revision.
-type AgentSpecificationLocator struct {
+// AgentSpecificationRepository authorizes one exact Agent revision content read.
+type AgentSpecificationRepository interface {
+	AuthorizeAgentSpecificationRead(context.Context, TenantID, agentruntime.AgentID, agentruntime.AgentRevisionID) (AgentSpecificationRecord, error)
+}
+
+// AgentSpecificationReader reads Agent specification content only after repository authorization.
+type AgentSpecificationReader struct {
+	store      *Store
+	repository AgentSpecificationRepository
+}
+
+// agentSpecificationLocator is a package-private capability created only after repository authorization.
+type agentSpecificationLocator struct {
 	tenant     TenantID
 	agentID    agentruntime.AgentID
 	revisionID agentruntime.AgentRevisionID
@@ -88,12 +103,40 @@ func New(contentRoot string, objects ImmutableObjectStore) (*Store, error) {
 	return &Store{contentRoot: contentRoot, objects: objects}, nil
 }
 
-// IssueAgentSpecificationLocator binds a repository capability to one tenant, Agent, and Agent revision.
-func (store *Store) IssueAgentSpecificationLocator(tenant TenantID, agentID agentruntime.AgentID, revisionID agentruntime.AgentRevisionID, revision uint64, reference Reference) (AgentSpecificationLocator, error) {
-	if !validTenantID(tenant) || !validAgentRevision(agentID, revisionID, revision) || !validReference(reference) {
-		return AgentSpecificationLocator{}, errors.New("invalid Agent specification repository capability")
+// NewAgentSpecificationReader constructs the content-read boundary from an explicit Store and repository authority.
+func NewAgentSpecificationReader(store *Store, repository AgentSpecificationRepository) (*AgentSpecificationReader, error) {
+	if store == nil || repository == nil {
+		return nil, errors.New("Agent specification reader requires content store and repository authority")
 	}
-	return AgentSpecificationLocator{tenant: tenant, agentID: agentID, revisionID: revisionID, revision: revision, reference: reference}, nil
+	return &AgentSpecificationReader{store: store, repository: repository}, nil
+}
+
+// ReadAgentSpecification authorizes and reads one exact tenant-owned Agent revision.
+func (reader *AgentSpecificationReader) ReadAgentSpecification(ctx context.Context, tenant TenantID, agentID agentruntime.AgentID, revisionID agentruntime.AgentRevisionID) (agentruntime.AgentSpecification, error) {
+	if !validTenantID(tenant) {
+		return agentruntime.AgentSpecification{}, ErrNotFoundOrDenied
+	}
+	if _, err := agentruntime.ParseAgentID(agentID.String()); err != nil {
+		return agentruntime.AgentSpecification{}, ErrNotFoundOrDenied
+	}
+	if _, err := agentruntime.ParseAgentRevisionID(revisionID.String()); err != nil {
+		return agentruntime.AgentSpecification{}, ErrNotFoundOrDenied
+	}
+	if err := ctx.Err(); err != nil {
+		return agentruntime.AgentSpecification{}, errors.Wrap(err, "authorize Agent specification read")
+	}
+	record, err := reader.repository.AuthorizeAgentSpecificationRead(ctx, tenant, agentID, revisionID)
+	if err != nil {
+		return agentruntime.AgentSpecification{}, classifyObjectError("authorize Agent specification read", err, ErrNotFoundOrDenied)
+	}
+	if err := ctx.Err(); err != nil {
+		return agentruntime.AgentSpecification{}, errors.Wrap(err, "authorize Agent specification read")
+	}
+	if record.Tenant != tenant || record.AgentID != agentID || record.RevisionID != revisionID || !validAgentRevision(record.AgentID, record.RevisionID, record.Revision) || !validReference(record.Reference) {
+		return agentruntime.AgentSpecification{}, ErrNotFoundOrDenied
+	}
+	locator := agentSpecificationLocator{tenant: record.Tenant, agentID: record.AgentID, revisionID: record.RevisionID, revision: record.Revision, reference: record.Reference}
+	return reader.store.getAgentSpecification(ctx, locator)
 }
 
 // PutAgentSpecification canonically encodes and conditionally stores one immutable specification.
@@ -132,8 +175,7 @@ func (store *Store) PutAgentSpecification(ctx context.Context, tenant TenantID, 
 	return reference, nil
 }
 
-// GetAgentSpecification reads only a repository-issued capability after integrity validation.
-func (store *Store) GetAgentSpecification(ctx context.Context, locator AgentSpecificationLocator) (agentruntime.AgentSpecification, error) {
+func (store *Store) getAgentSpecification(ctx context.Context, locator agentSpecificationLocator) (agentruntime.AgentSpecification, error) {
 	if !validLocator(locator) {
 		return agentruntime.AgentSpecification{}, ErrNotFoundOrDenied
 	}
@@ -169,7 +211,7 @@ func referenceFor(encoded []byte) Reference {
 	return Reference{Digest: "sha256:" + hex.EncodeToString(sum[:]), MediaType: AgentSpecificationMediaTypeV1, SizeBytes: int64(len(encoded))}
 }
 
-func validLocator(locator AgentSpecificationLocator) bool {
+func validLocator(locator agentSpecificationLocator) bool {
 	return validTenantID(locator.tenant) && validAgentRevision(locator.agentID, locator.revisionID, locator.revision) && validReference(locator.reference)
 }
 

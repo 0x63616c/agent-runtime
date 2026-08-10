@@ -16,7 +16,7 @@ import (
 )
 
 func TestStoreWritesAndReadsCanonicalAgentSpecificationThroughRepositoryCapability(t *testing.T) {
-	store, objects, tenant := testStore(t)
+	store, objects, tenant, repository := testStore(t)
 	specification := specification(t)
 	reference, err := store.PutAgentSpecification(context.Background(), tenant, specification)
 	if err != nil {
@@ -32,11 +32,8 @@ func TestStoreWritesAndReadsCanonicalAgentSpecificationThroughRepositoryCapabili
 	if objects.keys[0] != "tenant-a/runtime-content/v1/sha256/"+reference.Digest[len("sha256:"):] {
 		t.Fatalf("unexpected runtime content key %q", objects.keys[0])
 	}
-	locator, err := store.IssueAgentSpecificationLocator(tenant, specification.ID, specification.RevisionID, specification.Revision, reference)
-	if err != nil {
-		t.Fatal(err)
-	}
-	got, err := store.GetAgentSpecification(context.Background(), locator)
+	reader := readerFor(t, store, repository, tenant, specification, reference)
+	got, err := reader.ReadAgentSpecification(context.Background(), tenant, specification.ID, specification.RevisionID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -46,7 +43,7 @@ func TestStoreWritesAndReadsCanonicalAgentSpecificationThroughRepositoryCapabili
 }
 
 func TestStoreVerifiesExistingObjectBeforeReturningReference(t *testing.T) {
-	store, objects, tenant := testStore(t)
+	store, objects, tenant, _ := testStore(t)
 	objects.alwaysExisting = true
 	objects.existing = []byte("different object")
 	if _, err := store.PutAgentSpecification(context.Background(), tenant, specification(t)); !errors.Is(err, runtimecontent.ErrIntegrity) {
@@ -58,7 +55,7 @@ func TestStoreVerifiesExistingObjectBeforeReturningReference(t *testing.T) {
 }
 
 func TestStoreAcceptsOnlyAnExactlyMatchingExistingObject(t *testing.T) {
-	store, objects, tenant := testStore(t)
+	store, objects, tenant, _ := testStore(t)
 	first, err := store.PutAgentSpecification(context.Background(), tenant, specification(t))
 	if err != nil {
 		t.Fatal(err)
@@ -112,7 +109,7 @@ func TestStoreKeepsConfiguredContentRootsDisjoint(t *testing.T) {
 }
 
 func TestStoreRejectsForeignAndMismatchedRepositoryCapabilities(t *testing.T) {
-	store, objects, tenant := testStore(t)
+	store, objects, tenant, repository := testStore(t)
 	specification := specification(t)
 	reference, err := store.PutAgentSpecification(context.Background(), tenant, specification)
 	if err != nil {
@@ -122,22 +119,15 @@ func TestStoreRejectsForeignAndMismatchedRepositoryCapabilities(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	foreign, err := store.IssueAgentSpecificationLocator(otherTenant, specification.ID, specification.RevisionID, specification.Revision, reference)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := store.GetAgentSpecification(context.Background(), foreign); !errors.Is(err, runtimecontent.ErrNotFoundOrDenied) {
+	reader := readerFor(t, store, repository, tenant, specification, reference)
+	if _, err := reader.ReadAgentSpecification(context.Background(), otherTenant, specification.ID, specification.RevisionID); !errors.Is(err, runtimecontent.ErrNotFoundOrDenied) {
 		t.Fatalf("expected non-enumerating foreign capability refusal, got %v", err)
 	}
 	wrongID, err := agentruntime.ParseAgentID("agent_ABCDEFGHIJ123456")
 	if err != nil {
 		t.Fatal(err)
 	}
-	mismatched, err := store.IssueAgentSpecificationLocator(tenant, wrongID, specification.RevisionID, specification.Revision, reference)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := store.GetAgentSpecification(context.Background(), mismatched); !errors.Is(err, runtimecontent.ErrNotFoundOrDenied) {
+	if _, err := reader.ReadAgentSpecification(context.Background(), tenant, wrongID, specification.RevisionID); !errors.Is(err, runtimecontent.ErrNotFoundOrDenied) {
 		t.Fatalf("expected mismatched capability refusal, got %v", err)
 	}
 	if len(objects.keys) != 1 {
@@ -146,44 +136,56 @@ func TestStoreRejectsForeignAndMismatchedRepositoryCapabilities(t *testing.T) {
 }
 
 func TestStoreClassifiesCancellationAbsenceUnavailableAndIntegrity(t *testing.T) {
-	store, objects, tenant := testStore(t)
+	store, objects, tenant, repository := testStore(t)
 	specification := specification(t)
 	reference, err := store.PutAgentSpecification(context.Background(), tenant, specification)
 	if err != nil {
 		t.Fatal(err)
 	}
-	locator, err := store.IssueAgentSpecificationLocator(tenant, specification.ID, specification.RevisionID, specification.Revision, reference)
-	if err != nil {
-		t.Fatal(err)
-	}
+	reader := readerFor(t, store, repository, tenant, specification, reference)
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if _, err := store.GetAgentSpecification(ctx, locator); !errors.Is(err, context.Canceled) {
+	if _, err := reader.ReadAgentSpecification(ctx, tenant, specification.ID, specification.RevisionID); !errors.Is(err, context.Canceled) {
 		t.Fatalf("expected cancellation preservation, got %v", err)
 	}
 	ctx, cancel = context.WithCancel(context.Background())
+	repository.hook = cancel
+	if _, err := reader.ReadAgentSpecification(ctx, tenant, specification.ID, specification.RevisionID); !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected post-authorization cancellation preservation, got %v", err)
+	}
+	repository.hook = nil
+	ctx, cancel = context.WithCancel(context.Background())
 	objects.getHook = cancel
-	if _, err := store.GetAgentSpecification(ctx, locator); !errors.Is(err, context.Canceled) {
+	if _, err := reader.ReadAgentSpecification(ctx, tenant, specification.ID, specification.RevisionID); !errors.Is(err, context.Canceled) {
 		t.Fatalf("expected post-I/O cancellation preservation, got %v", err)
 	}
 	objects.getHook = nil
+	repository.err = runtimecontent.ErrNotFoundOrDenied
+	if _, err := reader.ReadAgentSpecification(context.Background(), tenant, specification.ID, specification.RevisionID); !errors.Is(err, runtimecontent.ErrNotFoundOrDenied) {
+		t.Fatalf("expected repository non-enumerating absence, got %v", err)
+	}
+	repository.err = errors.New("repository unavailable")
+	if _, err := reader.ReadAgentSpecification(context.Background(), tenant, specification.ID, specification.RevisionID); !errors.Is(err, runtimecontent.ErrUnavailable) {
+		t.Fatalf("expected repository unavailable classification, got %v", err)
+	}
+	repository.err = nil
 	objects.getErr = runtimecontent.ErrNotFoundOrDenied
-	if _, err := store.GetAgentSpecification(context.Background(), locator); !errors.Is(err, runtimecontent.ErrNotFoundOrDenied) {
+	if _, err := reader.ReadAgentSpecification(context.Background(), tenant, specification.ID, specification.RevisionID); !errors.Is(err, runtimecontent.ErrNotFoundOrDenied) {
 		t.Fatalf("expected non-enumerating absence, got %v", err)
 	}
 	objects.getErr = errors.New("object storage unavailable")
-	if _, err := store.GetAgentSpecification(context.Background(), locator); !errors.Is(err, runtimecontent.ErrUnavailable) {
+	if _, err := reader.ReadAgentSpecification(context.Background(), tenant, specification.ID, specification.RevisionID); !errors.Is(err, runtimecontent.ErrUnavailable) {
 		t.Fatalf("expected unavailable classification, got %v", err)
 	}
 	objects.getErr = nil
 	objects.values[objects.keys[0]] = append(objects.values[objects.keys[0]], 0)
-	if _, err := store.GetAgentSpecification(context.Background(), locator); !errors.Is(err, runtimecontent.ErrIntegrity) {
+	if _, err := reader.ReadAgentSpecification(context.Background(), tenant, specification.ID, specification.RevisionID); !errors.Is(err, runtimecontent.ErrIntegrity) {
 		t.Fatalf("expected tampered content integrity refusal, got %v", err)
 	}
 }
 
 func TestStoreRejectsNoncanonicalAndInvalidUTF8Content(t *testing.T) {
-	store, objects, tenant := testStore(t)
+	store, objects, tenant, repository := testStore(t)
 	specification := specification(t)
 	_, err := store.PutAgentSpecification(context.Background(), tenant, specification)
 	if err != nil {
@@ -193,12 +195,9 @@ func TestStoreRejectsNoncanonicalAndInvalidUTF8Content(t *testing.T) {
 	noncanonical[1] = 0x18 // Encode version 1 non-minimally; CBOR needs a second byte.
 	noncanonical = append(noncanonical[:2], append([]byte{0x01}, noncanonical[2:]...)...)
 	noncanonicalReference := referenceFor(noncanonical)
-	noncanonicalLocator, err := store.IssueAgentSpecificationLocator(tenant, specification.ID, specification.RevisionID, specification.Revision, noncanonicalReference)
-	if err != nil {
-		t.Fatal(err)
-	}
+	reader := readerFor(t, store, repository, tenant, specification, noncanonicalReference)
 	objects.forcedValue = noncanonical
-	if _, err := store.GetAgentSpecification(context.Background(), noncanonicalLocator); !errors.Is(err, runtimecontent.ErrIntegrity) {
+	if _, err := reader.ReadAgentSpecification(context.Background(), tenant, specification.ID, specification.RevisionID); !errors.Is(err, runtimecontent.ErrIntegrity) {
 		t.Fatalf("expected noncanonical content refusal, got %v", err)
 	}
 	invalidUTF8Encoded := append([]byte(nil), objects.values[objects.keys[0]]...)
@@ -208,12 +207,9 @@ func TestStoreRejectsNoncanonicalAndInvalidUTF8Content(t *testing.T) {
 	}
 	invalidUTF8Encoded[nameOffset] = 0xff
 	invalidUTF8Reference := referenceFor(invalidUTF8Encoded)
-	invalidUTF8Locator, err := store.IssueAgentSpecificationLocator(tenant, specification.ID, specification.RevisionID, specification.Revision, invalidUTF8Reference)
-	if err != nil {
-		t.Fatal(err)
-	}
+	reader = readerFor(t, store, repository, tenant, specification, invalidUTF8Reference)
 	objects.forcedValue = invalidUTF8Encoded
-	if _, err := store.GetAgentSpecification(context.Background(), invalidUTF8Locator); !errors.Is(err, runtimecontent.ErrIntegrity) {
+	if _, err := reader.ReadAgentSpecification(context.Background(), tenant, specification.ID, specification.RevisionID); !errors.Is(err, runtimecontent.ErrIntegrity) {
 		t.Fatalf("expected invalid UTF-8 decode refusal, got %v", err)
 	}
 	objects.forcedValue = nil
@@ -275,7 +271,7 @@ func (objects *recordingObjects) Get(_ context.Context, key string, _ int) ([]by
 	return append([]byte(nil), value...), nil
 }
 
-func testStore(t *testing.T) (*runtimecontent.Store, *recordingObjects, runtimecontent.TenantID) {
+func testStore(t *testing.T) (*runtimecontent.Store, *recordingObjects, runtimecontent.TenantID, *recordingRepository) {
 	t.Helper()
 	objects := newRecordingObjects()
 	store, err := runtimecontent.New("runtime-content", objects)
@@ -286,7 +282,33 @@ func testStore(t *testing.T) (*runtimecontent.Store, *recordingObjects, runtimec
 	if err != nil {
 		t.Fatal(err)
 	}
-	return store, objects, tenant
+	return store, objects, tenant, &recordingRepository{}
+}
+
+func readerFor(t *testing.T, store *runtimecontent.Store, repository *recordingRepository, tenant runtimecontent.TenantID, specification agentruntime.AgentSpecification, reference runtimecontent.Reference) *runtimecontent.AgentSpecificationReader {
+	t.Helper()
+	repository.record = runtimecontent.AgentSpecificationRecord{Tenant: tenant, AgentID: specification.ID, RevisionID: specification.RevisionID, Revision: specification.Revision, Reference: reference}
+	reader, err := runtimecontent.NewAgentSpecificationReader(store, repository)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return reader
+}
+
+type recordingRepository struct {
+	record runtimecontent.AgentSpecificationRecord
+	err    error
+	hook   func()
+}
+
+func (repository *recordingRepository) AuthorizeAgentSpecificationRead(_ context.Context, _ runtimecontent.TenantID, _ agentruntime.AgentID, _ agentruntime.AgentRevisionID) (runtimecontent.AgentSpecificationRecord, error) {
+	if repository.hook != nil {
+		repository.hook()
+	}
+	if repository.err != nil {
+		return runtimecontent.AgentSpecificationRecord{}, repository.err
+	}
+	return repository.record, nil
 }
 
 func specification(t *testing.T) agentruntime.AgentSpecification {
