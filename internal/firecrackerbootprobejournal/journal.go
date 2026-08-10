@@ -99,6 +99,18 @@ func (j *Journal) StageLaunchIntent(session firecrackerbootprobev2.Session) erro
 	if err = os.Rename(j.path+".tmp", j.path); err != nil {
 		return err
 	}
+	directory, err := os.Open(filepath.Dir(j.path))
+	if err != nil {
+		return err
+	}
+	err = directory.Sync()
+	closeErr := directory.Close()
+	if err != nil {
+		return err
+	}
+	if closeErr != nil {
+		return closeErr
+	}
 	j.session = &session
 	return nil
 }
