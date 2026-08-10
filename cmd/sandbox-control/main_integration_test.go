@@ -17,6 +17,7 @@ import (
 	"net"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -134,6 +135,45 @@ func TestControlProcessHarnessRedactsEarlyExitDiagnostics(t *testing.T) {
 	}
 }
 
+func TestControlProcessHarnessKillsAnUnresponsiveChild(t *testing.T) {
+	if os.Getenv("CONTROL_PROCESS_IGNORE_TERM_HELPER") == "1" {
+		signal.Ignore(syscall.SIGTERM)
+		_, _ = fmt.Fprintln(os.Stdout, `{"msg":"sandbox control ready","role":"sandbox-control","public_address":"127.0.0.1:1","host_control_address":""}`)
+		select {}
+	}
+	process := startCommand(t, os.Args[0], []string{"-test.run=^TestControlProcessHarnessKillsAnUnresponsiveChild$"}, map[string]string{"CONTROL_PROCESS_IGNORE_TERM_HELPER": "1"})
+	process.awaitReady(t)
+	forced, err := process.terminate()
+	if err != nil {
+		t.Fatalf("terminate() error = %v", err)
+	}
+	if !forced {
+		t.Fatal("terminate() did not force-kill an unresponsive child")
+	}
+	if err := process.wait(); err == nil {
+		t.Fatal("unresponsive child wait error = nil")
+	}
+}
+
+func TestControlProcessHarnessPreservesGracefulStopWaitError(t *testing.T) {
+	if os.Getenv("CONTROL_PROCESS_GRACEFUL_STOP_HELPER") == "1" {
+		_, _ = fmt.Fprintln(os.Stdout, `{"msg":"sandbox control ready","role":"sandbox-control","public_address":"127.0.0.1:1","host_control_address":""}`)
+		select {}
+	}
+	process := startCommand(t, os.Args[0], []string{"-test.run=^TestControlProcessHarnessPreservesGracefulStopWaitError$"}, map[string]string{"CONTROL_PROCESS_GRACEFUL_STOP_HELPER": "1"})
+	process.awaitReady(t)
+	forced, err := process.terminate()
+	if err != nil {
+		t.Fatalf("terminate() error = %v", err)
+	}
+	if forced {
+		t.Fatal("terminate() force-killed a child that honored SIGTERM")
+	}
+	if err := process.wait(); err == nil {
+		t.Fatal("graceful SIGTERM wait error = nil")
+	}
+}
+
 func (process *controlProcess) awaitReady(t *testing.T) controlReady {
 	t.Helper()
 	timeout, cancel := context.WithTimeout(context.Background(), 15*time.Second)
@@ -144,7 +184,7 @@ func (process *controlProcess) awaitReady(t *testing.T) controlReady {
 	case <-process.done:
 		t.Fatalf("sandbox-control exited before readiness: %v; diagnostics=%s", process.wait(), process.diagnostics())
 	case <-timeout.Done():
-		if err := process.terminate(); err != nil {
+		if _, err := process.terminate(); err != nil {
 			t.Fatalf("signal sandbox-control after readiness timeout: %v", err)
 		}
 		_ = process.wait()
@@ -155,7 +195,7 @@ func (process *controlProcess) awaitReady(t *testing.T) controlReady {
 
 func (process *controlProcess) stop(t *testing.T, secrets ...string) {
 	t.Helper()
-	if err := process.terminate(); err != nil {
+	if _, err := process.terminate(); err != nil {
 		t.Fatalf("signal sandbox-control: %v", err)
 	}
 	if err := process.wait(); err != nil {
@@ -168,21 +208,39 @@ func (process *controlProcess) stop(t *testing.T, secrets ...string) {
 	}
 }
 
-func (process *controlProcess) terminate() error {
+const controlProcessTerminationGrace = time.Second
+
+func (process *controlProcess) terminate() (bool, error) {
 	select {
 	case <-process.done:
-		return nil
+		return false, nil
 	default:
 	}
 	if err := process.command.Process.Signal(syscall.SIGTERM); err != nil {
 		select {
 		case <-process.done:
-			return nil
+			return false, nil
 		default:
-			return err
+			return false, err
 		}
 	}
-	return nil
+	grace, cancel := context.WithTimeout(context.Background(), controlProcessTerminationGrace)
+	defer cancel()
+	select {
+	case <-process.done:
+		return false, nil
+	case <-grace.Done():
+	}
+	if err := process.command.Process.Kill(); err != nil {
+		select {
+		case <-process.done:
+			return false, nil
+		default:
+			return false, err
+		}
+	}
+	<-process.done
+	return true, nil
 }
 
 func (process *controlProcess) wait() error {

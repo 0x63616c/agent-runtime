@@ -22,6 +22,7 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -152,6 +153,26 @@ func TestReferenceHostMultiProcessLostAckQuarantineCleanupAndReassignment(t *tes
 	got, err = client.GetOperation(context.Background(), quarantineRequest.ID)
 	if err != nil || got.State != sandbox.OperationUncertain {
 		t.Fatalf("operation after cleanup/reassignment = %#v, %v", got, err)
+	}
+}
+
+func TestHostProcessHarnessKillsAnUnresponsiveChild(t *testing.T) {
+	if os.Getenv("HOST_PROCESS_IGNORE_TERM_HELPER") == "1" {
+		signal.Ignore(syscall.SIGTERM)
+		_, _ = fmt.Fprintln(os.Stdout, `{"msg":"sandbox host poll","ready":true}`)
+		select {}
+	}
+	process := startProcess(t, os.Args[0], []string{"-test.run=^TestHostProcessHarnessKillsAnUnresponsiveChild$"}, map[string]string{"HOST_PROCESS_IGNORE_TERM_HELPER": "1"})
+	process.awaitHostPoll(t)
+	forced, err := process.terminate()
+	if err != nil {
+		t.Fatalf("terminate() error = %v", err)
+	}
+	if !forced {
+		t.Fatal("terminate() did not force-kill an unresponsive child")
+	}
+	if err := process.wait(); err == nil {
+		t.Fatal("unresponsive child wait error = nil")
 	}
 }
 
@@ -290,7 +311,7 @@ func awaitReady[T any](t *testing.T, process *process, ready <-chan T, role stri
 	case <-process.done:
 		t.Fatalf("%s exited before readiness: %v; diagnostics=%s", role, process.wait(), process.diagnostics())
 	case <-timeout.Done():
-		if err := process.terminate(); err != nil {
+		if _, err := process.terminate(); err != nil {
 			t.Fatalf("signal %s after readiness timeout: %v", role, err)
 		}
 		_ = process.wait()
@@ -307,7 +328,7 @@ func hostArguments(config string) []string {
 func (process *process) stop(t *testing.T, expectSuccess bool, secrets ...string) {
 	t.Helper()
 	if expectSuccess {
-		if err := process.terminate(); err != nil {
+		if _, err := process.terminate(); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -325,21 +346,39 @@ func (process *process) stop(t *testing.T, expectSuccess bool, secrets ...string
 	}
 }
 
-func (process *process) terminate() error {
+const hostProcessTerminationGrace = time.Second
+
+func (process *process) terminate() (bool, error) {
 	select {
 	case <-process.done:
-		return nil
+		return false, nil
 	default:
 	}
 	if err := process.command.Process.Signal(syscall.SIGTERM); err != nil {
 		select {
 		case <-process.done:
-			return nil
+			return false, nil
 		default:
-			return err
+			return false, err
 		}
 	}
-	return nil
+	grace, cancel := context.WithTimeout(context.Background(), hostProcessTerminationGrace)
+	defer cancel()
+	select {
+	case <-process.done:
+		return false, nil
+	case <-grace.Done():
+	}
+	if err := process.command.Process.Kill(); err != nil {
+		select {
+		case <-process.done:
+			return false, nil
+		default:
+			return false, err
+		}
+	}
+	<-process.done
+	return true, nil
 }
 
 func (process *process) wait() error {
