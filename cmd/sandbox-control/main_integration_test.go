@@ -91,11 +91,18 @@ type controlProcess struct {
 	done       chan struct{}
 	mu         sync.Mutex
 	waitErr    error
+	grace      time.Duration
 }
 
 func startControlProcess(t *testing.T, binary, configPath, dsn, authorization, assertionKey string) *controlProcess {
 	t.Helper()
-	return startCommand(t, binary, []string{"--config", configPath}, map[string]string{"TEST_DATABASE_DSN": dsn, "TEST_AUTHORIZATION": authorization, "TEST_ASSERTION_KEY": assertionKey})
+	process := startCommand(t, binary, []string{"--config", configPath}, map[string]string{"TEST_DATABASE_DSN": dsn, "TEST_AUTHORIZATION": authorization, "TEST_ASSERTION_KEY": assertionKey})
+	// The service declares a ten-second graceful HTTP shutdown. The harness
+	// must not preempt that contract while a race-instrumented PostgreSQL
+	// request is draining; synthetic unresponsive-child tests retain the short
+	// default below.
+	process.grace = serviceProcessTerminationGrace
+	return process
 }
 
 func startCommand(t *testing.T, binary string, arguments []string, environment map[string]string) *controlProcess {
@@ -111,7 +118,7 @@ func startCommand(t *testing.T, binary string, arguments []string, environment m
 	if err := command.Start(); err != nil {
 		t.Fatal(err)
 	}
-	process := &controlProcess{command: command, stdout: stdout, stderr: stderr, redactions: redactionsFromEnvironment(environment), done: make(chan struct{})}
+	process := &controlProcess{command: command, stdout: stdout, stderr: stderr, redactions: redactionsFromEnvironment(environment), done: make(chan struct{}), grace: controlProcessTerminationGrace}
 	go func() {
 		process.mu.Lock()
 		process.waitErr = command.Wait()
@@ -267,7 +274,10 @@ func (process *controlProcess) stop(t *testing.T, secrets ...string) {
 	}
 }
 
-const controlProcessTerminationGrace = time.Second
+const (
+	controlProcessTerminationGrace = time.Second
+	serviceProcessTerminationGrace = 12 * time.Second
+)
 
 func (process *controlProcess) terminate() (bool, error) {
 	select {
@@ -283,7 +293,7 @@ func (process *controlProcess) terminate() (bool, error) {
 			return false, err
 		}
 	}
-	grace, cancel := context.WithTimeout(context.Background(), controlProcessTerminationGrace)
+	grace, cancel := context.WithTimeout(context.Background(), process.grace)
 	defer cancel()
 	select {
 	case <-process.done:
@@ -298,13 +308,13 @@ func (process *controlProcess) terminate() (bool, error) {
 			return false, err
 		}
 	}
-	reap, cancel := context.WithTimeout(context.Background(), controlProcessTerminationGrace)
+	reap, cancel := context.WithTimeout(context.Background(), process.grace)
 	defer cancel()
 	select {
 	case <-process.done:
 		return true, nil
 	case <-reap.Done():
-		return true, fmt.Errorf("sandbox-control did not exit after SIGKILL within %s", controlProcessTerminationGrace)
+		return true, fmt.Errorf("sandbox-control did not exit after SIGKILL within %s", process.grace)
 	}
 }
 

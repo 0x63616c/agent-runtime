@@ -284,6 +284,7 @@ type process struct {
 	done       chan struct{}
 	mu         sync.Mutex
 	waitErr    error
+	grace      time.Duration
 }
 
 func startProcess(t *testing.T, binary string, args []string, environment map[string]string) *process {
@@ -299,7 +300,14 @@ func startProcess(t *testing.T, binary string, args []string, environment map[st
 	if err := command.Start(); err != nil {
 		t.Fatal(err)
 	}
-	process := &process{command: command, stdout: stdout, stderr: stderr, redactions: redactionsFromEnvironment(environment), done: make(chan struct{})}
+	grace := hostProcessTerminationGrace
+	if len(args) > 0 && args[0] == "--config" {
+		// A real role may be draining an in-flight, race-instrumented control
+		// request. Its declared request timeout is longer than the synthetic
+		// harness grace, so do not turn orderly signal handling into SIGKILL.
+		grace = serviceProcessTerminationGrace
+	}
+	process := &process{command: command, stdout: stdout, stderr: stderr, redactions: redactionsFromEnvironment(environment), done: make(chan struct{}), grace: grace}
 	go func() {
 		process.mu.Lock()
 		process.waitErr = command.Wait()
@@ -364,7 +372,10 @@ func (process *process) stop(t *testing.T, expectSuccess bool, secrets ...string
 	}
 }
 
-const hostProcessTerminationGrace = time.Second
+const (
+	hostProcessTerminationGrace    = time.Second
+	serviceProcessTerminationGrace = 12 * time.Second
+)
 
 func (process *process) terminate() (bool, error) {
 	select {
@@ -380,7 +391,7 @@ func (process *process) terminate() (bool, error) {
 			return false, err
 		}
 	}
-	grace, cancel := context.WithTimeout(context.Background(), hostProcessTerminationGrace)
+	grace, cancel := context.WithTimeout(context.Background(), process.grace)
 	defer cancel()
 	select {
 	case <-process.done:
@@ -395,13 +406,13 @@ func (process *process) terminate() (bool, error) {
 			return false, err
 		}
 	}
-	reap, cancel := context.WithTimeout(context.Background(), hostProcessTerminationGrace)
+	reap, cancel := context.WithTimeout(context.Background(), process.grace)
 	defer cancel()
 	select {
 	case <-process.done:
 		return true, nil
 	case <-reap.Done():
-		return true, fmt.Errorf("sandbox-host did not exit after SIGKILL within %s", hostProcessTerminationGrace)
+		return true, fmt.Errorf("sandbox-host did not exit after SIGKILL within %s", process.grace)
 	}
 }
 

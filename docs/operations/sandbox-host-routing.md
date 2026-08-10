@@ -12,6 +12,7 @@ evidence only; it does not promote Linux/KVM or Firecracker security profiles.
 | Sandbox control | Authenticate enrolled hosts; choose tenant/capability-compatible work; persist envelopes; own leases, fences, sequence watermarks, quarantine, and reassignment. | Execute guest work, widen Effective Specs/capabilities, create infrastructure, or infer cleanup from liveness. |
 | Sandbox core/public API | Canonicalize, authorize, admit, and expose Principal-scoped Operations. | Expose host, assignment, backend, TLS, PostgreSQL, or Temporal identifiers. |
 | Reference host | Verify one envelope; journal before its simulated effect; send receipt and signed result. | Claim isolation or enforce cgroups, network, image, mount, secret, output-content, or cleanup policy. |
+| M3/M4 bridge | Require one current signed enrolled assignment and the matching enrolled observation key before minting the fixed-purpose boot-probe capability. | Accept a raw M4 tuple, change the operation/tenant/lease/fence, interpret arbitrary dispatch content, or start a Jailer/VM. |
 | M4 host/Jailer | Enforce only the already-admitted envelope under separately certified capability profiles. | Widen control authority or substitute liveness for cleanup proof. |
 
 ## Deployment declarations
@@ -78,6 +79,14 @@ only its digest and `verified`, `failed`, or `metadata-only` outcome atomically;
 it never trusts caller-supplied outcome fields or stores the raw evidence. A
 failed outcome is durable and cannot authenticate. The local-unsafe profile is
 honestly `metadata-only`, never hardware-attested.
+
+For the narrowly scoped Firecracker boot-probe composition, control also signs
+the digest of the enrolled host result/output public key into each assignment.
+The private M3/M4 bridge derives the public key from the host's injected
+observation signing key and refuses a mismatch before constructing the M4
+grant. That binds M4's private input to the same enrolled identity control uses
+to accept observations; it does not prove guest execution or Firecracker
+isolation.
 
 ## Rotation and revocation
 

@@ -55,6 +55,8 @@ control-plane Ed25519 key and transported over mTLS. It binds:
 - issue and finite expiry instants plus control signing-key ID/version and the
   monotonic revocation epoch;
 - Host ID/generation, Assignment ID, lease epoch, and fencing token;
+- the SHA-256 digest of the enrolled host observation key that control will
+  use for result and output verification;
 - tenant and Principal, Sandbox/Process/Operation identities and operation kind;
 - Effective-Spec, capability-snapshot, canonical-request, and payload digests;
 - the exact bounded canonical operation request; and
@@ -77,6 +79,22 @@ across-restart retirement claim, and M3 does not yet provide that persistence.
 TLS supplies transport confidentiality. M3 does not add application-layer
 envelope encryption beyond TLS and therefore makes no protection claim after a
 legitimate endpoint receives plaintext.
+
+## M3-to-M4 boot-probe composition
+
+`internal/sandboxm4bridge` is the only private composition seam from a host
+assignment into the fixed-purpose Firecracker boot-probe grant. It strictly
+verifies the canonical control signature against the complete current trust
+snapshot, Host ID/generation, signing-key validity, revocation epoch, lease,
+fence, assignment, tenant/principal and immutable digest tuple. It additionally
+derives the host observation public key from the host's injected signing key
+and requires its SHA-256 digest to match the value signed into the assignment.
+Only then can it produce the bounded M4 grant.
+
+The bridge does not parse an arbitrary dispatch body, grant another operation
+kind, select a host, start a Jailer, launch a VM, or accept a stale envelope.
+The grant remains a private composition input; M4 still has to prove the
+Linux/KVM execution boundary separately.
 
 ## Pull, receipt, heartbeat, output, and result
 

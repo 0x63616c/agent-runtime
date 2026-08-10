@@ -53,22 +53,27 @@ type Envelope struct {
 	ControlRevocationEpoch uint64    `json:"control_revocation_epoch"`
 	HostID                 string    `json:"host_id"`
 	HostGeneration         uint64    `json:"host_generation"`
-	AssignmentID           string    `json:"assignment_id"`
-	LeaseEpoch             uint64    `json:"lease_epoch"`
-	FencingToken           uint64    `json:"fencing_token"`
-	Tenant                 string    `json:"tenant"`
-	Principal              string    `json:"principal"`
-	SandboxID              string    `json:"sandbox_id"`
-	ProcessID              string    `json:"process_id"`
-	OperationID            string    `json:"operation_id"`
-	OperationKind          string    `json:"operation_kind"`
-	EffectiveSpecDigest    string    `json:"effective_spec_digest"`
-	CapabilityDigest       string    `json:"capability_digest"`
-	CanonicalRequestDigest string    `json:"canonical_request_digest"`
-	SequenceContract       string    `json:"sequence_contract"`
-	PayloadDigest          string    `json:"payload_digest"`
-	Payload                []byte    `json:"payload"`
-	Signature              string    `json:"signature"`
+	// HostObservationKeyDigest binds this assignment to the enrolled public key
+	// that control will later use to verify the host's results and output. It is
+	// empty only for legacy non-M4 protocol fixtures; M4 bridge admission
+	// requires it.
+	HostObservationKeyDigest string `json:"host_observation_key_digest,omitempty"`
+	AssignmentID             string `json:"assignment_id"`
+	LeaseEpoch               uint64 `json:"lease_epoch"`
+	FencingToken             uint64 `json:"fencing_token"`
+	Tenant                   string `json:"tenant"`
+	Principal                string `json:"principal"`
+	SandboxID                string `json:"sandbox_id"`
+	ProcessID                string `json:"process_id"`
+	OperationID              string `json:"operation_id"`
+	OperationKind            string `json:"operation_kind"`
+	EffectiveSpecDigest      string `json:"effective_spec_digest"`
+	CapabilityDigest         string `json:"capability_digest"`
+	CanonicalRequestDigest   string `json:"canonical_request_digest"`
+	SequenceContract         string `json:"sequence_contract"`
+	PayloadDigest            string `json:"payload_digest"`
+	Payload                  []byte `json:"payload"`
+	Signature                string `json:"signature"`
 }
 
 // Result is one host-signed terminal or progress observation.
