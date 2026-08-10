@@ -1,80 +1,302 @@
-package runtimecontent
+package runtimecontent_test
 
 import (
+	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"errors"
+	"reflect"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/0x63616c/agent-runtime/internal/runtimecontent"
 	agentruntime "github.com/0x63616c/agent-runtime/sdk/go"
 )
 
-func TestStoreWritesCanonicalKeyFreeAgentSpecification(t *testing.T) {
-	store, objects := testStore(t)
-	reference, err := store.PutAgentSpecification(context.Background(), "tenant-a", specification(t))
-	if err != nil || reference.MediaType != AgentSpecificationMediaTypeV1 || reference.Digest == "" || reference.SizeBytes <= 0 || len(objects.keys) != 1 {
-		t.Fatalf("expected immutable canonical reference, got %+v %v keys=%v", reference, err, objects.keys)
+func TestStoreWritesAndReadsCanonicalAgentSpecificationThroughRepositoryCapability(t *testing.T) {
+	store, objects, tenant := testStore(t)
+	specification := specification(t)
+	reference, err := store.PutAgentSpecification(context.Background(), tenant, specification)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const wantCanonicalHex = "8901766167656e745f3132333435363738393041424344454675617265765f31323334353637383930414243444546016a726573656172636865726862616c616e63656467626520736166658182667365617263686673656172636874323032362d30382d30395430303a30303a30305a"
+	if got := hex.EncodeToString(objects.values[objects.keys[0]]); got != wantCanonicalHex {
+		t.Fatalf("canonical Agent specification changed: got %s", got)
+	}
+	if reference.MediaType != runtimecontent.AgentSpecificationMediaTypeV1 || reference.Digest == "" || reference.SizeBytes <= 0 || len(objects.keys) != 1 {
+		t.Fatalf("expected immutable canonical reference, got %+v keys=%v", reference, objects.keys)
 	}
 	if objects.keys[0] != "tenant-a/runtime-content/v1/sha256/"+reference.Digest[len("sha256:"):] {
 		t.Fatalf("unexpected runtime content key %q", objects.keys[0])
 	}
-}
-
-func TestStoreRefusesForeignLocatorAndCodecNamespace(t *testing.T) {
-	if _, err := New("tenant-a/temporal-payload", nil); err == nil {
-		t.Fatal("expected temporal payload namespace collision to be refused")
-	}
-	store, _ := testStore(t)
-	reference, err := store.PutAgentSpecification(context.Background(), "tenant-a", specification(t))
+	locator, err := store.IssueAgentSpecificationLocator(tenant, specification.ID, specification.RevisionID, specification.Revision, reference)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.GetAgentSpecification(context.Background(), store.locator("tenant-b", reference)); err == nil {
-		t.Fatal("expected foreign tenant locator refusal")
-	}
-}
-
-func TestStoreRejectsNoncanonicalAndCancelledReads(t *testing.T) {
-	store, objects := testStore(t)
-	reference, err := store.PutAgentSpecification(context.Background(), "tenant-a", specification(t))
+	got, err := store.GetAgentSpecification(context.Background(), locator)
 	if err != nil {
 		t.Fatal(err)
 	}
-	objects.values[objects.keys[0]] = append(objects.values[objects.keys[0]], 0)
-	if _, err := store.GetAgentSpecification(context.Background(), store.locator("tenant-a", reference)); err == nil {
-		t.Fatal("expected tampered canonical content refusal")
+	if !reflect.DeepEqual(got, specification) {
+		t.Fatalf("unexpected Agent specification: got %+v want %+v", got, specification)
+	}
+}
+
+func TestStoreVerifiesExistingObjectBeforeReturningReference(t *testing.T) {
+	store, objects, tenant := testStore(t)
+	objects.alwaysExisting = true
+	objects.existing = []byte("different object")
+	if _, err := store.PutAgentSpecification(context.Background(), tenant, specification(t)); !errors.Is(err, runtimecontent.ErrIntegrity) {
+		t.Fatalf("expected integrity refusal for conflicting existing object, got %v", err)
+	}
+	if objects.gets != 1 {
+		t.Fatalf("expected exact existing-object verification, got %d reads", objects.gets)
+	}
+}
+
+func TestStoreAcceptsOnlyAnExactlyMatchingExistingObject(t *testing.T) {
+	store, objects, tenant := testStore(t)
+	first, err := store.PutAgentSpecification(context.Background(), tenant, specification(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := store.PutAgentSpecification(context.Background(), tenant, specification(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second != first || objects.gets != 1 {
+		t.Fatalf("expected one exact read-back for matching existing content, got ref=%+v reads=%d", second, objects.gets)
+	}
+}
+
+func TestStoreRejectsInvalidTenantAndContentRootPaths(t *testing.T) {
+	objects := newRecordingObjects()
+	for _, root := range []string{"", ".", "..", "/runtime-content", "runtime-content/../other", "temporal-payload", "runtime-content\\other"} {
+		if _, err := runtimecontent.New(root, objects); err == nil {
+			t.Fatalf("expected root %q to be refused", root)
+		}
+	}
+	for _, raw := range []string{"", ".", "..", "tenant/a", "tenant\\a", "Tenant-A", "tenant\x00a"} {
+		if _, err := runtimecontent.ParseTenantID(raw); err == nil {
+			t.Fatalf("expected tenant %q to be refused", raw)
+		}
+	}
+}
+
+func TestStoreKeepsConfiguredContentRootsDisjoint(t *testing.T) {
+	objects := newRecordingObjects()
+	primary, err := runtimecontent.New("runtime-content", objects)
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondary, err := runtimecontent.New("runtime-content-v2", objects)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tenant, err := runtimecontent.ParseTenantID("tenant-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := primary.PutAgentSpecification(context.Background(), tenant, specification(t)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := secondary.PutAgentSpecification(context.Background(), tenant, specification(t)); err != nil {
+		t.Fatal(err)
+	}
+	if len(objects.keys) != 2 || objects.keys[0] == objects.keys[1] {
+		t.Fatalf("expected configured roots to remain disjoint, got %v", objects.keys)
+	}
+}
+
+func TestStoreRejectsForeignAndMismatchedRepositoryCapabilities(t *testing.T) {
+	store, objects, tenant := testStore(t)
+	specification := specification(t)
+	reference, err := store.PutAgentSpecification(context.Background(), tenant, specification)
+	if err != nil {
+		t.Fatal(err)
+	}
+	otherTenant, err := runtimecontent.ParseTenantID("tenant-b")
+	if err != nil {
+		t.Fatal(err)
+	}
+	foreign, err := store.IssueAgentSpecificationLocator(otherTenant, specification.ID, specification.RevisionID, specification.Revision, reference)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.GetAgentSpecification(context.Background(), foreign); !errors.Is(err, runtimecontent.ErrNotFoundOrDenied) {
+		t.Fatalf("expected non-enumerating foreign capability refusal, got %v", err)
+	}
+	wrongID, err := agentruntime.ParseAgentID("agent_ABCDEFGHIJ123456")
+	if err != nil {
+		t.Fatal(err)
+	}
+	mismatched, err := store.IssueAgentSpecificationLocator(tenant, wrongID, specification.RevisionID, specification.Revision, reference)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.GetAgentSpecification(context.Background(), mismatched); !errors.Is(err, runtimecontent.ErrNotFoundOrDenied) {
+		t.Fatalf("expected mismatched capability refusal, got %v", err)
+	}
+	if len(objects.keys) != 1 {
+		t.Fatalf("expected no new writes, got keys %v", objects.keys)
+	}
+}
+
+func TestStoreClassifiesCancellationAbsenceUnavailableAndIntegrity(t *testing.T) {
+	store, objects, tenant := testStore(t)
+	specification := specification(t)
+	reference, err := store.PutAgentSpecification(context.Background(), tenant, specification)
+	if err != nil {
+		t.Fatal(err)
+	}
+	locator, err := store.IssueAgentSpecificationLocator(tenant, specification.ID, specification.RevisionID, specification.Revision, reference)
+	if err != nil {
+		t.Fatal(err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if _, err := store.PutAgentSpecification(ctx, "tenant-a", specification(t)); err == nil {
-		t.Fatal("expected cancellation")
+	if _, err := store.GetAgentSpecification(ctx, locator); !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected cancellation preservation, got %v", err)
+	}
+	ctx, cancel = context.WithCancel(context.Background())
+	objects.getHook = cancel
+	if _, err := store.GetAgentSpecification(ctx, locator); !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected post-I/O cancellation preservation, got %v", err)
+	}
+	objects.getHook = nil
+	objects.getErr = runtimecontent.ErrNotFoundOrDenied
+	if _, err := store.GetAgentSpecification(context.Background(), locator); !errors.Is(err, runtimecontent.ErrNotFoundOrDenied) {
+		t.Fatalf("expected non-enumerating absence, got %v", err)
+	}
+	objects.getErr = errors.New("object storage unavailable")
+	if _, err := store.GetAgentSpecification(context.Background(), locator); !errors.Is(err, runtimecontent.ErrUnavailable) {
+		t.Fatalf("expected unavailable classification, got %v", err)
+	}
+	objects.getErr = nil
+	objects.values[objects.keys[0]] = append(objects.values[objects.keys[0]], 0)
+	if _, err := store.GetAgentSpecification(context.Background(), locator); !errors.Is(err, runtimecontent.ErrIntegrity) {
+		t.Fatalf("expected tampered content integrity refusal, got %v", err)
+	}
+}
+
+func TestStoreRejectsNoncanonicalAndInvalidUTF8Content(t *testing.T) {
+	store, objects, tenant := testStore(t)
+	specification := specification(t)
+	_, err := store.PutAgentSpecification(context.Background(), tenant, specification)
+	if err != nil {
+		t.Fatal(err)
+	}
+	noncanonical := append([]byte(nil), objects.values[objects.keys[0]]...)
+	noncanonical[1] = 0x18 // Encode version 1 non-minimally; CBOR needs a second byte.
+	noncanonical = append(noncanonical[:2], append([]byte{0x01}, noncanonical[2:]...)...)
+	noncanonicalReference := referenceFor(noncanonical)
+	noncanonicalLocator, err := store.IssueAgentSpecificationLocator(tenant, specification.ID, specification.RevisionID, specification.Revision, noncanonicalReference)
+	if err != nil {
+		t.Fatal(err)
+	}
+	objects.forcedValue = noncanonical
+	if _, err := store.GetAgentSpecification(context.Background(), noncanonicalLocator); !errors.Is(err, runtimecontent.ErrIntegrity) {
+		t.Fatalf("expected noncanonical content refusal, got %v", err)
+	}
+	invalidUTF8Encoded := append([]byte(nil), objects.values[objects.keys[0]]...)
+	nameOffset := bytes.Index(invalidUTF8Encoded, []byte(specification.Name))
+	if nameOffset < 0 {
+		t.Fatal("test vector does not contain Agent name")
+	}
+	invalidUTF8Encoded[nameOffset] = 0xff
+	invalidUTF8Reference := referenceFor(invalidUTF8Encoded)
+	invalidUTF8Locator, err := store.IssueAgentSpecificationLocator(tenant, specification.ID, specification.RevisionID, specification.Revision, invalidUTF8Reference)
+	if err != nil {
+		t.Fatal(err)
+	}
+	objects.forcedValue = invalidUTF8Encoded
+	if _, err := store.GetAgentSpecification(context.Background(), invalidUTF8Locator); !errors.Is(err, runtimecontent.ErrIntegrity) {
+		t.Fatalf("expected invalid UTF-8 decode refusal, got %v", err)
+	}
+	objects.forcedValue = nil
+	invalidUTF8 := specification
+	invalidUTF8.Name = string([]byte{0xff})
+	if _, err := store.PutAgentSpecification(context.Background(), tenant, invalidUTF8); err == nil {
+		t.Fatal("expected invalid UTF-8 encode refusal")
+	}
+	oversized := specification
+	oversized.Instructions = strings.Repeat("x", 256*1024+1)
+	if _, err := store.PutAgentSpecification(context.Background(), tenant, oversized); err == nil {
+		t.Fatal("expected oversized specification refusal")
 	}
 }
 
 type recordingObjects struct {
-	keys   []string
-	values map[string][]byte
+	keys           []string
+	values         map[string][]byte
+	alwaysExisting bool
+	existing       []byte
+	getErr         error
+	getHook        func()
+	forcedValue    []byte
+	gets           int
 }
 
-func (objects *recordingObjects) PutIfAbsent(_ context.Context, key string, value []byte) error {
+func newRecordingObjects() *recordingObjects {
+	return &recordingObjects{values: make(map[string][]byte)}
+}
+
+func (objects *recordingObjects) PutIfAbsent(_ context.Context, key string, value []byte) (bool, error) {
 	objects.keys = append(objects.keys, key)
+	if objects.alwaysExisting {
+		objects.values[key] = append([]byte(nil), objects.existing...)
+		return false, nil
+	}
+	if _, exists := objects.values[key]; exists {
+		return false, nil
+	}
 	objects.values[key] = append([]byte(nil), value...)
-	return nil
+	return true, nil
 }
+
 func (objects *recordingObjects) Get(_ context.Context, key string, _ int) ([]byte, error) {
-	return append([]byte(nil), objects.values[key]...), nil
+	objects.gets++
+	if objects.getHook != nil {
+		objects.getHook()
+	}
+	if objects.getErr != nil {
+		return nil, objects.getErr
+	}
+	if objects.forcedValue != nil {
+		return append([]byte(nil), objects.forcedValue...), nil
+	}
+	value, exists := objects.values[key]
+	if !exists {
+		return nil, runtimecontent.ErrNotFoundOrDenied
+	}
+	return append([]byte(nil), value...), nil
 }
-func testStore(t *testing.T) (*Store, *recordingObjects) {
+
+func testStore(t *testing.T) (*runtimecontent.Store, *recordingObjects, runtimecontent.TenantID) {
 	t.Helper()
-	objects := &recordingObjects{values: map[string][]byte{}}
-	store, err := New("runtime-content", objects)
+	objects := newRecordingObjects()
+	store, err := runtimecontent.New("runtime-content", objects)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return store, objects
+	tenant, err := runtimecontent.ParseTenantID("tenant-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return store, objects, tenant
 }
+
 func specification(t *testing.T) agentruntime.AgentSpecification {
 	t.Helper()
 	id, _ := agentruntime.ParseAgentID("agent_1234567890ABCDEF")
 	revision, _ := agentruntime.ParseAgentRevisionID("arev_1234567890ABCDEF")
 	return agentruntime.AgentSpecification{ID: id, RevisionID: revision, Revision: 1, Name: "researcher", ModelProfile: "balanced", Instructions: "be safe", Tools: []agentruntime.ToolDefinition{{Name: "search", Description: "search"}}, CreatedAt: time.Date(2026, 8, 9, 0, 0, 0, 0, time.UTC)}
+}
+
+func referenceFor(raw []byte) runtimecontent.Reference {
+	sum := sha256.Sum256(raw)
+	return runtimecontent.Reference{Digest: "sha256:" + hex.EncodeToString(sum[:]), MediaType: runtimecontent.AgentSpecificationMediaTypeV1, SizeBytes: int64(len(raw))}
 }
