@@ -40,7 +40,6 @@
                   "staticReadinessDigest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$", "minLength": 71, "maxLength": 71 }
                 },
                 "required": ["blobReadCapabilityDigest", "controllerImageDigest", "createdAt", "databaseAuthorityDigest", "fenceNonce", "manifestDigest", "migrationArtifactDigest", "migrationVersion", "requestExpiresAt", "snapshotCount", "snapshotFingerprint", "stackDigest", "staticReadinessDigest"],
-                "additionalProperties": false,
                 "x-kubernetes-validations": [
                   { "rule": "self == oldSelf", "message": "AgentSpecBackfill spec is immutable" },
                   { "rule": "self.requestExpiresAt \u003e self.createdAt", "message": "request expiry must follow creation" },
@@ -64,16 +63,21 @@
                   "verifiedCount": { "type": "integer", "format": "int64", "minimum": 0 }
                 },
                 "required": ["phase", "requestUID", "observedGeneration", "controllerImageDigest", "requestDigest", "snapshotFingerprint", "snapshotCount", "manifestDigest", "staticReadinessDigest", "verifiedCount", "completedAt"],
-                "additionalProperties": false,
                 "x-kubernetes-validations": [
                   { "rule": "!(has(oldSelf.phase) \u0026\u0026 (oldSelf.phase == 'Verified' || oldSelf.phase == 'Refused')) || self == oldSelf", "message": "terminal AgentSpecBackfill status is immutable" },
                   { "rule": "self.phase != 'Verified' || (!has(self.reason) \u0026\u0026 self.verifiedCount == self.snapshotCount)", "message": "verified status has no reason and verifies every snapshot" },
-                  { "rule": "self.phase != 'Refused' || has(self.reason)", "message": "refused status has a bounded reason" }
+                  { "rule": "self.phase != 'Refused' || has(self.reason)", "message": "refused status has a bounded reason" },
+                  { "rule": "(self.phase != 'Pending' \u0026\u0026 self.phase != 'Verifying') || !has(self.reason)", "message": "nonterminal status has no refusal reason" }
                 ]
               }
             },
             "required": ["spec"],
-            "additionalProperties": false
+            "x-kubernetes-validations": [
+              { "rule": "!has(self.status) || (self.status.controllerImageDigest == self.spec.controllerImageDigest && self.status.snapshotFingerprint == self.spec.snapshotFingerprint && self.status.snapshotCount == self.spec.snapshotCount && self.status.manifestDigest == self.spec.manifestDigest && self.status.staticReadinessDigest == self.spec.staticReadinessDigest && self.status.verifiedCount <= self.spec.snapshotCount)", "message": "status must bind the immutable request" },
+              { "rule": "!has(self.status) || self.status.phase != 'Refused' || self.status.reason != 'not_admitted' || self.status.completedAt < self.spec.createdAt", "message": "not-admitted refusal must precede request creation" },
+              { "rule": "!has(self.status) || self.status.phase != 'Refused' || self.status.reason != 'expired' || self.status.completedAt >= self.spec.requestExpiresAt", "message": "expired refusal must follow request expiry" },
+              { "rule": "!has(self.status) || !(self.status.phase == 'Verified' || (self.status.phase == 'Refused' && (self.status.reason == 'snapshot' || self.status.reason == 'content'))) || (self.status.completedAt >= self.spec.createdAt && self.status.completedAt < self.spec.requestExpiresAt)", "message": "verified and integrity refusals must be inside the request interval" }
+            ]
           }
         },
         "subresources": { "status": {} }

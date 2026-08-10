@@ -12,6 +12,13 @@ import (
 	"github.com/0x63616c/agent-runtime/internal/agentspecbackfill"
 	"github.com/0x63616c/agent-runtime/internal/agentspecbackfillcr"
 	"github.com/0x63616c/agent-runtime/internal/agentspecbackfillcrd"
+	apiextensions "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions"
+	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
+	apiextensionsvalidation "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/validation"
+	structuralschema "k8s.io/apiextensions-apiserver/pkg/apiserver/schema"
+	celvalidation "k8s.io/apiextensions-apiserver/pkg/apiserver/schema/cel"
+	"k8s.io/apimachinery/pkg/util/validation/field"
+	celconfig "k8s.io/apiserver/pkg/apis/cel"
 )
 
 func TestRenderProducesTheStrictV1AgentSpecBackfillCRD(t *testing.T) {
@@ -45,7 +52,7 @@ func TestRenderProducesTheStrictV1AgentSpecBackfillCRD(t *testing.T) {
 	root := version["schema"].(map[string]any)["openAPIV3Schema"].(map[string]any)
 	properties := root["properties"].(map[string]any)
 	specification := properties["spec"].(map[string]any)
-	if specification["additionalProperties"] != false || !contains(specification["x-kubernetes-validations"].([]any), "self == oldSelf") {
+	if specification["additionalProperties"] != nil || !contains(specification["x-kubernetes-validations"].([]any), "self == oldSelf") {
 		t.Fatalf("spec is not strictly immutable: %#v", specification)
 	}
 	fields := specification["properties"].(map[string]any)
@@ -53,8 +60,45 @@ func TestRenderProducesTheStrictV1AgentSpecBackfillCRD(t *testing.T) {
 		t.Fatalf("spec does not preserve canonical request bounds: %#v", fields)
 	}
 	status := properties["status"].(map[string]any)
-	if status["additionalProperties"] != false || status["x-kubernetes-validations"] == nil || !contains(status["x-kubernetes-validations"].([]any), "oldSelf.phase") {
+	if status["additionalProperties"] != nil || status["x-kubernetes-validations"] == nil || !contains(status["x-kubernetes-validations"].([]any), "oldSelf.phase") {
 		t.Fatalf("status is not bounded and terminally immutable: %#v", status)
+	}
+}
+
+func TestRenderedCRDPassesPinnedKubernetesStructuralAndCELValidation(t *testing.T) {
+	t.Parallel()
+	rendered, err := agentspecbackfillcrd.Render()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var external apiextensionsv1.CustomResourceDefinition
+	if err := json.Unmarshal(rendered, &external); err != nil {
+		t.Fatal(err)
+	}
+	var internal apiextensions.CustomResourceDefinition
+	if err := apiextensionsv1.Convert_v1_CustomResourceDefinition_To_apiextensions_CustomResourceDefinition(&external, &internal, nil); err != nil {
+		t.Fatal(err)
+	}
+	internal.Status.StoredVersions = []string{"v1alpha1"}
+	if validationErrors := apiextensionsvalidation.ValidateCustomResourceDefinition(t.Context(), &internal); len(validationErrors) != 0 {
+		t.Fatalf("pinned Kubernetes rejects rendered CRD: %v", validationErrors)
+	}
+}
+
+func TestPinnedKubernetesCELRefusesStatusThatDoesNotBindItsRequest(t *testing.T) {
+	t.Parallel()
+	structural, object := validatedCRDObject(t)
+	validator := celvalidation.NewValidator(structural, true, celconfig.PerCallLimit)
+	if validator == nil {
+		t.Fatal("expected generated schema to compile CEL validation")
+	}
+	if errs, _ := validator.Validate(t.Context(), field.NewPath("root"), structural, object, nil, celconfig.RuntimeCELCostBudget); len(errs) != 0 {
+		t.Fatalf("expected canonical request/status to pass CEL validation: %v", errs)
+	}
+	invalid := cloneObject(object)
+	invalid["status"].(map[string]any)["snapshotCount"] = int64(2)
+	if errs, _ := validator.Validate(t.Context(), field.NewPath("root"), structural, invalid, nil, celconfig.RuntimeCELCostBudget); len(errs) == 0 {
+		t.Fatal("expected mismatched status snapshot count to be refused")
 	}
 }
 
@@ -148,4 +192,77 @@ func assertSchemaCoversWire(t *testing.T, fields, wire map[string]any) {
 
 func canonicalCoreRequest(now time.Time) agentspecbackfill.Request {
 	return agentspecbackfill.Request{StackDigest: "sha256:1111111111111111111111111111111111111111111111111111111111111111", MigrationVersion: 4, MigrationArtifactDigest: "sha256:2222222222222222222222222222222222222222222222222222222222222222", ManifestDigest: "sha256:3333333333333333333333333333333333333333333333333333333333333333", ControllerImageDigest: "sha256:4444444444444444444444444444444444444444444444444444444444444444", SnapshotFingerprint: "sha256:5555555555555555555555555555555555555555555555555555555555555555", SnapshotCount: 1, FenceNonce: "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY", StaticReadinessDigest: "sha256:6666666666666666666666666666666666666666666666666666666666666666", DatabaseAuthorityDigest: "sha256:7777777777777777777777777777777777777777777777777777777777777777", BlobReadCapabilityDigest: "sha256:8888888888888888888888888888888888888888888888888888888888888888", CreatedAt: now, ExpiresAt: now.Add(time.Minute)}
+}
+
+func validatedCRDObject(t *testing.T) (*structuralschema.Structural, map[string]any) {
+	t.Helper()
+	now := time.Date(2026, 8, 9, 12, 0, 0, 0, time.UTC)
+	request, err := agentspecbackfillcr.NewRequest(canonicalCoreRequest(now))
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Metadata.UID, request.Metadata.Generation = "uid-01", 1
+	requestWire, err := request.Canonical()
+	if err != nil {
+		t.Fatal(err)
+	}
+	digest, err := request.Spec.Digest()
+	if err != nil {
+		t.Fatal(err)
+	}
+	status := agentspecbackfillcr.Status{Phase: agentspecbackfill.PhaseVerified, RequestUID: request.Metadata.UID, ObservedGeneration: request.Metadata.Generation, ControllerImageDigest: request.Spec.ControllerImageDigest, RequestDigest: digest, SnapshotFingerprint: request.Spec.SnapshotFingerprint, SnapshotCount: request.Spec.SnapshotCount, ManifestDigest: request.Spec.ManifestDigest, StaticReadinessDigest: request.Spec.StaticReadinessDigest, VerifiedCount: request.Spec.SnapshotCount, CompletedAt: now}
+	statusWire, err := status.CanonicalFor(request, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var object map[string]any
+	if err := json.Unmarshal(requestWire, &object); err != nil {
+		t.Fatal(err)
+	}
+	var statusObject map[string]any
+	if err := json.Unmarshal(statusWire, &statusObject); err != nil {
+		t.Fatal(err)
+	}
+	object["status"] = statusObject
+	object = normalizeNumbers(object).(map[string]any)
+	rendered, err := agentspecbackfillcrd.Render()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var external apiextensionsv1.CustomResourceDefinition
+	if err := json.Unmarshal(rendered, &external); err != nil {
+		t.Fatal(err)
+	}
+	var internal apiextensions.CustomResourceDefinition
+	if err := apiextensionsv1.Convert_v1_CustomResourceDefinition_To_apiextensions_CustomResourceDefinition(&external, &internal, nil); err != nil {
+		t.Fatal(err)
+	}
+	structural, err := structuralschema.NewStructural(internal.Spec.Validation.OpenAPIV3Schema)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return structural, object
+}
+
+func cloneObject(object map[string]any) map[string]any {
+	encoded, _ := json.Marshal(object)
+	var cloned map[string]any
+	_ = json.Unmarshal(encoded, &cloned)
+	return normalizeNumbers(cloned).(map[string]any)
+}
+
+func normalizeNumbers(value any) any {
+	switch typed := value.(type) {
+	case float64:
+		return int64(typed)
+	case map[string]any:
+		for key, child := range typed {
+			typed[key] = normalizeNumbers(child)
+		}
+	case []any:
+		for index, child := range typed {
+			typed[index] = normalizeNumbers(child)
+		}
+	}
+	return value
 }

@@ -75,7 +75,6 @@ type schema struct {
 	Enum                  []string          `json:"enum,omitempty"`
 	Properties            map[string]schema `json:"properties,omitempty"`
 	Required              []string          `json:"required,omitempty"`
-	AdditionalProperties  *bool             `json:"additionalProperties,omitempty"`
 	KubernetesValidations []validation      `json:"x-kubernetes-validations,omitempty"`
 }
 
@@ -120,7 +119,14 @@ func renderedDocument() document {
 }
 
 func rootSchema() schema {
-	return object(map[string]schema{"spec": requestSchema(), "status": statusSchema()}, []string{"spec"})
+	result := object(map[string]schema{"spec": requestSchema(), "status": statusSchema()}, []string{"spec"})
+	result.KubernetesValidations = []validation{
+		{Rule: "!has(self.status) || (self.status.controllerImageDigest == self.spec.controllerImageDigest && self.status.snapshotFingerprint == self.spec.snapshotFingerprint && self.status.snapshotCount == self.spec.snapshotCount && self.status.manifestDigest == self.spec.manifestDigest && self.status.staticReadinessDigest == self.spec.staticReadinessDigest && self.status.verifiedCount <= self.spec.snapshotCount)", Message: "status must bind the immutable request"},
+		{Rule: "!has(self.status) || self.status.phase != 'Refused' || self.status.reason != 'not_admitted' || self.status.completedAt < self.spec.createdAt", Message: "not-admitted refusal must precede request creation"},
+		{Rule: "!has(self.status) || self.status.phase != 'Refused' || self.status.reason != 'expired' || self.status.completedAt >= self.spec.requestExpiresAt", Message: "expired refusal must follow request expiry"},
+		{Rule: "!has(self.status) || !(self.status.phase == 'Verified' || (self.status.phase == 'Refused' && (self.status.reason == 'snapshot' || self.status.reason == 'content'))) || (self.status.completedAt >= self.spec.createdAt && self.status.completedAt < self.spec.requestExpiresAt)", Message: "verified and integrity refusals must be inside the request interval"},
+	}
+	return result
 }
 
 func requestSchema() schema {
@@ -153,13 +159,13 @@ func statusSchema() schema {
 		{Rule: "!(has(oldSelf.phase) && (oldSelf.phase == 'Verified' || oldSelf.phase == 'Refused')) || self == oldSelf", Message: "terminal AgentSpecBackfill status is immutable"},
 		{Rule: "self.phase != 'Verified' || (!has(self.reason) && self.verifiedCount == self.snapshotCount)", Message: "verified status has no reason and verifies every snapshot"},
 		{Rule: "self.phase != 'Refused' || has(self.reason)", Message: "refused status has a bounded reason"},
+		{Rule: "(self.phase != 'Pending' && self.phase != 'Verifying') || !has(self.reason)", Message: "nonterminal status has no refusal reason"},
 	}
 	return result
 }
 
 func object(properties map[string]schema, required []string) schema {
-	falseValue := false
-	return schema{Type: "object", Properties: properties, Required: required, AdditionalProperties: &falseValue}
+	return schema{Type: "object", Properties: properties, Required: required}
 }
 
 func digestSchema() schema { return stringSchema("^sha256:[0-9a-f]{64}$", 71, 71) }
