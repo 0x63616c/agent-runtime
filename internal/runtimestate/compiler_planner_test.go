@@ -358,6 +358,50 @@ func TestPlannerRegistersWorkerArtifactWithAuthorizationAuditOutboxAndReplay(t *
 	}
 }
 
+func TestPlannerAppendsConversationOnlyAtExpectedVersionAndReplaysIdempotently(t *testing.T) {
+	now := time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC)
+	content, _, tenant, principal := testRuntimeContent(t)
+	compiler, err := runtimestate.NewCompiler(content)
+	if err != nil {
+		t.Fatalf("new compiler: %v", err)
+	}
+	planner, err := runtimestate.NewRuntimeStatePlanner(fixedPlannerClock{now: now}, &uniquePlannerIDs{})
+	if err != nil {
+		t.Fatalf("new planner: %v", err)
+	}
+	sessionID := validSessionID(t)
+	state := runtimestate.RuntimeState{Sessions: []runtimestate.SessionRecord{{Tenant: tenant, Principal: principal, SessionID: sessionID, State: agentruntime.SessionOpen, Version: 1, CreatedAt: now, UpdatedAt: now, RetainUntil: now.Add(time.Hour)}}}
+	entry, err := content.StageConversationEntry(context.Background(), tenant, []byte("model semantic context"))
+	if err != nil {
+		t.Fatalf("stage conversation: %v", err)
+	}
+	command, err := compiler.CompileAppendConversation(runtimestate.AppendConversationCommand{Scope: workerScope(tenant, principal), IdempotencyKey: "conversation-1", SessionID: sessionID, ExpectedVersion: 0, Entry: entry})
+	if err != nil {
+		t.Fatalf("compile conversation: %v", err)
+	}
+	plan, err := planner.Plan(context.Background(), state, command)
+	if err != nil {
+		t.Fatalf("plan conversation: %v", err)
+	}
+	if result := plan.Result(); result.Conversation.Version != 1 || len(plan.Effects().Audit) != 1 || len(plan.Effects().Outbox) != 1 {
+		t.Fatalf("conversation plan = %#v / %#v", result, plan.Effects())
+	}
+	if replay, err := planner.Plan(context.Background(), plan.State(), command); err != nil || replay.Result().Conversation != plan.Result().Conversation {
+		t.Fatalf("conversation replay = %#v, %v", replay.Result(), err)
+	}
+	other, err := content.StageConversationEntry(context.Background(), tenant, []byte("racing writer"))
+	if err != nil {
+		t.Fatalf("stage racing entry: %v", err)
+	}
+	conflict, err := compiler.CompileAppendConversation(runtimestate.AppendConversationCommand{Scope: workerScope(tenant, principal), IdempotencyKey: "conversation-2", SessionID: sessionID, ExpectedVersion: 0, Entry: other})
+	if err != nil {
+		t.Fatalf("compile stale conversation: %v", err)
+	}
+	if _, err := planner.Plan(context.Background(), plan.State(), conflict); !errors.Is(err, runtimestate.ErrConflict) {
+		t.Fatalf("stale append error = %v, want conflict", err)
+	}
+}
+
 func TestCompilerRejectsForgedScopeAndCompilesOnlyStateScopedContentReaders(t *testing.T) {
 	content, _, tenant, principal := testRuntimeContent(t)
 	compiler, err := runtimestate.NewCompiler(content)

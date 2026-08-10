@@ -174,6 +174,10 @@ func (rejectContentHandoff) ValidateArtifactHandoff(runtimecontent.ContentHandof
 	return runtimecontent.ArtifactCommitment{}, runtimecontent.ErrNotFoundOrDenied
 }
 
+func (rejectContentHandoff) ValidateConversationEntryHandoff(runtimecontent.ContentHandoff) (runtimecontent.ConversationEntryCommitment, error) {
+	return runtimecontent.ConversationEntryCommitment{}, runtimecontent.ErrNotFoundOrDenied
+}
+
 type processClock struct{}
 
 func (processClock) Now() time.Time { return time.Now().UTC() }

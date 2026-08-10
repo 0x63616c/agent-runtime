@@ -20,11 +20,14 @@ const (
 	// AgentSpecificationBodyMediaTypeV1 identifies an identity-free canonical Agent specification body.
 	AgentSpecificationBodyMediaTypeV1 = "application/vnd.agent-runtime.agent-specification-body+cbor;version=1"
 	// InputEnvelopeMediaTypeV1 identifies the canonical identity-free Input envelope.
-	InputEnvelopeMediaTypeV1      = "application/vnd.agent-runtime.input+cbor;version=1"
+	InputEnvelopeMediaTypeV1 = "application/vnd.agent-runtime.input+cbor;version=1"
+	// ConversationEntryMediaTypeV1 identifies opaque immutable semantic context.
+	ConversationEntryMediaTypeV1  = "application/vnd.agent-runtime.conversation-entry+octets;version=1"
 	maximumSpecificationBytes     = 1 << 20
 	maximumInputEnvelopeBytes     = 2<<20 + 4<<10
 	maximumArtifactBytes          = 8 << 20
 	maximumArtifactMediaTypeBytes = 255
+	maximumConversationEntryBytes = 2 << 20
 	maximumInstructionsBytes      = 256 * 1024
 	maximumToolDescriptionBytes   = 4096
 	maximumNameBytes              = 128
@@ -107,6 +110,13 @@ type ArtifactCommitment struct {
 	Reference Reference
 }
 
+// ConversationEntryCommitment is the opaque immutable semantic-context
+// reference a state transition may persist.
+type ConversationEntryCommitment struct {
+	Tenant    TenantID
+	Reference Reference
+}
+
 // ContentHandoff is an opaque, in-process proof that Store wrote and read back one tenant-bound immutable content object.
 //
 // It is not a persistent record or a public capability. A state composition
@@ -126,6 +136,7 @@ const (
 	contentKindAgentSpecificationBody contentKind = iota + 1
 	contentKindInputEnvelope
 	contentKindArtifact
+	contentKindConversationEntry
 )
 
 // ContentHandoffValidator validates opaque staged-content commitments before a runtime state command persists their metadata.
@@ -133,6 +144,7 @@ type ContentHandoffValidator interface {
 	ValidateAgentSpecificationBodyHandoff(ContentHandoff) (AgentSpecificationBodyCommitment, error)
 	ValidateInputEnvelopeHandoff(ContentHandoff) (InputEnvelopeCommitment, error)
 	ValidateArtifactHandoff(ContentHandoff) (ArtifactCommitment, error)
+	ValidateConversationEntryHandoff(ContentHandoff) (ConversationEntryCommitment, error)
 }
 
 // ImmutableObjectStore conditionally stores and bounded-reads runtime-owned immutable bytes.
@@ -512,6 +524,32 @@ func (store *Store) ValidateArtifactHandoff(handoff ContentHandoff) (ArtifactCom
 	return ArtifactCommitment{Tenant: handoff.tenant, Reference: handoff.reference}, nil
 }
 
+// StageConversationEntry stores one bounded opaque semantic-context entry.
+// State admission supplies identity and optimistic versioning separately.
+func (store *Store) StageConversationEntry(ctx context.Context, tenant TenantID, body []byte) (ContentHandoff, error) {
+	if !validTenantID(tenant) || len(body) == 0 || len(body) > maximumConversationEntryBytes {
+		return ContentHandoff{}, errors.New("stage conversation entry: invalid immutable content")
+	}
+	if err := ctx.Err(); err != nil {
+		return ContentHandoff{}, errors.Wrap(err, "stage conversation entry")
+	}
+	copyBody := append([]byte(nil), body...)
+	reference := referenceForMediaType(copyBody, ConversationEntryMediaTypeV1)
+	if err := store.putVerified(ctx, tenant, reference, copyBody, "stage conversation entry"); err != nil {
+		return ContentHandoff{}, err
+	}
+	return ContentHandoff{issuer: store, tenant: tenant, reference: reference, kind: contentKindConversationEntry}, nil
+}
+
+// ValidateConversationEntryHandoff returns only a tenant-bound immutable
+// reference issued by this exact Store.
+func (store *Store) ValidateConversationEntryHandoff(handoff ContentHandoff) (ConversationEntryCommitment, error) {
+	if store == nil || handoff.issuer != store || handoff.kind != contentKindConversationEntry || !validTenantID(handoff.tenant) || !validConversationEntryReference(handoff.reference) || handoff.name != "" || handoff.modelProfile != "" {
+		return ConversationEntryCommitment{}, ErrNotFoundOrDenied
+	}
+	return ConversationEntryCommitment{Tenant: handoff.tenant, Reference: handoff.reference}, nil
+}
+
 func (store *Store) getAgentSpecification(ctx context.Context, locator agentSpecificationLocator) (agentruntime.AgentSpecification, error) {
 	if !validLocator(locator) {
 		return agentruntime.AgentSpecification{}, ErrNotFoundOrDenied
@@ -709,6 +747,10 @@ func validInputEnvelopeReference(reference Reference) bool {
 
 func validArtifactReference(reference Reference) bool {
 	return validArtifactMediaType(reference.MediaType) && reference.SizeBytes > 0 && reference.SizeBytes <= maximumArtifactBytes && validDigest(reference.Digest)
+}
+
+func validConversationEntryReference(reference Reference) bool {
+	return reference.MediaType == ConversationEntryMediaTypeV1 && reference.SizeBytes > 0 && reference.SizeBytes <= maximumConversationEntryBytes && validDigest(reference.Digest)
 }
 
 func validArtifactMediaType(value string) bool {

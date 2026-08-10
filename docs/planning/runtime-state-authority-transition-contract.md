@@ -154,10 +154,12 @@ responses remain reference-only and bounded.
 
 `RegisterAgentRevision`, `CreateSession`, `AdmitInput`,
 `BeginInvocationAttempt`, `RecordInvocationOutcome`, `SettleTurn`,
-`CancelTurn`, and `CloseSession` are the first complete Agent/Session/Turn
-lifecycle command set. Conversation, Artifact, Tool, and Approval commands
-must extend the same closed interface; they may not bypass it with direct
-tables or event writes. This first set is not a claim that DOM-008–013,
+`CancelTurn`, `CloseSession`, `RegisterArtifact`, and `AppendConversation`
+share the closed compiler/planner interface. The latter two retain only
+immutable content references, receipts, audit facts and outbox work;
+conversation appends additionally require the current durable version. Tool
+and Approval commands must use the same interface rather than bypassing it
+with direct tables or event writes. This remains not a claim that DOM-008–013,
 HITL-001–006, DAT-001–002, or the complete DAT-003–013 release evidence is
 implemented or satisfied.
 

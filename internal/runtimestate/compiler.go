@@ -22,6 +22,7 @@ const (
 	CommandCreateSession         CommandKind = "create_session"
 	CommandAdmitInput            CommandKind = "admit_input"
 	CommandRegisterArtifact      CommandKind = "register_artifact"
+	CommandAppendConversation    CommandKind = "append_conversation"
 	CommandBeginInvocation       CommandKind = "begin_invocation_attempt"
 	CommandRecordOutcome         CommandKind = "record_invocation_outcome"
 	CommandSettleTurn            CommandKind = "settle_turn"
@@ -130,6 +131,24 @@ func (compiler *Compiler) CompileRegisterArtifact(command RegisterArtifactComman
 		Session, Turn string
 		Reference     runtimecontent.Reference
 	}{command.SessionID.String(), command.TurnID.String(), commitment.Reference}, compiledArtifact{command: command, commitment: commitment})
+}
+
+// CompileAppendConversation validates a worker-owned immutable entry and its
+// expected version before the pure planner decides conflict/idempotency.
+func (compiler *Compiler) CompileAppendConversation(command AppendConversationCommand) (CompiledMutation, error) {
+	command = command.Owned()
+	if err := validateScope(command.Scope, AuthorityRuntimeWorker, true); err != nil || validSession(command.SessionID) != nil {
+		return CompiledMutation{}, errors.New("compile append conversation: invalid scope or Session")
+	}
+	commitment, err := compiler.content.ValidateConversationEntryHandoff(command.Entry)
+	if err != nil || commitment.Tenant != command.Scope.Tenant || !validConversationReference(commitment.Reference) {
+		return CompiledMutation{}, ErrIntegrity
+	}
+	return compiler.compile(CommandAppendConversation, command.Scope, command.IdempotencyKey, struct {
+		Session   string
+		Expected  uint64
+		Reference runtimecontent.Reference
+	}{command.SessionID.String(), command.ExpectedVersion, commitment.Reference}, compiledConversation{command: command, commitment: commitment})
 }
 
 // CompileBeginInvocationAttempt validates a fenced runtime-worker intent command.
@@ -279,6 +298,10 @@ type compiledArtifact struct {
 	command    RegisterArtifactCommand
 	commitment runtimecontent.ArtifactCommitment
 }
+type compiledConversation struct {
+	command    AppendConversationCommand
+	commitment runtimecontent.ConversationEntryCommitment
+}
 
 func (compiler *Compiler) compile(kind CommandKind, scope MutationScope, key string, shape any, command any) (CompiledMutation, error) {
 	if !validOpaque(key, 256) {
@@ -322,6 +345,9 @@ func validReference(reference runtimecontent.Reference) bool {
 }
 func validArtifactReference(reference runtimecontent.Reference) bool {
 	return reference.SizeBytes > 0 && reference.SizeBytes <= 8<<20 && validOpaque(reference.Digest, 128) && validOpaque(reference.MediaType, 256)
+}
+func validConversationReference(reference runtimecontent.Reference) bool {
+	return reference.MediaType == runtimecontent.ConversationEntryMediaTypeV1 && reference.SizeBytes > 0 && reference.SizeBytes <= 2<<20 && validOpaque(reference.Digest, 128)
 }
 func validAgent(id agentruntime.AgentID) error {
 	_, err := agentruntime.ParseAgentID(id.String())

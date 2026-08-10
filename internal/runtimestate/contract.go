@@ -130,6 +130,21 @@ type ArtifactRecord struct {
 // Clone returns an independent Artifact metadata snapshot.
 func (record ArtifactRecord) Clone() ArtifactRecord { return record }
 
+// ConversationRecord is one immutable semantic-context entry in a
+// session-owned, optimistic-versioned sequence.
+type ConversationRecord struct {
+	Tenant      runtimecontent.TenantID
+	Principal   runtimecontent.PrincipalID
+	SessionID   agentruntime.SessionID `json:",omitempty"`
+	Version     uint64
+	Reference   runtimecontent.Reference
+	CreatedAt   time.Time
+	RetainUntil time.Time
+}
+
+// Clone returns an independent conversation metadata snapshot.
+func (record ConversationRecord) Clone() ConversationRecord { return record }
+
 // TurnRecord is the bounded execution state for one accepted Input.
 type TurnRecord struct {
 	Tenant         runtimecontent.TenantID
@@ -296,19 +311,20 @@ func (record OutboxRecord) Clone() OutboxRecord {
 
 // MutationReceipt records exact idempotency resolution without retaining a raw request.
 type MutationReceipt struct {
-	Scope          MutationScope
-	IdempotencyKey string
-	OperationID    OperationID
-	Command        string
-	RequestDigest  RequestDigest
-	AgentID        agentruntime.AgentID         `json:",omitempty"`
-	RevisionID     agentruntime.AgentRevisionID `json:",omitempty"`
-	SessionID      agentruntime.SessionID       `json:",omitempty"`
-	InputID        agentruntime.InputID         `json:",omitempty"`
-	TurnID         agentruntime.TurnID          `json:",omitempty"`
-	ArtifactID     agentruntime.ArtifactID      `json:",omitempty"`
-	AcceptedAt     time.Time
-	RetentionUntil time.Time
+	Scope               MutationScope
+	IdempotencyKey      string
+	OperationID         OperationID
+	Command             string
+	RequestDigest       RequestDigest
+	AgentID             agentruntime.AgentID         `json:",omitempty"`
+	RevisionID          agentruntime.AgentRevisionID `json:",omitempty"`
+	SessionID           agentruntime.SessionID       `json:",omitempty"`
+	InputID             agentruntime.InputID         `json:",omitempty"`
+	TurnID              agentruntime.TurnID          `json:",omitempty"`
+	ArtifactID          agentruntime.ArtifactID      `json:",omitempty"`
+	ConversationVersion uint64
+	AcceptedAt          time.Time
+	RetentionUntil      time.Time
 }
 
 // Clone returns an independent mutation receipt snapshot.
@@ -380,6 +396,20 @@ type RegisterArtifactCommand struct {
 
 // Owned returns a value-owned artifact command.
 func (command RegisterArtifactCommand) Owned() RegisterArtifactCommand { return command }
+
+// AppendConversationCommand appends one immutable entry under expected-version
+// concurrency. It is worker-owned because providers/tools, not public clients,
+// establish semantic context.
+type AppendConversationCommand struct {
+	Scope           MutationScope
+	IdempotencyKey  string
+	SessionID       agentruntime.SessionID
+	ExpectedVersion uint64
+	Entry           runtimecontent.ContentHandoff
+}
+
+// Owned returns a value-owned conversation append command.
+func (command AppendConversationCommand) Owned() AppendConversationCommand { return command }
 
 // Owned returns a value-owned command. ContentHandoff is opaque and immutable to callers.
 func (command AdmitInputCommand) Owned() AdmitInputCommand {
@@ -520,6 +550,13 @@ type RegisterArtifactResult struct {
 	Effects  EffectSet
 }
 
+// AppendConversationResult returns one immutable sequence entry and derived effects.
+type AppendConversationResult struct {
+	Conversation ConversationRecord
+	Receipt      MutationReceipt
+	Effects      EffectSet
+}
+
 // BeginInvocationAttemptResult returns the committed fenced invocation intent and declared effects.
 type BeginInvocationAttemptResult struct {
 	Invocation InvocationRecord
@@ -595,6 +632,12 @@ func (result AdmitInputResult) Clone() AdmitInputResult {
 // Clone returns an independent artifact registration result.
 func (result RegisterArtifactResult) Clone() RegisterArtifactResult {
 	result.Artifact, result.Receipt, result.Effects = result.Artifact.Clone(), result.Receipt.Clone(), result.Effects.Clone()
+	return result
+}
+
+// Clone returns an independent conversation append result.
+func (result AppendConversationResult) Clone() AppendConversationResult {
+	result.Conversation, result.Receipt, result.Effects = result.Conversation.Clone(), result.Receipt.Clone(), result.Effects.Clone()
 	return result
 }
 
