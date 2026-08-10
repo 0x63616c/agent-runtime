@@ -116,6 +116,11 @@ The `firecracker-smoke` test performs these concrete steps:
 7. Remove the job directory and verify the Jailer cgroup/chroot for that VM id
    has gone. A cleanup failure is a test failure, not a warning.
 
+The checked-in `LinuxJailerHost` has the corresponding injected-port contract:
+Jailer start, ordered private REST configuration, guest serial/vsock control,
+then process and resource cleanup. This local contract neither substitutes for
+the runner nor changes the required real-boot evidence above.
+
 This is a real KVM proof: a Firecracker process alone is insufficient; the
 guest kernel must boot and execute the marker program. It is also intentionally
 not a complete production-security attestation. Firecracker's guidance calls

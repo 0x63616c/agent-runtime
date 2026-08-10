@@ -81,6 +81,16 @@ trailing data before applying the same fixture validator. The parser is a
 fail-closed intake boundary; no real lock is checked in and parsing alone cannot
 authorize a fixture fetch or launch.
 
+`LinuxJailerHost` now provides the internal real-backend seam for the protected
+runner. It accepts injected Jailer-process, private Firecracker REST, and guest
+serial/vsock ports only after a Linux/amd64 KVM preflight and verified fixtures.
+Its fixed REST order configures machine limits, the closed boot source, writable
+root drive, vsock, then `InstanceStart`; it declares no guest NIC. Cleanup closes
+guest control and requires process termination, wait, and Jailer resource proof,
+including when a starter returns both a process and an error. The checked-in
+tests use recording ports to validate this contract. They do not start a Jailer,
+open `/dev/kvm`, or count as Linux/KVM evidence.
+
 `tools/firecracker/` contains a static Linux/amd64 guest-agent source and a
 minimal no-download ext4 recipe. The recipe rejects dynamically linked or
 non-x86_64 ELF init input and emits a rootfs-attestation sidecar for lock-bundle
