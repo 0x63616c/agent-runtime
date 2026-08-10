@@ -13,6 +13,7 @@ import (
 	"syscall"
 
 	"github.com/0x63616c/agent-runtime/internal/roles"
+	"github.com/0x63616c/agent-runtime/internal/runtimeorchestration"
 )
 
 func main() {
@@ -88,5 +89,48 @@ func run(ctx context.Context, arguments []string, lookup func(string) (string, b
 	}
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil)).With("role", plan.Role(), "namespace", config.Namespace())
 	logger.Info("serve runtime role", "address", listener.Addr().String())
+	if config.Role() == roles.RoleOrchestrationCodec {
+		return serveCodecWorker(ctx, config, plan, listener, lookup)
+	}
 	return roles.Serve(ctx, plan, listener)
+}
+
+func serveCodecWorker(ctx context.Context, config roles.Config, plan roles.Plan, listener net.Listener, lookup func(string) (string, bool)) error {
+	worker := config.Worker()
+	_, stateDeclared := config.DependencyEndpoint("state")
+	temporalEndpoint, temporalDeclared := config.DependencyEndpoint("temporal")
+	if worker == nil || !stateDeclared || !temporalDeclared {
+		return fmt.Errorf("compose orchestration-codec role: validated worker/state/temporal configuration is required")
+	}
+	dsn, dsnFound := lookup("STATE_DATABASE_DSN")
+	token, tokenFound := lookup("TEMPORAL_AUTH_TOKEN")
+	accessKey, accessFound := lookup(worker.PayloadAccessKeyEnvironment)
+	secretKey, secretFound := lookup(worker.PayloadSecretKeyEnvironment)
+	if !dsnFound || !tokenFound || !accessFound || !secretFound {
+		return fmt.Errorf("compose orchestration-codec role: required private credential is unavailable")
+	}
+	roleContext, cancel := context.WithCancel(ctx)
+	defer cancel()
+	results := make(chan error, 2)
+	go func() { results <- roles.Serve(roleContext, plan, listener) }()
+	go func() {
+		results <- runtimeorchestration.Run(roleContext, runtimeorchestration.ProcessConfig{
+			DatabaseDSN:         dsn,
+			TemporalEndpoint:    temporalEndpoint,
+			TemporalToken:       token,
+			Namespace:           config.Namespace(),
+			TaskQueue:           worker.TaskQueue,
+			PayloadBlobEndpoint: worker.PayloadBlobEndpoint,
+			PayloadBlobBucket:   worker.PayloadBlobBucket,
+			PayloadBlobPrefix:   worker.PayloadBlobPrefix,
+			PayloadAccessKey:    accessKey,
+			PayloadSecretKey:    secretKey,
+		})
+	}()
+	err := <-results
+	cancel()
+	if err != nil {
+		return err
+	}
+	return <-results
 }

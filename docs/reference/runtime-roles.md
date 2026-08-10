@@ -19,9 +19,11 @@ when local development would find a convenience all-in-one process useful.
 
 The configuration schema is version `1`. `--check` runs startup validation and
 credential-presence validation but does not listen or mutate infrastructure.
-Without `--check`, the currently implemented composition slice exposes
-`GET /healthz` and `GET /readyz`; their response contains only `role`,
-`namespace`, and `status`.
+Without `--check`, ordinary roles expose `GET /healthz` and `GET /readyz`;
+their response contains only `role`, `namespace`, and `status`.
+`orchestration-codec` additionally starts the private state/outbox-derived
+Temporal Session worker from its explicit task queue and dedicated payload
+bucket/prefix. It receives no public API or runtime-content credential.
 
 `egress-proxy` is a separately deployed infrastructure process, not a runtime
 role. It takes an explicit bind address and one or more exact

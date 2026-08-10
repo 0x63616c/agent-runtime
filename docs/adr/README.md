@@ -21,3 +21,4 @@ implementation authority unless an accepted ADR explicitly promotes them.
 | [0012](0012-private-firecracker-boot-probe-v2.md) | Private Firecracker boot-probe v2 protocol |
 | [0013](0013-temporary-documentation-audit-exception.md) | Retired documentation production-dependency audit exception |
 | [0014](0014-astro-starlight-documentation-platform.md) | Astro Starlight documentation platform |
+| [0015](0015-codec-enabled-orchestration-worker.md) | Codec-enabled orchestration worker capability |

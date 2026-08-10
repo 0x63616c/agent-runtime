@@ -241,13 +241,18 @@ const (
 
 // OutboxRecord refers to a committed aggregate effect without copying its event payload.
 type OutboxRecord struct {
-	Tenant            runtimecontent.TenantID
-	Principal         runtimecontent.PrincipalID
-	OutboxID          OutboxID
-	Aggregate         string
-	AggregateVersion  uint64
-	Version           uint64
-	EventID           agentruntime.EventID `json:",omitempty"`
+	Tenant           runtimecontent.TenantID
+	Principal        runtimecontent.PrincipalID
+	OutboxID         OutboxID
+	Aggregate        string
+	AggregateVersion uint64
+	Version          uint64
+	EventID          agentruntime.EventID `json:",omitempty"`
+	// EventKind is the closed product-event route. It lets a private publisher
+	// select work from durable state without loading an event payload or a
+	// runtime-content object.
+	EventKind         agentruntime.EventKind `json:",omitempty"`
+	EventSequence     uint64                 `json:",omitempty"`
 	OperationID       OperationID
 	SessionID         agentruntime.SessionID `json:",omitempty"`
 	TurnID            agentruntime.TurnID    `json:",omitempty"`
@@ -781,6 +786,13 @@ type RuntimeStateStore interface {
 	ReadOutbox(context.Context, OutboxQuery) (OutboxPage, error)
 	AuthorizeAgentSpecificationBodyRead(context.Context, CompiledReadAuthorization) (runtimecontent.AgentSpecificationBodyRecord, error)
 	AuthorizeInputEnvelopeRead(context.Context, CompiledReadAuthorization) (runtimecontent.InputEnvelopeRecord, error)
+}
+
+// OutboxTenantSource is the deliberately narrow discovery capability used by
+// a private outbox publisher. It exposes tenant identifiers only; it is not a
+// public runtime query and it never grants content-read authority.
+type OutboxTenantSource interface {
+	ListOutboxTenants(context.Context) ([]runtimecontent.TenantID, error)
 }
 
 // ContentHandoffValidator is supplied to a state-store composition so a command cannot persist a forgeable reference.

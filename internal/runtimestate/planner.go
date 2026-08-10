@@ -549,7 +549,8 @@ func (planner *RuntimeStatePlanner) claim(state *RuntimeState, binding ReceiptBi
 		return PlanResult{}, EffectSet{}, ErrNotFoundOrDenied
 	}
 	record := state.Outbox[index]
-	if record.Version != command.ExpectedVersion || record.State != OutboxPending || !command.ClaimUntil.After(now) {
+	claimable := record.State == OutboxPending || (record.State == OutboxClaimed && record.ClaimUntil != nil && !record.ClaimUntil.After(now))
+	if record.Version != command.ExpectedVersion || !claimable || !command.ClaimUntil.After(now) {
 		return PlanResult{}, EffectSet{}, ErrConflict
 	}
 	record.State, record.ClaimedBy, record.ClaimUntil, record.Version = OutboxClaimed, command.Claimer, &command.ClaimUntil, record.Version+1
@@ -597,7 +598,7 @@ func (planner *RuntimeStatePlanner) effects(state *RuntimeState, binding Receipt
 		}
 		state.Events = append(state.Events, event)
 		effects.Events = append(effects.Events, event)
-		outbox, err := planner.outbox(session, turn, invocation, event.EventID, now, until)
+		outbox, err := planner.outbox(session, turn, invocation, event.EventID, kind, event.Sequence, now, until)
 		if err != nil {
 			return EffectSet{}, err
 		}
@@ -611,7 +612,7 @@ func (planner *RuntimeStatePlanner) effects(state *RuntimeState, binding Receipt
 	state.Audit = append(state.Audit, fact)
 	effects.Audit = append(effects.Audit, fact)
 	if len(kinds) == 0 {
-		outbox, err := planner.outbox(session, turn, invocation, agentruntime.EventID(""), now, until)
+		outbox, err := planner.outbox(session, turn, invocation, agentruntime.EventID(""), "", 0, now, until)
 		if err != nil {
 			return EffectSet{}, err
 		}
@@ -655,12 +656,12 @@ func (planner *RuntimeStatePlanner) factKind(binding ReceiptBinding, kind string
 	}
 	return AuditFactRecord{Tenant: binding.Scope.Tenant, AuditFactID: id, OperationID: OperationID(binding.IdempotencyKey), Actor: binding.Scope.Principal, Kind: kind, SessionID: sessionID, TurnID: turnID, OccurredAt: now, RetentionUntil: until}, nil
 }
-func (planner *RuntimeStatePlanner) outbox(session SessionRecord, turn TurnRecord, invocation InvocationRecord, eventID agentruntime.EventID, now, until time.Time) (OutboxRecord, error) {
+func (planner *RuntimeStatePlanner) outbox(session SessionRecord, turn TurnRecord, invocation InvocationRecord, eventID agentruntime.EventID, eventKind agentruntime.EventKind, eventSequence uint64, now, until time.Time) (OutboxRecord, error) {
 	id, err := planner.outboxID()
 	if err != nil {
 		return OutboxRecord{}, err
 	}
-	return OutboxRecord{Tenant: session.Tenant, Principal: session.Principal, OutboxID: id, Aggregate: "session", AggregateVersion: session.Version, Version: 1, EventID: eventID, OperationID: invocation.OperationID, SessionID: session.SessionID, TurnID: turn.TurnID, InvocationID: invocation.InvocationID, InvocationOrdinal: invocation.Ordinal, InvocationFence: invocation.Fence, SessionVersion: session.Version, TurnVersion: turn.Version, State: OutboxPending, CommittedAt: now, RetentionUntil: until}, nil
+	return OutboxRecord{Tenant: session.Tenant, Principal: session.Principal, OutboxID: id, Aggregate: "session", AggregateVersion: session.Version, Version: 1, EventID: eventID, EventKind: eventKind, EventSequence: eventSequence, OperationID: invocation.OperationID, SessionID: session.SessionID, TurnID: turn.TurnID, InvocationID: invocation.InvocationID, InvocationOrdinal: invocation.Ordinal, InvocationFence: invocation.Fence, SessionVersion: session.Version, TurnVersion: turn.Version, State: OutboxPending, CommittedAt: now, RetentionUntil: until}, nil
 }
 func (planner *RuntimeStatePlanner) catalogOutbox(binding ReceiptBinding, revision AgentRevisionRecord, now, until time.Time) (OutboxRecord, error) {
 	id, err := planner.outboxID()

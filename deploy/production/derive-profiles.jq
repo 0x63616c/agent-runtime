@@ -17,6 +17,11 @@ def role_config_namespace($namespace):
         .value |= (fromjson |
           .namespace = $namespace |
           .dependencies |= map(.endpoint |= gsub("\\.agent-runtime\\.svc"; "." + $namespace + ".svc")) |
+          if .worker then
+            .worker.payload_blob_endpoint |= gsub("\\.agent-runtime\\.svc"; "." + $namespace + ".svc") |
+            .worker.payload_blob_bucket = ($namespace + "-temporal-payload") |
+            .worker.task_queue = ($namespace + "-session-v1")
+          else . end |
           tojson)
       else . end))
   else . end;

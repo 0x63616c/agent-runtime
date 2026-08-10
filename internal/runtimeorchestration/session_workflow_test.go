@@ -21,10 +21,13 @@ func TestSessionWorkflowDispatchesOrderedStateCommandsAndContinuesAsNew(t *testi
 		return nil
 	}, activity.RegisterOptions{Name: runtimeorchestration.DispatchStateCommandActivity})
 	environment.RegisterDelayedCallback(func() {
-		environment.SignalWorkflow(runtimeorchestration.SessionCommandSignal, runtimeorchestration.Command{SessionID: "sess_1234567890ABCDEF", Kind: runtimeorchestration.CommandInputAccepted, Sequence: 1})
+		environment.SignalWorkflow(runtimeorchestration.SessionCommandSignal, runtimeorchestration.Command{Tenant: "tenant-a", OutboxID: "outbox-1", SessionID: "sess_1234567890ABCDEF", Kind: runtimeorchestration.CommandInputAccepted, Sequence: 1})
 	}, 0)
 	environment.RegisterDelayedCallback(func() {
-		environment.SignalWorkflow(runtimeorchestration.SessionCommandSignal, runtimeorchestration.Command{SessionID: "sess_1234567890ABCDEF", Kind: runtimeorchestration.CommandTurnCancelled, Sequence: 2})
+		environment.SignalWorkflow(runtimeorchestration.SessionCommandSignal, runtimeorchestration.Command{Tenant: "tenant-a", OutboxID: "outbox-1", SessionID: "sess_1234567890ABCDEF", Kind: runtimeorchestration.CommandInputAccepted, Sequence: 1})
+	}, 0)
+	environment.RegisterDelayedCallback(func() {
+		environment.SignalWorkflow(runtimeorchestration.SessionCommandSignal, runtimeorchestration.Command{Tenant: "tenant-a", OutboxID: "outbox-2", SessionID: "sess_1234567890ABCDEF", Kind: runtimeorchestration.CommandTurnCancelled, Sequence: 2})
 	}, 0)
 	environment.ExecuteWorkflow(runtimeorchestration.SessionWorkflow, runtimeorchestration.WorkflowInput{SessionID: "sess_1234567890ABCDEF", ContinueAfter: 2})
 	if !environment.IsWorkflowCompleted() {
@@ -47,7 +50,7 @@ func TestSessionWorkflowRejectsACommandForAnotherSession(t *testing.T) {
 	var suite testsuite.WorkflowTestSuite
 	environment := suite.NewTestWorkflowEnvironment()
 	environment.RegisterDelayedCallback(func() {
-		environment.SignalWorkflow(runtimeorchestration.SessionCommandSignal, runtimeorchestration.Command{SessionID: "sess_ABCDEFGHIJ123456", Kind: runtimeorchestration.CommandInputAccepted, Sequence: 1})
+		environment.SignalWorkflow(runtimeorchestration.SessionCommandSignal, runtimeorchestration.Command{Tenant: "tenant-a", OutboxID: "outbox-1", SessionID: "sess_ABCDEFGHIJ123456", Kind: runtimeorchestration.CommandInputAccepted, Sequence: 1})
 	}, 0)
 	environment.ExecuteWorkflow(runtimeorchestration.SessionWorkflow, runtimeorchestration.WorkflowInput{SessionID: "sess_1234567890ABCDEF", ContinueAfter: 2})
 	if err := environment.GetWorkflowError(); err == nil {

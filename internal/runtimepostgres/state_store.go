@@ -20,6 +20,7 @@ import (
 type RuntimeStateStore struct{ pool *pgxpool.Pool }
 
 var _ runtimestate.RuntimeStateStore = (*RuntimeStateStore)(nil)
+var _ runtimestate.OutboxTenantSource = (*RuntimeStateStore)(nil)
 
 // NewRuntimeStateStore constructs the PostgreSQL authority from an explicit pool.
 func NewRuntimeStateStore(pool *pgxpool.Pool) (*RuntimeStateStore, error) {
@@ -301,6 +302,34 @@ func (store *RuntimeStateStore) ReadOutbox(ctx context.Context, query runtimesta
 		page.Next = record.OutboxID
 	}
 	return page.Clone(), nil
+}
+
+// ListOutboxTenants exposes only durable state partitions to the private
+// outbox publisher. Runtime-content objects remain outside this capability.
+func (store *RuntimeStateStore) ListOutboxTenants(ctx context.Context) ([]runtimecontent.TenantID, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if store == nil || store.pool == nil {
+		return nil, runtimestate.ErrUnavailable
+	}
+	rows, err := store.pool.Query(ctx, `SELECT tenant_id FROM runtime.runtime_state_snapshots ORDER BY tenant_id`)
+	if err != nil {
+		return nil, runtimestate.ErrUnavailable
+	}
+	defer rows.Close()
+	tenants := []runtimecontent.TenantID{}
+	for rows.Next() {
+		var tenant string
+		if err := rows.Scan(&tenant); err != nil {
+			return nil, runtimestate.ErrUnavailable
+		}
+		tenants = append(tenants, runtimecontent.TenantID(tenant))
+	}
+	if rows.Err() != nil {
+		return nil, runtimestate.ErrUnavailable
+	}
+	return tenants, nil
 }
 func (store *RuntimeStateStore) AuthorizeAgentSpecificationBodyRead(ctx context.Context, authorization runtimestate.CompiledReadAuthorization) (runtimecontent.AgentSpecificationBodyRecord, error) {
 	scope := authorization.Scope()

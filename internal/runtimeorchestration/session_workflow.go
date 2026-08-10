@@ -6,7 +6,11 @@ import (
 	"errors"
 	"time"
 
+	"github.com/0x63616c/agent-runtime/internal/runtimecontent"
+	"github.com/0x63616c/agent-runtime/internal/runtimestate"
+	agentruntime "github.com/0x63616c/agent-runtime/sdk/go"
 	"go.temporal.io/sdk/activity"
+	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/workflow"
 )
 
@@ -16,6 +20,7 @@ const (
 	// DispatchStateCommandActivity is the registered activity name that reaches the state-backed dispatcher.
 	DispatchStateCommandActivity = "runtime.dispatch-state-command.v1"
 	workflowVersionChange        = "runtime.session-workflow.command-dispatch.v1"
+	deterministicRouteErrorType  = "runtime.deterministic_outbox_route"
 )
 
 // CommandKind is the closed private workflow command vocabulary.
@@ -30,6 +35,8 @@ const (
 
 // Command carries only public runtime IDs and ordered durable metadata; never content or backend handles.
 type Command struct {
+	Tenant    string
+	OutboxID  string
 	SessionID string
 	Kind      CommandKind
 	Sequence  uint64
@@ -39,6 +46,7 @@ type Command struct {
 type WorkflowInput struct {
 	SessionID     string
 	NextSequence  uint64
+	Dispatched    uint32
 	ContinueAfter uint32
 }
 
@@ -58,15 +66,67 @@ func NewActivities(dispatcher StateDispatcher) (*Activities, error) {
 	return &Activities{dispatcher: dispatcher}, nil
 }
 
+// DurableStateDispatcher rechecks the state-owned outbox route before an
+// activity may act on a Temporal signal. A Temporal credential by itself
+// therefore cannot manufacture runtime work: the command must name a durable
+// outbox record with the matching tenant, Session, and event route.
+type DurableStateDispatcher struct {
+	store runtimestate.RuntimeStateStore
+}
+
+// NewDurableStateDispatcher creates the state-only activity authority. It has
+// no runtime-content reader and no public API credential.
+func NewDurableStateDispatcher(store runtimestate.RuntimeStateStore) (*DurableStateDispatcher, error) {
+	if store == nil {
+		return nil, errors.New("create durable state dispatcher: state store is required")
+	}
+	return &DurableStateDispatcher{store: store}, nil
+}
+
+// Dispatch confirms the publisher-selected outbox route remains durable.
+func (dispatcher *DurableStateDispatcher) Dispatch(ctx context.Context, command Command) error {
+	if dispatcher == nil || dispatcher.store == nil || validateCommand(command) != nil {
+		return errors.New("dispatch durable runtime state command: invalid dispatcher or command")
+	}
+	tenant, err := runtimecontent.ParseTenantID(command.Tenant)
+	if err != nil {
+		return errors.New("dispatch durable runtime state command: invalid tenant")
+	}
+	after := runtimestate.OutboxID("")
+	for {
+		page, err := dispatcher.store.ReadOutbox(ctx, runtimestate.OutboxQuery{Scope: runtimestate.MutationScope{Tenant: tenant, Authority: runtimestate.AuthorityOutboxPublisher}, After: after, Limit: 256})
+		if err != nil {
+			return err
+		}
+		for _, record := range page.Records {
+			if string(record.OutboxID) != command.OutboxID {
+				continue
+			}
+			if string(record.SessionID) != command.SessionID || !matchesCommand(record.EventKind, command.Kind) || (record.State != runtimestate.OutboxClaimed && record.State != runtimestate.OutboxPublished) {
+				return errors.New("dispatch durable runtime state command: outbox route is not dispatchable")
+			}
+			return nil
+		}
+		if page.Next == "" || page.Next == after {
+			break
+		}
+		after = page.Next
+	}
+	return errors.New("dispatch durable runtime state command: outbox route is absent")
+}
+
 // DispatchStateCommand delivers one already-durable command to the state-backed dispatcher.
 func (activities *Activities) DispatchStateCommand(ctx context.Context, command Command) error {
 	if activities == nil || activities.dispatcher == nil {
-		return errors.New("dispatch runtime state command: state dispatcher is required")
+		return temporal.NewNonRetryableApplicationError("state dispatcher is required", deterministicRouteErrorType, nil)
 	}
 	if err := validateCommand(command); err != nil {
-		return err
+		return temporal.NewNonRetryableApplicationError("invalid durable state command", deterministicRouteErrorType, err)
 	}
 	if err := activities.dispatcher.Dispatch(ctx, command); err != nil {
+		if errors.Is(err, runtimestate.ErrNotFoundOrDenied) || errors.Is(err, runtimestate.ErrIntegrity) {
+			return temporal.NewNonRetryableApplicationError("durable outbox route rejected", deterministicRouteErrorType, err)
+		}
 		return err
 	}
 	return nil
@@ -99,22 +159,45 @@ func SessionWorkflow(ctx workflow.Context, input WorkflowInput) error {
 	for {
 		var command Command
 		commands.Receive(ctx, &command)
-		if command.SessionID != input.SessionID || command.Sequence != input.NextSequence+1 {
+		if command.SessionID != input.SessionID || validateCommand(command) != nil {
 			return errors.New("invalid runtime Session workflow command")
 		}
-		if err := workflow.ExecuteActivity(workflow.WithActivityOptions(ctx, workflow.ActivityOptions{StartToCloseTimeout: time.Minute}), DispatchStateCommandActivity, command).Get(ctx, nil); err != nil {
+		// Publishing is at-least-once: a reclaimed lease can re-signal an already
+		// recorded route. The duplicate is a deterministic no-op, not a second
+		// external effect. Outbox event sequence can have intentional gaps where
+		// product events do not need a worker command.
+		if command.Sequence <= input.NextSequence {
+			continue
+		}
+		activityContext := workflow.WithActivityOptions(ctx, workflow.ActivityOptions{
+			StartToCloseTimeout: time.Minute,
+			RetryPolicy: &temporal.RetryPolicy{
+				InitialInterval:        time.Second,
+				BackoffCoefficient:     2,
+				MaximumInterval:        30 * time.Second,
+				MaximumAttempts:        5,
+				NonRetryableErrorTypes: []string{deterministicRouteErrorType},
+			},
+		})
+		if err := workflow.ExecuteActivity(activityContext, DispatchStateCommandActivity, command).Get(ctx, nil); err != nil {
 			return err
 		}
 		input.NextSequence = command.Sequence
-		if input.NextSequence >= uint64(input.ContinueAfter) {
+		input.Dispatched++
+		if input.Dispatched >= input.ContinueAfter {
+			input.Dispatched = 0
 			return workflow.NewContinueAsNewError(ctx, SessionWorkflow, input)
 		}
 	}
 }
 
 func validateCommand(command Command) error {
-	if command.SessionID == "" || command.Sequence == 0 || (command.Kind != CommandInputAccepted && command.Kind != CommandTurnCancelled) {
+	if command.Tenant == "" || command.OutboxID == "" || command.SessionID == "" || command.Sequence == 0 || (command.Kind != CommandInputAccepted && command.Kind != CommandTurnCancelled) {
 		return errors.New("invalid runtime state command")
 	}
 	return nil
+}
+
+func matchesCommand(event agentruntime.EventKind, command CommandKind) bool {
+	return event == agentruntime.EventInputAccepted && command == CommandInputAccepted || event == agentruntime.EventTurnCancelled && command == CommandTurnCancelled
 }

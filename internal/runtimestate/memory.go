@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"reflect"
+	"slices"
 	"sync"
 
 	"github.com/0x63616c/agent-runtime/internal/runtimecontent"
@@ -19,6 +20,7 @@ type MemoryRuntimeStateStore struct {
 }
 
 var _ RuntimeStateStore = (*MemoryRuntimeStateStore)(nil)
+var _ OutboxTenantSource = (*MemoryRuntimeStateStore)(nil)
 
 // NewMemoryRuntimeStateStore constructs the complete in-memory plan persistence adapter.
 func NewMemoryRuntimeStateStore(planner *RuntimeStatePlanner) (*MemoryRuntimeStateStore, error) {
@@ -243,6 +245,23 @@ func (store *MemoryRuntimeStateStore) ReadOutbox(ctx context.Context, query Outb
 		page.Next = record.OutboxID
 	}
 	return page.Clone(), nil
+}
+
+// ListOutboxTenants returns only tenant partitions containing durable state.
+// It exists solely for the private publisher scheduler, which subsequently
+// performs authority-scoped outbox reads for each partition.
+func (store *MemoryRuntimeStateStore) ListOutboxTenants(ctx context.Context) ([]runtimecontent.TenantID, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	store.mu.RLock()
+	defer store.mu.RUnlock()
+	tenants := make([]runtimecontent.TenantID, 0, len(store.states))
+	for tenant := range store.states {
+		tenants = append(tenants, runtimecontent.TenantID(tenant))
+	}
+	slices.Sort(tenants)
+	return tenants, nil
 }
 func (store *MemoryRuntimeStateStore) AuthorizeAgentSpecificationBodyRead(ctx context.Context, authorization CompiledReadAuthorization) (runtimecontent.AgentSpecificationBodyRecord, error) {
 	if err := requireScope(ctx, authorization.scope, AuthorityTenantAdministrator, false); err != nil {

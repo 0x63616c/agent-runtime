@@ -33,6 +33,7 @@ credentials would destroy the trust boundary.
 | --- | --- | --- | --- |
 | `api` | state, telemetry | none in this early composition slice | Temporal, model, tool, blob, sandbox secrets |
 | `orchestration` | state, telemetry, Temporal | `STATE_DATABASE_DSN`, `TEMPORAL_AUTH_TOKEN` | Model, tool, blob, sandbox-host secrets |
+| `orchestration-codec` | state metadata, telemetry, Temporal, dedicated temporal-payload bucket/prefix and task queue | `STATE_DATABASE_DSN`, `TEMPORAL_AUTH_TOKEN`, `ORCHESTRATION_PAYLOAD_BLOB_ACCESS_KEY`, `ORCHESTRATION_PAYLOAD_BLOB_SECRET_KEY` | Public/API credentials, runtime-content bucket/prefix, model, tool, sandbox-host secrets |
 | `model` | conversation, egress proxy, model, telemetry | `CONVERSATION_ACCESS_TOKEN`, `MODEL_API_KEY` | Temporal, state DB, tool, storage, host secrets |
 | `tool` | sandbox control, telemetry, tool broker | `SANDBOX_CONTROL_TOKEN`, `TOOL_BROKER_TOKEN` | Temporal, model, state DB, blob credentials |
 | `blob` | storage, telemetry | `BLOB_STORAGE_CREDENTIAL` | Temporal, model, tool and sandbox credentials |
@@ -85,10 +86,12 @@ CA material remain external Secret references; they are not proxy arguments.
 Temporal remains a private runtime implementation detail for callers. It is an
 operator dependency with an explicit endpoint, namespace, authentication
 reference, task-queue prefix, history retention, worker role, scaling policy,
-and capacity review in the Stack. The orchestration role is the only runtime
-role that receives Temporal endpoint/authentication configuration. The UI
-codec is only an inspection adapter: it uses the same payload pipeline, but it
-does not become a worker or gain Temporal client credentials.
+and capacity review in the Stack. The generic orchestration and dedicated
+`orchestration-codec` worker roles receive Temporal endpoint/authentication
+configuration. Only `orchestration-codec` has the separate,
+prefix-restricted temporal-payload blob capability required by the local
+worker codec. The UI codec remains an inspection adapter: it does not become
+a worker or gain Temporal client credentials.
 
 The pinned Temporal auto-setup image is explicitly configured with
 `BIND_ON_IP=0.0.0.0`; its entrypoint otherwise derives a pod address that may
@@ -152,9 +155,11 @@ go run ./cmd/runtime serve --config-env RUNTIME_ROLE_CONFIG \
 
 The command verifies strict schema, the role allowlist, endpoint shape,
 namespace, and presence of only the declared credentials. It makes no
-infrastructure mutation. Running without `--check` serves only role health and
-readiness in this early composition slice; it does not claim that the future
-agent API, workers, or sandbox implementation have started.
+infrastructure mutation. Without `--check`, `orchestration-codec` starts the
+M5 private worker after startup codec compatibility succeeds; other roles in
+this slice serve health and readiness only. Its S3 policy must be separately
+restricted to the declared temporal-payload bucket/prefix and must not include
+runtime-content.
 
 `deploy/production/stack.json` is the checked-in typed reference Stack. Its
 role/Secret/replica/ingress/NetworkPolicy/migration topology is parsed and
