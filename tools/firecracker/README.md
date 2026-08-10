@@ -24,6 +24,11 @@ parameters are refused, except for exactly one `versionId` matching a
 versioned-object reference. Presigned URLs and embedded credentials cannot enter
 the lock.
 
+The internal `ParseFixtureLock` boundary accepts only one complete v2 JSON
+document up to 256 KiB, disallows unknown fields and trailing documents, and
+runs the complete provenance validator before any fetch is possible. It does
+not supply a lock file or authorize a fetch by itself.
+
 The rootfs project-build source is a verified tar.gz containing the ext4 member
 and a bounded `rootfs-attestation.json` sidecar. Before staging the image, the
 fixture validator verifies that the sidecar's rootfs digest/size and

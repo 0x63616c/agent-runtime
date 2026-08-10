@@ -2,6 +2,7 @@ package firecracker
 
 import (
 	"archive/tar"
+	"bytes"
 	"compress/gzip"
 	"context"
 	"crypto/sha256"
@@ -28,6 +29,8 @@ var (
 	// ErrSmokeUnavailable means a protected-run host cannot prove a smoke prerequisite.
 	ErrSmokeUnavailable = errors.New("Firecracker smoke harness unavailable")
 )
+
+const maximumFixtureLockBytes = 256 << 10
 
 // FixtureName identifies one non-interchangeable Firecracker fixture.
 type FixtureName string
@@ -127,6 +130,33 @@ type FixtureLock struct {
 	FixtureVersion string           `json:"fixture_version"`
 	Sources        []LockedSource   `json:"sources"`
 	Artifacts      []LockedArtifact `json:"artifacts"`
+}
+
+// ParseFixtureLock reads one bounded, strict, complete fixture-lock document.
+func ParseFixtureLock(reader io.Reader) (FixtureLock, error) {
+	if reader == nil {
+		return FixtureLock{}, fmt.Errorf("%w: lock reader is required", ErrFixtureLock)
+	}
+	contents, err := io.ReadAll(io.LimitReader(reader, maximumFixtureLockBytes+1))
+	if err != nil {
+		return FixtureLock{}, fmt.Errorf("%w: read lock: %v", ErrFixtureLock, err)
+	}
+	if len(contents) > maximumFixtureLockBytes {
+		return FixtureLock{}, fmt.Errorf("%w: lock exceeds %d bytes", ErrFixtureLock, maximumFixtureLockBytes)
+	}
+	decoder := json.NewDecoder(bytes.NewReader(contents))
+	decoder.DisallowUnknownFields()
+	var lock FixtureLock
+	if err := decoder.Decode(&lock); err != nil {
+		return FixtureLock{}, fmt.Errorf("%w: decode lock: %v", ErrFixtureLock, err)
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		return FixtureLock{}, fmt.Errorf("%w: lock contains trailing data", ErrFixtureLock)
+	}
+	if err := lock.Validate(); err != nil {
+		return FixtureLock{}, err
+	}
+	return lock, nil
 }
 
 // Validate rejects partial, mutable, duplicate, or unlicensed fixture locks.

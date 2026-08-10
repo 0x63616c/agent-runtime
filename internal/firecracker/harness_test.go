@@ -37,6 +37,37 @@ func TestFixtureLockAdmitsOnlyCompleteImmutableArtifacts(t *testing.T) {
 	}
 }
 
+func TestParseFixtureLockAcceptsOnlyOneCompleteV2JSONDocument(t *testing.T) {
+	encoded, err := json.Marshal(validFixtureLock())
+	if err != nil {
+		t.Fatalf("Marshal() error = %v", err)
+	}
+
+	lock, err := ParseFixtureLock(bytes.NewReader(encoded))
+	if err != nil {
+		t.Fatalf("ParseFixtureLock() error = %v", err)
+	}
+	if !reflect.DeepEqual(lock, validFixtureLock()) {
+		t.Fatalf("ParseFixtureLock() = %#v, want round-tripped complete lock", lock)
+	}
+}
+
+func TestParseFixtureLockRefusesUnknownTrailingAndOversizedInput(t *testing.T) {
+	encoded, err := json.Marshal(validFixtureLock())
+	if err != nil {
+		t.Fatalf("Marshal() error = %v", err)
+	}
+	for _, input := range [][]byte{
+		append(append([]byte(nil), encoded[:len(encoded)-1]...), []byte(`,"unreviewed":true}`)...),
+		append(append([]byte(nil), encoded...), []byte(` {}`)...),
+		bytes.Repeat([]byte("x"), maximumFixtureLockBytes+1),
+	} {
+		if _, err := ParseFixtureLock(bytes.NewReader(input)); !errors.Is(err, ErrFixtureLock) {
+			t.Errorf("ParseFixtureLock() error = %v, want strict lock refusal", err)
+		}
+	}
+}
+
 func TestFixtureLockV2RequiresGuestAgentAlongsideEveryLaunchArtifact(t *testing.T) {
 	lock := validFixtureLock()
 

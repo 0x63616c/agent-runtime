@@ -75,6 +75,11 @@ rootfs digest/size and `/sbin/init` digest/size against the verified static
 guest-agent artifact. This is stronger than a lock assertion, but is still not
 an ext4 filesystem inspection or proof that a guest has booted.
 
+The v2 lock parser accepts a single bounded 256 KiB JSON document only. It
+rejects unknown fields and trailing data before applying the same fixture
+validator. The parser is a fail-closed intake boundary; no real lock is checked
+in and parsing alone cannot authorize a fixture fetch or launch.
+
 `tools/firecracker/` contains a static Linux/amd64 guest-agent source and a
 minimal no-download ext4 recipe. The recipe rejects dynamically linked or
 non-x86_64 ELF init input and emits a rootfs-attestation sidecar for lock-bundle
