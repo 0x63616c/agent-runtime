@@ -18,9 +18,9 @@ terminal evidence ownership.
 
 | Area | Current implementation and evidence | Remaining terminal gap |
 | --- | --- | --- |
-| DOM-001–007 | Immutable Agent revisions, revision-pinned Sessions, bounded Input references, serialized Turns, invocation records/fences, cancellation and settlement are implemented by `internal/runtimestate`; `compiler_planner_test.go`, `state_runtime_test.go`, and durable API integration cover the initial lifecycle. | Artifact input authorization is not wired through `StateRuntime`; model-attempt dispatch has no model adapter. |
-| API-002–003, API-005–010 (initial Session surface) | Temporal-free SDK/OpenAPI route contract, strict HTTP handling, bounded public models, authorization, cursors, cancellation, inspection and model-profile allowlist have unit/architecture coverage. | API-001 is not complete: the public Artifact and Approval operations are absent. API-004 lacks the required durable idempotency-status lookup; API-011 lacks policy/tool compatibility artifacts; API-012 has no policy administration surface. |
-| DAT-003, DAT-005–007 (initial event/audit/outbox) | Planner-produced ordered events/audit/outbox, CAS state persistence, cursor behavior, and lease claim/ack are tested. The disposable PostgreSQL integration runs migrations, rollback refusal, and state-store checks. | Producer-loss gap/finalization, full audit fact lifecycle/outage matrix, data-classification/GC, tenant erasure, backup/restore, and process-kill boundary matrix are absent. |
+| DOM-001–007, DOM-010–011 (bounded foundation) | Immutable Agent revisions, revision-pinned Sessions, bounded Input references, serialized Turns, invocation records/fences, cancellation and settlement are implemented by `internal/runtimestate`; `compiler_planner_test.go`, `state_runtime_test.go`, and durable API integration cover the initial lifecycle. `AppendConversation` persists only immutable content references under expected-version conflict/idempotency, while `RegisterArtifact` and the state-authorized content reader provide ID/digest metadata plus principal-checked readback. | Artifact input authorization is not wired through `StateRuntime`; conversation has no model adapter; model-attempt dispatch has no model adapter. |
+| API-002–003, API-005–010 (initial Session surface), bounded API-001/API-004 additions | Temporal-free SDK/OpenAPI route contract, strict HTTP handling, bounded public models, authorization, cursors, cancellation, inspection and model-profile allowlist have unit/architecture coverage. Artifact download is a state-authorized SDK/HTTP read; scoped durable receipt status is observable without replaying work. | API-001 is incomplete: public Approval response is absent. API-004 still needs expiry and full HTTP conflict evidence. API-011 lacks policy/tool compatibility artifacts; API-012 has no policy administration surface. |
+| DAT-001–003, DAT-005–007 (bounded foundation) | Conversation expected-version/idempotent planner behavior, immutable Artifact digest authorization, planner-produced ordered events/audit/outbox, CAS state persistence, cursor behavior, and lease claim/ack are tested. The disposable PostgreSQL integration runs migrations, rollback refusal, and state-store checks. | Artifact streaming/retention evidence, producer-loss gap/finalization, full audit fact lifecycle/outage matrix, data-classification/GC, tenant erasure, backup/restore, and process-kill boundary matrix are absent. |
 | TMP-002–004 (Session route) | Private Temporal-free public API boundary; owned codec factory; durable state/outbox scheduler; replay-safe Session workflow versioning, duplicate tolerance, Continue-As-New, and development-server replay evidence. | A retained historic replay fixture and the complete lifecycle coverage are still absent. |
 
 ## Missing M5 work before review
@@ -28,12 +28,11 @@ terminal evidence ownership.
 The acceptance ledger specifies the missing proof/behavior, not merely
 documentation:
 
-- DOM-008–013: durable Tool-intent/grant, conversation, Artifact readback,
-  provider-neutral usage, and public failure contracts integrated with runtime
-  state/API.
-- API-001, API-004, API-011–012: Artifact/Approval HTTP+SDK operations,
-  idempotency-status lookup, compatibility fixtures, and policy admin surface.
-- DAT-001–002, DAT-004, DAT-008–013: conversation/artifact authority,
+- DOM-008–009, DOM-012–013: durable Tool-intent/grant, provider-neutral usage,
+  and public failure contracts integrated with runtime state/API.
+- API-001, API-004, API-011–012: Approval HTTP+SDK operations, full
+  idempotency expiry/conflict evidence, compatibility fixtures, and policy admin surface.
+- DAT-002, DAT-004, DAT-008–013: artifact streaming/retention authority,
   producer-loss finalization, lifecycle/GC classification, production
   PostgreSQL retention/partition/erasure/backup-restore evidence, and
   process-kill outbox recovery.
