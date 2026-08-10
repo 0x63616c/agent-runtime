@@ -8,6 +8,12 @@
   "migration_upgrade_rollback": true,
   "network_policy_admission": true,
   "rbac_negative": true,
+  "proof_provenance": {
+    "retained_artifact_sha256": "sha256:f9b26b33dfafd4cb6943930ff2540472a5ee17ca87d80a8ee539c6282a63338a",
+    "retention_revision": "7ae871ab79f10dc284adc9a126af66c8fecea1d9",
+    "source_revision": "6bb0da69befd89adffbf3aefd5068194607cfca9",
+    "source_tree_id": "8a200eefcd7d15a2ed767b1cf8fa21a753bfa588"
+  },
   "render_profiles": [
     "local",
     "ci",
