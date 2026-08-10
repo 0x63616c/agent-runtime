@@ -14,7 +14,6 @@ import (
 
 	"github.com/0x63616c/agent-runtime/internal/firecrackerbootprobev2"
 	"github.com/0x63616c/agent-runtime/internal/sandboxhostprotocol"
-	"github.com/0x63616c/agent-runtime/sandbox"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -51,9 +50,8 @@ func TestPostgresBootProbeV2RefusesRevokedAndStaleLeaseSessions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	binding := firecrackerbootprobev2.Binding{HostID: host.HostID, HostGeneration: host.Generation, AssignmentID: dispatch.Operation.Assignment.AssignmentID, Tenant: op.Tenant, Principal: op.Principal, SandboxID: op.TargetID, OperationID: op.ID, OperationKind: "firecracker-boot-probe", EffectiveSpecDigest: sandbox.Digest(op.EffectiveSpecDigest), CapabilityDigest: sandbox.Digest(op.CapabilityDigest), CanonicalRequestDigest: sandbox.Digest(op.CanonicalDigest)}
 	initial := firecrackerbootprobev2.Delivery{EnvelopeID: "fc-envelope-01", DeliveryID: "fc-delivery-01", Nonce: "MDEyMzQ1Njc4OWFiY2RlZg", IssuedAt: now, ExpiresAt: now.Add(time.Minute), LeaseEpoch: dispatch.Operation.Assignment.LeaseEpoch, FencingToken: dispatch.Operation.Assignment.FencingToken}
-	created, didCreate, err := ledger.CreateBootProbeSession(ctx, identity, binding, "host-instance-01", initial, now)
+	created, didCreate, err := ledger.CreateBootProbeSession(ctx, identity, op.Principal, op.ID, "host-instance-01", initial, now)
 	if err != nil || !didCreate || created.Version != 1 {
 		t.Fatalf("CreateBootProbeSession() = %#v,%t,%v", created, didCreate, err)
 	}

@@ -6,34 +6,44 @@ import (
 	"time"
 
 	"github.com/0x63616c/agent-runtime/internal/firecrackerbootprobev2"
+	"github.com/0x63616c/agent-runtime/sandbox"
 	"github.com/cockroachdb/errors"
 	"github.com/jackc/pgx/v5"
 )
 
 // CreateBootProbeSession creates the distinct v2 lifecycle only after the
 // durable current enrolled host assignment has been locked and compared.
-func (ledger *PostgresLedger) CreateBootProbeSession(ctx context.Context, identity HostIdentity, binding firecrackerbootprobev2.Binding, hostInstanceSessionID string, initial firecrackerbootprobev2.Delivery, now time.Time) (firecrackerbootprobev2.Snapshot, bool, error) {
-	state, err := firecrackerbootprobev2.NewState(binding, hostInstanceSessionID, initial, now)
-	if err != nil {
-		return firecrackerbootprobev2.Snapshot{}, false, errors.Wrap(err, "create v2 boot-probe state")
-	}
-	session, err := firecrackerbootprobev2.NewSession(state)
-	if err != nil {
-		return firecrackerbootprobev2.Snapshot{}, false, errors.Wrap(err, "create v2 boot-probe session")
-	}
-	wire, err := firecrackerbootprobev2.EncodeSession(session)
-	if err != nil {
-		return firecrackerbootprobev2.Snapshot{}, false, err
-	}
+func (ledger *PostgresLedger) CreateBootProbeSession(ctx context.Context, identity HostIdentity, principal, operationID, hostInstanceSessionID string, initial firecrackerbootprobev2.Delivery, now time.Time) (firecrackerbootprobev2.Snapshot, bool, error) {
 	var snapshot firecrackerbootprobev2.Snapshot
 	created := false
-	err = ledger.transaction(ctx, "create PostgreSQL v2 boot-probe session", func(tx pgx.Tx) error {
-		if err := ledger.validateBootProbeAuthority(ctx, tx, identity, session, now); err != nil {
+	err := ledger.transaction(ctx, "create PostgreSQL v2 boot-probe session", func(tx pgx.Tx) error {
+		host, err := authenticatePostgresHost(ctx, tx, identity, now)
+		if err != nil {
+			return ErrHostDenied
+		}
+		op, err := lockedOperation(ctx, tx, principal, operationID)
+		if err != nil {
+			return err
+		}
+		binding := firecrackerbootprobev2.Binding{HostID: host.HostID, HostGeneration: host.Generation, AssignmentID: op.Assignment.AssignmentID, Tenant: op.Tenant, Principal: op.Principal, SandboxID: op.TargetID, OperationID: op.ID, OperationKind: op.Kind, EffectiveSpecDigest: digestToSandbox(op.EffectiveSpecDigest), CapabilityDigest: digestToSandbox(op.CapabilityDigest), CanonicalRequestDigest: digestToSandbox(op.CanonicalDigest)}
+		if op.Assignment.HostID != host.HostID || op.Assignment.HostGeneration != host.Generation || op.Assignment.LeaseEpoch != initial.LeaseEpoch || op.Assignment.FencingToken != initial.FencingToken || !now.Before(op.Assignment.LeaseExpiresAt) {
+			return ErrStaleFence
+		}
+		state, err := firecrackerbootprobev2.NewState(binding, hostInstanceSessionID, initial, now)
+		if err != nil {
+			return err
+		}
+		session, err := firecrackerbootprobev2.NewSession(state)
+		if err != nil {
+			return err
+		}
+		wire, err := firecrackerbootprobev2.EncodeSession(session)
+		if err != nil {
 			return err
 		}
 		var prior []byte
 		var version int64
-		err := tx.QueryRow(ctx, `SELECT version, session_body FROM runtime.firecracker_boot_probe_sessions WHERE host_instance_session_id=$1 FOR UPDATE`, hostInstanceSessionID).Scan(&version, &prior)
+		err = tx.QueryRow(ctx, `SELECT version, session_body FROM runtime.firecracker_boot_probe_sessions WHERE host_instance_session_id=$1 FOR UPDATE`, hostInstanceSessionID).Scan(&version, &prior)
 		if errors.Is(err, pgx.ErrNoRows) {
 			if _, err := tx.Exec(ctx, `INSERT INTO runtime.firecracker_boot_probe_sessions (host_instance_session_id,host_id,host_generation,principal,operation_id,assignment_id,version,session_body,created_at,updated_at) VALUES ($1,$2,$3,$4,$5,$6,1,$7,$8,$8)`, hostInstanceSessionID, binding.HostID, int64(binding.HostGeneration), binding.Principal, binding.OperationID, binding.AssignmentID, wire, now.UTC()); err != nil {
 				return err
@@ -54,6 +64,8 @@ func (ledger *PostgresLedger) CreateBootProbeSession(ctx context.Context, identi
 	})
 	return snapshot, created, err
 }
+
+func digestToSandbox(value string) sandbox.Digest { return sandbox.Digest(value) }
 
 // RenewBootProbeSession admits exactly one successor only while the original
 // enrolled host, assignment, lease, and fence are still authoritative.
