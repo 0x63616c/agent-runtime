@@ -46,11 +46,7 @@ func TestPostgresBootProbeV2RefusesRevokedAndStaleLeaseSessions(t *testing.T) {
 		t.Fatal(err)
 	}
 	identity := HostIdentity{HostID: host.HostID, Generation: host.Generation, CertificateDigest: host.CertificateDigest}
-	dispatch, err := ledger.PullHostAssignment(ctx, identity, now, now.Add(time.Minute), DeliverySeed{AssignmentID: "assignment_v2", EnvelopeID: "envelope_v2", DeliveryID: "delivery_v2", Nonce: "nonce_v2"}, testEnvelopeSigner)
-	if err != nil {
-		t.Fatal(err)
-	}
-	initial := firecrackerbootprobev2.Delivery{EnvelopeID: "fc-envelope-01", DeliveryID: "fc-delivery-01", Nonce: "MDEyMzQ1Njc4OWFiY2RlZg", IssuedAt: now, ExpiresAt: now.Add(time.Minute), LeaseEpoch: dispatch.Operation.Assignment.LeaseEpoch, FencingToken: dispatch.Operation.Assignment.FencingToken}
+	initial := firecrackerbootprobev2.Delivery{EnvelopeID: "fc-envelope-01", DeliveryID: "fc-delivery-01", Nonce: "MDEyMzQ1Njc4OWFiY2RlZg", IssuedAt: now, ExpiresAt: now.Add(time.Minute)}
 	created, didCreate, err := ledger.CreateBootProbeSession(ctx, identity, op.Principal, op.ID, "host-instance-01", initial, now)
 	if err != nil || !didCreate || created.Version != 1 {
 		t.Fatalf("CreateBootProbeSession() = %#v,%t,%v", created, didCreate, err)
@@ -58,7 +54,7 @@ func TestPostgresBootProbeV2RefusesRevokedAndStaleLeaseSessions(t *testing.T) {
 	if _, _, err := ledger.CreateBootProbeSession(ctx, identity, op.Principal, op.ID, "host-instance-competing", initial, now); err == nil {
 		t.Fatal("CreateBootProbeSession accepted two host-instance sessions for one assignment/fence")
 	}
-	successor := initial
+	successor := created.Session.Delivery.Current
 	successor.EnvelopeID = "fc-envelope-02"
 	successor.DeliveryID = "fc-delivery-02"
 	successor.Nonce = "YWJjZGVmZ2hpamtsbW5vcA"
