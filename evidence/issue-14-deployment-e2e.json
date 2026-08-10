@@ -2,27 +2,21 @@
   "version": 2,
   "milestone": "M1 self-hosted roles and deployment",
   "proof_level": "local_disposable_kubernetes_integration",
-  "utc_time": "2026-08-09T20:05:45Z",
-  "implementation_revision": "49d5b0de99ec2e2f989c069cf6471a68817480fb",
-  "proof_provenance": {
-    "source_revision": "49d5b0de99ec2e2f989c069cf6471a68817480fb",
-    "source_tree_id": "f04391a971104e2dd20a752b90d5704d87feca31",
-    "retention_revision": "6b50b522120f1c794442baaa25710d6f7800dc2c",
-    "retained_artifact_sha256": "sha256:e3b85a282db6bf523a0b27f0dd7e0d6cb8c744e6a00652651646759f3f4fa166"
-  },
+  "utc_time": "2026-08-10T22:29:15Z",
+  "implementation_revision": "fa8ac05de0b347bffdf1b23c86f8f09acd6341f8",
   "stack": {
     "path": "deploy/production/stack.json",
     "profile": "local",
     "name": "agent-runtime",
-    "render_digest": "sha256:2e9d9bac20e254729a05e5046ea597f78216eed55681602700a366648596d2a7"
+    "render_digest": "sha256:d4b87822918936e1e6f83f187d64c3989891eb063cf628877a3ccf98f8286a5f"
   },
   "command": {
     "path": "deploy/production/run-kubernetes-smoke.sh",
-    "kubernetes_context": "orbstack",
+    "kubernetes_context": "k3d-ar-m1-dep-20260810222412",
     "result": "passed"
   },
   "operator": {
-    "audit_sha256": "sha256:6b3b019df2e54bb29e73ad03caeb8c89f52353e64fb9ee13a3b726a4d724eb83",
+    "audit_sha256": "sha256:b80b57860c91046bd0d5ca68ac31de0865ea2d9821068270a2a26c6966bb3e6d",
     "bootstrap": true,
     "apply": true,
     "reconcile_zero_kubernetes_drift": true,
