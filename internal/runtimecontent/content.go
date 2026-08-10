@@ -1,4 +1,4 @@
-// Package runtimecontent owns runtime-scoped immutable Agent specification content.
+// Package runtimecontent owns runtime-scoped immutable Agent specification and Input content.
 package runtimecontent
 
 import (
@@ -19,13 +19,16 @@ const (
 	AgentSpecificationMediaTypeV1 = "application/vnd.agent-runtime.agent-specification+cbor;version=1"
 	// AgentSpecificationBodyMediaTypeV1 identifies an identity-free canonical Agent specification body.
 	AgentSpecificationBodyMediaTypeV1 = "application/vnd.agent-runtime.agent-specification-body+cbor;version=1"
-	maximumSpecificationBytes         = 1 << 20
-	maximumInstructionsBytes          = 256 * 1024
-	maximumToolDescriptionBytes       = 4096
-	maximumNameBytes                  = 128
-	maximumTools                      = 64
-	maximumTenantIDBytes              = 128
-	maximumContentRootBytes           = 128
+	// InputEnvelopeMediaTypeV1 identifies the canonical identity-free Input envelope.
+	InputEnvelopeMediaTypeV1    = "application/vnd.agent-runtime.input+cbor;version=1"
+	maximumSpecificationBytes   = 1 << 20
+	maximumInputEnvelopeBytes   = 2<<20 + 4<<10
+	maximumInstructionsBytes    = 256 * 1024
+	maximumToolDescriptionBytes = 4096
+	maximumNameBytes            = 128
+	maximumTools                = 64
+	maximumTenantIDBytes        = 128
+	maximumContentRootBytes     = 128
 )
 
 var (
@@ -46,6 +49,17 @@ func ParseTenantID(raw string) (TenantID, error) {
 		return "", errors.New("invalid runtime content tenant identity")
 	}
 	return TenantID(raw), nil
+}
+
+// PrincipalID is the strict, canonical identity used to authorize session-owned runtime content reads.
+type PrincipalID string
+
+// ParsePrincipalID validates one canonical runtime-content principal identity.
+func ParsePrincipalID(raw string) (PrincipalID, error) {
+	if !validSegment(raw, maximumTenantIDBytes) {
+		return "", errors.New("invalid runtime content principal identity")
+	}
+	return PrincipalID(raw), nil
 }
 
 // Reference contains immutable content metadata without a storage key.
@@ -78,7 +92,13 @@ type AgentSpecificationBodyCommitment struct {
 	ModelProfile string
 }
 
-// ContentHandoff is an opaque, in-process proof that Store wrote and read back one tenant-bound immutable body.
+// InputEnvelopeCommitment is the bounded metadata a state command may persist after validating a staged Input handoff.
+type InputEnvelopeCommitment struct {
+	Tenant    TenantID
+	Reference Reference
+}
+
+// ContentHandoff is an opaque, in-process proof that Store wrote and read back one tenant-bound immutable content object.
 //
 // It is not a persistent record or a public capability. A state composition
 // validates it through the issuing Store before accepting its metadata.
@@ -93,6 +113,7 @@ type ContentHandoff struct {
 // ContentHandoffValidator validates opaque staged-content commitments before a runtime state command persists their metadata.
 type ContentHandoffValidator interface {
 	ValidateAgentSpecificationBodyHandoff(ContentHandoff) (AgentSpecificationBodyCommitment, error)
+	ValidateInputEnvelopeHandoff(ContentHandoff) (InputEnvelopeCommitment, error)
 }
 
 // ImmutableObjectStore conditionally stores and bounded-reads runtime-owned immutable bytes.
@@ -133,6 +154,20 @@ type AgentSpecificationBodyRepository interface {
 	AuthorizeAgentSpecificationBodyRead(context.Context, TenantID, agentruntime.AgentID, agentruntime.AgentRevisionID) (AgentSpecificationBodyRecord, error)
 }
 
+// InputEnvelopeRecord is the exact durable metadata required to authorize one immutable Input envelope read.
+type InputEnvelopeRecord struct {
+	Tenant    TenantID
+	Principal PrincipalID
+	SessionID agentruntime.SessionID
+	InputID   agentruntime.InputID
+	Reference Reference
+}
+
+// InputEnvelopeRepository authorizes one exact metadata-bound Input envelope read.
+type InputEnvelopeRepository interface {
+	AuthorizeInputEnvelopeRead(context.Context, TenantID, PrincipalID, agentruntime.SessionID, agentruntime.InputID) (InputEnvelopeRecord, error)
+}
+
 // AgentSpecificationReader reads Agent specification content only after repository authorization.
 type AgentSpecificationReader struct {
 	store      *Store
@@ -143,6 +178,12 @@ type AgentSpecificationReader struct {
 type AgentSpecificationBodyReader struct {
 	store      *Store
 	repository AgentSpecificationBodyRepository
+}
+
+// InputEnvelopeReader reads Input content only after runtime-state authorization.
+type InputEnvelopeReader struct {
+	store      *Store
+	repository InputEnvelopeRepository
 }
 
 // agentSpecificationLocator is a package-private capability created only after repository authorization.
@@ -156,6 +197,10 @@ type agentSpecificationLocator struct {
 
 type agentSpecificationBodyLocator struct {
 	record AgentSpecificationBodyRecord
+}
+
+type inputEnvelopeLocator struct {
+	record InputEnvelopeRecord
 }
 
 // Store owns one explicit runtime content namespace.
@@ -186,6 +231,14 @@ func NewAgentSpecificationBodyReader(store *Store, repository AgentSpecification
 		return nil, errors.New("Agent specification body reader requires content store and repository authority")
 	}
 	return &AgentSpecificationBodyReader{store: store, repository: repository}, nil
+}
+
+// NewInputEnvelopeReader constructs the metadata-bound Input envelope read boundary.
+func NewInputEnvelopeReader(store *Store, repository InputEnvelopeRepository) (*InputEnvelopeReader, error) {
+	if store == nil || repository == nil {
+		return nil, errors.New("Input envelope reader requires content store and repository authority")
+	}
+	return &InputEnvelopeReader{store: store, repository: repository}, nil
 }
 
 // ReadAgentSpecification authorizes and reads one exact tenant-owned Agent revision.
@@ -241,6 +294,33 @@ func (reader *AgentSpecificationBodyReader) ReadAgentSpecification(ctx context.C
 		return agentruntime.AgentSpecification{}, ErrNotFoundOrDenied
 	}
 	return reader.store.getAgentSpecificationBody(ctx, agentSpecificationBodyLocator{record: record})
+}
+
+// ReadInputEnvelope authorizes and reads one exact tenant-owned Input envelope.
+func (reader *InputEnvelopeReader) ReadInputEnvelope(ctx context.Context, tenant TenantID, principal PrincipalID, sessionID agentruntime.SessionID, inputID agentruntime.InputID) ([]agentruntime.ContentPart, error) {
+	if !validTenantID(tenant) || !validPrincipalID(principal) {
+		return nil, ErrNotFoundOrDenied
+	}
+	if _, err := agentruntime.ParseSessionID(sessionID.String()); err != nil {
+		return nil, ErrNotFoundOrDenied
+	}
+	if _, err := agentruntime.ParseInputID(inputID.String()); err != nil {
+		return nil, ErrNotFoundOrDenied
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, errors.Wrap(err, "authorize Input envelope read")
+	}
+	record, err := reader.repository.AuthorizeInputEnvelopeRead(ctx, tenant, principal, sessionID, inputID)
+	if err != nil {
+		return nil, classifyObjectError("authorize Input envelope read", err, ErrNotFoundOrDenied)
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, errors.Wrap(err, "authorize Input envelope read")
+	}
+	if record.Tenant != tenant || record.Principal != principal || record.SessionID != sessionID || record.InputID != inputID || !validInputEnvelopeRecord(record) {
+		return nil, ErrNotFoundOrDenied
+	}
+	return reader.store.getInputEnvelope(ctx, inputEnvelopeLocator{record: record})
 }
 
 // PutAgentSpecification canonically encodes and conditionally stores one immutable specification.
@@ -306,6 +386,33 @@ func (store *Store) ValidateAgentSpecificationBodyHandoff(handoff ContentHandoff
 	return AgentSpecificationBodyCommitment{Tenant: handoff.tenant, Reference: handoff.reference, Name: handoff.name, ModelProfile: handoff.modelProfile}, nil
 }
 
+// StageInputEnvelope conditionally writes and reads back a canonical Input envelope before state admission.
+func (store *Store) StageInputEnvelope(ctx context.Context, tenant TenantID, parts []agentruntime.ContentPart) (ContentHandoff, error) {
+	if !validTenantID(tenant) {
+		return ContentHandoff{}, errors.New("stage Input envelope: invalid runtime content owner")
+	}
+	if err := ctx.Err(); err != nil {
+		return ContentHandoff{}, errors.Wrap(err, "stage Input envelope")
+	}
+	encoded, err := encodeInputEnvelope(parts)
+	if err != nil {
+		return ContentHandoff{}, err
+	}
+	reference := referenceForMediaType(encoded, InputEnvelopeMediaTypeV1)
+	if err := store.putVerified(ctx, tenant, reference, encoded, "stage Input envelope"); err != nil {
+		return ContentHandoff{}, err
+	}
+	return ContentHandoff{issuer: store, tenant: tenant, reference: reference}, nil
+}
+
+// ValidateInputEnvelopeHandoff returns metadata only when this Store issued an intact tenant-bound Input handoff.
+func (store *Store) ValidateInputEnvelopeHandoff(handoff ContentHandoff) (InputEnvelopeCommitment, error) {
+	if store == nil || handoff.issuer != store || !validTenantID(handoff.tenant) || !validInputEnvelopeReference(handoff.reference) || handoff.name != "" || handoff.modelProfile != "" {
+		return InputEnvelopeCommitment{}, ErrNotFoundOrDenied
+	}
+	return InputEnvelopeCommitment{Tenant: handoff.tenant, Reference: handoff.reference}, nil
+}
+
 func (store *Store) getAgentSpecification(ctx context.Context, locator agentSpecificationLocator) (agentruntime.AgentSpecification, error) {
 	if !validLocator(locator) {
 		return agentruntime.AgentSpecification{}, ErrNotFoundOrDenied
@@ -361,6 +468,31 @@ func (store *Store) getAgentSpecificationBody(ctx context.Context, locator agent
 	return agentruntime.AgentSpecification{ID: record.AgentID, RevisionID: record.RevisionID, Revision: record.Revision, Name: record.Name, ModelProfile: record.ModelProfile, Instructions: body.Instructions, Tools: append([]agentruntime.ToolDefinition(nil), body.Tools...), CreatedAt: record.CreatedAt.UTC()}, nil
 }
 
+func (store *Store) getInputEnvelope(ctx context.Context, locator inputEnvelopeLocator) ([]agentruntime.ContentPart, error) {
+	record := locator.record
+	if !validInputEnvelopeRecord(record) {
+		return nil, ErrNotFoundOrDenied
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, errors.Wrap(err, "read Input envelope")
+	}
+	raw, err := store.objects.Get(ctx, store.key(record.Tenant, record.Reference.Digest), int(record.Reference.SizeBytes))
+	if err != nil {
+		return nil, classifyObjectError("read immutable Input envelope", err, ErrNotFoundOrDenied)
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, errors.Wrap(err, "read Input envelope")
+	}
+	if int64(len(raw)) != record.Reference.SizeBytes || referenceForMediaType(raw, InputEnvelopeMediaTypeV1).Digest != record.Reference.Digest {
+		return nil, ErrIntegrity
+	}
+	parts, err := decodeInputEnvelope(raw)
+	if err != nil {
+		return nil, errors.Wrap(ErrIntegrity, "decode immutable Input envelope")
+	}
+	return parts, nil
+}
+
 func (store *Store) key(tenant TenantID, digest string) string {
 	return string(tenant) + "/" + store.contentRoot + "/v1/sha256/" + strings.TrimPrefix(digest, "sha256:")
 }
@@ -400,6 +532,10 @@ func validLocator(locator agentSpecificationLocator) bool {
 }
 
 func validTenantID(value TenantID) bool {
+	return validSegment(string(value), maximumTenantIDBytes)
+}
+
+func validPrincipalID(value PrincipalID) bool {
 	return validSegment(string(value), maximumTenantIDBytes)
 }
 
@@ -445,6 +581,21 @@ func validReference(reference Reference) bool {
 
 func validAgentSpecificationBodyReference(reference Reference) bool {
 	return reference.MediaType == AgentSpecificationBodyMediaTypeV1 && reference.SizeBytes > 0 && reference.SizeBytes <= maximumSpecificationBytes && validDigest(reference.Digest)
+}
+
+func validInputEnvelopeReference(reference Reference) bool {
+	return reference.MediaType == InputEnvelopeMediaTypeV1 && reference.SizeBytes > 0 && reference.SizeBytes <= maximumInputEnvelopeBytes && validDigest(reference.Digest)
+}
+
+func validInputEnvelopeRecord(record InputEnvelopeRecord) bool {
+	if !validTenantID(record.Tenant) || !validPrincipalID(record.Principal) || !validInputEnvelopeReference(record.Reference) {
+		return false
+	}
+	if _, err := agentruntime.ParseSessionID(record.SessionID.String()); err != nil {
+		return false
+	}
+	_, err := agentruntime.ParseInputID(record.InputID.String())
+	return err == nil
 }
 
 func validDigest(value string) bool {
@@ -510,6 +661,109 @@ func encodeAgentSpecificationBody(body AgentSpecificationBody) ([]byte, error) {
 		return nil, errors.New("canonical Agent specification body exceeds bound")
 	}
 	return encoded.Bytes(), nil
+}
+
+func encodeInputEnvelope(parts []agentruntime.ContentPart) ([]byte, error) {
+	if err := validateInputEnvelope(parts); err != nil {
+		return nil, err
+	}
+	var encoded bytes.Buffer
+	head(&encoded, 4, 2)
+	uintv(&encoded, 1)
+	head(&encoded, 4, uint64(len(parts)))
+	for _, part := range parts {
+		head(&encoded, 4, 2)
+		switch part.Kind {
+		case agentruntime.ContentText:
+			uintv(&encoded, 1)
+			text(&encoded, part.Text)
+		case agentruntime.ContentArtifact:
+			uintv(&encoded, 2)
+			head(&encoded, 4, 4)
+			text(&encoded, part.Artifact.ID.String())
+			text(&encoded, part.Artifact.MediaType)
+			uintv(&encoded, uint64(part.Artifact.SizeBytes))
+			text(&encoded, part.Artifact.SHA256)
+		default:
+			return nil, errors.New("unsupported Input envelope part")
+		}
+	}
+	if encoded.Len() > maximumInputEnvelopeBytes {
+		return nil, errors.New("canonical Input envelope exceeds bound")
+	}
+	return encoded.Bytes(), nil
+}
+
+func decodeInputEnvelope(raw []byte) ([]agentruntime.ContentPart, error) {
+	if len(raw) == 0 || len(raw) > maximumInputEnvelopeBytes {
+		return nil, errors.New("invalid Input envelope")
+	}
+	decoder := decoder{raw: raw}
+	major, count, err := decoder.head()
+	if err != nil || major != 4 || count != 2 {
+		return nil, errors.New("invalid Input envelope")
+	}
+	if version, err := decoder.uint(); err != nil || version != 1 {
+		return nil, errors.New("unsupported Input envelope version")
+	}
+	major, count, err = decoder.head()
+	if err != nil || major != 4 || count == 0 || count > agentruntime.MaxInputParts {
+		return nil, errors.New("invalid Input envelope parts")
+	}
+	parts := make([]agentruntime.ContentPart, 0, count)
+	for index := uint64(0); index < count; index++ {
+		major, fields, err := decoder.head()
+		if err != nil || major != 4 || fields != 2 {
+			return nil, errors.New("invalid Input envelope part")
+		}
+		kind, err := decoder.uint()
+		if err != nil {
+			return nil, errors.New("invalid Input envelope part kind")
+		}
+		switch kind {
+		case 1:
+			value, err := decoder.text()
+			if err != nil {
+				return nil, errors.New("invalid Input envelope text part")
+			}
+			parts = append(parts, agentruntime.ContentPart{Kind: agentruntime.ContentText, Text: value})
+		case 2:
+			major, fields, err := decoder.head()
+			if err != nil || major != 4 || fields != 4 {
+				return nil, errors.New("invalid Input envelope artifact part")
+			}
+			id, err := decoder.text()
+			if err != nil {
+				return nil, errors.New("invalid Input envelope artifact part")
+			}
+			mediaType, err := decoder.text()
+			if err != nil {
+				return nil, errors.New("invalid Input envelope artifact part")
+			}
+			sizeBytes, err := decoder.uint()
+			if err != nil || sizeBytes > uint64(^uint64(0)>>1) {
+				return nil, errors.New("invalid Input envelope artifact size")
+			}
+			digest, err := decoder.text()
+			if err != nil {
+				return nil, errors.New("invalid Input envelope artifact part")
+			}
+			parts = append(parts, agentruntime.ContentPart{Kind: agentruntime.ContentArtifact, Artifact: &agentruntime.ArtifactReference{ID: agentruntime.ArtifactID(id), MediaType: mediaType, SizeBytes: int64(sizeBytes), SHA256: digest}})
+		default:
+			return nil, errors.New("unsupported Input envelope part")
+		}
+	}
+	if decoder.at != len(raw) {
+		return nil, errors.New("invalid Input envelope")
+	}
+	if err := validateInputEnvelope(parts); err != nil {
+		return nil, err
+	}
+	canonical, err := encodeInputEnvelope(parts)
+	if err != nil || !bytes.Equal(canonical, raw) {
+		return nil, errors.New("noncanonical Input envelope")
+	}
+	return parts, nil
 }
 
 func decodeAgentSpecificationBody(raw []byte) (AgentSpecificationBody, error) {
@@ -677,6 +931,30 @@ func validateAgentSpecificationBody(body AgentSpecificationBody) error {
 			return errors.New("invalid Agent specification body")
 		}
 		seenTools[tool.Name] = struct{}{}
+	}
+	return nil
+}
+
+func validateInputEnvelope(parts []agentruntime.ContentPart) error {
+	if len(parts) == 0 || len(parts) > agentruntime.MaxInputParts {
+		return errors.New("invalid Input envelope part count")
+	}
+	for _, part := range parts {
+		switch part.Kind {
+		case agentruntime.ContentText:
+			if !validText(part.Text, agentruntime.MaxTextPartBytes) || part.Artifact != nil {
+				return errors.New("invalid Input envelope text part")
+			}
+		case agentruntime.ContentArtifact:
+			if part.Text != "" || part.Artifact == nil || part.Artifact.SizeBytes < 0 || !validText(part.Artifact.MediaType, 255) || len(part.Artifact.SHA256) != 64 || strings.Trim(part.Artifact.SHA256, "0123456789abcdef") != "" {
+				return errors.New("invalid Input envelope artifact part")
+			}
+			if _, err := agentruntime.ParseArtifactID(part.Artifact.ID.String()); err != nil {
+				return errors.New("invalid Input envelope artifact part")
+			}
+		default:
+			return errors.New("unsupported Input envelope part")
+		}
 	}
 	return nil
 }

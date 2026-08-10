@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -32,6 +34,233 @@ func TestStoreStagesAnIdentityFreeAgentSpecificationBodyAsTenantBoundHandoff(t *
 	}
 	if len(objects.keys) != 1 || bytes.Contains(objects.values[objects.keys[0]], []byte("agent_")) || bytes.Contains(objects.values[objects.keys[0]], []byte("arev_")) {
 		t.Fatalf("staged Agent body must be identity-free, keys=%v bytes=%x", objects.keys, objects.values[objects.keys[0]])
+	}
+}
+
+func TestStoreStagesCanonicalInputEnvelopeAsTenantBoundHandoff(t *testing.T) {
+	store, objects, tenant, _ := testStore(t)
+	parts := []agentruntime.ContentPart{{Kind: agentruntime.ContentText, Text: "raw input remains immutable content"}}
+
+	handoff, err := store.StageInputEnvelope(context.Background(), tenant, parts)
+	if err != nil {
+		t.Fatalf("stage input envelope: %v", err)
+	}
+	commitment, err := store.ValidateInputEnvelopeHandoff(handoff)
+	if err != nil {
+		t.Fatalf("validate input envelope handoff: %v", err)
+	}
+	if commitment.Tenant != tenant || commitment.Reference.MediaType != runtimecontent.InputEnvelopeMediaTypeV1 || commitment.Reference.Digest == "" || commitment.Reference.SizeBytes <= 0 {
+		t.Fatalf("handoff commitment = %#v, want tenant-bound input reference only", commitment)
+	}
+	if strings.Contains(fmt.Sprintf("%#v", commitment), parts[0].Text) {
+		t.Fatalf("Input envelope commitment exposes raw input: %#v", commitment)
+	}
+	if len(objects.keys) != 1 || !bytes.Contains(objects.values[objects.keys[0]], []byte(parts[0].Text)) {
+		t.Fatalf("staged input envelope = keys=%v bytes=%x, want immutable canonical raw input", objects.keys, objects.values[objects.keys[0]])
+	}
+	const wantCanonicalHex = "8201818201782372617720696e7075742072656d61696e7320696d6d757461626c6520636f6e74656e74"
+	if got := fmt.Sprintf("%x", objects.values[objects.keys[0]]); got != wantCanonicalHex {
+		t.Fatalf("canonical Input envelope changed: got %s, want %s", got, wantCanonicalHex)
+	}
+}
+
+func TestStoreRejectsForeignAndWrongKindInputEnvelopeHandoffs(t *testing.T) {
+	store, objects, tenant, _ := testStore(t)
+	input, err := store.StageInputEnvelope(context.Background(), tenant, []agentruntime.ContentPart{{Kind: agentruntime.ContentText, Text: "safe input"}})
+	if err != nil {
+		t.Fatalf("stage input envelope: %v", err)
+	}
+	other, err := runtimecontent.New("runtime-content", objects)
+	if err != nil {
+		t.Fatalf("new other content authority: %v", err)
+	}
+	if _, err := other.ValidateInputEnvelopeHandoff(input); !errors.Is(err, runtimecontent.ErrNotFoundOrDenied) {
+		t.Fatalf("foreign input handoff error = %v, want ErrNotFoundOrDenied", err)
+	}
+	body, err := store.StageAgentSpecificationBody(context.Background(), tenant, runtimecontent.AgentSpecificationBody{Name: "researcher", ModelProfile: "balanced", Instructions: "be safe"})
+	if err != nil {
+		t.Fatalf("stage Agent specification body: %v", err)
+	}
+	if _, err := store.ValidateInputEnvelopeHandoff(body); !errors.Is(err, runtimecontent.ErrNotFoundOrDenied) {
+		t.Fatalf("body handoff accepted as Input envelope: %v", err)
+	}
+}
+
+func TestStoreFencesCancellationAfterInputEnvelopeObjectWrite(t *testing.T) {
+	store, objects, tenant, _ := testStore(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	objects.getHook = cancel
+
+	_, err := store.StageInputEnvelope(ctx, tenant, []agentruntime.ContentPart{{Kind: agentruntime.ContentText, Text: "orphaned on cancellation"}})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("stage cancelled Input envelope error = %v, want context.Canceled", err)
+	}
+	if len(objects.keys) != 1 {
+		t.Fatalf("writes = %v, want one reconciled immutable orphan", objects.keys)
+	}
+}
+
+func TestStoreStagesArtifactInputEnvelopeWithinPublicContract(t *testing.T) {
+	store, objects, tenant, _ := testStore(t)
+	handoff, err := store.StageInputEnvelope(context.Background(), tenant, []agentruntime.ContentPart{{Kind: agentruntime.ContentArtifact, Artifact: &agentruntime.ArtifactReference{
+		ID: "art_0000000000000001", MediaType: "text/plain", SizeBytes: 5,
+		SHA256: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+	}}})
+	if err != nil {
+		t.Fatalf("stage artifact input envelope: %v", err)
+	}
+	if _, err := store.ValidateInputEnvelopeHandoff(handoff); err != nil {
+		t.Fatalf("validate artifact input envelope: %v", err)
+	}
+	const wantCanonicalHex = "820181820284746172745f303030303030303030303030303030316a746578742f706c61696e05784061616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161"
+	if got := fmt.Sprintf("%x", objects.values[objects.keys[0]]); got != wantCanonicalHex {
+		t.Fatalf("canonical artifact Input envelope changed: got %s, want %s", got, wantCanonicalHex)
+	}
+}
+
+func TestInputEnvelopeReaderAuthorizesAndHydratesExactInputMetadata(t *testing.T) {
+	store, _, tenant, _ := testStore(t)
+	principal := testPrincipalID(t, "alice")
+	parts := []agentruntime.ContentPart{{Kind: agentruntime.ContentText, Text: "read through content authority"}}
+	handoff, err := store.StageInputEnvelope(context.Background(), tenant, parts)
+	if err != nil {
+		t.Fatalf("stage Input envelope: %v", err)
+	}
+	commitment, err := store.ValidateInputEnvelopeHandoff(handoff)
+	if err != nil {
+		t.Fatalf("validate Input envelope handoff: %v", err)
+	}
+	repository := inputEnvelopeRepository{record: runtimecontent.InputEnvelopeRecord{
+		Tenant: tenant, Principal: principal, SessionID: "sess_0000000000000001", InputID: "inpt_0000000000000001", Reference: commitment.Reference,
+	}}
+	reader, err := runtimecontent.NewInputEnvelopeReader(store, repository)
+	if err != nil {
+		t.Fatalf("new Input envelope reader: %v", err)
+	}
+
+	got, err := reader.ReadInputEnvelope(context.Background(), tenant, principal, repository.record.SessionID, repository.record.InputID)
+	if err != nil {
+		t.Fatalf("read Input envelope: %v", err)
+	}
+	if !reflect.DeepEqual(got, parts) {
+		t.Fatalf("Input envelope = %#v, want %#v", got, parts)
+	}
+}
+
+func TestInputEnvelopeReaderRejectsTenantMismatchesBeforeContentRead(t *testing.T) {
+	store, objects, tenant, _ := testStore(t)
+	principal := testPrincipalID(t, "alice")
+	parts := []agentruntime.ContentPart{{Kind: agentruntime.ContentText, Text: "tenant bound input"}}
+	handoff, err := store.StageInputEnvelope(context.Background(), tenant, parts)
+	if err != nil {
+		t.Fatalf("stage Input envelope: %v", err)
+	}
+	commitment, err := store.ValidateInputEnvelopeHandoff(handoff)
+	if err != nil {
+		t.Fatalf("validate Input envelope handoff: %v", err)
+	}
+	otherTenant, err := runtimecontent.ParseTenantID("tenant-b")
+	if err != nil {
+		t.Fatalf("parse other tenant: %v", err)
+	}
+	if _, err := store.StageInputEnvelope(context.Background(), otherTenant, parts); err != nil {
+		t.Fatalf("stage same Input envelope for other tenant: %v", err)
+	}
+	if len(objects.keys) != 2 || objects.keys[0] == objects.keys[1] {
+		t.Fatalf("tenant content keys = %v, want separate immutable object namespaces", objects.keys)
+	}
+	repository := inputEnvelopeRepository{record: runtimecontent.InputEnvelopeRecord{
+		Tenant: tenant, Principal: principal, SessionID: "sess_0000000000000001", InputID: "inpt_0000000000000001", Reference: commitment.Reference,
+	}}
+	reader, err := runtimecontent.NewInputEnvelopeReader(store, repository)
+	if err != nil {
+		t.Fatalf("new Input envelope reader: %v", err)
+	}
+	if _, err := reader.ReadInputEnvelope(context.Background(), otherTenant, principal, repository.record.SessionID, repository.record.InputID); !errors.Is(err, runtimecontent.ErrNotFoundOrDenied) {
+		t.Fatalf("cross-tenant Input read error = %v, want ErrNotFoundOrDenied", err)
+	}
+	if objects.gets != 2 {
+		t.Fatalf("content reads = %d, want staging read-backs only", objects.gets)
+	}
+}
+
+func TestInputEnvelopeReaderRejectsSameTenantDifferentPrincipalBeforeContentRead(t *testing.T) {
+	store, objects, tenant, _ := testStore(t)
+	handoff, err := store.StageInputEnvelope(context.Background(), tenant, []agentruntime.ContentPart{{Kind: agentruntime.ContentText, Text: "principal bound input"}})
+	if err != nil {
+		t.Fatalf("stage Input envelope: %v", err)
+	}
+	commitment, err := store.ValidateInputEnvelopeHandoff(handoff)
+	if err != nil {
+		t.Fatalf("validate Input envelope handoff: %v", err)
+	}
+	alice, err := runtimecontent.ParsePrincipalID("alice")
+	if err != nil {
+		t.Fatalf("parse alice principal: %v", err)
+	}
+	bob, err := runtimecontent.ParsePrincipalID("bob")
+	if err != nil {
+		t.Fatalf("parse bob principal: %v", err)
+	}
+	repository := inputEnvelopeRepository{record: runtimecontent.InputEnvelopeRecord{
+		Tenant: tenant, Principal: alice, SessionID: "sess_0000000000000001", InputID: "inpt_0000000000000001", Reference: commitment.Reference,
+	}}
+	reader, err := runtimecontent.NewInputEnvelopeReader(store, repository)
+	if err != nil {
+		t.Fatalf("new Input envelope reader: %v", err)
+	}
+	if _, err := reader.ReadInputEnvelope(context.Background(), tenant, bob, repository.record.SessionID, repository.record.InputID); !errors.Is(err, runtimecontent.ErrNotFoundOrDenied) {
+		t.Fatalf("cross-principal Input read error = %v, want ErrNotFoundOrDenied", err)
+	}
+	if objects.gets != 1 {
+		t.Fatalf("content reads = %d, want staging read-back only", objects.gets)
+	}
+}
+
+func TestInputEnvelopeReaderPreservesCancellationAndIntegrity(t *testing.T) {
+	store, objects, tenant, _ := testStore(t)
+	principal := testPrincipalID(t, "alice")
+	handoff, err := store.StageInputEnvelope(context.Background(), tenant, []agentruntime.ContentPart{{Kind: agentruntime.ContentText, Text: "protected input"}})
+	if err != nil {
+		t.Fatalf("stage Input envelope: %v", err)
+	}
+	commitment, err := store.ValidateInputEnvelopeHandoff(handoff)
+	if err != nil {
+		t.Fatalf("validate Input envelope handoff: %v", err)
+	}
+	repository := inputEnvelopeRepository{record: runtimecontent.InputEnvelopeRecord{
+		Tenant: tenant, Principal: principal, SessionID: "sess_0000000000000001", InputID: "inpt_0000000000000001", Reference: commitment.Reference,
+	}}
+	reader, err := runtimecontent.NewInputEnvelopeReader(store, repository)
+	if err != nil {
+		t.Fatalf("new Input envelope reader: %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	objects.getHook = cancel
+	if _, err := reader.ReadInputEnvelope(ctx, tenant, principal, repository.record.SessionID, repository.record.InputID); !errors.Is(err, context.Canceled) {
+		t.Fatalf("post-read cancellation error = %v, want context.Canceled", err)
+	}
+	objects.getHook = nil
+	objects.values[objects.keys[0]] = append(objects.values[objects.keys[0]], 0)
+	if _, err := reader.ReadInputEnvelope(context.Background(), tenant, principal, repository.record.SessionID, repository.record.InputID); !errors.Is(err, runtimecontent.ErrIntegrity) {
+		t.Fatalf("tampered Input envelope error = %v, want ErrIntegrity", err)
+	}
+}
+
+func TestStoreRejectsInputEnvelopeOutsidePublicContract(t *testing.T) {
+	store, _, tenant, _ := testStore(t)
+	if _, err := store.StageInputEnvelope(context.Background(), tenant, nil); err == nil {
+		t.Fatal("empty Input envelope staged content, want refusal")
+	}
+	if _, err := store.StageInputEnvelope(context.Background(), tenant, []agentruntime.ContentPart{{Kind: agentruntime.ContentText, Text: "", Artifact: nil}}); err == nil {
+		t.Fatal("empty text Input envelope staged content, want refusal")
+	}
+	tooMany := make([]agentruntime.ContentPart, agentruntime.MaxInputParts+1)
+	for index := range tooMany {
+		tooMany[index] = agentruntime.ContentPart{Kind: agentruntime.ContentText, Text: "x"}
+	}
+	if _, err := store.StageInputEnvelope(context.Background(), tenant, tooMany); err == nil {
+		t.Fatal("oversized Input envelope staged content, want refusal")
 	}
 }
 
@@ -94,4 +323,21 @@ type bodyReaderRepository struct {
 
 func (repository bodyReaderRepository) AuthorizeAgentSpecificationBodyRead(context.Context, runtimecontent.TenantID, agentruntime.AgentID, agentruntime.AgentRevisionID) (runtimecontent.AgentSpecificationBodyRecord, error) {
 	return repository.record, nil
+}
+
+type inputEnvelopeRepository struct {
+	record runtimecontent.InputEnvelopeRecord
+}
+
+func (repository inputEnvelopeRepository) AuthorizeInputEnvelopeRead(context.Context, runtimecontent.TenantID, runtimecontent.PrincipalID, agentruntime.SessionID, agentruntime.InputID) (runtimecontent.InputEnvelopeRecord, error) {
+	return repository.record, nil
+}
+
+func testPrincipalID(t *testing.T, value string) runtimecontent.PrincipalID {
+	t.Helper()
+	principal, err := runtimecontent.ParsePrincipalID(value)
+	if err != nil {
+		t.Fatalf("parse principal %q: %v", value, err)
+	}
+	return principal
 }
