@@ -72,9 +72,10 @@ the returned command. Treating a configuration literal as the compiled stage
 identity is prohibited.
 
 The current M3 reference v2 route is a non-executing control prerequisite: it
-persists and fences the preparation/lifecycle record but emits no M4 grant or
-command and does not stage or start Firecracker. It must not be used as the
-final M4 handoff until the interface below exists.
+persists and fences only the preparation record, then returns the exact
+authority-validated prepared snapshot on retry. It emits no M4 grant or
+command and does not stage, journal, or start Firecracker. It must not be used
+as the final M4 handoff until the interface below exists.
 
 ### Required M4 integration interface
 
