@@ -34,11 +34,12 @@ The M5 activity performs only this reversible state-route verification. It
 propagates cancellation, treats invalid or rejected durable routes as
 non-retryable, and permits transient state-backend errors to retry under the
 bounded Temporal policy. It does not call a model, tool, approval service, or
-sandbox, so it cannot honestly classify an unknown external effect or an
-incompatible persisted policy. Those retry cases and the TMP-010 approval/
-sandbox-operation scenarios are M7 work; they must add their own durable
-activity, reconciliation record, and test-environment evidence rather than be
-silently treated as M5 retries.
+sandbox, so it cannot yet classify an unknown external effect or an
+incompatible persisted policy. TMP-009 nevertheless remains M5 terminal work:
+it requires an explicit retry decision table and proof for those cases before
+this implementation seam can be accepted. TMP-010 likewise remains M5
+terminal work for the approval and sandbox-operation scenarios; M6/M7 consume
+those foundations later but do not own their acceptance rows.
 
 Required retained evidence:
 
