@@ -17,18 +17,20 @@ import (
 	"time"
 
 	"github.com/0x63616c/agent-runtime/internal/clock"
+	"github.com/0x63616c/agent-runtime/internal/firecrackerbootprobev2"
 	"github.com/0x63616c/agent-runtime/internal/sandboxcontrol"
 	"github.com/0x63616c/agent-runtime/internal/sandboxhostprotocol"
 	"github.com/cockroachdb/errors"
 )
 
 const (
-	pullPath      = "/sandbox.host-control/v1/pull"
-	receiptPath   = "/sandbox.host-control/v1/receipt"
-	heartbeatPath = "/sandbox.host-control/v1/heartbeat"
-	outputPath    = "/sandbox.host-control/v1/output"
-	resultPath    = "/sandbox.host-control/v1/result"
-	maxBodyBytes  = 1 << 20
+	pullPath             = "/sandbox.host-control/v1/pull"
+	receiptPath          = "/sandbox.host-control/v1/receipt"
+	heartbeatPath        = "/sandbox.host-control/v1/heartbeat"
+	outputPath           = "/sandbox.host-control/v1/output"
+	resultPath           = "/sandbox.host-control/v1/result"
+	bootProbePreparePath = "/sandbox.host-control/v2/firecracker-boot-probe/prepare"
+	maxBodyBytes         = 1 << 20
 )
 
 // Config contains explicit durable authority and signing material supplied by
@@ -40,6 +42,7 @@ type Config struct {
 	Entropy           io.Reader
 	Clock             clock.Clock
 	LeaseDuration     time.Duration
+	BootProbeStore    *sandboxcontrol.PostgresLedger
 }
 
 type server struct{ config Config }
@@ -56,6 +59,12 @@ type acknowledgement struct {
 	Kind            string `json:"kind"`
 	Duplicate       bool   `json:"duplicate"`
 }
+type bootProbePrepareRequest struct {
+	ProtocolVersion       string `json:"protocol_version"`
+	Principal             string `json:"principal"`
+	OperationID           string `json:"operation_id"`
+	HostInstanceSessionID string `json:"host_instance_session_id"`
+}
 
 // NewHandler constructs the bounded host API without opening listeners or
 // provisioning enrollment, database, certificates or signing keys.
@@ -71,7 +80,45 @@ func NewHandler(config Config) (http.Handler, error) {
 	mux.HandleFunc("POST "+heartbeatPath, server.heartbeat)
 	mux.HandleFunc("POST "+outputPath, server.output)
 	mux.HandleFunc("POST "+resultPath, server.result)
+	if config.BootProbeStore != nil {
+		mux.HandleFunc("POST "+bootProbePreparePath, server.bootProbePrepare)
+	}
 	return secureHeaders(mux), nil
+}
+
+func (server *server) bootProbePrepare(writer http.ResponseWriter, request *http.Request) {
+	identity, _, ok := server.authenticatePeer(writer, request)
+	if !ok {
+		return
+	}
+	var body bootProbePrepareRequest
+	if !decodeCanonical(request, &body) || body.ProtocolVersion != "sandbox.host-control/v2/firecracker-boot-probe" || !bounded(body.Principal, 512) || !bounded(body.OperationID, 128) || !bounded(body.HostInstanceSessionID, 128) {
+		writeDenied(writer)
+		return
+	}
+	now := server.config.Clock.Now().UTC()
+	nonce := make([]byte, 16)
+	if _, err := io.ReadFull(server.config.Entropy, nonce); err != nil {
+		writeUnavailable(writer)
+		return
+	}
+	nonceText := base64.RawURLEncoding.EncodeToString(nonce)
+	delivery := firecrackerbootprobev2.Delivery{EnvelopeID: "v2-" + hex.EncodeToString(nonce[:8]), DeliveryID: "v2-" + hex.EncodeToString(nonce[8:]), Nonce: nonceText, IssuedAt: now, ExpiresAt: now.Add(server.config.LeaseDuration)}
+	// The ledger fills the lease and fence only from the locked operation; this
+	// initial request cannot choose either authority value.
+	op, err := server.config.BootProbeStore.Get(request.Context(), body.Principal, body.OperationID)
+	if err != nil {
+		writeDenied(writer)
+		return
+	}
+	delivery.LeaseEpoch = op.Assignment.LeaseEpoch
+	delivery.FencingToken = op.Assignment.FencingToken
+	snapshot, _, err := server.config.BootProbeStore.CreateBootProbeSession(request.Context(), identity, body.Principal, body.OperationID, body.HostInstanceSessionID, delivery, now)
+	if err != nil {
+		writeStoreError(writer, err)
+		return
+	}
+	writeJSON(writer, http.StatusOK, snapshot)
 }
 
 func (server *server) pull(writer http.ResponseWriter, request *http.Request) {

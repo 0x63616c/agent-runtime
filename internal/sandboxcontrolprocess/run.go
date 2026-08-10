@@ -180,7 +180,7 @@ func listenerAddress(listener net.Listener) string {
 	return listener.Addr().String()
 }
 
-func newHostControlServer(config *hostControlConfig, lookup SecretLookup, store sandboxcontrol.HostControlStore) (*http.Server, error) {
+func newHostControlServer(config *hostControlConfig, lookup SecretLookup, store *sandboxcontrol.PostgresLedger) (*http.Server, error) {
 	encodedKey, err := requiredSecret(lookup, config.controlSigningKeyEnvironment)
 	if err != nil {
 		return nil, err
@@ -203,7 +203,7 @@ func newHostControlServer(config *hostControlConfig, lookup SecretLookup, store 
 	}
 	publicKey := ed25519.PrivateKey(privateKey).Public().(ed25519.PublicKey)
 	trust := sandboxhostprotocol.TrustBundle{Version: config.trustVersion, RevocationEpoch: config.revocationEpoch, Current: sandboxhostprotocol.SigningKey{ID: config.controlKeyID, Version: config.keyVersion, PublicKey: publicKey, NotBefore: config.keyNotBefore, NotAfter: config.keyNotAfter}}
-	handler, err := sandboxhostapi.NewHandler(sandboxhostapi.Config{Store: store, ControlTrust: trust, ControlSigningKey: ed25519.PrivateKey(privateKey), Entropy: rand.Reader, Clock: systemClock{}, LeaseDuration: config.lease})
+	handler, err := sandboxhostapi.NewHandler(sandboxhostapi.Config{Store: store, BootProbeStore: store, ControlTrust: trust, ControlSigningKey: ed25519.PrivateKey(privateKey), Entropy: rand.Reader, Clock: systemClock{}, LeaseDuration: config.lease})
 	if err != nil {
 		return nil, err
 	}
