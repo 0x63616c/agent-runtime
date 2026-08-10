@@ -70,6 +70,10 @@ func RunOnceWithExecutor(ctx context.Context, config Config, lookup SecretLookup
 		return err
 	}
 	defer client.CloseIdleConnections()
+	if config.bootProbe != nil {
+		_, err := RunBootProbeV2Once(ctx, client, config.controlURL, config.bootProbe.principal, config.bootProbe.operationID, config.bootProbe.hostInstanceSessionID, config.bootProbe.journalFile)
+		return err
+	}
 	journal, err := sandboxhostjournal.Open(config.journalFile, config.maximumReceipts)
 	if err != nil {
 		return err
