@@ -2,17 +2,11 @@
   "version": 1,
   "milestone": "M1 local Stack instance isolation",
   "proof_level": "isolated_kubernetes_integration",
-  "utc_time": "2026-08-09T20:08:44Z",
-  "implementation_revision": "49d5b0de99ec2e2f989c069cf6471a68817480fb",
-  "proof_provenance": {
-    "source_revision": "49d5b0de99ec2e2f989c069cf6471a68817480fb",
-    "source_tree_id": "f04391a971104e2dd20a752b90d5704d87feca31",
-    "retention_revision": "6b50b522120f1c794442baaa25710d6f7800dc2c",
-    "retained_artifact_sha256": "sha256:b0187a62233b369fb55d2995957a0a093b1ec9bb6c5f19228a05672f2b08d8cd"
-  },
+  "utc_time": "2026-08-10T21:54:53Z",
+  "implementation_revision": "46ff46e0057617574c358e2cca076ea168434257",
   "command": {
     "path": "deploy/dev/run-two-stack-smoke.sh",
-    "kubernetes_context": "k3d-agent-runtime-isolated",
+    "kubernetes_context": "k3d-ar-ci-m1-20260810215052",
     "profile": "ci",
     "result": "passed"
   },
@@ -25,14 +19,14 @@
   },
   "stacks": [
     {
-      "name": "ci-isolation-a",
-      "namespace": "ar-ci-ci-isolation-a",
-      "namespace_uid": "288707cf-a1cf-4f63-9f57-5e20cba4d0ad"
+      "name": "m1-live-a",
+      "namespace": "ar-ci-m1-live-a",
+      "namespace_uid": "c3c487c1-77d0-4dbd-b9f0-2826b31dc1a1"
     },
     {
-      "name": "ci-isolation-b",
-      "namespace": "ar-ci-ci-isolation-b",
-      "namespace_uid": "8f07c167-6835-41cd-b59f-7a34b07c7f7d"
+      "name": "m1-live-b",
+      "namespace": "ar-ci-m1-live-b",
+      "namespace_uid": "7efba876-f12b-4a93-95f2-31fd8cdfd5b4"
     }
   ],
   "both_stacks_concurrently_ready": true,
