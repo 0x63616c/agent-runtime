@@ -508,6 +508,19 @@ type DecideApprovalCommand struct {
 
 func (command DecideApprovalCommand) Owned() DecideApprovalCommand { return command }
 
+// ConsumeCapabilityGrantCommand records one worker-owned use of an approved
+// grant before the associated external tool execution may begin.
+type ConsumeCapabilityGrantCommand struct {
+	Scope                               MutationScope
+	IdempotencyKey, GrantID, ToolCallID string
+	PolicyRevisionDigest                string
+	SessionID                           agentruntime.SessionID
+	TurnID                              agentruntime.TurnID
+}
+
+// Owned returns a value-owned capability grant consumption command.
+func (command ConsumeCapabilityGrantCommand) Owned() ConsumeCapabilityGrantCommand { return command }
+
 // Owned returns a value-owned command. ContentHandoff is opaque and immutable to callers.
 func (command AdmitInputCommand) Owned() AdmitInputCommand {
 	return command

@@ -26,6 +26,7 @@ const (
 	IdentifierCursor     IdentifierKind = "cur"
 	IdentifierAudit      IdentifierKind = "audit"
 	IdentifierOutbox     IdentifierKind = "outbox"
+	IdentifierGrant      IdentifierKind = "grant"
 )
 
 // IdentifierSource supplies planner-owned opaque IDs. It is injected so plans are deterministic in tests.
@@ -257,6 +258,8 @@ func (planner *RuntimeStatePlanner) Plan(ctx context.Context, prior RuntimeState
 		result, effects, err = planner.requestApproval(&state, mutation.mutation.receipt, command, now)
 	case DecideApprovalCommand:
 		result, effects, err = planner.decideApproval(&state, mutation.mutation.receipt, command, now)
+	case ConsumeCapabilityGrantCommand:
+		result, effects, err = planner.consumeCapabilityGrant(&state, mutation.mutation.receipt, command, now)
 	case BeginInvocationAttemptCommand:
 		result, effects, err = planner.begin(&state, mutation.mutation.receipt, command, now)
 	case RecordInvocationOutcomeCommand:
@@ -514,8 +517,46 @@ func (planner *RuntimeStatePlanner) decideApproval(state *RuntimeState, binding 
 		a.Decision = c.Decision
 		a.DecidedAt = &now
 		state.Approvals[n] = a
+		if c.Decision == "approved" {
+			grantID, err := planner.grantID()
+			if err != nil {
+				return PlanResult{}, EffectSet{}, err
+			}
+			state.Grants = append(state.Grants, CapabilityGrantRecord{
+				Tenant:               a.Tenant,
+				Principal:            a.Principal,
+				GrantID:              grantID,
+				ToolCallID:           a.ToolCallID,
+				CapabilityDigest:     a.CapabilityDigest,
+				MaximumUses:          a.MaximumUses,
+				ExpiresAt:            a.ExpiresAt,
+				PolicyRevisionDigest: a.PolicyRevisionDigest,
+				CreatedAt:            now,
+				RetainUntil:          a.RetainUntil,
+			})
+		}
 		e, err := planner.auditOnly(state, binding, "approval."+c.Decision, a.SessionID, a.TurnID, now, a.RetainUntil)
 		return PlanResult{}, e, err
+	}
+	return PlanResult{}, EffectSet{}, ErrNotFoundOrDenied
+}
+
+func (planner *RuntimeStatePlanner) consumeCapabilityGrant(state *RuntimeState, binding ReceiptBinding, c ConsumeCapabilityGrantCommand, now time.Time) (PlanResult, EffectSet, error) {
+	if findTurn(state, binding.Scope, c.SessionID, c.TurnID) < 0 {
+		return PlanResult{}, EffectSet{}, ErrNotFoundOrDenied
+	}
+	for index := range state.Grants {
+		grant := state.Grants[index]
+		if grant.GrantID != c.GrantID || grant.Tenant != binding.Scope.Tenant || grant.Principal != binding.Scope.Principal {
+			continue
+		}
+		if grant.ToolCallID != c.ToolCallID || grant.PolicyRevisionDigest != c.PolicyRevisionDigest || !now.Before(grant.ExpiresAt) || grant.Uses >= grant.MaximumUses {
+			return PlanResult{}, EffectSet{}, ErrConflict
+		}
+		grant.Uses++
+		state.Grants[index] = grant
+		effects, err := planner.auditOnly(state, binding, "capability_grant.consumed", c.SessionID, c.TurnID, now, grant.RetainUntil)
+		return PlanResult{}, effects, err
 	}
 	return PlanResult{}, EffectSet{}, ErrNotFoundOrDenied
 }
@@ -883,6 +924,17 @@ func (planner *RuntimeStatePlanner) artifactID() (agentruntime.ArtifactID, error
 	}
 	return agentruntime.ParseArtifactID(value)
 }
+
+func (planner *RuntimeStatePlanner) grantID() (string, error) {
+	value, err := planner.raw(IdentifierGrant)
+	if err != nil {
+		return "", err
+	}
+	if !validOpaque(value, 128) {
+		return "", ErrIntegrity
+	}
+	return value, nil
+}
 func (planner *RuntimeStatePlanner) turnID() (agentruntime.TurnID, error) {
 	value, err := planner.raw(IdentifierTurn)
 	if err != nil {
@@ -1009,6 +1061,7 @@ func containsOutbox(state RuntimeState, record OutboxRecord) bool {
 }
 func validateState(state RuntimeState) error {
 	revisions, sessions, inputs, artifacts, conversations, turns, operations := map[string]struct{}{}, map[string]struct{}{}, map[string]struct{}{}, map[string]struct{}{}, map[string]struct{}{}, map[string]struct{}{}, map[string]struct{}{}
+	approvals, grants := map[string]struct{}{}, map[string]struct{}{}
 	events, cursors, audit, outbox, receipts := map[string]struct{}{}, map[string]struct{}{}, map[string]struct{}{}, map[string]struct{}{}, map[string]struct{}{}
 	active, positions := map[agentruntime.SessionID]uint64{}, map[string]struct{}{}
 	for _, record := range state.Revisions {
@@ -1033,6 +1086,16 @@ func validateState(state RuntimeState) error {
 	}
 	for _, record := range state.Conversations {
 		if duplicate(conversations, record.SessionID.String()+fmt.Sprintf("/%d", record.Version)) {
+			return ErrIntegrity
+		}
+	}
+	for _, record := range state.Approvals {
+		if duplicate(approvals, record.ApprovalID) {
+			return ErrIntegrity
+		}
+	}
+	for _, record := range state.Grants {
+		if duplicate(grants, record.GrantID) || record.MaximumUses == 0 || record.Uses > record.MaximumUses || record.ExpiresAt.IsZero() {
 			return ErrIntegrity
 		}
 	}

@@ -436,6 +436,47 @@ func TestPlannerPersistsToolIntentBeforeApprovalDecision(t *testing.T) {
 	if err != nil || plan.State().Approvals[0].State != "approved" || len(plan.Effects().Audit) != 1 {
 		t.Fatalf("decision=%v %#v", err, plan.State().Approvals)
 	}
+	if len(plan.State().Grants) != 1 {
+		t.Fatalf("approved decision grants = %#v; want one bounded capability grant", plan.State().Grants)
+	}
+	grant := plan.State().Grants[0]
+	if grant.ToolCallID != "tcall_1234567890ABCDEF" || grant.CapabilityDigest != digest || grant.MaximumUses != 1 || grant.Uses != 0 || !grant.ExpiresAt.Equal(now.Add(time.Hour)) || grant.PolicyRevisionDigest != digest {
+		t.Fatalf("capability grant = %#v; want proposal-bounded unused grant", grant)
+	}
+}
+
+func TestPlannerConsumesApprovedCapabilityOnlyWithinItsPolicyAndExpiry(t *testing.T) {
+	now := time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC)
+	content, _, tenant, principal := testRuntimeContent(t)
+	compiler, _ := runtimestate.NewCompiler(content)
+	planner, _ := runtimestate.NewRuntimeStatePlanner(fixedPlannerClock{now: now}, &uniquePlannerIDs{})
+	session := validSessionID(t)
+	turn := agentruntime.TurnID("turn_1234567890ABCDEF")
+	digest := "sha256:" + strings.Repeat("a", 64)
+	state := runtimestate.RuntimeState{
+		Sessions:    []runtimestate.SessionRecord{{Tenant: tenant, Principal: principal, SessionID: session, State: agentruntime.SessionOpen, CreatedAt: now, UpdatedAt: now}},
+		Turns:       []runtimestate.TurnRecord{{Tenant: tenant, Principal: principal, SessionID: session, TurnID: turn, State: agentruntime.TurnRunning}},
+		ToolIntents: []runtimestate.ToolIntentRecord{{Tenant: tenant, Principal: principal, SessionID: session, TurnID: turn, ToolCallID: "tcall_1234567890ABCDEF", ActionDigest: digest, PolicyRevisionDigest: digest, CreatedAt: now}},
+		Grants:      []runtimestate.CapabilityGrantRecord{{Tenant: tenant, Principal: principal, GrantID: "grant_1234567890ABCDE", ToolCallID: "tcall_1234567890ABCDEF", CapabilityDigest: digest, MaximumUses: 1, ExpiresAt: now.Add(time.Hour), PolicyRevisionDigest: digest, CreatedAt: now}},
+	}
+	consume, err := compiler.CompileConsumeCapabilityGrant(runtimestate.ConsumeCapabilityGrantCommand{Scope: workerScope(tenant, principal), IdempotencyKey: "use-grant", SessionID: session, TurnID: turn, ToolCallID: "tcall_1234567890ABCDEF", GrantID: "grant_1234567890ABCDE", PolicyRevisionDigest: digest})
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan, err := planner.Plan(context.Background(), state, consume)
+	if err != nil || plan.State().Grants[0].Uses != 1 || len(plan.Effects().Audit) != 1 {
+		t.Fatalf("consume approved capability = %#v, %v", plan.State().Grants, err)
+	}
+	if _, err := planner.Plan(context.Background(), plan.State(), consume); err != nil {
+		t.Fatalf("replay consume capability: %v", err)
+	}
+	second, err := compiler.CompileConsumeCapabilityGrant(runtimestate.ConsumeCapabilityGrantCommand{Scope: workerScope(tenant, principal), IdempotencyKey: "use-grant-again", SessionID: session, TurnID: turn, ToolCallID: "tcall_1234567890ABCDEF", GrantID: "grant_1234567890ABCDE", PolicyRevisionDigest: digest})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := planner.Plan(context.Background(), plan.State(), second); !errors.Is(err, runtimestate.ErrConflict) {
+		t.Fatalf("exhausted capability error = %v, want conflict", err)
+	}
 }
 
 func TestCompilerRejectsForgedScopeAndCompilesOnlyStateScopedContentReaders(t *testing.T) {

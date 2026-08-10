@@ -18,21 +18,22 @@ import (
 type CommandKind string
 
 const (
-	CommandRegisterAgentRevision CommandKind = "register_agent_revision"
-	CommandCreateSession         CommandKind = "create_session"
-	CommandAdmitInput            CommandKind = "admit_input"
-	CommandRegisterArtifact      CommandKind = "register_artifact"
-	CommandAppendConversation    CommandKind = "append_conversation"
-	CommandRecordToolIntent      CommandKind = "record_tool_intent"
-	CommandRequestApproval       CommandKind = "request_approval"
-	CommandDecideApproval        CommandKind = "decide_approval"
-	CommandBeginInvocation       CommandKind = "begin_invocation_attempt"
-	CommandRecordOutcome         CommandKind = "record_invocation_outcome"
-	CommandSettleTurn            CommandKind = "settle_turn"
-	CommandCancelTurn            CommandKind = "cancel_turn"
-	CommandCloseSession          CommandKind = "close_session"
-	CommandClaimOutbox           CommandKind = "claim_outbox"
-	CommandAcknowledgeOutbox     CommandKind = "acknowledge_outbox"
+	CommandRegisterAgentRevision  CommandKind = "register_agent_revision"
+	CommandCreateSession          CommandKind = "create_session"
+	CommandAdmitInput             CommandKind = "admit_input"
+	CommandRegisterArtifact       CommandKind = "register_artifact"
+	CommandAppendConversation     CommandKind = "append_conversation"
+	CommandRecordToolIntent       CommandKind = "record_tool_intent"
+	CommandRequestApproval        CommandKind = "request_approval"
+	CommandDecideApproval         CommandKind = "decide_approval"
+	CommandConsumeCapabilityGrant CommandKind = "consume_capability_grant"
+	CommandBeginInvocation        CommandKind = "begin_invocation_attempt"
+	CommandRecordOutcome          CommandKind = "record_invocation_outcome"
+	CommandSettleTurn             CommandKind = "settle_turn"
+	CommandCancelTurn             CommandKind = "cancel_turn"
+	CommandCloseSession           CommandKind = "close_session"
+	CommandClaimOutbox            CommandKind = "claim_outbox"
+	CommandAcknowledgeOutbox      CommandKind = "acknowledge_outbox"
 )
 
 // ReceiptBinding is the safe compiler-owned idempotency commitment. It is not an adapter input.
@@ -174,6 +175,17 @@ func (compiler *Compiler) CompileDecideApproval(command DecideApprovalCommand) (
 		return CompiledMutation{}, errors.New("compile approval decision: invalid command")
 	}
 	return compiler.compile(CommandDecideApproval, command.Scope, command.IdempotencyKey, command, command)
+}
+
+// CompileConsumeCapabilityGrant authorizes one worker-owned tool execution
+// against a previously approved, bounded capability grant. The grant is never
+// itself a credential and this command records no tool arguments.
+func (compiler *Compiler) CompileConsumeCapabilityGrant(command ConsumeCapabilityGrantCommand) (CompiledMutation, error) {
+	command = command.Owned()
+	if err := validateWorkerCommand(command.Scope, command.SessionID, command.TurnID, OperationID(command.ToolCallID)); err != nil || !validOpaque(command.GrantID, 128) || !validDigest(command.PolicyRevisionDigest) {
+		return CompiledMutation{}, errors.New("compile consume capability grant: invalid command")
+	}
+	return compiler.compile(CommandConsumeCapabilityGrant, command.Scope, command.IdempotencyKey, command, command)
 }
 
 // CompileBeginInvocationAttempt validates a fenced runtime-worker intent command.
