@@ -26,8 +26,11 @@ started. This is durable M3 control evidence only, not Firecracker execution.
 When a reference host declares the optional private `boot_probe` block, it
 uses only the v2 `prepare` and `launch-started` endpoints. On restart it first
 loads the fsynced host-instance intent and retries the same CAS version; it
-does not issue a new prepare request. This route remains operator-only and is
-not a public sandbox API or a Firecracker execution claim.
+does not issue a new prepare request. This is a non-executing M3 lifecycle
+prerequisite, not the M4 `stage-ready`/signed-command handoff: it has no
+operator-enrolled M4 profile, distinct observation key, compiled stage
+identity, or Firecracker grant. It remains operator-only and is not a public
+sandbox API or a Firecracker execution claim.
 
 ## Deployment declarations
 
