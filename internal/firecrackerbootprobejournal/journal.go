@@ -17,15 +17,61 @@ import (
 var ErrLocked = errors.New("Firecracker boot-probe host-instance journal is already locked")
 
 type document struct {
-	Version string                         `json:"version"`
-	Session firecrackerbootprobev2.Session `json:"session"`
+	Version         string                         `json:"version"`
+	SnapshotVersion uint64                         `json:"snapshot_version,omitempty"`
+	Session         firecrackerbootprobev2.Session `json:"session"`
+}
+
+// StageLaunchSnapshot persists the exact control CAS version with intent.
+func (j *Journal) StageLaunchSnapshot(snapshot firecrackerbootprobev2.Snapshot) error {
+	if snapshot.Version == 0 {
+		return errors.New("stage Firecracker boot-probe snapshot: version required")
+	}
+	if err := j.StageLaunchIntent(snapshot.Session); err != nil {
+		return err
+	}
+	wire, err := json.Marshal(document{Version: "firecracker-boot-probe-host-journal/v2", SnapshotVersion: snapshot.Version, Session: snapshot.Session})
+	if err != nil {
+		return err
+	}
+	file, err := os.OpenFile(j.path+".tmp", os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
+	if err != nil {
+		return err
+	}
+	if _, err = file.Write(wire); err == nil {
+		err = file.Sync()
+	}
+	if closeErr := file.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		return err
+	}
+	if err = os.Rename(j.path+".tmp", j.path); err != nil {
+		return err
+	}
+	directory, err := os.Open(filepath.Dir(j.path))
+	if err != nil {
+		return err
+	}
+	err = directory.Sync()
+	closeErr := directory.Close()
+	if err != nil {
+		return err
+	}
+	if closeErr != nil {
+		return closeErr
+	}
+	j.snapshotVersion = snapshot.Version
+	return nil
 }
 
 // Journal exclusively owns one absolute host-instance journal path.
 type Journal struct {
-	path    string
-	lock    *os.File
-	session *firecrackerbootprobev2.Session
+	path            string
+	lock            *os.File
+	session         *firecrackerbootprobev2.Session
+	snapshotVersion uint64
 }
 
 // Open recovers the sole canonical journal record and refuses a second host process.
@@ -63,6 +109,7 @@ func Open(path string) (*Journal, error) {
 		return nil, errors.New("open Firecracker boot-probe journal: non-canonical record")
 	}
 	j.session = &d.Session
+	j.snapshotVersion = d.SnapshotVersion
 	return j, nil
 }
 
@@ -121,6 +168,14 @@ func (j *Journal) LaunchIntent() (firecrackerbootprobev2.Session, bool) {
 		return firecrackerbootprobev2.Session{}, false
 	}
 	return *j.session, true
+}
+func (j *Journal) LaunchSnapshot() (firecrackerbootprobev2.Snapshot, bool) {
+	intent, ok := j.LaunchIntent()
+	if !ok || j.snapshotVersion == 0 {
+		return firecrackerbootprobev2.Snapshot{}, false
+	}
+	wire, _ := firecrackerbootprobev2.EncodeSession(intent)
+	return firecrackerbootprobev2.Snapshot{Version: j.snapshotVersion, Session: intent, Wire: wire}, true
 }
 
 // Close releases exclusive host-instance ownership.
