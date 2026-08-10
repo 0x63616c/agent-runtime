@@ -18,11 +18,50 @@ func TestRuntimeStateStoreDefinesTheCompleteInitialLifecycle(t *testing.T) {
 		"RegisterAgentRevision", "CreateSession", "AdmitInput",
 		"BeginInvocationAttempt", "RecordInvocationOutcome", "SettleTurn",
 		"CancelTurn", "CloseSession", "GetAgentRevision", "GetSessionView",
-		"GetTurn", "ReadEvents", "GetMutationReceipt", "ReadAudit",
+		"GetTurn", "GetInvocation", "ReadEvents", "GetMutationReceipt", "ReadAudit",
 		"ReadOutbox", "ClaimOutbox", "AcknowledgeOutbox",
 	} {
 		if _, ok := store.MethodByName(name); !ok {
 			t.Fatalf("RuntimeStateStore missing %s", name)
+		}
+	}
+}
+
+func TestOutboxRecoveryCarriesTheExactFencedInvocationRoute(t *testing.T) {
+	record := reflect.TypeOf(runtimestate.OutboxRecord{})
+	for _, field := range []string{
+		"Tenant", "Principal", "SessionID", "TurnID", "InvocationID", "OperationID",
+		"InvocationOrdinal", "InvocationFence", "SessionVersion", "TurnVersion",
+	} {
+		if _, ok := record.FieldByName(field); !ok {
+			t.Fatalf("OutboxRecord missing recovery route %s", field)
+		}
+	}
+	store := reflect.TypeOf((*runtimestate.RuntimeStateStore)(nil)).Elem()
+	method, ok := store.MethodByName("GetInvocation")
+	if !ok || method.Type.NumOut() != 2 || method.Type.Out(0) != reflect.TypeOf(runtimestate.InvocationRecord{}) {
+		t.Fatalf("GetInvocation signature = %v, want scoped invocation query", method.Type)
+	}
+}
+
+func TestOutboxMutationsCarryReplaySafeMutationReceipts(t *testing.T) {
+	type command interface {
+		CommandScope() runtimestate.MutationScope
+		CanonicalRequestDigest() runtimestate.RequestDigest
+	}
+	for _, mutation := range []command{runtimestate.ClaimOutboxCommand{}, runtimestate.AcknowledgeOutboxCommand{}} {
+		if mutation.CommandScope() != (runtimestate.MutationScope{}) || mutation.CanonicalRequestDigest() != "" {
+			t.Fatalf("zero outbox mutation unexpectedly carries replay identity: %#v", mutation)
+		}
+	}
+	store := reflect.TypeOf((*runtimestate.RuntimeStateStore)(nil)).Elem()
+	for _, methodName := range []string{"ClaimOutbox", "AcknowledgeOutbox"} {
+		method, ok := store.MethodByName(methodName)
+		if !ok || method.Type.Out(0).Kind() != reflect.Struct {
+			t.Fatalf("%s result = %v, want result with receipt", methodName, method.Type)
+		}
+		if _, ok := method.Type.Out(0).FieldByName("Receipt"); !ok {
+			t.Fatalf("%s result lacks idempotency receipt", methodName)
 		}
 	}
 }
@@ -83,6 +122,51 @@ func TestRecordsAndResultsDefensivelyCloneMutableMetadata(t *testing.T) {
 	result.Promoted.Failure.Details["safe"] = "changed"
 	if got := clonedResult.Promoted.Failure.Details["safe"]; got != "value" {
 		t.Fatalf("settle result aliases promoted Turn failure: %q", got)
+	}
+}
+
+func TestPointerBearingCommandsTakeOwnedNormalizedSnapshots(t *testing.T) {
+	local := time.Date(2026, 8, 10, 12, 0, 0, 0, time.FixedZone("local", -7*60*60))
+	result := &runtimecontent.Reference{Digest: "sha256:one", MediaType: "application/test", SizeBytes: 1}
+	failure := &agentruntime.Failure{Details: map[string]string{"phase": "before"}}
+	command := runtimestate.RecordInvocationOutcomeCommand{
+		Result: result, Failure: failure,
+	}
+	owned := command.Owned()
+	result.Digest = "sha256:changed"
+	failure.Details["phase"] = "changed"
+	if owned.Result.Digest != "sha256:one" || owned.Failure.Details["phase"] != "before" {
+		t.Fatalf("owned outcome command aliases caller-owned pointer metadata: %#v", owned)
+	}
+
+	claim := runtimestate.ClaimOutboxCommand{ClaimUntil: local}.Owned()
+	if claim.ClaimUntil.Location() != time.UTC || !claim.ClaimUntil.Equal(local) {
+		t.Fatalf("owned claim time = %v, want normalized UTC equivalent", claim.ClaimUntil)
+	}
+	settle := runtimestate.SettleTurnCommand{Outcome: runtimestate.TerminalOutcome{Failure: failure}}.Owned()
+	failure.Details["phase"] = "changed again"
+	if settle.Outcome.Failure.Details["phase"] != "changed" {
+		t.Fatalf("owned terminal outcome aliases caller failure: %#v", settle.Outcome)
+	}
+}
+
+func TestEveryMutationCommandOffersOwnedNormalization(t *testing.T) {
+	for _, command := range []reflect.Type{
+		reflect.TypeOf(runtimestate.RegisterAgentRevisionCommand{}),
+		reflect.TypeOf(runtimestate.CreateSessionCommand{}),
+		reflect.TypeOf(runtimestate.AdmitInputCommand{}),
+		reflect.TypeOf(runtimestate.BeginInvocationAttemptCommand{}),
+		reflect.TypeOf(runtimestate.RecordInvocationOutcomeCommand{}),
+		reflect.TypeOf(runtimestate.SettleTurnCommand{}),
+		reflect.TypeOf(runtimestate.CancelTurnCommand{}),
+		reflect.TypeOf(runtimestate.CloseSessionCommand{}),
+		reflect.TypeOf(runtimestate.ClaimOutboxCommand{}),
+		reflect.TypeOf(runtimestate.AcknowledgeOutboxCommand{}),
+	} {
+		method, ok := command.MethodByName("Owned")
+		if !ok || method.Type.NumOut() != 1 || method.Type.Out(0) != command {
+			t.Fatalf("%s Owned signature = %v, want same-type owned snapshot", command, method.Type)
+		}
 	}
 }
 

@@ -60,7 +60,7 @@ scoped by an authenticated `Tenant` plus a `Principal` where user-owned.
 | `InvocationRecord` | tenant/principal/session/turn, runtime operation ID, ordinal, current fence, intent/outcome state, bounded usage references, times | provider credential, raw request/response |
 | `ProductEventRecord` | tenant/principal/session, sequence, opaque Cursor, Event ID/kind, referenced IDs, occurred/retention times | event body, database position, Temporal offset |
 | `AuditFactRecord` | tenant, audit/operation IDs, actor, fact kind, subject reference, time, retention | secret, raw content, unbounded diagnostics |
-| `OutboxRecord` | aggregate/version/event reference, commit/publication/reconciliation state, retention | arbitrary event payload or exactly-once claim |
+| `OutboxRecord` | tenant/principal plus exact Session/Turn/invocation/operation/ordinal/fence and Session/Turn version route; aggregate/version/event reference; commit/publication/reconciliation state; retention | arbitrary event payload or exactly-once claim |
 | `MutationReceipt` | owner, runtime operation ID, command kind, canonical request digest, result references, accepted/retention times | raw request, authorization header, backend identifier |
 
 An identity-free Agent-specification body contains the immutable name, logical
@@ -122,7 +122,7 @@ Queries are authorization-scoped and have no mutation side effect.
 | `ReadEvents` | bounded ordered page, next opaque Cursor, or explicit Gap | duplicate-tolerant replay; unknown/expired Cursor never silently skips; Temporal offsets are refused |
 | `GetMutationReceipt` | safe idempotency status/result reference | exact owner/key only; retention expiry is explicit |
 | `ReadAudit` | authorized bounded Audit page | audit authorization is separate from ordinary Session ownership |
-| `ReadOutbox`, `ClaimOutbox`, `AcknowledgeOutbox` | ordered publication/reconciliation work | durable at-least-once claim/ack; publisher failure cannot erase the committed fact |
+| `ReadOutbox`, `ClaimOutbox`, `AcknowledgeOutbox` | ordered publication/reconciliation work | durable at-least-once claim/ack, ownership-scoped idempotency receipt, and enough exact route/fence/version metadata for recovery to form a fenced invocation outcome/settlement command; publisher failure cannot erase the committed fact |
 
 The application expands metadata results into public `agentruntime` models
 only through authorized content reads. A public `SendInputResult` may hydrate
