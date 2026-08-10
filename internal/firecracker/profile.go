@@ -24,6 +24,8 @@ var (
 	ErrCapabilityUnavailable = errors.New("firecracker capability is unavailable")
 )
 
+const declaredJailerBaseDirectory = "/srv/agent-runtime/jailer"
+
 // NetworkMode identifies the only host-network authority represented by a profile.
 type NetworkMode string
 
@@ -89,6 +91,8 @@ type ResourceEnforcement struct {
 // Plan is a resolved, immutable launch plan. The host agent verifies fixture digests before launch.
 type Plan struct {
 	vmID            string
+	uid             uint32
+	gid             uint32
 	jailerArguments []string
 	machine         MachineConfig
 	resources       ResourceEnforcement
@@ -104,6 +108,12 @@ type Plan struct {
 
 // VMID returns the Jailer-safe identity of this launch plan.
 func (plan Plan) VMID() string { return plan.vmID }
+
+// UID returns the exact unprivileged Jailer identity that owns guest-visible staged resources.
+func (plan Plan) UID() uint32 { return plan.uid }
+
+// GID returns the exact unprivileged Jailer group that owns guest-visible staged resources.
+func (plan Plan) GID() uint32 { return plan.gid }
 
 // JailerArguments returns a defensive copy of the exact Jailer argument vector.
 func (plan Plan) JailerArguments() []string {
@@ -172,8 +182,8 @@ func Compile(profile Profile) (Plan, error) {
 			return Plan{}, fmt.Errorf("%w: every executable and guest artifact must be absolute and SHA-256 pinned", ErrInvalidProfile)
 		}
 	}
-	if profile.KVMDevice != "/dev/kvm" || !safeAbsolutePath(profile.ChrootBaseDir) || profile.UID == 0 || profile.GID == 0 {
-		return Plan{}, fmt.Errorf("%w: KVM, chroot and unprivileged jailer identity are required", ErrInvalidProfile)
+	if profile.KVMDevice != "/dev/kvm" || profile.ChrootBaseDir != declaredJailerBaseDirectory || profile.UID == 0 || profile.GID == 0 {
+		return Plan{}, fmt.Errorf("%w: KVM, declared Jailer root, and unprivileged jailer identity are required", ErrInvalidProfile)
 	}
 	if profile.Network.Mode != NetworkDenyAll || len(profile.Network.Allowlist) != 0 {
 		return Plan{}, fmt.Errorf("%w: foundation profile permits only deny-all networking", ErrCapabilityUnavailable)
@@ -187,6 +197,8 @@ func Compile(profile Profile) (Plan, error) {
 	}
 	return Plan{
 		vmID:            profile.VMID,
+		uid:             profile.UID,
+		gid:             profile.GID,
 		jailerArguments: []string{"--id", profile.VMID, "--exec-file", profile.Firecracker.Path, "--uid", strconv.FormatUint(uint64(profile.UID), 10), "--gid", strconv.FormatUint(uint64(profile.GID), 10), "--chroot-base-dir", profile.ChrootBaseDir, "--cgroup-version", "2", "--", "--api-sock", "/run/firecracker.socket"},
 		machine:         machine,
 		resources: ResourceEnforcement{
@@ -384,7 +396,7 @@ func hasPinnedLaunchPlan(plan Plan) bool {
 }
 
 func validCompiledPlan(plan Plan) bool {
-	return plan.compiled && validVMID(plan.vmID) && validArtifact(plan.firecracker) && validArtifact(plan.jailer) && validArtifact(plan.kernel) && validArtifact(plan.rootFS) && validArtifact(plan.guestAgent) && len(plan.jailerArguments) > 0 && plan.machine.VCPUCount > 0 && plan.machine.MemoryMiB >= 128 && validResourceEnforcement(plan.resources) && plan.network.Mode == NetworkDenyAll && len(plan.network.Allowlist) == 0
+	return plan.compiled && validVMID(plan.vmID) && plan.uid != 0 && plan.gid != 0 && validArtifact(plan.firecracker) && validArtifact(plan.jailer) && validArtifact(plan.kernel) && validArtifact(plan.rootFS) && validArtifact(plan.guestAgent) && len(plan.jailerArguments) > 0 && plan.machine.VCPUCount > 0 && plan.machine.MemoryMiB >= 128 && validResourceEnforcement(plan.resources) && plan.network.Mode == NetworkDenyAll && len(plan.network.Allowlist) == 0
 }
 
 func validResourceEnforcement(resources ResourceEnforcement) bool {

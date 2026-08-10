@@ -80,6 +80,15 @@ func TestCompileRequiresPinnedGuestAgentAlongsideRootFS(t *testing.T) {
 	}
 }
 
+func TestCompileRefusesAnArbitraryJailerHostPath(t *testing.T) {
+	profile := validProfile()
+	profile.ChrootBaseDir = "/var/lib/agent-runtime/jailer"
+
+	if _, err := Compile(profile); !errors.Is(err, ErrInvalidProfile) {
+		t.Fatalf("Compile() error = %v, want declared Jailer-root refusal", err)
+	}
+}
+
 func TestPlanAccessorsDefensivelyCopyMutableState(t *testing.T) {
 	profile := validProfile()
 	emptyDigest := sandbox.Digest("sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855")

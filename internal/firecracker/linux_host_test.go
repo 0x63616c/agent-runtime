@@ -3,9 +3,18 @@ package firecracker
 import (
 	"context"
 	"errors"
+	"path/filepath"
 	"reflect"
 	"testing"
 )
+
+func TestExpectedJailRootIncludesTheJailerExecutableBaseName(t *testing.T) {
+	plan := mustCompile(t, validProfile())
+
+	if got, want := expectedJailRoot(plan), filepath.Join("/srv/agent-runtime/jailer", "firecracker", "sandbox-001", "root"); got != want {
+		t.Fatalf("expectedJailRoot() = %q, want Jailer chroot layout %q", got, want)
+	}
+}
 
 func TestLinuxJailerHostOrdersTheNoNICRESTLaunchAndGuestControlPorts(t *testing.T) {
 	plan := mustCompile(t, validProfile())
@@ -357,6 +366,8 @@ func validBoundJailedResourceStage(plan Plan, fixtures FixtureSet, rootFSCopyPat
 	stage := JailedResourceStage{
 		FixtureVersion: fixtures.FixtureVersion(),
 		JailRoot:       expectedJailRoot(plan),
+		OwnerUID:       plan.UID(),
+		OwnerGID:       plan.GID(),
 		Jailer:         plan.Jailer(),
 		Firecracker:    JailedFixtureBinding{Source: plan.Firecracker(), JailedPath: "/firecracker"},
 		Kernel:         JailedFixtureBinding{Source: plan.Kernel(), JailedPath: "/kernel/vmlinux"},

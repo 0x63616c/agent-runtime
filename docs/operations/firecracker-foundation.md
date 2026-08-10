@@ -92,7 +92,27 @@ substituted source, stale binding, duplicate destination, or any root that is
 not the exact per-VM Jailer namespace before it starts a port. Jailer start
 receives that complete stage record and the REST boot/root-drive/vsock requests
 and guest bind use its mapped paths. This validates the record contract; it does
-not verify an on-disk copy or establish a real Jailer mapping.
+not itself establish a real Jailer mapping.
+
+`LinuxJailerResourceStager` is the corresponding internal on-disk staging
+adapter. It accepts only a complete verified fixture set and a distinct private
+rootfs copy, rechecks every pinned artifact through a no-symlink regular-file
+descriptor, and rejects a reused, changed, or symlinked input before creating a
+Jailer namespace. The private rootfs must fit the plan's finite root-disk limit.
+The compiler permits only the declared `/srv/agent-runtime/jailer` Jailer base.
+The production stager checks that this base, every ancestor to `/`, and an
+existing executable directory are root-owned, non-symlinked, and not group- or
+world-writable; those operator-owned paths are its trusted filesystem root, so
+an unprivileged actor cannot race path checks or cleanup. It creates only the fresh Jailer layout
+`<chroot-base>/<firecracker-executable-name>/<vm-id>/root`, then copies the
+verified kernel and private rootfs to their fixed jailed destinations and binds
+that result, including the plan's exact unprivileged UID/GID, into the stage
+digest. Guest-visible child directories and files are owned by that identity
+with no group or world access. The stager keeps those directories root-owned
+while it creates, verifies, and finalizes the kernel and rootfs, transferring
+their ownership only as its last successful staging step. The Jailer retains
+ownership of copying its own Firecracker executable into the chroot. The stager does not start a Jailer,
+infer a fixture lock, or certify KVM isolation.
 Its fixed REST order configures machine limits, the closed boot source, writable
 root drive, vsock, then `InstanceStart`; it declares no guest NIC. Every process,
 REST, and guest-port call is context-fenced before and after I/O. A cancellation

@@ -28,10 +28,12 @@ type JailedFixtureBinding struct {
 	JailedPath string
 }
 
-// JailedResourceStage records the complete, digest-bound mapping from verified sources to one Jailer chroot.
+// JailedResourceStage records the complete, identity-bound mapping from verified sources to one Jailer chroot.
 type JailedResourceStage struct {
 	FixtureVersion string
 	JailRoot       string
+	OwnerUID       uint32
+	OwnerGID       uint32
 	Jailer         PinnedArtifact
 	Firecracker    JailedFixtureBinding
 	Kernel         JailedFixtureBinding
@@ -395,6 +397,8 @@ func (stage JailedResourceStage) bindingDigest() sandbox.Digest {
 	identity := struct {
 		FixtureVersion string
 		JailRoot       string
+		OwnerUID       uint32
+		OwnerGID       uint32
 		Jailer         PinnedArtifact
 		Firecracker    JailedFixtureBinding
 		Kernel         JailedFixtureBinding
@@ -406,6 +410,8 @@ func (stage JailedResourceStage) bindingDigest() sandbox.Digest {
 	}{
 		FixtureVersion: stage.FixtureVersion,
 		JailRoot:       stage.JailRoot,
+		OwnerUID:       stage.OwnerUID,
+		OwnerGID:       stage.OwnerGID,
 		Jailer:         stage.Jailer,
 		Firecracker:    stage.Firecracker,
 		Kernel:         stage.Kernel,
@@ -423,7 +429,7 @@ func (stage JailedResourceStage) bindingDigest() sandbox.Digest {
 }
 
 func validJailedResourceStage(stage JailedResourceStage, plan Plan, fixtures FixtureSet, rootFSCopyPath string) bool {
-	if stage.FixtureVersion != fixtures.FixtureVersion() || stage.JailRoot != expectedJailRoot(plan) || stage.Jailer != plan.Jailer() || stage.Firecracker.Source != plan.Firecracker() || stage.Kernel.Source != plan.Kernel() || stage.RootFS.Source != (PinnedArtifact{Path: rootFSCopyPath, Digest: plan.RootFS().Digest}) || stage.GuestAgent != plan.GuestAgent() || stage.GuestInitPath != "/sbin/init" || stage.APISocketPath != jailedAPISocketPath(plan.JailerArguments()) || stage.BindingDigest != stage.bindingDigest() {
+	if stage.FixtureVersion != fixtures.FixtureVersion() || stage.JailRoot != expectedJailRoot(plan) || stage.OwnerUID != plan.UID() || stage.OwnerGID != plan.GID() || stage.Jailer != plan.Jailer() || stage.Firecracker.Source != plan.Firecracker() || stage.Kernel.Source != plan.Kernel() || stage.RootFS.Source != (PinnedArtifact{Path: rootFSCopyPath, Digest: plan.RootFS().Digest}) || stage.GuestAgent != plan.GuestAgent() || stage.GuestInitPath != "/sbin/init" || stage.APISocketPath != jailedAPISocketPath(plan.JailerArguments()) || stage.BindingDigest != stage.bindingDigest() {
 		return false
 	}
 	paths := []string{stage.Firecracker.JailedPath, stage.Kernel.JailedPath, stage.RootFS.JailedPath, stage.APISocketPath, stage.VSockUDSPath}
@@ -442,10 +448,11 @@ func validJailedResourceStage(stage JailedResourceStage, plan Plan, fixtures Fix
 
 func expectedJailRoot(plan Plan) string {
 	base := jailerArgumentValue(plan.JailerArguments(), "--chroot-base-dir")
-	if !safeAbsolutePath(base) {
+	executableName := filepath.Base(plan.Firecracker().Path)
+	if !safeAbsolutePath(base) || executableName == "." || executableName == string(filepath.Separator) {
 		return ""
 	}
-	return filepath.Join(base, plan.VMID(), "root")
+	return filepath.Join(base, executableName, plan.VMID(), "root")
 }
 
 func jailDestinationContained(root, jailedPath string) bool {
