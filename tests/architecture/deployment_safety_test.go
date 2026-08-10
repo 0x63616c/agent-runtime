@@ -159,6 +159,7 @@ var _ = Describe("M1 deployment safety boundaries", func() {
 			`[[ "$api_port" =~ ^[1-9][0-9]{0,4}$ ]]`,
 			"rancher/k3s:v1.33.9-k3s1@sha256:f17e43023cce2b9c613e198f26e73637bf734b5156d37c9f44819d97bac4d655",
 			"Preload and prove the local-path helper image",
+			"local-path helper configuration did not become available",
 			"rancher/mirrored-library-busybox@sha256:101b4afd76732482eff9b95cae5f94bcf295e521fbec4e01b69c5421f3f3f3e5",
 			"docker buildx imagetools inspect --raw",
 			"timeout 120s docker pull \"$helper_digest_ref\"",

@@ -316,7 +316,17 @@ jobs:
           }
           trap cleanup EXIT
 
-          helper_pod_yaml="$(kubectl --context "$context" --namespace "$provisioner_namespace" get configmap local-path-config -o json | jq -er '.data["helperPod.yaml"]')"
+          helper_pod_yaml=""
+          for attempt in $(seq 1 60); do
+            if helper_pod_yaml="$(kubectl --context "$context" --namespace "$provisioner_namespace" get configmap local-path-config -o json 2>/dev/null | jq -er '.data["helperPod.yaml"]' 2>/dev/null)"; then
+              break
+            fi
+            if [[ "$attempt" == 60 ]]; then
+              echo "local-path helper configuration did not become available" >&2
+              exit 1
+            fi
+            sleep 2
+          done
           configured_helper_image="$(printf '%s\n' "$helper_pod_yaml" | sed -nE 's/^[[:space:]]*image:[[:space:]]*([^[:space:]#]+).*$/\1/p' | head -n 1)"
           configured_pull_policy="$(printf '%s\n' "$helper_pod_yaml" | sed -nE 's/^[[:space:]]*imagePullPolicy:[[:space:]]*([^[:space:]#]+).*$/\1/p' | head -n 1)"
           [[ "$configured_helper_image" == "$helper_image" ]]
