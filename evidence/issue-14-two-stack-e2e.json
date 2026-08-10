@@ -5,7 +5,7 @@
     "namespaces_absent": true
   },
   "command": {
-    "kubernetes_context": "k3d-ar-ci-31441112582-1",
+    "kubernetes_context": "k3d-ar-ci-31441677625-1",
     "path": "deploy/dev/run-two-stack-smoke.sh",
     "profile": "ci",
     "result": "passed"
@@ -14,11 +14,11 @@
   "distinct_private_state": true,
   "first_teardown_left_second_unchanged": true,
   "hosted_ci": {
-    "artifact": "two-stack-isolation-670ebcaa4e1ca0ad0d86230a919122293a34d6de",
-    "job_url": "https://github.com/0x63616c/agent-runtime/actions/runs/31441112582/job/93625824672",
-    "run_url": "https://github.com/0x63616c/agent-runtime/actions/runs/31441112582"
+    "artifact": "two-stack-isolation-6bb0da69befd89adffbf3aefd5068194607cfca9",
+    "job_url": "https://github.com/0x63616c/agent-runtime/actions/runs/31441677625/job/93627512224",
+    "run_url": "https://github.com/0x63616c/agent-runtime/actions/runs/31441677625"
   },
-  "implementation_revision": "670ebcaa4e1ca0ad0d86230a919122293a34d6de",
+  "implementation_revision": "6bb0da69befd89adffbf3aefd5068194607cfca9",
   "limitations": [
     "does not claim Linux KVM or Firecracker isolation",
     "does not mutate a production cluster"
@@ -30,22 +30,16 @@
     "service_ip_probe": true
   },
   "proof_level": "isolated_kubernetes_integration",
-  "proof_provenance": {
-    "retained_artifact_sha256": "sha256:9d822cf1358540f82ac1b53ef47e5dd1c33bd2f832619277704fc5647d13a77d",
-    "retention_revision": "7711c15253bad1b0c41ed571eaf27ec580793d6e",
-    "source_revision": "670ebcaa4e1ca0ad0d86230a919122293a34d6de",
-    "source_tree_id": "8467e17b93b50717de6b8ef9a977df9703c669ca"
-  },
   "stacks": [
     {
       "name": "ci-isolation-a",
       "namespace": "ar-ci-ci-isolation-a",
-      "namespace_uid": "c6195654-bd06-4523-8c82-d03da2ec2699"
+      "namespace_uid": "a467841f-41c1-4078-9021-cbedeaed8e76"
     },
     {
       "name": "ci-isolation-b",
       "namespace": "ar-ci-ci-isolation-b",
-      "namespace_uid": "eabec18b-5285-4d52-bf55-a42314fad9a5"
+      "namespace_uid": "f4c90ee7-370e-4bc1-9308-3f045ed2e69e"
     }
   ],
   "toolchain": {
@@ -55,6 +49,6 @@
     "registry_image": "registry:2.8.3@sha256:a3d8aaa63ed8681a604f1dea0aa03f100d5895b6a58ace528858a7b332415373",
     "tilt": "v0.37.6"
   },
-  "utc_time": "2026-08-10T23:11:02Z",
+  "utc_time": "2026-08-10T23:19:54Z",
   "version": 1
 }
