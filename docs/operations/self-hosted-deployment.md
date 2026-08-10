@@ -104,7 +104,7 @@ Before a production rollout, the platform operator must define and test:
 - Temporal namespace history retention, archival/backup policy, frontend and
   worker capacity, namespace authentication, and task-queue isolation.
 - PostgreSQL backup/restore ownership, immutable migration artifacts, migration
-  Job readiness, and recovery authority. The current runtime v2 migration is
+  Job readiness, and recovery authority. The runtime v2 base migration is
   deliberately forward-only: its declared rollback artifact refuses before any
   destructive action, so recovery requires an operator-approved PostgreSQL
   backup/PITR procedure rather than automatic schema deletion. No backup/PITR
@@ -113,7 +113,9 @@ Before a production rollout, the platform operator must define and test:
   declares normalized tenant, Agent revision, Session,
   content-reference Input, Turn, Product-event, audit, and outbox tables. It
   intentionally contains no raw prompt or event-body columns; the blob
-  authority owns content bytes. A narrow internal first-admission repository
+  authority owns content bytes. The runtime v3 forward-only migration follows
+  and raises only the bounded immutable Input-reference metadata size limit. A
+  narrow internal first-admission repository
   seam exists for real PostgreSQL integration tests, but it is not wired to
   the standalone API, its deterministic in-memory content store is not a blob
   authorization plane, and its recorded outbox has no publisher or recovery
