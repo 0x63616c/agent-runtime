@@ -144,6 +144,9 @@ func ParseFixtureLock(reader io.Reader) (FixtureLock, error) {
 	if len(contents) > maximumFixtureLockBytes {
 		return FixtureLock{}, fmt.Errorf("%w: lock exceeds %d bytes", ErrFixtureLock, maximumFixtureLockBytes)
 	}
+	if err := validateFixtureLockJSON(contents); err != nil {
+		return FixtureLock{}, fmt.Errorf("%w: strict lock shape: %v", ErrFixtureLock, err)
+	}
 	decoder := json.NewDecoder(bytes.NewReader(contents))
 	decoder.DisallowUnknownFields()
 	var lock FixtureLock
@@ -157,6 +160,125 @@ func ParseFixtureLock(reader io.Reader) (FixtureLock, error) {
 		return FixtureLock{}, err
 	}
 	return lock, nil
+}
+
+type fixtureLockJSONShape struct {
+	fields  map[string]fixtureLockJSONShape
+	element *fixtureLockJSONShape
+}
+
+var fixtureLockJSONDocument = fixtureLockJSONShape{fields: map[string]fixtureLockJSONShape{
+	"version":         fixtureLockJSONScalar,
+	"fixture_version": fixtureLockJSONScalar,
+	"sources":         {element: &fixtureLockJSONSource},
+	"artifacts":       {element: &fixtureLockJSONArtifact},
+}}
+
+var fixtureLockJSONSource = fixtureLockJSONShape{fields: map[string]fixtureLockJSONShape{
+	"id":                  fixtureLockJSONScalar,
+	"kind":                fixtureLockJSONScalar,
+	"url":                 fixtureLockJSONScalar,
+	"immutable_reference": fixtureLockJSONScalar,
+	"format":              fixtureLockJSONScalar,
+	"sha256":              fixtureLockJSONScalar,
+	"size_bytes":          fixtureLockJSONScalar,
+	"license":             fixtureLockJSONScalar,
+}}
+
+var fixtureLockJSONArtifact = fixtureLockJSONShape{fields: map[string]fixtureLockJSONShape{
+	"name":       fixtureLockJSONScalar,
+	"source_id":  fixtureLockJSONScalar,
+	"member":     fixtureLockJSONScalar,
+	"sha256":     fixtureLockJSONScalar,
+	"size_bytes": fixtureLockJSONScalar,
+	"license":    fixtureLockJSONScalar,
+	"platform": {fields: map[string]fixtureLockJSONShape{
+		"os":           fixtureLockJSONScalar,
+		"architecture": fixtureLockJSONScalar,
+	}},
+	"build": {fields: map[string]fixtureLockJSONShape{
+		"recipe_path":        fixtureLockJSONScalar,
+		"source_revision":    fixtureLockJSONScalar,
+		"toolchain":          fixtureLockJSONScalar,
+		"inputs_sha256":      fixtureLockJSONScalar,
+		"sbom_sha256":        fixtureLockJSONScalar,
+		"static":             fixtureLockJSONScalar,
+		"guest_agent_sha256": fixtureLockJSONScalar,
+		"attestation_member": fixtureLockJSONScalar,
+	}},
+}}
+
+var fixtureLockJSONScalar fixtureLockJSONShape
+
+func validateFixtureLockJSON(contents []byte) error {
+	decoder := json.NewDecoder(bytes.NewReader(contents))
+	if err := validateFixtureLockJSONValue(decoder, fixtureLockJSONDocument); err != nil {
+		return err
+	}
+	if _, err := decoder.Token(); !errors.Is(err, io.EOF) {
+		return errors.New("trailing JSON data")
+	}
+	return nil
+}
+
+func validateFixtureLockJSONValue(decoder *json.Decoder, shape fixtureLockJSONShape) error {
+	if shape.element != nil {
+		token, err := decoder.Token()
+		if err != nil {
+			return err
+		}
+		if delimiter, ok := token.(json.Delim); !ok || delimiter != '[' {
+			return errors.New("array is required")
+		}
+		for decoder.More() {
+			if err := validateFixtureLockJSONValue(decoder, *shape.element); err != nil {
+				return err
+			}
+		}
+		_, err = decoder.Token()
+		return err
+	}
+	if shape.fields == nil {
+		token, err := decoder.Token()
+		if err != nil {
+			return err
+		}
+		if _, isContainer := token.(json.Delim); isContainer {
+			return errors.New("scalar value is required")
+		}
+		return nil
+	}
+	token, err := decoder.Token()
+	if err != nil {
+		return err
+	}
+	if delimiter, ok := token.(json.Delim); !ok || delimiter != '{' {
+		return errors.New("object is required")
+	}
+	seen := make(map[string]struct{}, len(shape.fields))
+	for decoder.More() {
+		token, err := decoder.Token()
+		if err != nil {
+			return err
+		}
+		key, ok := token.(string)
+		if !ok {
+			return errors.New("object key is required")
+		}
+		field, known := shape.fields[key]
+		if !known {
+			return fmt.Errorf("unknown or non-canonical key %q", key)
+		}
+		if _, duplicate := seen[key]; duplicate {
+			return fmt.Errorf("duplicate key %q", key)
+		}
+		seen[key] = struct{}{}
+		if err := validateFixtureLockJSONValue(decoder, field); err != nil {
+			return err
+		}
+	}
+	_, err = decoder.Token()
+	return err
 }
 
 // Validate rejects partial, mutable, duplicate, or unlicensed fixture locks.

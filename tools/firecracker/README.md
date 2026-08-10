@@ -26,8 +26,10 @@ the lock.
 
 The internal `ParseFixtureLock` boundary accepts only one complete v2 JSON
 document up to 256 KiB, disallows unknown fields and trailing documents, and
-runs the complete provenance validator before any fetch is possible. It does
-not supply a lock file or authorize a fetch by itself.
+runs the complete provenance validator before any fetch is possible. Its token
+walk rejects duplicate keys at every nested object and refuses case aliases, so
+JSON's last-key-wins and case-insensitive decoder behavior cannot change a
+reviewed identity. It does not supply a lock file or authorize a fetch by itself.
 
 The rootfs project-build source is a verified tar.gz containing the ext4 member
 and a bounded `rootfs-attestation.json` sidecar. Before staging the image, the

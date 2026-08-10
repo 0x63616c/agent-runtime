@@ -60,11 +60,59 @@ func TestParseFixtureLockRefusesUnknownTrailingAndOversizedInput(t *testing.T) {
 	for _, input := range [][]byte{
 		append(append([]byte(nil), encoded[:len(encoded)-1]...), []byte(`,"unreviewed":true}`)...),
 		append(append([]byte(nil), encoded...), []byte(` {}`)...),
-		bytes.Repeat([]byte("x"), maximumFixtureLockBytes+1),
 	} {
 		if _, err := ParseFixtureLock(bytes.NewReader(input)); !errors.Is(err, ErrFixtureLock) {
 			t.Errorf("ParseFixtureLock() error = %v, want strict lock refusal", err)
 		}
+	}
+}
+
+func TestParseFixtureLockRejectsDuplicateAndCaseAliasKeysAtEveryObjectLevel(t *testing.T) {
+	encoded, err := json.Marshal(validFixtureLock())
+	if err != nil {
+		t.Fatalf("Marshal() error = %v", err)
+	}
+	for _, mutate := range []func(string) string{
+		func(document string) string {
+			return strings.Replace(document, `"version":"firecracker.fixtures/v2"`, `"version":"firecracker.fixtures/v2","version":"firecracker.fixtures/v2"`, 1)
+		},
+		func(document string) string { return strings.Replace(document, `"version":`, `"Version":`, 1) },
+		func(document string) string {
+			return strings.Replace(document, `"id":"firecracker-release"`, `"id":"replacement","id":"firecracker-release"`, 1)
+		},
+		func(document string) string {
+			return strings.Replace(document, `"id":"firecracker-release"`, `"ID":"firecracker-release"`, 1)
+		},
+		func(document string) string {
+			return strings.Replace(document, `"os":"linux"`, `"os":"linux","os":"linux"`, 1)
+		},
+		func(document string) string {
+			return strings.Replace(document, `"architecture":"amd64"`, `"Architecture":"amd64"`, 1)
+		},
+		func(document string) string {
+			return strings.Replace(document, `"static":false`, `"static":false,"static":false`, 1)
+		},
+	} {
+		if _, err := ParseFixtureLock(strings.NewReader(mutate(string(encoded)))); !errors.Is(err, ErrFixtureLock) {
+			t.Errorf("ParseFixtureLock() error = %v, want duplicate or case-alias refusal", err)
+		}
+	}
+}
+
+func TestParseFixtureLockAppliesTheExactByteLimitToValidDocuments(t *testing.T) {
+	encoded, err := json.Marshal(validFixtureLock())
+	if err != nil {
+		t.Fatalf("Marshal() error = %v", err)
+	}
+	if len(encoded) > maximumFixtureLockBytes {
+		t.Fatalf("fixture lock is %d bytes, want test fixture below %d", len(encoded), maximumFixtureLockBytes)
+	}
+	exactLimit := append(append([]byte(nil), encoded...), bytes.Repeat([]byte(" "), maximumFixtureLockBytes-len(encoded))...)
+	if _, err := ParseFixtureLock(bytes.NewReader(exactLimit)); err != nil {
+		t.Fatalf("ParseFixtureLock() exact valid limit error = %v", err)
+	}
+	if _, err := ParseFixtureLock(bytes.NewReader(append(exactLimit, ' '))); !errors.Is(err, ErrFixtureLock) {
+		t.Fatalf("ParseFixtureLock() over-limit valid document error = %v, want size refusal", err)
 	}
 }
 
