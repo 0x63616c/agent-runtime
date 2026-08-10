@@ -7,6 +7,8 @@ CREATE TABLE runtime.firecracker_boot_probe_sessions (
     principal TEXT NOT NULL CHECK (octet_length(principal) BETWEEN 1 AND 512),
     operation_id TEXT NOT NULL CHECK (octet_length(operation_id) BETWEEN 1 AND 128),
     assignment_id TEXT NOT NULL CHECK (octet_length(assignment_id) BETWEEN 1 AND 128),
+    lease_epoch BIGINT NOT NULL CHECK (lease_epoch > 0),
+    fencing_token BIGINT NOT NULL CHECK (fencing_token > 0),
     version BIGINT NOT NULL CHECK (version > 0),
     session_body BYTEA NOT NULL CHECK (octet_length(session_body) BETWEEN 1 AND 65536),
     created_at TIMESTAMPTZ NOT NULL,
@@ -15,3 +17,5 @@ CREATE TABLE runtime.firecracker_boot_probe_sessions (
 
 CREATE INDEX firecracker_boot_probe_sessions_host_idx
     ON runtime.firecracker_boot_probe_sessions (host_id, host_generation);
+CREATE UNIQUE INDEX firecracker_boot_probe_sessions_assignment_fence_idx
+    ON runtime.firecracker_boot_probe_sessions (assignment_id, lease_epoch, fencing_token);

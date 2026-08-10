@@ -45,7 +45,7 @@ func (ledger *PostgresLedger) CreateBootProbeSession(ctx context.Context, identi
 		var version int64
 		err = tx.QueryRow(ctx, `SELECT version, session_body FROM runtime.firecracker_boot_probe_sessions WHERE host_instance_session_id=$1 FOR UPDATE`, hostInstanceSessionID).Scan(&version, &prior)
 		if errors.Is(err, pgx.ErrNoRows) {
-			if _, err := tx.Exec(ctx, `INSERT INTO runtime.firecracker_boot_probe_sessions (host_instance_session_id,host_id,host_generation,principal,operation_id,assignment_id,version,session_body,created_at,updated_at) VALUES ($1,$2,$3,$4,$5,$6,1,$7,$8,$8)`, hostInstanceSessionID, binding.HostID, int64(binding.HostGeneration), binding.Principal, binding.OperationID, binding.AssignmentID, wire, now.UTC()); err != nil {
+			if _, err := tx.Exec(ctx, `INSERT INTO runtime.firecracker_boot_probe_sessions (host_instance_session_id,host_id,host_generation,principal,operation_id,assignment_id,lease_epoch,fencing_token,version,session_body,created_at,updated_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,1,$9,$10,$10)`, hostInstanceSessionID, binding.HostID, int64(binding.HostGeneration), binding.Principal, binding.OperationID, binding.AssignmentID, int64(initial.LeaseEpoch), int64(initial.FencingToken), wire, now.UTC()); err != nil {
 				return err
 			}
 			snapshot = firecrackerbootprobev2.Snapshot{Version: 1, Session: session, Wire: append([]byte(nil), wire...)}
