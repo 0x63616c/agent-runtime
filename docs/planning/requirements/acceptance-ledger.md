@@ -138,7 +138,7 @@ not evidence claimed to exist today.
 | SBX-041 | Signed/encrypted envelope contract tests tenant/principal, Effective-Spec digest, operation, capability, expiry, lease/fencing and protocol refusal behavior. | Host-control protocol reference. |
 | SBX-042 | Durable assignment/renewal/fencing/stale-result/output-sequence/loss/quarantine/reassignment integration suite. | Host routing and reconciliation runbook. |
 | SBX-043 | Authority-boundary review and negative deployment tests show control/core/host/Jailer permissions cannot bypass declared cgroup/network/image/mount/output/cleanup owners. | Authority matrix. |
-| SBX-044 | Replay, revocation, stale-lease, wrong-tenant, rogue-host, lost-acknowledgement, restart and quarantine-cleanup suite runs against M3 and Linux/KVM lanes. | M3/M4 host-protocol evidence. |
+| SBX-044 | M3 proves replay, revocation, stale lease, wrong tenant, rogue host, lost acknowledgement, restart and quarantine cleanup in its durable protocol lane; M4 separately reproves the same bindings in Linux/KVM before any Firecracker claim. | M3/M4 host-protocol evidence. |
 | SBX-021 | Linux/KVM Firecracker foundation smoke/security suite. | Firecracker security profile. |
 | SBX-022 | Local adapter acknowledgement/refusal/sanitization tests. | Local adapter warning guide. |
 | SBX-023 | Fake adapter scripted lifecycle/retry/clock unit suite. | Test adapter guide. |
