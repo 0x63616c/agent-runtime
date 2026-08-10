@@ -36,15 +36,17 @@ const (
 
 // Spec is validated versioned desired state and has no usable zero value.
 type Spec struct {
-	Version  int
-	Name     Name
-	profiles Profiles
+	Version                 int
+	Name                    Name
+	staticAgentSpecBackfill *StaticAgentSpecBackfillV1
+	profiles                Profiles
 }
 
 type specInput struct {
-	Version  int          `json:"version"`
-	Name     string       `json:"name"`
-	Profiles profileInput `json:"profiles"`
+	Version                 int                        `json:"version"`
+	Name                    string                     `json:"name"`
+	StaticAgentSpecBackfill *StaticAgentSpecBackfillV1 `json:"static_agent_spec_backfill,omitempty"`
+	Profiles                profileInput               `json:"profiles"`
 }
 
 type profileInput struct {
@@ -100,10 +102,26 @@ func Parse(input io.Reader) (Spec, error) {
 	if err != nil {
 		return Spec{}, err
 	}
+	var staticAgentSpecBackfill *StaticAgentSpecBackfillV1
+	if document.StaticAgentSpecBackfill != nil {
+		if err := validateStaticAgentSpecBackfill(*document.StaticAgentSpecBackfill); err != nil {
+			return Spec{}, err
+		}
+		declaration := cloneStaticAgentSpecBackfill(*document.StaticAgentSpecBackfill)
+		staticAgentSpecBackfill = &declaration
+	}
 	if profiles.Local.Namespace != "ar-"+name.String() || profiles.CI.Namespace != "ar-ci-"+name.String() || profiles.Production.Namespace != name.String() {
 		return Spec{}, errors.New("validate stack specification: profile namespaces must be explicitly bound to the sole stack identity")
 	}
-	return Spec{Version: document.Version, Name: name, profiles: profiles}, nil
+	return Spec{Version: document.Version, Name: name, staticAgentSpecBackfill: staticAgentSpecBackfill, profiles: profiles}, nil
+}
+
+// StaticAgentSpecBackfill returns the optional static control-plane declaration without rendering or applying it.
+func (spec Spec) StaticAgentSpecBackfill() (StaticAgentSpecBackfillV1, bool) {
+	if spec.staticAgentSpecBackfill == nil {
+		return StaticAgentSpecBackfillV1{}, false
+	}
+	return cloneStaticAgentSpecBackfill(*spec.staticAgentSpecBackfill), true
 }
 
 // Namespace returns the explicit namespace for a reviewed profile.
