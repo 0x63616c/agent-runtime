@@ -7,7 +7,6 @@ import (
 
 	"github.com/0x63616c/agent-runtime/internal/approval"
 	"github.com/0x63616c/agent-runtime/internal/clock"
-	agentruntime "github.com/0x63616c/agent-runtime/sdk/go"
 )
 
 func TestApprovalOwnerOrTenantAdminMayInspectAndDecideExactlyOnce(t *testing.T) {
@@ -18,13 +17,13 @@ func TestApprovalOwnerOrTenantAdminMayInspectAndDecideExactlyOnce(t *testing.T) 
 	owner := approval.Actor{TenantID: "tenant-a", PrincipalID: "owner"}
 	admin := approval.Actor{TenantID: "tenant-a", PrincipalID: "admin", Admin: true}
 	other := approval.Actor{TenantID: "tenant-a", PrincipalID: "other"}
-	if _, err := pending.Inspect(owner); err != nil {
+	if _, err := pending.Inspect(owner, pending.CreatedAt()); err != nil {
 		t.Fatalf("owner inspect: %v", err)
 	}
-	if _, err := pending.Inspect(admin); err != nil {
+	if _, err := pending.Inspect(admin, pending.CreatedAt()); err != nil {
 		t.Fatalf("tenant admin inspect: %v", err)
 	}
-	if _, err := pending.Inspect(other); !errors.Is(err, approval.ErrNotFoundOrDenied) {
+	if _, err := pending.Inspect(other, pending.CreatedAt()); !errors.Is(err, approval.ErrNotFoundOrDenied) {
 		t.Fatalf("unrelated principal inspect = %v, want safe refusal", err)
 	}
 
@@ -81,7 +80,7 @@ func TestTenantAdminMayDenyAnotherOwnerApprovalInsideTheSameTenant(t *testing.T)
 	if err != nil || denied.State() != approval.StateDenied {
 		t.Fatalf("tenant-admin denial = %#v, %v", denied, err)
 	}
-	if _, err := pending.Inspect(approval.Actor{TenantID: "tenant-b", PrincipalID: "admin", Admin: true}); !errors.Is(err, approval.ErrNotFoundOrDenied) {
+	if _, err := pending.Inspect(approval.Actor{TenantID: "tenant-b", PrincipalID: "admin", Admin: true}, pending.CreatedAt()); !errors.Is(err, approval.ErrNotFoundOrDenied) {
 		t.Fatalf("cross-tenant admin inspect = %v, want safe refusal", err)
 	}
 }
@@ -116,15 +115,57 @@ func TestApprovalCancellationAndInvalidationAreTerminalWithoutToolExecution(t *t
 	if err != nil || invalidated.State() != approval.StateInvalidated {
 		t.Fatalf("invalidate = %#v, %v", invalidated, err)
 	}
+	if repeated, err := cancelled.Cancel(pending.ExpiresAt().Add(time.Minute)); err != nil || repeated != cancelled {
+		t.Fatalf("repeat cancel = %#v, %v", repeated, err)
+	}
+	if repeated, err := invalidated.Invalidate(pending.ExpiresAt().Add(time.Minute)); err != nil || repeated != invalidated {
+		t.Fatalf("repeat invalidation = %#v, %v", repeated, err)
+	}
+}
+
+func TestApprovalInspectionExpiresWithFakeClockAndExposesSafeContext(t *testing.T) {
+	pending := validApproval(t)
+	owner := approval.Actor{TenantID: "tenant-a", PrincipalID: "owner"}
+	fakeClock, err := clock.NewFake(pending.CreatedAt())
+	if err != nil {
+		t.Fatalf("new fake clock: %v", err)
+	}
+	if err := fakeClock.Advance(5 * time.Minute); err != nil {
+		t.Fatalf("advance fake clock: %v", err)
+	}
+	expired, err := pending.Inspect(owner, fakeClock.Now())
+	if err != nil || expired.State() != approval.StateExpired {
+		t.Fatalf("expired inspection = %#v, %v", expired, err)
+	}
+	if expired.Summary().String() != "restart workspace-service" || expired.PolicyRevisionDigest() != "sha256:2222222222222222222222222222222222222222222222222222222222222222" || expired.SessionID().String() != "sess_1234567890ABCDEF" || expired.TurnID().String() != "turn_1234567890ABCDEF" || expired.ToolCallID().String() != "tcall_1234567890ABCDEF" || expired.Owner() != owner {
+		t.Fatalf("safe approval context was not available: %#v", expired)
+	}
 }
 
 func validApproval(t *testing.T) approval.Approval {
 	t.Helper()
-	sessionID, err := agentruntime.ParseSessionID("sess_1234567890ABCDEF")
+	value, err := approval.New(validProposal(t))
+	if err != nil {
+		t.Fatalf("new approval: %v", err)
+	}
+	return value
+}
+
+func TestApprovalRejectsArbitrarySummaryPayload(t *testing.T) {
+	proposal := validProposal(t)
+	proposal.Summary = approval.Summary{Verb: approval.SummaryVerb("Authorization: Bearer secret"), Target: approval.SummaryTarget("untrusted")}
+	if _, err := approval.New(proposal); err == nil {
+		t.Fatal("arbitrary raw summary payload was accepted")
+	}
+}
+
+func validProposal(t *testing.T) approval.Proposal {
+	t.Helper()
+	sessionID, err := approval.ParseSessionID("sess_1234567890ABCDEF")
 	if err != nil {
 		t.Fatal(err)
 	}
-	turnID, err := agentruntime.ParseTurnID("turn_1234567890ABCDEF")
+	turnID, err := approval.ParseTurnID("turn_1234567890ABCDEF")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -137,7 +178,7 @@ func validApproval(t *testing.T) approval.Approval {
 		t.Fatal(err)
 	}
 	createdAt := time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC)
-	value, err := approval.New(approval.Proposal{
+	return approval.Proposal{
 		ID:                   approvalID,
 		Owner:                approval.Actor{TenantID: "tenant-a", PrincipalID: "owner"},
 		SessionID:            sessionID,
@@ -145,13 +186,9 @@ func validApproval(t *testing.T) approval.Approval {
 		ToolCallID:           toolCallID,
 		ActionDigest:         "sha256:1111111111111111111111111111111111111111111111111111111111111111",
 		PolicyRevisionDigest: "sha256:2222222222222222222222222222222222222222222222222222222222222222",
-		Summary:              "Restart the isolated workspace service.",
+		Summary:              approval.Summary{Verb: approval.SummaryRestart, Target: approval.SummaryWorkspaceService},
 		ProposedScope:        approval.Scope{CapabilityDigest: "sha256:3333333333333333333333333333333333333333333333333333333333333333", MaximumUses: 2, ExpiresAt: createdAt.Add(4 * time.Minute)},
 		CreatedAt:            createdAt,
 		ExpiresAt:            createdAt.Add(5 * time.Minute),
-	})
-	if err != nil {
-		t.Fatalf("new approval: %v", err)
 	}
-	return value
 }

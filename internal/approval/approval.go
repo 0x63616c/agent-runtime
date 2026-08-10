@@ -4,16 +4,12 @@ package approval
 import (
 	"strings"
 	"time"
-	"unicode"
-	"unicode/utf8"
 
-	agentruntime "github.com/0x63616c/agent-runtime/sdk/go"
 	"github.com/cockroachdb/errors"
 )
 
 const (
 	maxIdentityBytes      = 128
-	maxSummaryBytes       = 512
 	maxScopeUses          = 32
 	maximumApprovalWindow = 24 * time.Hour
 )
@@ -35,11 +31,23 @@ type ID string
 // ToolCallID is an internal stable correlation reference for one model Tool intent.
 type ToolCallID string
 
+// SessionID is the internal canonical Session correlation reference.
+type SessionID string
+
+// TurnID is the internal canonical Turn correlation reference.
+type TurnID string
+
 // String returns the canonical internal Approval identity.
 func (id ID) String() string { return string(id) }
 
 // String returns the canonical internal Tool-call identity.
 func (id ToolCallID) String() string { return string(id) }
+
+// String returns the canonical internal Session reference.
+func (id SessionID) String() string { return string(id) }
+
+// String returns the canonical internal Turn reference.
+func (id TurnID) String() string { return string(id) }
 
 // ParseID validates one canonical internal Approval identity.
 func ParseID(value string) (ID, error) {
@@ -55,6 +63,22 @@ func ParseToolCallID(value string) (ToolCallID, error) {
 		return "", errors.New("parse tool call ID: invalid identifier")
 	}
 	return ToolCallID(value), nil
+}
+
+// ParseSessionID validates one canonical internal Session reference.
+func ParseSessionID(value string) (SessionID, error) {
+	if !validID(value, "sess_") {
+		return "", errors.New("parse approval session ID: invalid identifier")
+	}
+	return SessionID(value), nil
+}
+
+// ParseTurnID validates one canonical internal Turn reference.
+func ParseTurnID(value string) (TurnID, error) {
+	if !validID(value, "turn_") {
+		return "", errors.New("parse approval turn ID: invalid identifier")
+	}
+	return TurnID(value), nil
 }
 
 func validID(value, prefix string) bool {
@@ -97,6 +121,39 @@ func (scope Scope) narrowerThan(proposed Scope) bool {
 	return scope.valid() && scope.CapabilityDigest == proposed.CapabilityDigest && scope.MaximumUses <= proposed.MaximumUses && !scope.ExpiresAt.After(proposed.ExpiresAt)
 }
 
+// SummaryVerb is one fixed action phrase. Arbitrary tool arguments are never retained as an Approval summary.
+type SummaryVerb string
+
+const (
+	SummaryExecute SummaryVerb = "execute"
+	SummaryRestart SummaryVerb = "restart"
+	SummaryWrite   SummaryVerb = "write"
+	SummaryDelete  SummaryVerb = "delete"
+)
+
+// SummaryTarget is one fixed approved-action target phrase.
+type SummaryTarget string
+
+const (
+	SummaryWorkspaceService SummaryTarget = "workspace-service"
+	SummarySandboxProcess   SummaryTarget = "sandbox-process"
+	SummaryArtifact         SummaryTarget = "artifact"
+	SummaryNetworkRequest   SummaryTarget = "network-request"
+)
+
+// Summary is a small fixed human-readable projection. It deliberately has no arbitrary text field.
+type Summary struct {
+	Verb   SummaryVerb
+	Target SummaryTarget
+}
+
+// String returns the safe human-readable projection.
+func (summary Summary) String() string { return string(summary.Verb) + " " + string(summary.Target) }
+
+func (summary Summary) valid() bool {
+	return (summary.Verb == SummaryExecute || summary.Verb == SummaryRestart || summary.Verb == SummaryWrite || summary.Verb == SummaryDelete) && (summary.Target == SummaryWorkspaceService || summary.Target == SummarySandboxProcess || summary.Target == SummaryArtifact || summary.Target == SummaryNetworkRequest)
+}
+
 // Decision records the sole human decision available to an Approval.
 type Decision string
 
@@ -121,12 +178,12 @@ const (
 type Proposal struct {
 	ID                   ID
 	Owner                Actor
-	SessionID            agentruntime.SessionID
-	TurnID               agentruntime.TurnID
+	SessionID            SessionID
+	TurnID               TurnID
 	ToolCallID           ToolCallID
 	ActionDigest         string
 	PolicyRevisionDigest string
-	Summary              string
+	Summary              Summary
 	ProposedScope        Scope
 	CreatedAt            time.Time
 	ExpiresAt            time.Time
@@ -164,12 +221,12 @@ func New(proposal Proposal) (Approval, error) {
 	return Approval{proposal: proposal, state: StatePending}, nil
 }
 
-// Inspect returns the same immutable snapshot only to its owner or a tenant admin.
-func (value Approval) Inspect(actor Actor) (Approval, error) {
+// Inspect returns a clock-fresh immutable snapshot only to its owner or a tenant admin.
+func (value Approval) Inspect(actor Actor, now time.Time) (Approval, error) {
 	if !value.authorized(actor) {
 		return Approval{}, ErrNotFoundOrDenied
 	}
-	return value, nil
+	return value.Expire(now)
 }
 
 // Decide advances a pending Approval once. An exact repeated command returns the existing immutable result.
@@ -220,6 +277,14 @@ func (value Approval) Invalidate(now time.Time) (Approval, error) {
 	return value.endPending(StateInvalidated, now)
 }
 
+// Expire makes the deadline transition explicit for a reconciler or clock-aware read path.
+func (value Approval) Expire(now time.Time) (Approval, error) {
+	if err := value.validateNow(now); err != nil {
+		return Approval{}, err
+	}
+	return value.expire(now), nil
+}
+
 // State returns the immutable current state.
 func (value Approval) State() State { return value.state }
 
@@ -228,6 +293,24 @@ func (value Approval) ID() ID { return value.proposal.ID }
 
 // ActionDigest returns the immutable digest of the normalized requested action.
 func (value Approval) ActionDigest() string { return value.proposal.ActionDigest }
+
+// Owner returns the immutable request owner.
+func (value Approval) Owner() Actor { return value.proposal.Owner }
+
+// SessionID returns the immutable governing Session reference.
+func (value Approval) SessionID() SessionID { return value.proposal.SessionID }
+
+// TurnID returns the immutable governing Turn reference.
+func (value Approval) TurnID() TurnID { return value.proposal.TurnID }
+
+// ToolCallID returns the immutable Tool-intent correlation reference.
+func (value Approval) ToolCallID() ToolCallID { return value.proposal.ToolCallID }
+
+// PolicyRevisionDigest returns the immutable policy revision digest.
+func (value Approval) PolicyRevisionDigest() string { return value.proposal.PolicyRevisionDigest }
+
+// Summary returns the fixed safe human-readable action projection.
+func (value Approval) Summary() Summary { return value.proposal.Summary }
 
 // CreatedAt returns the immutable proposal creation time.
 func (value Approval) CreatedAt() time.Time { return value.proposal.CreatedAt }
@@ -269,11 +352,14 @@ func (value Approval) endPending(next State, now time.Time) (Approval, error) {
 	if err := value.validateNow(now); err != nil {
 		return Approval{}, err
 	}
+	if value.state != StatePending {
+		if value.state == next {
+			return value, nil
+		}
+		return Approval{}, ErrConflict
+	}
 	if !now.Before(value.proposal.ExpiresAt) {
 		return value.expire(now), ErrExpired
-	}
-	if value.state != StatePending {
-		return Approval{}, ErrConflict
 	}
 	value.state, value.terminalAt = next, now
 	return value, nil
@@ -284,14 +370,8 @@ func (value Approval) matches(actor Actor, command DecisionCommand) bool {
 }
 
 func validateProposal(proposal Proposal) error {
-	if !validID(string(proposal.ID), "appr_") || !proposal.Owner.valid() || !validID(string(proposal.ToolCallID), "tcall_") || !validDigest(proposal.ActionDigest) || !validDigest(proposal.PolicyRevisionDigest) || !validSummary(proposal.Summary) || !proposal.ProposedScope.valid() || !validUTC(proposal.CreatedAt) || !validUTC(proposal.ExpiresAt) || !proposal.ExpiresAt.After(proposal.CreatedAt) || proposal.ExpiresAt.After(proposal.CreatedAt.Add(maximumApprovalWindow)) || proposal.ProposedScope.ExpiresAt.Before(proposal.CreatedAt) || proposal.ProposedScope.ExpiresAt.After(proposal.ExpiresAt) {
+	if !validID(string(proposal.ID), "appr_") || !proposal.Owner.valid() || !validID(string(proposal.SessionID), "sess_") || !validID(string(proposal.TurnID), "turn_") || !validID(string(proposal.ToolCallID), "tcall_") || !validDigest(proposal.ActionDigest) || !validDigest(proposal.PolicyRevisionDigest) || !proposal.Summary.valid() || !proposal.ProposedScope.valid() || !validUTC(proposal.CreatedAt) || !validUTC(proposal.ExpiresAt) || !proposal.ExpiresAt.After(proposal.CreatedAt) || proposal.ExpiresAt.After(proposal.CreatedAt.Add(maximumApprovalWindow)) || !proposal.ProposedScope.ExpiresAt.After(proposal.CreatedAt) || proposal.ProposedScope.ExpiresAt.After(proposal.ExpiresAt) {
 		return errors.New("approval proposal is invalid")
-	}
-	if _, err := agentruntime.ParseSessionID(proposal.SessionID.String()); err != nil {
-		return errors.Wrap(err, "approval proposal session ID")
-	}
-	if _, err := agentruntime.ParseTurnID(proposal.TurnID.String()); err != nil {
-		return errors.Wrap(err, "approval proposal turn ID")
 	}
 	return nil
 }
@@ -309,18 +389,6 @@ func validDigest(value string) bool {
 	}
 	for _, character := range strings.TrimPrefix(value, "sha256:") {
 		if (character < '0' || character > '9') && (character < 'a' || character > 'f') {
-			return false
-		}
-	}
-	return true
-}
-
-func validSummary(value string) bool {
-	if len(value) == 0 || len(value) > maxSummaryBytes || !utf8.ValidString(value) {
-		return false
-	}
-	for _, character := range value {
-		if unicode.IsControl(character) {
 			return false
 		}
 	}
