@@ -177,14 +177,14 @@ func TestVerifyRefusesFrozenSnapshotAndImmutableContentFailures(t *testing.T) {
 func TestArchiveIsRequestKeyedAndRetainsCertificateAbsentTerminalResult(t *testing.T) {
 	request := validRequest()
 	status := agentspecbackfill.Status{Phase: agentspecbackfill.PhaseRefused, RequestDigest: mustDigest(t, request), SnapshotFingerprint: request.SnapshotFingerprint, SnapshotCount: request.SnapshotCount, Reason: agentspecbackfill.RefusalContent, CompletedAt: time.Date(2026, 8, 9, 0, 1, 0, 0, time.UTC)}
-	bundle, err := agentspecbackfill.NewArchiveBundle(request, status, agentspecbackfill.Audit{Code: "content"}, nil)
+	bundle, err := agentspecbackfill.NewArchiveBundle(archiveEvidence(t, request, status, "content"))
 	if err != nil {
 		t.Fatalf("new archive bundle: %v", err)
 	}
 	if bundle.CertificatePresent() {
 		t.Fatal("refused terminal result has certificate")
 	}
-	if key := bundle.Key("retained/preflight"); key != "retained/preflight/agentspecbackfill/v1/asb-u3cis7tsnfpwwseebaafrqnlsczhkdcoqfhomaeoastupk5np7ca/sha256-a6c4897e72695f6b4884080058c1ab90b2750c4e814ee6008e04a747abad7fc4.cbor" {
+	if key := bundle.Key("retained/preflight"); key != "retained/preflight/agentspecbackfill/v1/1c8e3d7a-2f8b-4eea-b71a-000000000001/sha256-a6c4897e72695f6b4884080058c1ab90b2750c4e814ee6008e04a747abad7fc4.cbor" {
 		t.Fatalf("archive key = %q", key)
 	}
 	if _, err := bundle.Canonical(); err != nil {
@@ -192,7 +192,7 @@ func TestArchiveIsRequestKeyedAndRetainsCertificateAbsentTerminalResult(t *testi
 	}
 	later := status
 	later.CompletedAt = later.CompletedAt.Add(time.Second)
-	laterBundle, err := agentspecbackfill.NewArchiveBundle(request, later, agentspecbackfill.Audit{Code: "content"}, nil)
+	laterBundle, err := agentspecbackfill.NewArchiveBundle(archiveEvidence(t, request, later, "content"))
 	if err != nil {
 		t.Fatalf("new later archive bundle: %v", err)
 	}
@@ -200,6 +200,21 @@ func TestArchiveIsRequestKeyedAndRetainsCertificateAbsentTerminalResult(t *testi
 	second, _ := laterBundle.Canonical()
 	if string(first) == string(second) {
 		t.Fatal("archive omitted terminal status completion time")
+	}
+}
+
+func TestArchiveRejectsEvidenceWhoseDeclaredRequestDigestDoesNotMatchRequest(t *testing.T) {
+	request := validRequest()
+	status := agentbackfillVerifiedStatus(t, request)
+	_, err := agentspecbackfill.NewArchiveBundle(agentspecbackfill.TerminalArchiveEvidence{
+		RequestUID:    "1c8e3d7a-2f8b-4eea-b71a-000000000001",
+		RequestDigest: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		Request:       request,
+		Status:        status,
+		Audit:         agentspecbackfill.Audit{Code: "verified"},
+	})
+	if err == nil {
+		t.Fatal("mismatched declared request digest was accepted")
 	}
 }
 
@@ -214,6 +229,11 @@ func mustDigest(t *testing.T, request agentspecbackfill.Request) string {
 		t.Fatal(err)
 	}
 	return value
+}
+
+func archiveEvidence(t *testing.T, request agentspecbackfill.Request, status agentspecbackfill.Status, auditCode string) agentspecbackfill.TerminalArchiveEvidence {
+	t.Helper()
+	return agentspecbackfill.TerminalArchiveEvidence{RequestUID: "1c8e3d7a-2f8b-4eea-b71a-000000000001", RequestDigest: mustDigest(t, request), Request: request, Status: status, Audit: agentspecbackfill.Audit{Code: auditCode}}
 }
 func agentbackfillVerifiedStatus(t *testing.T, request agentspecbackfill.Request) agentspecbackfill.Status {
 	t.Helper()

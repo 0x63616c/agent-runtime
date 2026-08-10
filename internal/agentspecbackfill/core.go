@@ -352,39 +352,86 @@ type Audit struct{ Code string }
 // CertificateInput is the safe certificate projection when v4 committed.
 type CertificateInput struct{ Digest string }
 
+// TerminalArchiveEvidence is the redacted, immutable terminal evidence selected by the distinct archive-export authority.
+// RequestUID is the observed CR UID, never a caller-supplied display name.
+type TerminalArchiveEvidence struct {
+	RequestUID    string
+	RequestDigest string
+	Request       Request
+	Status        Status
+	Audit         Audit
+	Certificate   *CertificateInput
+}
+
 // ArchiveBundle is one immutable terminal request evidence bundle.
 type ArchiveBundle struct {
+	requestUID  string
 	request     Request
 	status      Status
 	audit       Audit
 	certificate *CertificateInput
 }
 
-// NewArchiveBundle constructs one request-keyed terminal archive bundle.
-func NewArchiveBundle(request Request, status Status, audit Audit, certificate *CertificateInput) (ArchiveBundle, error) {
-	if err := status.ValidateFor(request, status.CompletedAt); err != nil {
+// NewArchiveBundle constructs one CR-UID and request-digest-keyed terminal archive bundle.
+func NewArchiveBundle(evidence TerminalArchiveEvidence) (ArchiveBundle, error) {
+	if !validArchiveRequestUID(evidence.RequestUID) {
+		return ArchiveBundle{}, errors.New("invalid archive request UID")
+	}
+	requestDigest, err := evidence.Request.Digest()
+	if err != nil || evidence.RequestDigest != requestDigest {
+		return ArchiveBundle{}, errors.New("archive evidence request digest does not match request")
+	}
+	if err := evidence.Status.ValidateFor(evidence.Request, evidence.Status.CompletedAt); err != nil {
 		return ArchiveBundle{}, errors.Wrap(err, "validate archive status")
 	}
-	if len(audit.Code) == 0 || len(audit.Code) > 64 {
+	if !validAuditCode(evidence.Audit.Code) {
 		return ArchiveBundle{}, errors.New("invalid archive audit code")
 	}
-	if certificate != nil && !validDigest(certificate.Digest) {
+	if evidence.Certificate != nil && !validDigest(evidence.Certificate.Digest) {
 		return ArchiveBundle{}, errors.New("invalid archive certificate")
 	}
-	if status.Phase != PhaseVerified && certificate != nil {
+	if evidence.Status.Phase != PhaseVerified && evidence.Certificate != nil {
 		return ArchiveBundle{}, errors.New("refused archive has certificate")
 	}
-	return ArchiveBundle{request: request, status: status, audit: audit, certificate: certificate}, nil
+	return ArchiveBundle{requestUID: evidence.RequestUID, request: evidence.Request, status: evidence.Status, audit: evidence.Audit, certificate: evidence.Certificate}, nil
+}
+
+func validArchiveRequestUID(value string) bool {
+	if len(value) == 0 || len(value) > 128 {
+		return false
+	}
+	for index, character := range value {
+		if (character >= 'a' && character <= 'z') || (character >= '0' && character <= '9') || (character == '-' && index > 0 && index < len(value)-1) {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+func validAuditCode(value string) bool {
+	if len(value) == 0 || len(value) > 64 {
+		return false
+	}
+	for _, character := range value {
+		if (character >= 'a' && character <= 'z') || (character >= '0' && character <= '9') || character == '_' || character == '-' {
+			continue
+		}
+		return false
+	}
+	return true
 }
 
 // CertificatePresent reports whether the terminal request committed v4 certificate evidence.
 func (bundle ArchiveBundle) CertificatePresent() bool { return bundle.certificate != nil }
 
+// AuditCode reports the bounded redacted audit classification retained in this bundle.
+func (bundle ArchiveBundle) AuditCode() string { return bundle.audit.Code }
+
 // Key returns the deterministic archive object key under one declared prefix.
 func (bundle ArchiveBundle) Key(prefix string) string {
-	name, _ := bundle.request.Name()
 	digest, _ := bundle.request.Digest()
-	return strings.TrimSuffix(prefix, "/") + "/agentspecbackfill/v1/" + name + "/" + strings.Replace(digest, ":", "-", 1) + ".cbor"
+	return strings.TrimSuffix(prefix, "/") + "/agentspecbackfill/v1/" + bundle.requestUID + "/" + strings.Replace(digest, ":", "-", 1) + ".cbor"
 }
 
 // Canonical returns bounded redacted immutable archive bytes.
@@ -398,8 +445,9 @@ func (bundle ArchiveBundle) Canonical() ([]byte, error) {
 		return nil, err
 	}
 	var value bytes.Buffer
-	writeHead(&value, 4, 5)
+	writeHead(&value, 4, 6)
 	writeUint(&value, 1)
+	writeText(&value, bundle.requestUID)
 	writeBytes(&value, request)
 	writeBytes(&value, status)
 	writeText(&value, bundle.audit.Code)
