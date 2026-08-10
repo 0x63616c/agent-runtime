@@ -46,6 +46,13 @@ The store atomically persists a legal plan or returns safe conflict,
 not-found-or-denied, unavailable, or integrity results. It does not recreate
 domain decisions in a database adapter.
 
+The sole digest authority is a canonical command engine: it owns command kind,
+authenticated scope, idempotency key, and ordered metadata fields. The pure
+planner consumes that canonical command, bounded prior state, and injected
+clock/ID/retention policy and returns an exact transition plan. Adapters only
+persist the plan; they do not allocate IDs, choose retention, advance fences,
+or derive effects.
+
 ## Shared records
 
 All records are bounded, UTC-normalized, deep-copied at their boundary, and
@@ -56,7 +63,7 @@ scoped by an authenticated `Tenant` plus a `Principal` where user-owned.
 | `AgentRevisionRecord` | tenant, Agent/Revision IDs, revision number, name, logical model profile, identity-free specification-body reference, created time, retention | instructions, Tool descriptions, credentials, provider types |
 | `SessionRecord` | tenant/principal, Session ID, pinned Agent/Revision IDs, state, version, times, retention | Temporal execution/run ID, backend handles |
 | `InputRecord` | tenant/principal/session, Input ID, idempotency receipt, content reference, accepted time | Input parts or raw text |
-| `TurnRecord` | tenant/principal/session, Turn/Input IDs, position, state, invocation count, safe terminal failure, times | model reasoning, provider error, raw output |
+| `TurnRecord` | tenant/principal/session, Turn/Input IDs, position, state, persisted current fence, invocation count, safe terminal failure, times | model reasoning, provider error, raw output |
 | `InvocationRecord` | tenant/principal/session/turn, runtime operation ID, ordinal, current fence, intent/outcome state, bounded usage references, times | provider credential, raw request/response |
 | `ProductEventRecord` | tenant/principal/session, sequence, opaque Cursor, Event ID/kind, referenced IDs, occurred/retention times | event body, database position, Temporal offset |
 | `AuditFactRecord` | tenant, audit/operation IDs, actor, fact kind, subject reference, time, retention | secret, raw content, unbounded diagnostics |
@@ -123,6 +130,7 @@ Queries are authorization-scoped and have no mutation side effect.
 | `GetMutationReceipt` | safe idempotency status/result reference | exact owner/key only; retention expiry is explicit |
 | `ReadAudit` | authorized bounded Audit page | audit authorization is separate from ordinary Session ownership |
 | `ReadOutbox`, `ClaimOutbox`, `AcknowledgeOutbox` | ordered publication/reconciliation work | durable at-least-once claim/ack, ownership-scoped idempotency receipt, and enough exact route/fence/version metadata for recovery to form a fenced invocation outcome/settlement command; publisher failure cannot erase the committed fact |
+| `AuthorizeAgentSpecificationBodyRead`, `AuthorizeInputEnvelopeRead` | runtimecontent reader authorization | state-scoped only; content composition does not authorize with raw tenant/principal input outside this authority |
 
 The application expands metadata results into public `agentruntime` models
 only through authorized content reads. A public `SendInputResult` may hydrate
@@ -193,6 +201,38 @@ raw Agent/Input content out of runtime-state records, require the opaque
 require every listed lifecycle and Outbox operation to remain in the closed
 interface. The next migration step is a complete deterministic memory
 conformance implementation, not an incremental route migration.
+
+### Required planner replacement split
+
+The existing aggregate kernel cannot be adapted incrementally: it owns raw
+Agent/Input bytes and exposes closure transactions, while the new authority
+needs typed canonical commands and metadata-only plans. The next coherent
+vertical is therefore one replacement, with these non-separable stages:
+
+1. Replace the current draft with one complete internal contract: ten typed
+   canonical command inputs—`RegisterAgentRevision`, `CreateSession`,
+   `AdmitInput`, `BeginInvocationAttempt`, `RecordInvocationOutcome`,
+   `SettleTurn`, `CancelTurn`, `CloseSession`, `ClaimOutbox`, and
+   `AcknowledgeOutbox`—plus the state-scoped
+   `AuthorizeAgentSpecificationBodyRead` and `AuthorizeInputEnvelopeRead`
+   content-reader authorizers. A compiler validates scope, authority,
+   idempotency and bounded metadata, validates content handoffs into
+   references, and is the only component that creates a `Mutation` receipt
+   binding. No adapter may accept, construct, or use a generic `Mutation` in
+   parallel with this compiler; it persists only compiler-produced plans.
+2. Implement one concrete pure lifecycle planner for all ten mutations. Its
+   prior state includes Agent revision series, Session, ordered active/queued
+   Turns, invocation/fence, receipt, cursor/sequence and Outbox lease state.
+   Its plan contains every allocated ID, atomic session/turn/invocation write,
+   promotion/terminal write, and ordered Product-event/Audit/Outbox effect.
+   The plan is opaque or centrally validated before an adapter can persist it.
+3. Replace `kernel.Repository` in one cutover with a complete deterministic
+   MemoryRuntimeStateStore that supplies that prior state and persists only
+   planner output. The same conformance suite then becomes the PostgreSQL
+   adapter target. No public route may use either authority until this cutover.
+
+This is deliberately not an adapter ABI. The in-progress contract draft is
+not committed until stage 1 and the complete stage-2 planner are coherent.
 
 ## First executable vertical
 
