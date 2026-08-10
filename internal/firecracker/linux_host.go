@@ -65,16 +65,20 @@ type JailerProcess interface {
 	Cleanup(context.Context) (CleanupProof, error)
 }
 
+// JailerSerialObserver observes the exact bounded serial stream owned by one started Jailer process.
+type JailerSerialObserver interface {
+	AwaitSerial(context.Context, string) error
+}
+
 // FirecrackerHTTPPort sends one bounded JSON request over the exact private Firecracker API socket.
 type FirecrackerHTTPPort interface {
 	Bind(context.Context, string) error
 	Put(context.Context, string, any) error
 }
 
-// GuestChannel carries the exact private guest serial observation and vsock control protocol.
-type GuestChannel interface {
+// GuestControlChannel carries a future private guest-control transport. No concrete control transport is composed yet.
+type GuestControlChannel interface {
 	Bind(context.Context, string) error
-	AwaitSerial(context.Context, string) error
 	Ping(context.Context, string) error
 	Close(context.Context) error
 }
@@ -87,7 +91,7 @@ type LinuxJailerHost struct {
 	Authority      JailerExecutionAuthority
 	Jailer         JailerStarter
 	HTTP           FirecrackerHTTPPort
-	Guest          GuestChannel
+	Guest          GuestControlChannel
 
 	mu             sync.Mutex
 	preflight      bool
@@ -105,6 +109,7 @@ type LinuxJailerHost struct {
 	authority      JailerExecutionAuthority
 	request        LaunchRequest
 	stage          JailedResourceStage
+	serial         JailerSerialObserver
 	launchDone     chan struct{}
 	prepareDone    chan struct{}
 	cleanupDone    chan struct{}
@@ -144,7 +149,7 @@ func (host *LinuxJailerHost) Preflight(ctx context.Context, plan Plan, fixtures 
 	if err := contextError(ctx); err != nil {
 		return err
 	}
-	if host == nil || host.Resources == nil || host.Jailer == nil || host.HTTP == nil || host.Guest == nil || !safeAbsolutePath(host.RootFSCopyPath) || !validCompiledPlan(plan) || !validJailerExecutionAuthority(host.Authority, plan) || !fixturesMatchPlan(fixtures, plan) || (host.configured && !sameConfiguredLinuxJailerPlan(host.configuredPlan, plan)) {
+	if host == nil || host.Resources == nil || host.Jailer == nil || host.HTTP == nil || !safeAbsolutePath(host.RootFSCopyPath) || !validCompiledPlan(plan) || !validJailerExecutionAuthority(host.Authority, plan) || !fixturesMatchPlan(fixtures, plan) || (host.configured && !sameConfiguredLinuxJailerPlan(host.configuredPlan, plan)) {
 		return fmt.Errorf("%w: Linux Jailer ports, resource stage, private rootfs copy, compiled plan, and verified fixtures are required", ErrSmokeUnavailable)
 	}
 	if err := host.PreflightState.Validate(); err != nil {
@@ -246,15 +251,24 @@ func (host *LinuxJailerHost) Launch(ctx context.Context, request LaunchRequest) 
 	if startErr != nil || process == nil {
 		return host.failLaunch(fmt.Errorf("start Jailer: %w", errors.Join(startErr, missingJailerProcess(process))))
 	}
+	serial, ok := process.(JailerSerialObserver)
+	if !ok {
+		return host.failLaunch(fmt.Errorf("%w: started Jailer serial observer is required", ErrSmokeUnavailable))
+	}
+	host.mu.Lock()
+	host.serial = serial
+	host.mu.Unlock()
 	if err := callWithContextFence(ctx, "bind Firecracker API socket", func(callCtx context.Context) error {
 		return http.Bind(callCtx, hostJailedPath(stage.JailRoot, stage.APISocketPath))
 	}); err != nil {
 		return host.failLaunch(err)
 	}
-	if err := callWithContextFence(ctx, "bind guest vsock", func(callCtx context.Context) error {
-		return guest.Bind(callCtx, hostJailedPath(stage.JailRoot, stage.VSockUDSPath))
-	}); err != nil {
-		return host.failLaunch(err)
+	if guest != nil {
+		if err := callWithContextFence(ctx, "bind guest control", func(callCtx context.Context) error {
+			return guest.Bind(callCtx, hostJailedPath(stage.JailRoot, stage.VSockUDSPath))
+		}); err != nil {
+			return host.failLaunch(err)
+		}
 	}
 	for _, call := range []struct {
 		path string
@@ -280,12 +294,15 @@ func (host *LinuxJailerHost) AwaitSerial(ctx context.Context, marker string) err
 		return fmt.Errorf("%w: Linux Jailer host is required", ErrSmokeUnavailable)
 	}
 	host.mu.Lock()
-	launched, cleaning, cleaned, request, guest := host.launched, host.cleaning, host.cleaned, cloneLaunchRequest(host.request), host.Guest
+	launched, cleaning, cleaned, request, serial := host.launched, host.cleaning, host.cleaned, cloneLaunchRequest(host.request), host.serial
 	host.mu.Unlock()
 	if !launched || cleaning || cleaned || marker != request.SerialMarker {
 		return fmt.Errorf("%w: launched immutable serial marker is required", ErrSmokeUnavailable)
 	}
-	if err := callWithContextFence(ctx, "await guest serial marker", func(callCtx context.Context) error { return guest.AwaitSerial(callCtx, marker) }); err != nil {
+	if serial == nil {
+		return host.abortAfterStart(fmt.Errorf("%w: started Jailer serial observer is required", ErrSmokeUnavailable))
+	}
+	if err := callWithContextFence(ctx, "await guest serial marker", func(callCtx context.Context) error { return serial.AwaitSerial(callCtx, marker) }); err != nil {
 		return host.abortAfterStart(err)
 	}
 	return nil
@@ -299,7 +316,7 @@ func (host *LinuxJailerHost) Control(ctx context.Context) error {
 	host.mu.Lock()
 	launched, cleaning, cleaned, request, guest := host.launched, host.cleaning, host.cleaned, cloneLaunchRequest(host.request), host.Guest
 	host.mu.Unlock()
-	if !launched || cleaning || cleaned {
+	if !launched || cleaning || cleaned || guest == nil {
 		return fmt.Errorf("%w: launched guest channel is required", ErrSmokeUnavailable)
 	}
 	if err := callWithContextFence(ctx, "control guest vsock", func(callCtx context.Context) error { return guest.Ping(callCtx, request.Boot.VMID) }); err != nil {
@@ -364,8 +381,10 @@ func (host *LinuxJailerHost) Cleanup(ctx context.Context) (CleanupProof, error) 
 			return proof, nil
 		}
 		var cleanupErr error
-		if err := callWithContextFence(ctx, "close guest channel", guest.Close); err != nil {
-			cleanupErr = errors.Join(cleanupErr, err)
+		if guest != nil {
+			if err := callWithContextFence(ctx, "close guest control", guest.Close); err != nil {
+				cleanupErr = errors.Join(cleanupErr, err)
+			}
 		}
 		if err := callWithContextFence(ctx, "terminate Jailer", process.Terminate); err != nil {
 			cleanupErr = errors.Join(cleanupErr, err)
