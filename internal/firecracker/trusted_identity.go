@@ -40,6 +40,17 @@ func (identity TrustedM4Identity) StageDigest() sandbox.Digest { return identity
 // AuthorityDigest returns the opaque Jailer-authority commitment.
 func (identity TrustedM4Identity) AuthorityDigest() sandbox.Digest { return identity.authorityDigest }
 
+// LaunchGrantIdentity returns the non-secret identity tuple that an M4 host
+// may submit to the private boot-probe protocol. The tuple is available only
+// from a compiler-produced identity; callers cannot construct a usable
+// TrustedM4Identity themselves.
+func (identity TrustedM4Identity) LaunchGrantIdentity() (firecrackerlaunchgrant.TrustedM4Identity, error) {
+	if !identity.compiled {
+		return firecrackerlaunchgrant.TrustedM4Identity{}, fmt.Errorf("%w: compiled trusted M4 identity is required", ErrInvalidProfile)
+	}
+	return identity.launchGrantIdentity(), nil
+}
+
 // String returns the safe labels and opaque digests that may cross the private M3/M4 binding seam.
 func (identity TrustedM4Identity) String() string {
 	return fmt.Sprintf("%s vm_id=%q fixture_version=%q plan_digest=%s fixture_digest=%s stage_digest=%s authority_digest=%s", trustedM4IdentityVersion, identity.vmID, identity.fixtureVersion, identity.planDigest, identity.fixtureDigest, identity.stageDigest, identity.authorityDigest)
