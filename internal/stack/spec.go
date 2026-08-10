@@ -107,6 +107,11 @@ func Parse(input io.Reader) (Spec, error) {
 		if err := validateStaticAgentSpecBackfill(*document.StaticAgentSpecBackfill); err != nil {
 			return Spec{}, err
 		}
+		if document.StaticAgentSpecBackfill.Inventory != nil {
+			if err := validateStaticAgentSpecBackfillInventory(*document.StaticAgentSpecBackfill); err != nil {
+				return Spec{}, err
+			}
+		}
 		declaration := cloneStaticAgentSpecBackfill(*document.StaticAgentSpecBackfill)
 		staticAgentSpecBackfill = &declaration
 	}

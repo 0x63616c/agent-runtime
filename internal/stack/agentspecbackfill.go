@@ -74,18 +74,20 @@ type StaticAgentSpecBackfillIdentity struct {
 
 // StaticAgentSpecBackfillLifecycleIdentity declares the static readiness observer's distinct authority.
 type StaticAgentSpecBackfillLifecycleIdentity struct {
-	Name                       string `json:"name"`
-	CredentialReferenceDigest  string `json:"credential_reference_digest"`
-	RBACDigest                 string `json:"rbac_digest"`
-	ObservationAuthorityDigest string `json:"observation_authority_digest"`
+	Name                       string                          `json:"name"`
+	CredentialReferenceDigest  string                          `json:"credential_reference_digest"`
+	RBACDigest                 string                          `json:"rbac_digest"`
+	ObservationAuthorityDigest string                          `json:"observation_authority_digest"`
+	Identity                   StaticAgentSpecBackfillIdentity `json:"identity"`
 }
 
 // StaticAgentSpecBackfillArchiveIdentity declares the retained-evidence export authority.
 type StaticAgentSpecBackfillArchiveIdentity struct {
-	Name                      string `json:"name"`
-	CredentialReferenceDigest string `json:"credential_reference_digest"`
-	RBACDigest                string `json:"rbac_digest"`
-	ArchivePolicyDigest       string `json:"archive_policy_digest"`
+	Name                      string                          `json:"name"`
+	CredentialReferenceDigest string                          `json:"credential_reference_digest"`
+	RBACDigest                string                          `json:"rbac_digest"`
+	ArchivePolicyDigest       string                          `json:"archive_policy_digest"`
+	Identity                  StaticAgentSpecBackfillIdentity `json:"identity"`
 }
 
 // StaticAgentSpecBackfillAdmission pins the static validating admission policy and its binding.
@@ -395,6 +397,8 @@ func cloneStaticAgentSpecBackfillInventory(inventory StaticAgentSpecBackfillInve
 	clone := inventory
 	clone.ControllerIdentity.Permissions = clonePermissions(inventory.ControllerIdentity.Permissions)
 	clone.OperatorIdentity.Permissions = clonePermissions(inventory.OperatorIdentity.Permissions)
+	clone.LifecycleIdentity.Identity.Permissions = clonePermissions(inventory.LifecycleIdentity.Identity.Permissions)
+	clone.ArchiveIdentity.Identity.Permissions = clonePermissions(inventory.ArchiveIdentity.Identity.Permissions)
 	return clone
 }
 
@@ -452,6 +456,8 @@ func CompileStaticAgentSpecBackfillInventory(spec Spec) (StaticAgentSpecBackfill
 	sort.Strings(declaration.TeardownInventory)
 	canonicalizeStaticIdentity(&inventory.ControllerIdentity)
 	canonicalizeStaticIdentity(&inventory.OperatorIdentity)
+	canonicalizeStaticIdentity(&inventory.LifecycleIdentity.Identity)
+	canonicalizeStaticIdentity(&inventory.ArchiveIdentity.Identity)
 	document := staticAgentSpecBackfillInventoryDocument{
 		Version: declaration.Version, Stack: spec.Name.String(), NotApplied: true, CRDDigest: declaration.CRDDigest,
 		Controller: declaration.Controller, Identities: declaration.Identities, Routes: declaration.Routes,
@@ -490,8 +496,17 @@ func validateStaticAgentSpecBackfillInventory(declaration StaticAgentSpecBackfil
 	if !resourceIDPattern.MatchString(inventory.LifecycleIdentity.Name) || !allDistinctDigests([]string{inventory.LifecycleIdentity.CredentialReferenceDigest, inventory.LifecycleIdentity.RBACDigest, inventory.LifecycleIdentity.ObservationAuthorityDigest}) {
 		return errors.New("static AgentSpecBackfill inventory must declare distinct lifecycle identity authority")
 	}
+	if err := validateStaticIdentity(inventory.LifecycleIdentity.Identity, "", "", inventory.LifecycleIdentity.RBACDigest, inventory.LifecycleIdentity.CredentialReferenceDigest, nil); err != nil {
+		return errors.Wrap(err, "validate static AgentSpecBackfill lifecycle identity")
+	}
+	if err := validateStaticReadOnlyPermissions(inventory.LifecycleIdentity.Identity.Permissions); err != nil {
+		return errors.Wrap(err, "validate static AgentSpecBackfill lifecycle identity")
+	}
 	if !resourceIDPattern.MatchString(inventory.ArchiveIdentity.Name) || !allDistinctDigests([]string{inventory.ArchiveIdentity.CredentialReferenceDigest, inventory.ArchiveIdentity.RBACDigest, inventory.ArchiveIdentity.ArchivePolicyDigest}) {
 		return errors.New("static AgentSpecBackfill inventory must declare distinct archive identity authority")
+	}
+	if err := validateStaticIdentity(inventory.ArchiveIdentity.Identity, "", "", inventory.ArchiveIdentity.RBACDigest, inventory.ArchiveIdentity.CredentialReferenceDigest, archiveStaticPermissions()); err != nil {
+		return errors.Wrap(err, "validate static AgentSpecBackfill archive identity")
 	}
 	identityCredentials := []string{inventory.ControllerIdentity.CredentialReferenceDigest, inventory.OperatorIdentity.CredentialReferenceDigest, inventory.LifecycleIdentity.CredentialReferenceDigest, inventory.ArchiveIdentity.CredentialReferenceDigest}
 	if !allDistinctDigests(identityCredentials) {
@@ -507,7 +522,7 @@ func validateStaticAgentSpecBackfillInventory(declaration StaticAgentSpecBackfil
 }
 
 func validateStaticIdentity(identity StaticAgentSpecBackfillIdentity, expectedNamespace, expectedSubject, expectedRBACDigest, expectedCredentialDigest string, expectedPermissions []Permission) error {
-	if (identity.SubjectKind != "service_account" && identity.SubjectKind != "external") || !resourceIDPattern.MatchString(identity.Subject) || !sha256Pattern.MatchString(identity.CredentialReferenceDigest) || identity.RBACDigest != expectedRBACDigest || !samePermissions(identity.Permissions, expectedPermissions) {
+	if (identity.SubjectKind != "service_account" && identity.SubjectKind != "external") || !resourceIDPattern.MatchString(identity.Subject) || !sha256Pattern.MatchString(identity.CredentialReferenceDigest) || !sha256Pattern.MatchString(identity.RBACDigest) || identity.RBACDigest != expectedRBACDigest || (expectedPermissions != nil && !samePermissions(identity.Permissions, expectedPermissions)) {
 		return errors.New("identity kind, subject, credential, RBAC, and exact permissions are required")
 	}
 	if expectedCredentialDigest != "" && identity.CredentialReferenceDigest != expectedCredentialDigest {
@@ -535,6 +550,28 @@ func controllerStaticPermissions() []Permission {
 
 func operatorStaticPermissions() []Permission {
 	return []Permission{{APIGroup: "runtime.0x63616c.dev", Resource: "agentspecbackfills", Verbs: []string{"create", "get"}}}
+}
+
+func archiveStaticPermissions() []Permission {
+	return []Permission{{APIGroup: "runtime.0x63616c.dev", Resource: "agentspecbackfills", Verbs: []string{"get", "list"}}}
+}
+
+func validateStaticReadOnlyPermissions(permissions []Permission) error {
+	if len(permissions) == 0 {
+		return errors.New("at least one explicit read-only permission is required")
+	}
+	seen := make(map[string]struct{}, len(permissions))
+	for _, permission := range permissions {
+		if permission.APIGroup == "*" || permission.Resource == "" || permission.Resource == "*" || len(permission.Verbs) != 1 || permission.Verbs[0] != "get" {
+			return errors.New("read-only permissions must contain one explicit resource and get verb")
+		}
+		key := permission.APIGroup + "\x00" + permission.Resource
+		if _, duplicate := seen[key]; duplicate {
+			return errors.New("read-only permissions must not repeat resources")
+		}
+		seen[key] = struct{}{}
+	}
+	return nil
 }
 
 func samePermissions(actual, expected []Permission) bool {

@@ -83,7 +83,7 @@ var _ = Describe("Static Agent specification backfill declaration", func() {
 	})
 
 	It("compiles explicit static authority facts into a canonical non-applying inventory", func() {
-		declaration := staticBackfillWithAdmissionInventory(validStaticBackfillDeclaration())
+		declaration := staticBackfillWithFullyScopedInventory(validStaticBackfillDeclaration())
 		declared, err := stack.Parse(strings.NewReader(stackWithStaticBackfill(declaration)))
 		Expect(err).NotTo(HaveOccurred())
 
@@ -98,25 +98,26 @@ var _ = Describe("Static Agent specification backfill declaration", func() {
 	})
 
 	It("refuses an inventory that leaves authority, identity, profile, route, or UID-handshake facts implicit", func() {
-		valid := staticBackfillWithAdmissionInventory(validStaticBackfillDeclaration())
+		valid := staticBackfillWithFullyScopedInventory(validStaticBackfillDeclaration())
+		legacy, err := stack.Parse(strings.NewReader(stackWithStaticBackfill(validStaticBackfillDeclaration())))
+		Expect(err).NotTo(HaveOccurred())
+		_, err = stack.CompileStaticAgentSpecBackfillInventory(legacy)
+		Expect(err).To(HaveOccurred())
+
 		for _, declaration := range []string{
-			validStaticBackfillDeclaration(),
 			strings.Replace(valid, `"profile":"production"`, `"profile":""`, 1),
 			strings.Replace(valid, `"owner":"platform-control-plane"`, `"owner":""`, 1),
 			strings.Replace(valid, `"subject_kind":"external"`, `"subject_kind":""`, 1),
 			strings.Replace(valid, `"kind":"database","namespace":"runtime"`, `"kind":"database","namespace":""`, 1),
 			strings.Replace(valid, `"uid_handshake_digest":"sha256:dddd`, `"uid_handshake_digest":"not-a-digest`, 1),
 		} {
-			declared, err := stack.Parse(strings.NewReader(stackWithStaticBackfill(declaration)))
-			if err == nil {
-				_, err = stack.CompileStaticAgentSpecBackfillInventory(declared)
-			}
+			_, err := stack.Parse(strings.NewReader(stackWithStaticBackfill(declaration)))
 			Expect(err).To(HaveOccurred(), declaration)
 		}
 	})
 
 	It("canonicalizes the declared static identity permissions without widening them", func() {
-		firstDeclaration := staticBackfillWithAdmissionInventory(validStaticBackfillDeclaration())
+		firstDeclaration := staticBackfillWithFullyScopedInventory(validStaticBackfillDeclaration())
 		secondDeclaration := strings.Replace(firstDeclaration,
 			`"permissions":[{"api_group":"runtime.0x63616c.dev","resource":"agentspecbackfills","verbs":["get","list","watch"]},{"api_group":"runtime.0x63616c.dev","resource":"agentspecbackfills/status","verbs":["patch","update"]}]`,
 			`"permissions":[{"api_group":"runtime.0x63616c.dev","resource":"agentspecbackfills/status","verbs":["update","patch"]},{"api_group":"runtime.0x63616c.dev","resource":"agentspecbackfills","verbs":["watch","get","list"]}]`, 1)
@@ -132,30 +133,51 @@ var _ = Describe("Static Agent specification backfill declaration", func() {
 		Expect(secondInventory.JSON()).To(Equal(firstInventory.JSON()))
 
 		broadened := strings.Replace(firstDeclaration, `"verbs":["create","get"]`, `"verbs":["create","get","list"]`, 1)
-		declared, err := stack.Parse(strings.NewReader(stackWithStaticBackfill(broadened)))
-		Expect(err).NotTo(HaveOccurred())
-		_, err = stack.CompileStaticAgentSpecBackfillInventory(declared)
+		_, err = stack.Parse(strings.NewReader(stackWithStaticBackfill(broadened)))
 		Expect(err).To(HaveOccurred())
 	})
 
 	It("requires explicit immutable admission policy and binding authority", func() {
-		complete := staticBackfillWithAdmissionInventory(validStaticBackfillDeclaration())
+		complete := staticBackfillWithFullyScopedInventory(validStaticBackfillDeclaration())
 		declared, err := stack.Parse(strings.NewReader(stackWithStaticBackfill(complete)))
 		Expect(err).NotTo(HaveOccurred())
 		_, err = stack.CompileStaticAgentSpecBackfillInventory(declared)
 		Expect(err).NotTo(HaveOccurred())
 
-		incomplete, err := stack.Parse(strings.NewReader(stackWithStaticBackfill(staticBackfillWithInventory(validStaticBackfillDeclaration()))))
-		Expect(err).NotTo(HaveOccurred())
-		_, err = stack.CompileStaticAgentSpecBackfillInventory(incomplete)
+		_, err = stack.Parse(strings.NewReader(stackWithStaticBackfill(staticBackfillWithInventory(validStaticBackfillDeclaration()))))
 		Expect(err).To(HaveOccurred())
 	})
 
 	It("refuses an inventory that reuses distinct identity credential authority", func() {
-		declaration := strings.Replace(staticBackfillWithAdmissionInventory(validStaticBackfillDeclaration()), `"credential_reference_digest":"sha256:`+strings.Repeat("1", 64)+`"`, `"credential_reference_digest":"sha256:`+strings.Repeat("d", 64)+`"`, 1)
+		declaration := strings.Replace(staticBackfillWithFullyScopedInventory(validStaticBackfillDeclaration()), `"credential_reference_digest":"sha256:`+strings.Repeat("1", 64)+`"`, `"credential_reference_digest":"sha256:`+strings.Repeat("d", 64)+`"`, 1)
+		_, err := stack.Parse(strings.NewReader(stackWithStaticBackfill(declaration)))
+		Expect(err).To(HaveOccurred())
+	})
+
+	It("requires separately scoped lifecycle and archive identities with exact read authority", func() {
+		complete := staticBackfillWithFullyScopedInventory(validStaticBackfillDeclaration())
+		declared, err := stack.Parse(strings.NewReader(stackWithStaticBackfill(complete)))
+		Expect(err).NotTo(HaveOccurred())
+		_, err = stack.CompileStaticAgentSpecBackfillInventory(declared)
+		Expect(err).NotTo(HaveOccurred())
+
+		widened := strings.Replace(complete, `"permissions":[{"api_group":"runtime.0x63616c.dev","resource":"agentspecbackfills","verbs":["get","list"]}]`, `"permissions":[{"api_group":"runtime.0x63616c.dev","resource":"agentspecbackfills","verbs":["get","list","watch"]}]`, 1)
+		_, err = stack.Parse(strings.NewReader(stackWithStaticBackfill(widened)))
+		Expect(err).To(HaveOccurred())
+
+		_, err = stack.Parse(strings.NewReader(stackWithStaticBackfill(staticBackfillWithAdmissionInventory(validStaticBackfillDeclaration()))))
+		Expect(err).To(HaveOccurred())
+	})
+
+	It("retains an explicit lifecycle read set without inferring additional authority", func() {
+		declaration := strings.Replace(staticBackfillWithFullyScopedInventory(validStaticBackfillDeclaration()), `"permissions":[{"api_group":"apiextensions.k8s.io","resource":"customresourcedefinitions","verbs":["get"]},{"api_group":"runtime.0x63616c.dev","resource":"agentspecbackfills","verbs":["get"]}]`, `"permissions":[{"api_group":"apiextensions.k8s.io","resource":"customresourcedefinitions","verbs":["get"]},{"api_group":"apps","resource":"deployments","verbs":["get"]},{"api_group":"runtime.0x63616c.dev","resource":"agentspecbackfills","verbs":["get"]}]`, 1)
 		declared, err := stack.Parse(strings.NewReader(stackWithStaticBackfill(declaration)))
 		Expect(err).NotTo(HaveOccurred())
 		_, err = stack.CompileStaticAgentSpecBackfillInventory(declared)
+		Expect(err).NotTo(HaveOccurred())
+
+		widened := strings.Replace(declaration, `"api_group":"apps","resource":"deployments","verbs":["get"]`, `"api_group":"apps","resource":"deployments","verbs":["get","list"]`, 1)
+		_, err = stack.Parse(strings.NewReader(stackWithStaticBackfill(widened)))
 		Expect(err).To(HaveOccurred())
 	})
 })
@@ -221,4 +243,10 @@ func staticBackfillWithInventory(declaration string) string {
 
 func staticBackfillWithAdmissionInventory(declaration string) string {
 	return strings.Replace(staticBackfillWithInventory(declaration), `"runtime_target":`, `"admission":{"policy_digest":"sha256:`+strings.Repeat("5", 64)+`","binding_digest":"sha256:`+strings.Repeat("6", 64)+`"},"runtime_target":`, 1)
+}
+
+func staticBackfillWithFullyScopedInventory(declaration string) string {
+	inventory := staticBackfillWithAdmissionInventory(declaration)
+	inventory = strings.Replace(inventory, `"observation_authority_digest":"sha256:`+strings.Repeat("f", 64)+`"}`, `"observation_authority_digest":"sha256:`+strings.Repeat("f", 64)+`","identity":{"subject_kind":"service_account","subject":"agent-spec-backfill-lifecycle","namespace":"agent-spec-backfill","credential_reference_digest":"sha256:`+strings.Repeat("d", 64)+`","rbac_digest":"sha256:`+strings.Repeat("e", 64)+`","permissions":[{"api_group":"apiextensions.k8s.io","resource":"customresourcedefinitions","verbs":["get"]},{"api_group":"runtime.0x63616c.dev","resource":"agentspecbackfills","verbs":["get"]}]}}`, 1)
+	return strings.Replace(inventory, `"archive_policy_digest":"sha256:`+strings.Repeat("3", 64)+`"}`, `"archive_policy_digest":"sha256:`+strings.Repeat("3", 64)+`","identity":{"subject_kind":"service_account","subject":"agent-spec-backfill-archive","namespace":"agent-spec-backfill","credential_reference_digest":"sha256:`+strings.Repeat("1", 64)+`","rbac_digest":"sha256:`+strings.Repeat("2", 64)+`","permissions":[{"api_group":"runtime.0x63616c.dev","resource":"agentspecbackfills","verbs":["get","list"]}]}}`, 1)
 }
