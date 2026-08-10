@@ -95,7 +95,7 @@ func (ledger *PostgresLedger) RevokeHost(ctx context.Context, hostID string, gen
 		if _, err := tx.Exec(ctx, `UPDATE runtime.sandbox_host_enrollments SET status='revoked' WHERE host_id=$1 AND generation=$2`, hostID, int64(generation)); err != nil {
 			return errors.Wrap(err, "mark sandbox host revoked")
 		}
-		_, err = fencePostgresHost(ctx, tx, hostID, generation, StateUncertain)
+		_, err = fencePostgresHost(ctx, tx, hostID, generation, StateUncertain, now)
 		return err
 	})
 }
@@ -360,7 +360,7 @@ func (ledger *PostgresLedger) QuarantineHost(ctx context.Context, identity HostI
 			return errors.Wrap(err, "mark sandbox host quarantined")
 		}
 		var err error
-		fenced, err = fencePostgresHost(ctx, tx, identity.HostID, identity.Generation, StateUncertain)
+		fenced, err = fencePostgresHost(ctx, tx, identity.HostID, identity.Generation, StateUncertain, now)
 		return err
 	})
 	return fenced, err
@@ -463,7 +463,7 @@ func writePostgresDispatch(ctx context.Context, tx pgx.Tx, operation Operation, 
 	return errors.Wrap(err, "write sandbox host dispatch")
 }
 
-func fencePostgresHost(ctx context.Context, tx pgx.Tx, hostID string, generation uint64, next State) ([]Operation, error) {
+func fencePostgresHost(ctx context.Context, tx pgx.Tx, hostID string, generation uint64, next State, now time.Time) ([]Operation, error) {
 	// Revocation and quarantine must also durably converge every private v2
 	// host-instance lifecycle to cleanup-pending in the same transaction.
 	sessions, err := tx.Query(ctx, `SELECT host_instance_session_id, session_body FROM runtime.firecracker_boot_probe_sessions WHERE host_id=$1 AND host_generation=$2 FOR UPDATE`, hostID, int64(generation))
@@ -508,7 +508,7 @@ func fencePostgresHost(ctx context.Context, tx pgx.Tx, hostID string, generation
 			sessions.Close()
 			return nil, err
 		}
-		if _, err := tx.Exec(ctx, `UPDATE runtime.firecracker_boot_probe_sessions SET version=version+1,session_body=$2,updated_at=NOW() WHERE host_instance_session_id=$1`, pendingSession.id, cleanWire); err != nil {
+		if _, err := tx.Exec(ctx, `UPDATE runtime.firecracker_boot_probe_sessions SET version=version+1,session_body=$2,updated_at=$3 WHERE host_instance_session_id=$1`, pendingSession.id, cleanWire, now.UTC()); err != nil {
 			sessions.Close()
 			return nil, err
 		}
