@@ -8,9 +8,11 @@ import (
 	"io"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/0x63616c/agent-runtime/sandbox"
 	"github.com/cockroachdb/errors"
+	"golang.org/x/text/unicode/norm"
 )
 
 var (
@@ -34,6 +36,9 @@ const (
 type EnvelopeTuple struct {
 	EnvelopeID             string         `json:"envelope_id"`
 	DeliveryID             string         `json:"delivery_id"`
+	Nonce                  string         `json:"nonce"`
+	IssuedAt               time.Time      `json:"issued_at"`
+	ExpiresAt              time.Time      `json:"expires_at"`
 	HostID                 string         `json:"host_id"`
 	HostGeneration         uint64         `json:"host_generation"`
 	AssignmentID           string         `json:"assignment_id"`
@@ -66,17 +71,14 @@ type Grant struct {
 	Version       string            `json:"version"`
 	Envelope      EnvelopeTuple     `json:"envelope"`
 	M4            TrustedM4Identity `json:"m4"`
-	Nonce         string            `json:"nonce"`
-	IssuedAt      time.Time         `json:"issued_at"`
-	Deadline      time.Time         `json:"deadline"`
 	GuestProtocol string            `json:"guest_protocol"`
 	SerialMarker  string            `json:"serial_marker"`
 }
 
 // New creates the sole fixed-purpose grant from an already-authenticated M3 tuple and trusted M4 identity tuple.
 // It does not interpret DispatchBody or launch a Jailer, VMM, guest, or vsock connection.
-func New(envelope EnvelopeTuple, identity TrustedM4Identity, nonce string, issuedAt, deadline time.Time) (Grant, error) {
-	grant := Grant{Version: Version, Envelope: envelope, M4: identity, Nonce: nonce, IssuedAt: issuedAt, Deadline: deadline, GuestProtocol: GuestProtocolV1, SerialMarker: serialMarker(identity.VMID, identity.FixtureVersion)}
+func New(envelope EnvelopeTuple, identity TrustedM4Identity) (Grant, error) {
+	grant := Grant{Version: Version, Envelope: envelope, M4: identity, GuestProtocol: GuestProtocolV1, SerialMarker: serialMarker(identity.VMID, identity.FixtureVersion)}
 	if err := grant.Validate(); err != nil {
 		return Grant{}, err
 	}
@@ -122,7 +124,7 @@ func Decode(wire []byte) (Grant, error) {
 
 // Validate confirms that Grant is one bounded, fixed-purpose M3/M4 binding.
 func (grant Grant) Validate() error {
-	if grant.Version != Version || !validEnvelopeTuple(grant.Envelope) || !validM4Identity(grant.M4) || !validNonce(grant.Nonce) || !validDeadline(grant.IssuedAt, grant.Deadline) || grant.GuestProtocol != GuestProtocolV1 || grant.SerialMarker != serialMarker(grant.M4.VMID, grant.M4.FixtureVersion) {
+	if grant.Version != Version || !validEnvelopeTuple(grant.Envelope) || !validM4Identity(grant.M4) || grant.GuestProtocol != GuestProtocolV1 || grant.SerialMarker != serialMarker(grant.M4.VMID, grant.M4.FixtureVersion) {
 		return errors.Wrap(ErrInvalidGrant, "validate exact boot-probe binding")
 	}
 	return nil
@@ -134,7 +136,7 @@ func ValidateBinding(grant Grant, envelope EnvelopeTuple, identity TrustedM4Iden
 	if err := grant.Validate(); err != nil {
 		return err
 	}
-	if !validEnvelopeTuple(envelope) || !validM4Identity(identity) || now.IsZero() || now.Location() != time.UTC || now.Before(grant.IssuedAt) || !now.Before(grant.Deadline) || grant.Envelope != envelope || grant.M4 != identity {
+	if !validEnvelopeTuple(envelope) || !validM4Identity(identity) || now.IsZero() || now.Location() != time.UTC || now.Before(grant.Envelope.IssuedAt) || !now.Before(grant.Envelope.ExpiresAt) || grant.Envelope != envelope || grant.M4 != identity {
 		return errors.Wrap(ErrInvalidGrant, "validate authenticated M3 and trusted M4 binding")
 	}
 	return nil
@@ -145,7 +147,7 @@ func serialMarker(vmID, fixtureVersion string) string {
 }
 
 func validEnvelopeTuple(tuple EnvelopeTuple) bool {
-	return validID(tuple.EnvelopeID, 128) && validID(tuple.DeliveryID, 128) && validID(tuple.HostID, 128) && tuple.HostGeneration > 0 && validID(tuple.AssignmentID, 128) && tuple.LeaseEpoch > 0 && tuple.FencingToken > 0 && validID(tuple.Tenant, 256) && validID(tuple.Principal, 512) && strings.HasPrefix(tuple.Principal, tuple.Tenant+":") && validID(tuple.SandboxID, 128) && validID(tuple.OperationID, 128) && tuple.OperationKind == OperatorBootProbeOperation && validDigest(tuple.EffectiveSpecDigest) && validDigest(tuple.CapabilityDigest) && validDigest(tuple.CanonicalRequestDigest)
+	return validID(tuple.EnvelopeID, 128) && validID(tuple.DeliveryID, 128) && validNonce(tuple.Nonce) && validDeadline(tuple.IssuedAt, tuple.ExpiresAt) && validID(tuple.HostID, 128) && tuple.HostGeneration > 0 && validID(tuple.AssignmentID, 128) && tuple.LeaseEpoch > 0 && tuple.FencingToken > 0 && validID(tuple.Tenant, 256) && validID(tuple.Principal, 512) && strings.HasPrefix(tuple.Principal, tuple.Tenant+":") && validID(tuple.SandboxID, 128) && validID(tuple.OperationID, 128) && tuple.OperationKind == OperatorBootProbeOperation && validDigest(tuple.EffectiveSpecDigest) && validDigest(tuple.CapabilityDigest) && validDigest(tuple.CanonicalRequestDigest)
 }
 
 func validM4Identity(identity TrustedM4Identity) bool {
@@ -165,7 +167,7 @@ func validNonce(nonce string) bool {
 }
 
 func validID(value string, maximum int) bool {
-	return value != "" && len(value) <= maximum && !strings.ContainsRune(value, '\x00')
+	return value != "" && len(value) <= maximum && utf8.ValidString(value) && norm.NFC.IsNormalString(value) && !strings.ContainsRune(value, '\x00')
 }
 
 func validVMID(value string) bool {
