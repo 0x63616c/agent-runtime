@@ -147,6 +147,9 @@ type OperatorAuditRecord struct {
 	Profile Profile `json:"profile"`
 	// Digest is the immutable rendered desired-state digest.
 	Digest string `json:"digest"`
+	// TransitionFromDigest records the reviewed source revision of an explicit rollback.
+	// It is empty for non-transition actions.
+	TransitionFromDigest string `json:"transition_from_digest,omitempty"`
 	// Result is applied, unchanged, observed, differed, rolled_back, torn_down, or failed.
 	Result string `json:"result"`
 	// Resources is a bounded sorted affected resource identity list.
@@ -389,19 +392,36 @@ func (operator KubernetesOperator) Rollback(ctx context.Context, request Operato
 	if currentDocument.Stack != document.Stack || currentDocument.Profile != document.Profile || currentDocument.Namespace != document.Namespace {
 		return KubernetesObservation{}, operator.recordFailure(ctx, request, currentDocument, OperatorActionRollback, errors.New("rollback rendered Stack identity must match current rendering"))
 	}
-	if migrationErr := operator.rollbackMigrations(ctx, request.Target, current, previous, document, request.BootstrapAuthority); migrationErr != nil {
+	transitionAuthority, transitionErr := reviewedRollbackTransition(request.BootstrapAuthority, currentDocument, document)
+	if transitionErr != nil {
+		return KubernetesObservation{}, operator.recordFailure(ctx, request, currentDocument, OperatorActionRollback, transitionErr)
+	}
+	if migrationErr := operator.rollbackMigrations(ctx, request.Target, current, previous, document, transitionAuthority); migrationErr != nil {
 		return KubernetesObservation{}, operator.recordFailure(ctx, request, document, OperatorActionRollback, migrationErr)
 	}
-	previousAuthority := request.BootstrapAuthority
-	previousAuthority.RenderDigest = previous.Digest()
-	observation, rollbackErr := operator.adapter.Apply(ctx, request.Target, manifests, previousAuthority)
+	observation, rollbackErr := operator.adapter.Apply(ctx, request.Target, manifests, transitionAuthority)
 	if rollbackErr != nil {
 		return KubernetesObservation{}, operator.recordFailure(ctx, request, document, OperatorActionRollback, rollbackErr)
 	}
-	if err := operator.record(ctx, request, document, OperatorActionRollback, "rolled_back", observation.ObjectIDs); err != nil {
+	if err := operator.recordTransition(ctx, request, document, currentDocument.Digest, observation.ObjectIDs); err != nil {
 		return KubernetesObservation{}, err
 	}
 	return observation, nil
+}
+
+// reviewedRollbackTransition derives the only permitted revision transition:
+// the caller must hold authority for the exact current rendering, and the
+// explicit rollback target must have the same contained Stack identity.
+func reviewedRollbackTransition(authority BootstrapAuthority, current, previous renderedDocument) (BootstrapAuthority, error) {
+	if err := validateBootstrapAuthority(authority, current); err != nil {
+		return BootstrapAuthority{}, err
+	}
+	if current.Stack != previous.Stack || current.Profile != previous.Profile || current.Namespace != previous.Namespace {
+		return BootstrapAuthority{}, errors.New("validate rollback transition: reviewed Stack identity must match")
+	}
+	transition := authority
+	transition.RenderDigest = previous.Digest
+	return transition, nil
 }
 
 // Teardown delegates only containment-safe, re-observed deletion to the explicit operator adapter.
@@ -554,6 +574,15 @@ func (operator KubernetesOperator) recordFailure(ctx context.Context, request Op
 
 func (operator KubernetesOperator) record(ctx context.Context, request OperatorRequest, document renderedDocument, action OperatorAction, result string, resources []ResourceID) error {
 	record := OperatorAuditRecord{Action: action, Actor: request.Actor, Context: request.Target.Context, Stack: document.Stack, Profile: document.Profile, Digest: document.Digest, Result: result, Resources: append([]ResourceID(nil), resources...)}
+	return operator.appendRecord(ctx, record)
+}
+
+func (operator KubernetesOperator) recordTransition(ctx context.Context, request OperatorRequest, document renderedDocument, fromDigest string, resources []ResourceID) error {
+	record := OperatorAuditRecord{Action: OperatorActionRollback, Actor: request.Actor, Context: request.Target.Context, Stack: document.Stack, Profile: document.Profile, Digest: document.Digest, TransitionFromDigest: fromDigest, Result: "rolled_back", Resources: append([]ResourceID(nil), resources...)}
+	return operator.appendRecord(ctx, record)
+}
+
+func (operator KubernetesOperator) appendRecord(ctx context.Context, record OperatorAuditRecord) error {
 	sort.Slice(record.Resources, func(left, right int) bool { return record.Resources[left] < record.Resources[right] })
 	if err := operator.audit.Append(ctx, record); err != nil {
 		return errors.Wrap(err, "retain Kubernetes operator audit record")

@@ -213,13 +213,17 @@ var _ = Describe("Audited Kubernetes operator", func() {
 		Expect(err).NotTo(HaveOccurred())
 		Expect(previous.Digest()).NotTo(Equal(rendered.Digest()))
 		adapter := &fakeKubernetesOperator{}
-		operator, err := stack.NewKubernetesOperator(adapter, &recordedAudit{})
+		audit := &recordedAudit{}
+		operator, err := stack.NewKubernetesOperator(adapter, audit)
 		Expect(err).NotTo(HaveOccurred())
 
 		_, err = operator.Rollback(context.Background(), operatorRequest(rendered), rendered, previous)
 
 		Expect(err).NotTo(HaveOccurred())
 		Expect(adapter.applies).To(Equal(1))
+		Expect(audit.records).To(HaveLen(1))
+		Expect(audit.records[0].TransitionFromDigest).To(Equal(rendered.Digest()))
+		Expect(audit.records[0].Digest).To(Equal(previous.Digest()))
 	})
 
 	It("tears provider resources down before Kubernetes dependencies", func() {
