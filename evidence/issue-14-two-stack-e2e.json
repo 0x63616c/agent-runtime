@@ -4,6 +4,12 @@
   "proof_level": "isolated_kubernetes_integration",
   "utc_time": "2026-08-10T21:54:53Z",
   "implementation_revision": "46ff46e0057617574c358e2cca076ea168434257",
+  "proof_provenance": {
+    "source_revision": "46ff46e0057617574c358e2cca076ea168434257",
+    "source_tree_id": "2d632f8d83ba3437a8f779dc48f94e2985654cc4",
+    "retention_revision": "b39accb50e76365f61e4b37dc5b111d396b5f7f7",
+    "retained_artifact_sha256": "sha256:37e4cd0cfaa26ff60d90a61f5b35dbe7c1de326cf386d88a2a2269315c1d12bb"
+  },
   "command": {
     "path": "deploy/dev/run-two-stack-smoke.sh",
     "kubernetes_context": "k3d-ar-ci-m1-20260810215052",
