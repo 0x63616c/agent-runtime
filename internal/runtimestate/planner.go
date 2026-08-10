@@ -1,0 +1,928 @@
+package runtimestate
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"time"
+
+	"github.com/0x63616c/agent-runtime/internal/clock"
+	"github.com/0x63616c/agent-runtime/internal/runtimecontent"
+	agentruntime "github.com/0x63616c/agent-runtime/sdk/go"
+)
+
+// IdentifierKind identifies the exact opaque identifier allocated by a planner.
+type IdentifierKind string
+
+const (
+	IdentifierAgent      IdentifierKind = "agent"
+	IdentifierRevision   IdentifierKind = "arev"
+	IdentifierSession    IdentifierKind = "sess"
+	IdentifierInput      IdentifierKind = "inpt"
+	IdentifierTurn       IdentifierKind = "turn"
+	IdentifierInvocation IdentifierKind = "invocation"
+	IdentifierEvent      IdentifierKind = "evt"
+	IdentifierCursor     IdentifierKind = "cur"
+	IdentifierAudit      IdentifierKind = "audit"
+	IdentifierOutbox     IdentifierKind = "outbox"
+)
+
+// IdentifierSource supplies planner-owned opaque IDs. It is injected so plans are deterministic in tests.
+type IdentifierSource interface {
+	NextIdentifier(IdentifierKind) (string, error)
+}
+
+// RetentionPolicy declares metadata retention at the transition boundary.
+type RetentionPolicy interface{ RetainUntil(time.Time) time.Time }
+type defaultRetention struct{}
+
+func (defaultRetention) RetainUntil(now time.Time) time.Time { return now.Add(24 * time.Hour) }
+
+// PlannerOption configures one RuntimeStatePlanner.
+type PlannerOption func(*RuntimeStatePlanner) error
+
+// WithRetentionPolicy injects the retention authority used for every planner-owned record.
+func WithRetentionPolicy(policy RetentionPolicy) PlannerOption {
+	return func(planner *RuntimeStatePlanner) error {
+		if policy == nil {
+			return errors.New("runtime state retention policy is required")
+		}
+		planner.retention = policy
+		return nil
+	}
+}
+
+// RuntimeState is the complete bounded metadata prior state consumed by RuntimeStatePlanner.
+// It intentionally contains no raw Agent/Input bytes and is cloned at every boundary.
+type RuntimeState struct {
+	Revisions   []AgentRevisionRecord
+	Sessions    []SessionRecord
+	Inputs      []InputRecord
+	Turns       []TurnRecord
+	Invocations []InvocationRecord
+	Receipts    []MutationReceipt
+	Events      []ProductEventRecord
+	Audit       []AuditFactRecord
+	Outbox      []OutboxRecord
+}
+
+// Clone returns an independent prior-state snapshot.
+func (state RuntimeState) Clone() RuntimeState {
+	clone := RuntimeState{}
+	clone.Revisions = append([]AgentRevisionRecord(nil), state.Revisions...)
+	clone.Sessions = append([]SessionRecord(nil), state.Sessions...)
+	clone.Inputs = append([]InputRecord(nil), state.Inputs...)
+	clone.Turns = make([]TurnRecord, len(state.Turns))
+	for i := range state.Turns {
+		clone.Turns[i] = state.Turns[i].Clone()
+	}
+	clone.Invocations = make([]InvocationRecord, len(state.Invocations))
+	for i := range state.Invocations {
+		clone.Invocations[i] = state.Invocations[i].Clone()
+	}
+	clone.Receipts = append([]MutationReceipt(nil), state.Receipts...)
+	clone.Events = append([]ProductEventRecord(nil), state.Events...)
+	clone.Audit = append([]AuditFactRecord(nil), state.Audit...)
+	clone.Outbox = make([]OutboxRecord, len(state.Outbox))
+	for i := range state.Outbox {
+		clone.Outbox[i] = state.Outbox[i].Clone()
+	}
+	return clone
+}
+
+// PlanResult is the safe result of a planned transition. Exactly the records applicable to Kind are present.
+type PlanResult struct {
+	Kind       CommandKind
+	Revision   AgentRevisionRecord
+	Session    SessionRecord
+	Input      InputRecord
+	Turn       TurnRecord
+	Promoted   *TurnRecord
+	Invocation InvocationRecord
+	Outbox     OutboxRecord
+	Receipt    MutationReceipt
+}
+
+// Clone returns an independent transition result.
+func (result PlanResult) Clone() PlanResult {
+	result.Revision = result.Revision.Clone()
+	result.Session = result.Session.Clone()
+	result.Input = result.Input.Clone()
+	result.Turn = result.Turn.Clone()
+	result.Invocation = result.Invocation.Clone()
+	result.Outbox = result.Outbox.Clone()
+	result.Receipt = result.Receipt.Clone()
+	if result.Promoted != nil {
+		promoted := result.Promoted.Clone()
+		result.Promoted = &promoted
+	}
+	return result
+}
+
+// TransitionPlan is a centrally-produced atomic state replacement and its ordered derived effects.
+type TransitionPlan struct {
+	kind    CommandKind
+	state   RuntimeState
+	effects EffectSet
+	result  PlanResult
+}
+
+// Kind returns the planned closed command kind.
+func (plan TransitionPlan) Kind() CommandKind { return plan.kind }
+
+// State returns the complete metadata state to persist atomically.
+func (plan TransitionPlan) State() RuntimeState { return plan.state.Clone() }
+
+// Effects returns the ordered effects included in State.
+func (plan TransitionPlan) Effects() EffectSet { return plan.effects.Clone() }
+
+// Result returns the safe command result derived from State.
+func (plan TransitionPlan) Result() PlanResult { return plan.result.Clone() }
+
+// Validate confirms the plan's effects and result are included in the replacement state.
+func (plan TransitionPlan) Validate() error {
+	if plan.kind == "" || plan.result.Kind != plan.kind || plan.result.Receipt.Command != string(plan.kind) {
+		return ErrIntegrity
+	}
+	if !containsReceipt(plan.state, plan.result.Receipt) {
+		return ErrIntegrity
+	}
+	for _, event := range plan.effects.Events {
+		if !containsEvent(plan.state, event) {
+			return ErrIntegrity
+		}
+	}
+	for _, fact := range plan.effects.Audit {
+		if !containsAudit(plan.state, fact) {
+			return ErrIntegrity
+		}
+	}
+	for _, outbox := range plan.effects.Outbox {
+		if !containsOutbox(plan.state, outbox) {
+			return ErrIntegrity
+		}
+	}
+	return nil
+}
+
+// RuntimeStatePlanner deterministically interprets compiler-sealed mutations over metadata-only state.
+type RuntimeStatePlanner struct {
+	clock     clock.Clock
+	ids       IdentifierSource
+	retention RetentionPolicy
+}
+
+// NewRuntimeStatePlanner constructs the pure lifecycle interpreter.
+func NewRuntimeStatePlanner(source clock.Clock, ids IdentifierSource, options ...PlannerOption) (*RuntimeStatePlanner, error) {
+	if source == nil || ids == nil {
+		return nil, errors.New("create runtime state planner: clock and identifier source are required")
+	}
+	planner := &RuntimeStatePlanner{clock: source, ids: ids, retention: defaultRetention{}}
+	for _, option := range options {
+		if option == nil {
+			return nil, errors.New("create runtime state planner: nil option")
+		}
+		if err := option(planner); err != nil {
+			return nil, err
+		}
+	}
+	return planner, nil
+}
+
+// Plan returns the complete atomic replacement for a compiler-sealed command.
+func (planner *RuntimeStatePlanner) Plan(ctx context.Context, prior RuntimeState, mutation CompiledMutation) (TransitionPlan, error) {
+	if err := ctx.Err(); err != nil {
+		return TransitionPlan{}, err
+	}
+	if planner == nil || planner.clock == nil || planner.ids == nil || planner.retention == nil || mutation.mutation.kind == "" || mutation.mutation.receipt.Command != mutation.mutation.kind {
+		return TransitionPlan{}, ErrIntegrity
+	}
+	now := normalizeTime(planner.clock.Now())
+	if now.IsZero() {
+		return TransitionPlan{}, ErrIntegrity
+	}
+	state := prior.Clone()
+	if err := validateState(state); err != nil {
+		return TransitionPlan{}, err
+	}
+	if receipt, ok := findReceipt(state, mutation.mutation.receipt); ok {
+		if receiptExpired(receipt, now) {
+			return TransitionPlan{}, ErrReceiptExpired
+		}
+		if receipt.Command != string(mutation.mutation.kind) || receipt.RequestDigest != mutation.mutation.receipt.RequestDigest {
+			return TransitionPlan{}, ErrConflict
+		}
+		return planner.replayPlan(state, mutation.mutation.kind, receipt)
+	}
+	var result PlanResult
+	var effects EffectSet
+	var err error
+	switch command := mutation.mutation.command.(type) {
+	case compiledRegister:
+		result, effects, err = planner.register(&state, mutation.mutation.receipt, command, now)
+	case CreateSessionCommand:
+		result, effects, err = planner.createSession(&state, mutation.mutation.receipt, command, now)
+	case compiledAdmit:
+		result, effects, err = planner.admit(&state, mutation.mutation.receipt, command, now)
+	case BeginInvocationAttemptCommand:
+		result, effects, err = planner.begin(&state, mutation.mutation.receipt, command, now)
+	case RecordInvocationOutcomeCommand:
+		result, effects, err = planner.recordOutcome(&state, mutation.mutation.receipt, command, now)
+	case SettleTurnCommand:
+		result, effects, err = planner.settle(&state, mutation.mutation.receipt, command, now, false)
+	case CancelTurnCommand:
+		result, effects, err = planner.cancel(&state, mutation.mutation.receipt, command, now)
+	case CloseSessionCommand:
+		result, effects, err = planner.close(&state, mutation.mutation.receipt, command, now)
+	case ClaimOutboxCommand:
+		result, effects, err = planner.claim(&state, mutation.mutation.receipt, command, now)
+	case AcknowledgeOutboxCommand:
+		result, effects, err = planner.acknowledge(&state, mutation.mutation.receipt, command, now)
+	default:
+		return TransitionPlan{}, ErrIntegrity
+	}
+	if err != nil {
+		return TransitionPlan{}, err
+	}
+	result.Kind = mutation.mutation.kind
+	result.Receipt = planner.receipt(mutation.mutation.receipt, result, now)
+	state.Receipts = append(state.Receipts, result.Receipt)
+	if err := validateState(state); err != nil {
+		return TransitionPlan{}, err
+	}
+	plan := TransitionPlan{kind: mutation.mutation.kind, state: state, effects: effects, result: result}
+	if err := plan.Validate(); err != nil {
+		return TransitionPlan{}, err
+	}
+	return plan, nil
+}
+
+func (planner *RuntimeStatePlanner) register(state *RuntimeState, binding ReceiptBinding, compiled compiledRegister, now time.Time) (PlanResult, EffectSet, error) {
+	command := compiled.command
+	revision := uint64(1)
+	agentID := command.AgentID
+	if agentID == "" {
+		var err error
+		agentID, err = planner.agentID()
+		if err != nil {
+			return PlanResult{}, EffectSet{}, err
+		}
+	} else {
+		latest := uint64(0)
+		for _, record := range state.Revisions {
+			if record.Tenant == binding.Scope.Tenant && record.AgentID == agentID && record.Revision > latest {
+				latest = record.Revision
+			}
+		}
+		if latest != command.ExpectedRevision {
+			return PlanResult{}, EffectSet{}, ErrConflict
+		}
+		revision = latest + 1
+	}
+	revisionID, err := planner.revisionID()
+	if err != nil {
+		return PlanResult{}, EffectSet{}, err
+	}
+	until := planner.retain(now)
+	record := AgentRevisionRecord{Tenant: binding.Scope.Tenant, AgentID: agentID, RevisionID: revisionID, Revision: revision, Name: compiled.commitment.Name, ModelProfile: compiled.commitment.ModelProfile, Specification: compiled.commitment.Reference, CreatedAt: now, RetainUntil: until}
+	state.Revisions = append(state.Revisions, record)
+	effects, err := planner.auditOnly(state, binding, "agent_revision.registered", "", "", now, until)
+	if err != nil {
+		return PlanResult{}, EffectSet{}, err
+	}
+	outbox, err := planner.catalogOutbox(binding, record, now, until)
+	if err != nil {
+		return PlanResult{}, EffectSet{}, err
+	}
+	state.Outbox = append(state.Outbox, outbox)
+	effects.Outbox = append(effects.Outbox, outbox)
+	return PlanResult{Revision: record}, effects, nil
+}
+
+func (planner *RuntimeStatePlanner) createSession(state *RuntimeState, binding ReceiptBinding, command CreateSessionCommand, now time.Time) (PlanResult, EffectSet, error) {
+	var revision AgentRevisionRecord
+	found := false
+	for _, candidate := range state.Revisions {
+		if candidate.Tenant == binding.Scope.Tenant && candidate.RevisionID == command.RevisionID {
+			revision, found = candidate, true
+			break
+		}
+	}
+	if !found {
+		return PlanResult{}, EffectSet{}, ErrNotFoundOrDenied
+	}
+	id, err := planner.sessionID()
+	if err != nil {
+		return PlanResult{}, EffectSet{}, err
+	}
+	until := planner.retain(now)
+	session := SessionRecord{Tenant: binding.Scope.Tenant, Principal: binding.Scope.Principal, SessionID: id, AgentID: revision.AgentID, RevisionID: revision.RevisionID, State: agentruntime.SessionOpen, Version: 1, CreatedAt: now, UpdatedAt: now, RetainUntil: until}
+	state.Sessions = append(state.Sessions, session)
+	effects, err := planner.effects(state, binding, session, TurnRecord{}, InvocationRecord{}, []agentruntime.EventKind{agentruntime.EventSessionCreated}, now, until)
+	if err != nil {
+		return PlanResult{}, EffectSet{}, err
+	}
+	return PlanResult{Session: session}, effects, nil
+}
+
+func (planner *RuntimeStatePlanner) admit(state *RuntimeState, binding ReceiptBinding, compiled compiledAdmit, now time.Time) (PlanResult, EffectSet, error) {
+	command := compiled.command
+	sessionIndex := findSession(state, binding.Scope, command.SessionID)
+	if sessionIndex < 0 {
+		return PlanResult{}, EffectSet{}, ErrNotFoundOrDenied
+	}
+	session := state.Sessions[sessionIndex]
+	if session.State != agentruntime.SessionOpen {
+		return PlanResult{}, EffectSet{}, ErrConflict
+	}
+	inputID, err := planner.inputID()
+	if err != nil {
+		return PlanResult{}, EffectSet{}, err
+	}
+	turnID, err := planner.turnID()
+	if err != nil {
+		return PlanResult{}, EffectSet{}, err
+	}
+	until := planner.retain(now)
+	input := InputRecord{Tenant: session.Tenant, Principal: session.Principal, SessionID: session.SessionID, InputID: inputID, Content: compiled.commitment.Reference, AcceptedAt: now, RetentionUntil: until}
+	state.Inputs = append(state.Inputs, input)
+	position := uint64(1)
+	active := false
+	for _, turn := range state.Turns {
+		if turn.SessionID == session.SessionID {
+			if turn.Position >= position {
+				position = turn.Position + 1
+			}
+			if turn.State == agentruntime.TurnRunning {
+				active = true
+			}
+		}
+	}
+	turnState := agentruntime.TurnRunning
+	kinds := []agentruntime.EventKind{agentruntime.EventInputAccepted, agentruntime.EventTurnStarted}
+	started := &now
+	if active {
+		turnState, kinds, started = agentruntime.TurnQueued, []agentruntime.EventKind{agentruntime.EventInputAccepted, agentruntime.EventTurnQueued}, nil
+	}
+	turn := TurnRecord{Tenant: session.Tenant, Principal: session.Principal, SessionID: session.SessionID, TurnID: turnID, InputID: inputID, Position: position, State: turnState, Version: 1, StartedAt: started, RetentionUntil: until}
+	state.Turns = append(state.Turns, turn)
+	session.Version++
+	session.UpdatedAt = now
+	state.Sessions[sessionIndex] = session
+	effects, err := planner.effects(state, binding, session, turn, InvocationRecord{}, kinds, now, until)
+	if err != nil {
+		return PlanResult{}, EffectSet{}, err
+	}
+	return PlanResult{Input: input, Turn: turn, Session: session}, effects, nil
+}
+
+func (planner *RuntimeStatePlanner) begin(state *RuntimeState, binding ReceiptBinding, command BeginInvocationAttemptCommand, now time.Time) (PlanResult, EffectSet, error) {
+	sessionIndex := findSession(state, binding.Scope, command.SessionID)
+	turnIndex := findTurn(state, binding.Scope, command.SessionID, command.TurnID)
+	if sessionIndex < 0 || turnIndex < 0 {
+		return PlanResult{}, EffectSet{}, ErrNotFoundOrDenied
+	}
+	session, turn := state.Sessions[sessionIndex], state.Turns[turnIndex]
+	if session.Version != command.ExpectedSessionVersion || turn.Version != command.ExpectedTurnVersion || turn.State != agentruntime.TurnRunning {
+		return PlanResult{}, EffectSet{}, ErrConflict
+	}
+	for _, invocation := range state.Invocations {
+		if invocation.OperationID == command.OperationID {
+			return PlanResult{}, EffectSet{}, ErrConflict
+		}
+	}
+	ordinal, fence := uint64(1), uint64(1)
+	for _, invocation := range state.Invocations {
+		if invocation.TurnID == turn.TurnID {
+			if invocation.Ordinal >= ordinal {
+				ordinal = invocation.Ordinal + 1
+			}
+			if invocation.Fence >= fence {
+				fence = invocation.Fence + 1
+			}
+		}
+	}
+	if command.ExpectedFence != 0 && command.ExpectedFence != fence-1 {
+		return PlanResult{}, EffectSet{}, ErrConflict
+	}
+	id, err := planner.invocationID()
+	if err != nil {
+		return PlanResult{}, EffectSet{}, err
+	}
+	until := planner.retain(now)
+	invocation := InvocationRecord{Tenant: session.Tenant, Principal: session.Principal, SessionID: session.SessionID, TurnID: turn.TurnID, InvocationID: id, OperationID: command.OperationID, Ordinal: ordinal, Fence: fence, State: InvocationIntent, CreatedAt: now, UpdatedAt: now, RetentionUntil: until}
+	state.Invocations = append(state.Invocations, invocation)
+	turn.Version++
+	session.Version++
+	session.UpdatedAt = now
+	state.Turns[turnIndex], state.Sessions[sessionIndex] = turn, session
+	effects, err := planner.effects(state, binding, session, turn, invocation, nil, now, until)
+	if err != nil {
+		return PlanResult{}, EffectSet{}, err
+	}
+	return PlanResult{Invocation: invocation, Session: session, Turn: turn}, effects, nil
+}
+
+func (planner *RuntimeStatePlanner) recordOutcome(state *RuntimeState, binding ReceiptBinding, command RecordInvocationOutcomeCommand, now time.Time) (PlanResult, EffectSet, error) {
+	sessionIndex := findSession(state, binding.Scope, command.SessionID)
+	turnIndex := findTurn(state, binding.Scope, command.SessionID, command.TurnID)
+	invocationIndex := findInvocation(state, binding.Scope, command.SessionID, command.TurnID, command.OperationID)
+	if sessionIndex < 0 || turnIndex < 0 || invocationIndex < 0 {
+		return PlanResult{}, EffectSet{}, ErrNotFoundOrDenied
+	}
+	session, turn, invocation := state.Sessions[sessionIndex], state.Turns[turnIndex], state.Invocations[invocationIndex]
+	if session.Version != command.ExpectedSessionVersion || turn.Version != command.ExpectedTurnVersion || invocation.Ordinal != command.Ordinal || invocation.Fence != command.Fence || invocation.State != InvocationIntent || turn.State != agentruntime.TurnRunning {
+		return PlanResult{}, EffectSet{}, ErrConflict
+	}
+	invocation.State, invocation.Result, invocation.Failure, invocation.UpdatedAt = command.Outcome, command.Result, command.Failure.Clone(), now
+	state.Invocations[invocationIndex] = invocation
+	effects, err := planner.effects(state, binding, session, turn, invocation, nil, now, planner.retain(now))
+	if err != nil {
+		return PlanResult{}, EffectSet{}, err
+	}
+	return PlanResult{Invocation: invocation}, effects, nil
+}
+
+func (planner *RuntimeStatePlanner) settle(state *RuntimeState, binding ReceiptBinding, command SettleTurnCommand, now time.Time, cancelled bool) (PlanResult, EffectSet, error) {
+	sessionIndex := findSession(state, binding.Scope, command.SessionID)
+	turnIndex := findTurn(state, binding.Scope, command.SessionID, command.TurnID)
+	if sessionIndex < 0 || turnIndex < 0 {
+		return PlanResult{}, EffectSet{}, ErrNotFoundOrDenied
+	}
+	session, turn := state.Sessions[sessionIndex], state.Turns[turnIndex]
+	if session.Version != command.ExpectedSessionVersion || turn.Version != command.ExpectedTurnVersion || turn.State != agentruntime.TurnRunning {
+		return PlanResult{}, EffectSet{}, ErrConflict
+	}
+	if command.Outcome.OperationID != "" {
+		index := findInvocation(state, binding.Scope, command.SessionID, command.TurnID, command.Outcome.OperationID)
+		if index < 0 || state.Invocations[index].Ordinal != command.Outcome.Ordinal || state.Invocations[index].Fence != command.Outcome.Fence || (state.Invocations[index].State != InvocationSucceeded && state.Invocations[index].State != InvocationFailed && state.Invocations[index].State != InvocationUncertain) {
+			return PlanResult{}, EffectSet{}, ErrConflict
+		}
+	}
+	turn.State, turn.Failure = command.Outcome.State, command.Outcome.Failure.Clone()
+	turn.Version++
+	turn.CompletedAt = &now
+	state.Turns[turnIndex] = turn
+	session.Version++
+	session.UpdatedAt = now
+	kind := terminalEvent(turn.State)
+	kinds := []agentruntime.EventKind{kind}
+	promoted := planner.promote(state, session.SessionID, now)
+	if promoted != nil {
+		kinds = append(kinds, agentruntime.EventTurnStarted)
+	} else if session.State == agentruntime.SessionClosing {
+		session.State = agentruntime.SessionCompleted
+		kinds = append(kinds, agentruntime.EventSessionCompleted)
+	}
+	state.Sessions[sessionIndex] = session
+	effects, err := planner.effects(state, binding, session, turn, InvocationRecord{}, kinds, now, planner.retain(now))
+	if err != nil {
+		return PlanResult{}, EffectSet{}, err
+	}
+	return PlanResult{Session: session, Turn: turn, Promoted: promoted}, effects, nil
+}
+
+func (planner *RuntimeStatePlanner) cancel(state *RuntimeState, binding ReceiptBinding, command CancelTurnCommand, now time.Time) (PlanResult, EffectSet, error) {
+	sessionIndex := findSession(state, binding.Scope, command.SessionID)
+	turnIndex := findTurn(state, binding.Scope, command.SessionID, command.TurnID)
+	if sessionIndex < 0 || turnIndex < 0 {
+		return PlanResult{}, EffectSet{}, ErrNotFoundOrDenied
+	}
+	session, turn := state.Sessions[sessionIndex], state.Turns[turnIndex]
+	if turn.State != agentruntime.TurnRunning && turn.State != agentruntime.TurnQueued {
+		return PlanResult{}, EffectSet{}, ErrConflict
+	}
+	priorState := turn.State
+	turn.State, turn.Version, turn.CompletedAt = agentruntime.TurnCancelled, turn.Version+1, &now
+	state.Turns[turnIndex] = turn
+	session.Version++
+	session.UpdatedAt = now
+	kinds := []agentruntime.EventKind{agentruntime.EventTurnCancelled}
+	promoted := (*TurnRecord)(nil)
+	if priorState == agentruntime.TurnRunning {
+		promoted = planner.promote(state, session.SessionID, now)
+	}
+	if promoted != nil {
+		kinds = append(kinds, agentruntime.EventTurnStarted)
+	} else if session.State == agentruntime.SessionClosing && !hasPending(state, session.SessionID) {
+		session.State = agentruntime.SessionCompleted
+		kinds = append(kinds, agentruntime.EventSessionCompleted)
+	}
+	state.Sessions[sessionIndex] = session
+	effects, err := planner.effects(state, binding, session, turn, InvocationRecord{}, kinds, now, planner.retain(now))
+	if err != nil {
+		return PlanResult{}, EffectSet{}, err
+	}
+	return PlanResult{Session: session, Turn: turn, Promoted: promoted}, effects, nil
+}
+
+func (planner *RuntimeStatePlanner) close(state *RuntimeState, binding ReceiptBinding, command CloseSessionCommand, now time.Time) (PlanResult, EffectSet, error) {
+	index := findSession(state, binding.Scope, command.SessionID)
+	if index < 0 {
+		return PlanResult{}, EffectSet{}, ErrNotFoundOrDenied
+	}
+	session := state.Sessions[index]
+	if session.State != agentruntime.SessionOpen {
+		return PlanResult{}, EffectSet{}, ErrConflict
+	}
+	session.State, session.Version, session.UpdatedAt = agentruntime.SessionClosing, session.Version+1, now
+	kinds := []agentruntime.EventKind{agentruntime.EventSessionClosing}
+	if !hasPending(state, session.SessionID) {
+		session.State = agentruntime.SessionCompleted
+		kinds = append(kinds, agentruntime.EventSessionCompleted)
+	}
+	state.Sessions[index] = session
+	effects, err := planner.effects(state, binding, session, TurnRecord{}, InvocationRecord{}, kinds, now, planner.retain(now))
+	if err != nil {
+		return PlanResult{}, EffectSet{}, err
+	}
+	return PlanResult{Session: session}, effects, nil
+}
+func (planner *RuntimeStatePlanner) claim(state *RuntimeState, binding ReceiptBinding, command ClaimOutboxCommand, now time.Time) (PlanResult, EffectSet, error) {
+	index := findOutbox(state, binding.Scope.Tenant, command.OutboxID)
+	if index < 0 {
+		return PlanResult{}, EffectSet{}, ErrNotFoundOrDenied
+	}
+	record := state.Outbox[index]
+	if record.Version != command.ExpectedVersion || record.State != OutboxPending || !command.ClaimUntil.After(now) {
+		return PlanResult{}, EffectSet{}, ErrConflict
+	}
+	record.State, record.ClaimedBy, record.ClaimUntil, record.Version = OutboxClaimed, command.Claimer, &command.ClaimUntil, record.Version+1
+	state.Outbox[index] = record
+	effects, err := planner.auditOnly(state, binding, "outbox.claimed", record.SessionID, record.TurnID, now, planner.retain(now))
+	return PlanResult{Outbox: record}, effects, err
+}
+func (planner *RuntimeStatePlanner) acknowledge(state *RuntimeState, binding ReceiptBinding, command AcknowledgeOutboxCommand, now time.Time) (PlanResult, EffectSet, error) {
+	index := findOutbox(state, binding.Scope.Tenant, command.OutboxID)
+	if index < 0 {
+		return PlanResult{}, EffectSet{}, ErrNotFoundOrDenied
+	}
+	record := state.Outbox[index]
+	if record.Version != command.ExpectedVersion || record.State != OutboxClaimed || record.ClaimedBy != command.Claimer || record.ClaimUntil == nil || !record.ClaimUntil.After(now) {
+		return PlanResult{}, EffectSet{}, ErrConflict
+	}
+	record.State, record.Version, record.ClaimUntil = OutboxPublished, record.Version+1, nil
+	state.Outbox[index] = record
+	effects, err := planner.auditOnly(state, binding, "outbox.published", record.SessionID, record.TurnID, now, planner.retain(now))
+	return PlanResult{Outbox: record}, effects, err
+}
+
+func (planner *RuntimeStatePlanner) promote(state *RuntimeState, sessionID agentruntime.SessionID, now time.Time) *TurnRecord {
+	var index = -1
+	var position uint64
+	for i := range state.Turns {
+		turn := state.Turns[i]
+		if turn.SessionID == sessionID && turn.State == agentruntime.TurnQueued && (index < 0 || turn.Position < position) {
+			index, position = i, turn.Position
+		}
+	}
+	if index < 0 {
+		return nil
+	}
+	state.Turns[index].State, state.Turns[index].Version, state.Turns[index].StartedAt = agentruntime.TurnRunning, state.Turns[index].Version+1, &now
+	result := state.Turns[index].Clone()
+	return &result
+}
+func (planner *RuntimeStatePlanner) effects(state *RuntimeState, binding ReceiptBinding, session SessionRecord, turn TurnRecord, invocation InvocationRecord, kinds []agentruntime.EventKind, now, until time.Time) (EffectSet, error) {
+	effects := EffectSet{}
+	for _, kind := range kinds {
+		event, err := planner.event(state, session, turn, binding, kind, now, until)
+		if err != nil {
+			return EffectSet{}, err
+		}
+		state.Events = append(state.Events, event)
+		effects.Events = append(effects.Events, event)
+		outbox, err := planner.outbox(session, turn, invocation, event.EventID, now, until)
+		if err != nil {
+			return EffectSet{}, err
+		}
+		state.Outbox = append(state.Outbox, outbox)
+		effects.Outbox = append(effects.Outbox, outbox)
+	}
+	fact, err := planner.fact(binding, session, turn, now, until)
+	if err != nil {
+		return EffectSet{}, err
+	}
+	state.Audit = append(state.Audit, fact)
+	effects.Audit = append(effects.Audit, fact)
+	if len(kinds) == 0 {
+		outbox, err := planner.outbox(session, turn, invocation, agentruntime.EventID(""), now, until)
+		if err != nil {
+			return EffectSet{}, err
+		}
+		state.Outbox = append(state.Outbox, outbox)
+		effects.Outbox = append(effects.Outbox, outbox)
+	}
+	return effects, nil
+}
+func (planner *RuntimeStatePlanner) auditOnly(state *RuntimeState, binding ReceiptBinding, kind string, sessionID agentruntime.SessionID, turnID agentruntime.TurnID, now, until time.Time) (EffectSet, error) {
+	fact, err := planner.factKind(binding, kind, sessionID, turnID, now, until)
+	if err != nil {
+		return EffectSet{}, err
+	}
+	state.Audit = append(state.Audit, fact)
+	return EffectSet{Audit: []AuditFactRecord{fact}}, nil
+}
+func (planner *RuntimeStatePlanner) event(state *RuntimeState, session SessionRecord, turn TurnRecord, binding ReceiptBinding, kind agentruntime.EventKind, now, until time.Time) (ProductEventRecord, error) {
+	sequence := uint64(1)
+	for _, event := range state.Events {
+		if event.SessionID == session.SessionID && event.Sequence >= sequence {
+			sequence = event.Sequence + 1
+		}
+	}
+	id, err := planner.eventID()
+	if err != nil {
+		return ProductEventRecord{}, err
+	}
+	cursor, err := planner.cursor()
+	if err != nil {
+		return ProductEventRecord{}, err
+	}
+	return ProductEventRecord{Tenant: session.Tenant, Principal: session.Principal, SessionID: session.SessionID, Sequence: sequence, Cursor: cursor, EventID: id, Kind: kind, InputID: turn.InputID, TurnID: turn.TurnID, OperationID: OperationID(binding.IdempotencyKey), OccurredAt: now, RetentionUntil: until}, nil
+}
+func (planner *RuntimeStatePlanner) fact(binding ReceiptBinding, session SessionRecord, turn TurnRecord, now, until time.Time) (AuditFactRecord, error) {
+	return planner.factKind(binding, string(binding.Command), session.SessionID, turn.TurnID, now, until)
+}
+func (planner *RuntimeStatePlanner) factKind(binding ReceiptBinding, kind string, sessionID agentruntime.SessionID, turnID agentruntime.TurnID, now, until time.Time) (AuditFactRecord, error) {
+	id, err := planner.auditID()
+	if err != nil {
+		return AuditFactRecord{}, err
+	}
+	return AuditFactRecord{Tenant: binding.Scope.Tenant, AuditFactID: id, OperationID: OperationID(binding.IdempotencyKey), Actor: binding.Scope.Principal, Kind: kind, SessionID: sessionID, TurnID: turnID, OccurredAt: now, RetentionUntil: until}, nil
+}
+func (planner *RuntimeStatePlanner) outbox(session SessionRecord, turn TurnRecord, invocation InvocationRecord, eventID agentruntime.EventID, now, until time.Time) (OutboxRecord, error) {
+	id, err := planner.outboxID()
+	if err != nil {
+		return OutboxRecord{}, err
+	}
+	return OutboxRecord{Tenant: session.Tenant, Principal: session.Principal, OutboxID: id, Aggregate: "session", AggregateVersion: session.Version, Version: 1, EventID: eventID, OperationID: invocation.OperationID, SessionID: session.SessionID, TurnID: turn.TurnID, InvocationID: invocation.InvocationID, InvocationOrdinal: invocation.Ordinal, InvocationFence: invocation.Fence, SessionVersion: session.Version, TurnVersion: turn.Version, State: OutboxPending, CommittedAt: now, RetentionUntil: until}, nil
+}
+func (planner *RuntimeStatePlanner) catalogOutbox(binding ReceiptBinding, revision AgentRevisionRecord, now, until time.Time) (OutboxRecord, error) {
+	id, err := planner.outboxID()
+	if err != nil {
+		return OutboxRecord{}, err
+	}
+	return OutboxRecord{Tenant: binding.Scope.Tenant, Principal: binding.Scope.Principal, OutboxID: id, Aggregate: "agent_revision", AggregateVersion: revision.Revision, Version: 1, OperationID: OperationID(binding.IdempotencyKey), State: OutboxPending, CommittedAt: now, RetentionUntil: until}, nil
+}
+func (planner *RuntimeStatePlanner) receipt(binding ReceiptBinding, result PlanResult, now time.Time) MutationReceipt {
+	return MutationReceipt{Scope: binding.Scope, IdempotencyKey: binding.IdempotencyKey, OperationID: OperationID(binding.IdempotencyKey), Command: string(binding.Command), RequestDigest: binding.RequestDigest, AgentID: result.Revision.AgentID, RevisionID: result.Revision.RevisionID, SessionID: firstID(result.Session.SessionID, result.Turn.SessionID), InputID: result.Input.InputID, TurnID: result.Turn.TurnID, AcceptedAt: now, RetentionUntil: planner.retain(now)}
+}
+func firstID(left, right agentruntime.SessionID) agentruntime.SessionID {
+	if left != "" {
+		return left
+	}
+	return right
+}
+func (planner *RuntimeStatePlanner) retain(now time.Time) time.Time {
+	return normalizeTime(planner.retention.RetainUntil(now))
+}
+func (planner *RuntimeStatePlanner) raw(kind IdentifierKind) (string, error) {
+	value, err := planner.ids.NextIdentifier(kind)
+	if err != nil || value == "" {
+		return "", fmt.Errorf("allocate runtime state %s: %w", kind, err)
+	}
+	return value, nil
+}
+func (planner *RuntimeStatePlanner) agentID() (agentruntime.AgentID, error) {
+	value, err := planner.raw(IdentifierAgent)
+	if err != nil {
+		return "", err
+	}
+	return agentruntime.ParseAgentID(value)
+}
+func (planner *RuntimeStatePlanner) revisionID() (agentruntime.AgentRevisionID, error) {
+	value, err := planner.raw(IdentifierRevision)
+	if err != nil {
+		return "", err
+	}
+	return agentruntime.ParseAgentRevisionID(value)
+}
+func (planner *RuntimeStatePlanner) sessionID() (agentruntime.SessionID, error) {
+	value, err := planner.raw(IdentifierSession)
+	if err != nil {
+		return "", err
+	}
+	return agentruntime.ParseSessionID(value)
+}
+func (planner *RuntimeStatePlanner) inputID() (agentruntime.InputID, error) {
+	value, err := planner.raw(IdentifierInput)
+	if err != nil {
+		return "", err
+	}
+	return agentruntime.ParseInputID(value)
+}
+func (planner *RuntimeStatePlanner) turnID() (agentruntime.TurnID, error) {
+	value, err := planner.raw(IdentifierTurn)
+	if err != nil {
+		return "", err
+	}
+	return agentruntime.ParseTurnID(value)
+}
+func (planner *RuntimeStatePlanner) eventID() (agentruntime.EventID, error) {
+	value, err := planner.raw(IdentifierEvent)
+	if err != nil {
+		return "", err
+	}
+	return agentruntime.ParseEventID(value)
+}
+func (planner *RuntimeStatePlanner) cursor() (agentruntime.Cursor, error) {
+	value, err := planner.raw(IdentifierCursor)
+	if err != nil {
+		return "", err
+	}
+	return agentruntime.ParseCursor(value)
+}
+func (planner *RuntimeStatePlanner) invocationID() (InvocationID, error) {
+	value, err := planner.raw(IdentifierInvocation)
+	return InvocationID(value), err
+}
+func (planner *RuntimeStatePlanner) auditID() (AuditFactID, error) {
+	value, err := planner.raw(IdentifierAudit)
+	return AuditFactID(value), err
+}
+func (planner *RuntimeStatePlanner) outboxID() (OutboxID, error) {
+	value, err := planner.raw(IdentifierOutbox)
+	return OutboxID(value), err
+}
+
+func findSession(state *RuntimeState, scope MutationScope, id agentruntime.SessionID) int {
+	for i, session := range state.Sessions {
+		if session.Tenant == scope.Tenant && session.Principal == scope.Principal && session.SessionID == id {
+			return i
+		}
+	}
+	return -1
+}
+func findTurn(state *RuntimeState, scope MutationScope, sessionID agentruntime.SessionID, turnID agentruntime.TurnID) int {
+	for i, turn := range state.Turns {
+		if turn.Tenant == scope.Tenant && turn.Principal == scope.Principal && turn.SessionID == sessionID && turn.TurnID == turnID {
+			return i
+		}
+	}
+	return -1
+}
+func findInvocation(state *RuntimeState, scope MutationScope, sessionID agentruntime.SessionID, turnID agentruntime.TurnID, operation OperationID) int {
+	for i, invocation := range state.Invocations {
+		if invocation.Tenant == scope.Tenant && invocation.Principal == scope.Principal && invocation.SessionID == sessionID && invocation.TurnID == turnID && invocation.OperationID == operation {
+			return i
+		}
+	}
+	return -1
+}
+func findOutbox(state *RuntimeState, tenant runtimecontent.TenantID, id OutboxID) int {
+	for i, record := range state.Outbox {
+		if record.Tenant == tenant && record.OutboxID == id {
+			return i
+		}
+	}
+	return -1
+}
+func findReceipt(state RuntimeState, binding ReceiptBinding) (MutationReceipt, bool) {
+	for _, receipt := range state.Receipts {
+		if receipt.Scope == binding.Scope && receipt.IdempotencyKey == binding.IdempotencyKey {
+			return receipt, true
+		}
+	}
+	return MutationReceipt{}, false
+}
+func hasPending(state *RuntimeState, sessionID agentruntime.SessionID) bool {
+	for _, turn := range state.Turns {
+		if turn.SessionID == sessionID && (turn.State == agentruntime.TurnQueued || turn.State == agentruntime.TurnRunning) {
+			return true
+		}
+	}
+	return false
+}
+func terminalEvent(state agentruntime.TurnState) agentruntime.EventKind {
+	switch state {
+	case agentruntime.TurnSucceeded:
+		return agentruntime.EventTurnSucceeded
+	case agentruntime.TurnCancelled:
+		return agentruntime.EventTurnCancelled
+	default:
+		return agentruntime.EventTurnFailed
+	}
+}
+func containsReceipt(state RuntimeState, receipt MutationReceipt) bool {
+	for _, item := range state.Receipts {
+		if item.Scope == receipt.Scope && item.IdempotencyKey == receipt.IdempotencyKey && item.RequestDigest == receipt.RequestDigest {
+			return true
+		}
+	}
+	return false
+}
+func containsEvent(state RuntimeState, event ProductEventRecord) bool {
+	for _, item := range state.Events {
+		if item.EventID == event.EventID {
+			return true
+		}
+	}
+	return false
+}
+func containsAudit(state RuntimeState, fact AuditFactRecord) bool {
+	for _, item := range state.Audit {
+		if item.AuditFactID == fact.AuditFactID {
+			return true
+		}
+	}
+	return false
+}
+func containsOutbox(state RuntimeState, record OutboxRecord) bool {
+	for _, item := range state.Outbox {
+		if item.OutboxID == record.OutboxID {
+			return true
+		}
+	}
+	return false
+}
+func validateState(state RuntimeState) error {
+	revisions, sessions, inputs, turns, operations := map[string]struct{}{}, map[string]struct{}{}, map[string]struct{}{}, map[string]struct{}{}, map[string]struct{}{}
+	events, cursors, audit, outbox, receipts := map[string]struct{}{}, map[string]struct{}{}, map[string]struct{}{}, map[string]struct{}{}, map[string]struct{}{}
+	active, positions := map[agentruntime.SessionID]uint64{}, map[string]struct{}{}
+	for _, record := range state.Revisions {
+		if duplicate(revisions, record.RevisionID.String()) {
+			return ErrIntegrity
+		}
+	}
+	for _, record := range state.Sessions {
+		if !record.CreatedAt.IsZero() && record.CreatedAt.Location() != time.UTC || duplicate(sessions, record.SessionID.String()) {
+			return ErrIntegrity
+		}
+	}
+	for _, record := range state.Inputs {
+		if duplicate(inputs, record.InputID.String()) {
+			return ErrIntegrity
+		}
+	}
+	for _, record := range state.Turns {
+		if duplicate(turns, record.TurnID.String()) || duplicate(positions, record.SessionID.String()+fmt.Sprintf("/%d", record.Position)) {
+			return ErrIntegrity
+		}
+		if record.State == agentruntime.TurnRunning {
+			active[record.SessionID]++
+			if active[record.SessionID] > 1 {
+				return ErrIntegrity
+			}
+		}
+	}
+	for _, record := range state.Invocations {
+		if duplicate(operations, string(record.OperationID)) {
+			return ErrIntegrity
+		}
+	}
+	for _, record := range state.Events {
+		if duplicate(events, record.EventID.String()) || duplicate(cursors, record.Cursor.String()) {
+			return ErrIntegrity
+		}
+	}
+	for _, record := range state.Audit {
+		if duplicate(audit, string(record.AuditFactID)) {
+			return ErrIntegrity
+		}
+	}
+	for _, record := range state.Outbox {
+		if duplicate(outbox, string(record.OutboxID)) {
+			return ErrIntegrity
+		}
+	}
+	for _, record := range state.Receipts {
+		if duplicate(receipts, string(record.Scope.Tenant)+"/"+string(record.Scope.Principal)+"/"+string(record.Scope.Authority)+"/"+record.IdempotencyKey) {
+			return ErrIntegrity
+		}
+	}
+	return nil
+}
+func duplicate(seen map[string]struct{}, value string) bool {
+	if value == "" {
+		return false
+	}
+	if _, exists := seen[value]; exists {
+		return true
+	}
+	seen[value] = struct{}{}
+	return false
+}
+func (planner *RuntimeStatePlanner) replayPlan(state RuntimeState, kind CommandKind, receipt MutationReceipt) (TransitionPlan, error) {
+	result := PlanResult{Kind: kind, Receipt: receipt}
+	for _, revision := range state.Revisions {
+		if revision.RevisionID == receipt.RevisionID {
+			result.Revision = revision
+		}
+	}
+	for _, session := range state.Sessions {
+		if session.SessionID == receipt.SessionID {
+			result.Session = session
+		}
+	}
+	for _, input := range state.Inputs {
+		if input.InputID == receipt.InputID {
+			result.Input = input
+		}
+	}
+	for _, turn := range state.Turns {
+		if turn.TurnID == receipt.TurnID {
+			result.Turn = turn
+		}
+	}
+	return TransitionPlan{kind: kind, state: state, result: result}, nil
+}

@@ -231,8 +231,13 @@ vertical is therefore one replacement, with these non-separable stages:
    planner output. The same conformance suite then becomes the PostgreSQL
    adapter target. No public route may use either authority until this cutover.
 
-This is deliberately not an adapter ABI. The in-progress contract draft is
-not committed until stage 1 and the complete stage-2 planner are coherent.
+This is deliberately not an adapter ABI. Stages 1 and 2 are implemented as
+the isolated `internal/runtimestate` compiler and pure planner: command
+callers cannot supply a digest or receipt, content handoffs are validated
+before a sealed command is produced, and adapters receive only a centrally
+validated transition plan. Focused lifecycle/race tests exercise all ten
+commands, but this is not a durable adapter, public-route, PostgreSQL, or
+Temporal completion claim. Stage 3 remains the next required cutover.
 
 ## First executable vertical
 

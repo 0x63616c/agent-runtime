@@ -52,7 +52,7 @@ type MutationScope struct {
 	Authority Authority
 }
 
-// RequestDigest commits the canonical, identity-free command request used for idempotency.
+// RequestDigest commits the compiler-canonical, identity-free command request used for idempotency.
 type RequestDigest string
 
 // OperationID is the durable external-effect key owned by the runtime.
@@ -66,23 +66,6 @@ type AuditFactID string
 
 // OutboxID identifies one durable publication/reconciliation work record.
 type OutboxID string
-
-// Mutation is shared by every lifecycle command. Implementations resolve its
-// idempotency receipt before allocating identifiers, sequence positions, or effects.
-type Mutation struct {
-	Scope          MutationScope
-	IdempotencyKey string
-	RequestDigest  RequestDigest
-}
-
-// CommandScope returns the authenticated ownership scope of the mutation.
-func (mutation Mutation) CommandScope() MutationScope { return mutation.Scope }
-
-// CanonicalRequestDigest returns the request commitment used for replay-safe idempotency.
-func (mutation Mutation) CanonicalRequestDigest() RequestDigest { return mutation.RequestDigest }
-
-// Owned returns the value-owned mutation envelope accepted by a state adapter.
-func (mutation Mutation) Owned() Mutation { return mutation }
 
 // AgentRevisionRecord is persisted revision metadata; the behavior body remains in runtimecontent.
 type AgentRevisionRecord struct {
@@ -331,7 +314,8 @@ func (effects EffectSet) Clone() EffectSet {
 
 // RegisterAgentRevisionCommand allocates an initial Agent or next immutable revision from an opaque body handoff.
 type RegisterAgentRevisionCommand struct {
-	Mutation
+	Scope            MutationScope
+	IdempotencyKey   string
 	AgentID          agentruntime.AgentID // empty allocates a new Agent
 	ExpectedRevision uint64               // zero only when AgentID is empty
 	Specification    runtimecontent.ContentHandoff
@@ -339,38 +323,38 @@ type RegisterAgentRevisionCommand struct {
 
 // Owned returns a value-owned command. ContentHandoff is opaque and immutable to callers.
 func (command RegisterAgentRevisionCommand) Owned() RegisterAgentRevisionCommand {
-	command.Mutation = command.Mutation.Owned()
 	return command
 }
 
 // CreateSessionCommand pins a principal-owned Session to one exact immutable revision.
 type CreateSessionCommand struct {
-	Mutation
-	RevisionID agentruntime.AgentRevisionID
+	Scope          MutationScope
+	IdempotencyKey string
+	RevisionID     agentruntime.AgentRevisionID
 }
 
 // Owned returns a value-owned command.
 func (command CreateSessionCommand) Owned() CreateSessionCommand {
-	command.Mutation = command.Mutation.Owned()
 	return command
 }
 
 // AdmitInputCommand creates exactly one Input and ordered Turn from an opaque Input-envelope handoff.
 type AdmitInputCommand struct {
-	Mutation
-	SessionID agentruntime.SessionID
-	Input     runtimecontent.ContentHandoff
+	Scope          MutationScope
+	IdempotencyKey string
+	SessionID      agentruntime.SessionID
+	Input          runtimecontent.ContentHandoff
 }
 
 // Owned returns a value-owned command. ContentHandoff is opaque and immutable to callers.
 func (command AdmitInputCommand) Owned() AdmitInputCommand {
-	command.Mutation = command.Mutation.Owned()
 	return command
 }
 
 // BeginInvocationAttempt records intent before an external model effect may be dispatched.
 type BeginInvocationAttemptCommand struct {
-	Mutation
+	Scope                  MutationScope
+	IdempotencyKey         string
 	SessionID              agentruntime.SessionID
 	TurnID                 agentruntime.TurnID
 	OperationID            OperationID
@@ -381,13 +365,13 @@ type BeginInvocationAttemptCommand struct {
 
 // Owned returns a value-owned command.
 func (command BeginInvocationAttemptCommand) Owned() BeginInvocationAttemptCommand {
-	command.Mutation = command.Mutation.Owned()
 	return command
 }
 
 // RecordInvocationOutcomeCommand records a fenced safe outcome for one exact operation.
 type RecordInvocationOutcomeCommand struct {
-	Mutation
+	Scope                  MutationScope
+	IdempotencyKey         string
 	SessionID              agentruntime.SessionID
 	TurnID                 agentruntime.TurnID
 	OperationID            OperationID
@@ -402,7 +386,6 @@ type RecordInvocationOutcomeCommand struct {
 
 // Owned returns a value-owned command and clones all caller-owned pointer metadata.
 func (command RecordInvocationOutcomeCommand) Owned() RecordInvocationOutcomeCommand {
-	command.Mutation = command.Mutation.Owned()
 	command.Failure = command.Failure.Clone()
 	if command.Result != nil {
 		result := *command.Result
@@ -432,7 +415,8 @@ func (outcome TerminalOutcome) Owned() TerminalOutcome { return outcome.Clone() 
 
 // SettleTurnCommand terminally settles a current running Turn and may promote one queued Turn.
 type SettleTurnCommand struct {
-	Mutation
+	Scope                  MutationScope
+	IdempotencyKey         string
 	SessionID              agentruntime.SessionID
 	TurnID                 agentruntime.TurnID
 	ExpectedSessionVersion uint64
@@ -442,33 +426,32 @@ type SettleTurnCommand struct {
 
 // Owned returns a value-owned command and terminal outcome.
 func (command SettleTurnCommand) Owned() SettleTurnCommand {
-	command.Mutation = command.Mutation.Owned()
 	command.Outcome = command.Outcome.Owned()
 	return command
 }
 
 // CancelTurnCommand terminally cancels a running or queued Turn.
 type CancelTurnCommand struct {
-	Mutation
-	SessionID agentruntime.SessionID
-	TurnID    agentruntime.TurnID
+	Scope          MutationScope
+	IdempotencyKey string
+	SessionID      agentruntime.SessionID
+	TurnID         agentruntime.TurnID
 }
 
 // Owned returns a value-owned command.
 func (command CancelTurnCommand) Owned() CancelTurnCommand {
-	command.Mutation = command.Mutation.Owned()
 	return command
 }
 
 // CloseSessionCommand rejects future admission and completes only after accepted work drains.
 type CloseSessionCommand struct {
-	Mutation
-	SessionID agentruntime.SessionID
+	Scope          MutationScope
+	IdempotencyKey string
+	SessionID      agentruntime.SessionID
 }
 
 // Owned returns a value-owned command.
 func (command CloseSessionCommand) Owned() CloseSessionCommand {
-	command.Mutation = command.Mutation.Owned()
 	return command
 }
 
@@ -750,7 +733,8 @@ func (page OutboxPage) Clone() OutboxPage {
 
 // ClaimOutboxCommand atomically leases one Outbox record under ownership-scoped idempotency.
 type ClaimOutboxCommand struct {
-	Mutation
+	Scope           MutationScope
+	IdempotencyKey  string
 	OutboxID        OutboxID
 	ExpectedVersion uint64
 	Claimer         string
@@ -759,14 +743,14 @@ type ClaimOutboxCommand struct {
 
 // Owned returns a value-owned command with a UTC-normalized claim expiry.
 func (command ClaimOutboxCommand) Owned() ClaimOutboxCommand {
-	command.Mutation = command.Mutation.Owned()
 	command.ClaimUntil = normalizeTime(command.ClaimUntil)
 	return command
 }
 
 // AcknowledgeOutboxCommand atomically acknowledges one owned Outbox lease under idempotency.
 type AcknowledgeOutboxCommand struct {
-	Mutation
+	Scope           MutationScope
+	IdempotencyKey  string
 	OutboxID        OutboxID
 	ExpectedVersion uint64
 	Claimer         string
@@ -775,24 +759,18 @@ type AcknowledgeOutboxCommand struct {
 
 // Owned returns a value-owned command with a UTC-normalized publication time.
 func (command AcknowledgeOutboxCommand) Owned() AcknowledgeOutboxCommand {
-	command.Mutation = command.Mutation.Owned()
 	command.PublishedAt = normalizeTime(command.PublishedAt)
 	return command
 }
 
-// RuntimeStateStore is the closed internal lifecycle authority. Implementations must take an Owned snapshot of
-// every command before interpreting it, validate ContentHandoff through the configured ContentHandoffValidator,
-// and return owned result snapshots. Its production implementation is PostgreSQL; neither this contract nor a
-// memory conformance adapter claims durable public composition.
+// RuntimeStateStore is the plans-only internal lifecycle persistence authority.
+// Command construction belongs exclusively to Compiler and lifecycle decisions
+// exclusively to RuntimeStatePlanner; an adapter may read authorized metadata
+// state and atomically persist a validated TransitionPlan, but it cannot accept
+// a caller command or manufacture a MutationReceipt.
 type RuntimeStateStore interface {
-	RegisterAgentRevision(context.Context, RegisterAgentRevisionCommand) (RegisterAgentRevisionResult, error)
-	CreateSession(context.Context, CreateSessionCommand) (CreateSessionResult, error)
-	AdmitInput(context.Context, AdmitInputCommand) (AdmitInputResult, error)
-	BeginInvocationAttempt(context.Context, BeginInvocationAttemptCommand) (BeginInvocationAttemptResult, error)
-	RecordInvocationOutcome(context.Context, RecordInvocationOutcomeCommand) (RecordInvocationOutcomeResult, error)
-	SettleTurn(context.Context, SettleTurnCommand) (SettleTurnResult, error)
-	CancelTurn(context.Context, CancelTurnCommand) (CancelTurnResult, error)
-	CloseSession(context.Context, CloseSessionCommand) (CloseSessionResult, error)
+	LoadRuntimeState(context.Context, MutationScope) (RuntimeState, error)
+	PersistTransitionPlan(context.Context, TransitionPlan) error
 	GetAgentRevision(context.Context, AgentRevisionQuery) (AgentRevisionRecord, error)
 	GetSessionView(context.Context, SessionViewQuery) (SessionView, error)
 	GetTurn(context.Context, TurnQuery) (TurnRecord, error)
@@ -801,8 +779,8 @@ type RuntimeStateStore interface {
 	GetMutationReceipt(context.Context, MutationReceiptQuery) (MutationReceipt, error)
 	ReadAudit(context.Context, AuditQuery) (AuditPage, error)
 	ReadOutbox(context.Context, OutboxQuery) (OutboxPage, error)
-	ClaimOutbox(context.Context, ClaimOutboxCommand) (ClaimOutboxResult, error)
-	AcknowledgeOutbox(context.Context, AcknowledgeOutboxCommand) (AcknowledgeOutboxResult, error)
+	AuthorizeAgentSpecificationBodyRead(context.Context, CompiledReadAuthorization) (runtimecontent.AgentSpecificationBodyRecord, error)
+	AuthorizeInputEnvelopeRead(context.Context, CompiledReadAuthorization) (runtimecontent.InputEnvelopeRecord, error)
 }
 
 // ContentHandoffValidator is supplied to a state-store composition so a command cannot persist a forgeable reference.
