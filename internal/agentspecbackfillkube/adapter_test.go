@@ -274,6 +274,57 @@ func TestAdapterRefusesMalformedNonterminalStatusBeforeAnyOverwrite(t *testing.T
 	}
 }
 
+func TestAdapterDoesNoTerminalStatusIOAfterCallerCancellation(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 8, 9, 12, 0, 0, 0, time.UTC)
+	object := testRequest(t, now, "3")
+	resource := &recordingResource{list: &unstructured.UnstructuredList{Object: map[string]any{"metadata": map[string]any{"resourceVersion": "91"}}, Items: []unstructured.Unstructured{object}}, object: object.DeepCopy()}
+	adapter, err := agentspecbackfillkube.New(testConfig(), resource)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wires, err := adapter.List(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	request, err := agentspecbackfillcr.ParseRequest(bytes.NewReader(wires[0]))
+	if err != nil {
+		t.Fatal(err)
+	}
+	digest, err := request.Spec.Digest()
+	if err != nil {
+		t.Fatal(err)
+	}
+	candidate := agentspecbackfillcr.Status{Phase: agentspecbackfill.PhaseVerified, RequestUID: request.Metadata.UID, ObservedGeneration: request.Metadata.Generation, ControllerImageDigest: request.Spec.ControllerImageDigest, RequestDigest: digest, SnapshotFingerprint: request.Spec.SnapshotFingerprint, SnapshotCount: request.Spec.SnapshotCount, ManifestDigest: request.Spec.ManifestDigest, StaticReadinessDigest: request.Spec.StaticReadinessDigest, VerifiedCount: request.Spec.SnapshotCount, CompletedAt: now}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, _, err := adapter.ReadTerminal(ctx, request); !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected cancelled read, got %v", err)
+	}
+	if _, _, err := adapter.CreateTerminal(ctx, request, candidate); !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected cancelled write, got %v", err)
+	}
+	if resource.getCalls != 0 || resource.statusUpdates != 0 {
+		t.Fatalf("expected no terminal API I/O after cancellation, got gets=%d updates=%d", resource.getCalls, resource.statusUpdates)
+	}
+}
+
+func TestAdapterRefusesANilWatchStream(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 8, 9, 12, 0, 0, 0, time.UTC)
+	resource := &recordingResource{list: &unstructured.UnstructuredList{Object: map[string]any{"metadata": map[string]any{"resourceVersion": "91"}}, Items: []unstructured.Unstructured{testRequest(t, now, "3")}}, nilWatch: true}
+	adapter, err := agentspecbackfillkube.New(testConfig(), resource)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := adapter.List(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := adapter.Watch(context.Background()); !errors.Is(err, agentspecbackfillkube.ErrUnavailable) {
+		t.Fatalf("expected nil watch stream to be unavailable, got %v", err)
+	}
+}
+
 func testConfig() agentspecbackfillkube.Config {
 	return agentspecbackfillkube.Config{APIServerURL: "https://kubernetes.example.test:6443", Namespace: "agent-spec-backfill", CAFile: "/var/run/certs/ca.crt", TokenFile: "/var/run/tokens/controller", TLSServerName: "kubernetes.example.test", RequestTimeout: time.Second}
 }
@@ -309,8 +360,10 @@ type recordingResource struct {
 	watchOptions   metav1.ListOptions
 	watchCalls     int
 	object         *unstructured.Unstructured
+	getCalls       int
 	statusUpdates  int
 	stream         *watch.RaceFreeFakeWatcher
+	nilWatch       bool
 	updateError    error
 	onStatusUpdate func()
 }
@@ -323,6 +376,9 @@ func (resource *recordingResource) List(context.Context, metav1.ListOptions) (*u
 func (resource *recordingResource) Watch(_ context.Context, options metav1.ListOptions) (watch.Interface, error) {
 	resource.watchCalls++
 	resource.watchOptions = options
+	if resource.nilWatch {
+		return nil, nil
+	}
 	if resource.stream != nil {
 		return resource.stream, nil
 	}
@@ -330,6 +386,7 @@ func (resource *recordingResource) Watch(_ context.Context, options metav1.ListO
 }
 
 func (resource *recordingResource) Get(context.Context, string, metav1.GetOptions) (*unstructured.Unstructured, error) {
+	resource.getCalls++
 	return resource.object.DeepCopy(), nil
 }
 

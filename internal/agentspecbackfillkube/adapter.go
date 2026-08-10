@@ -163,6 +163,9 @@ func (adapter *Adapter) Watch(ctx context.Context) (agentspecbackfillprocess.Wat
 		}
 		return nil, classifyAPIError("watch AgentSpecBackfill requests", err)
 	}
+	if stream == nil {
+		return nil, errors.Wrap(ErrUnavailable, "watch AgentSpecBackfill requests: stream is required")
+	}
 	if err := ctx.Err(); err != nil {
 		stream.Stop()
 		return nil, err
@@ -180,6 +183,9 @@ func (adapter *Adapter) ReadTerminal(ctx context.Context, request agentspecbackf
 func (adapter *Adapter) CreateTerminal(ctx context.Context, request agentspecbackfillcr.Request, candidate agentspecbackfillcr.Status) (agentspecbackfillcr.Status, bool, error) {
 	if ctx == nil {
 		return agentspecbackfillcr.Status{}, false, errors.New("record AgentSpecBackfill terminal status: context is required")
+	}
+	if err := ctx.Err(); err != nil {
+		return agentspecbackfillcr.Status{}, false, err
 	}
 	if _, err := candidate.CanonicalFor(request, candidate.CompletedAt); err != nil {
 		return agentspecbackfillcr.Status{}, false, errors.Wrap(ErrInvalidObject, "record AgentSpecBackfill terminal status: candidate is invalid")
@@ -201,6 +207,9 @@ func (adapter *Adapter) CreateTerminal(ctx context.Context, request agentspecbac
 	updated := object.DeepCopy()
 	if err := unstructured.SetNestedMap(updated.Object, statusObject, "status"); err != nil {
 		return agentspecbackfillcr.Status{}, false, errors.Wrap(ErrInvalidObject, "record AgentSpecBackfill terminal status")
+	}
+	if err := ctx.Err(); err != nil {
+		return agentspecbackfillcr.Status{}, false, err
 	}
 	result, err := adapter.resource.UpdateStatus(ctx, updated, metav1.UpdateOptions{})
 	if err != nil {
@@ -297,6 +306,9 @@ func sameStatus(left, right agentspecbackfillcr.Status) bool {
 func (adapter *Adapter) read(ctx context.Context, request agentspecbackfillcr.Request) (*unstructured.Unstructured, agentspecbackfillcr.Status, bool, error) {
 	if ctx == nil {
 		return nil, agentspecbackfillcr.Status{}, false, errors.New("read AgentSpecBackfill terminal status: context is required")
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, agentspecbackfillcr.Status{}, false, err
 	}
 	object, err := adapter.resource.Get(ctx, request.Metadata.Name, metav1.GetOptions{})
 	if err != nil {
