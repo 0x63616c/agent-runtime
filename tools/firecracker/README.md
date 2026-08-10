@@ -15,9 +15,16 @@ Linux/KVM proof.
 The lock must record every source URL and source-kind-specific immutable
 reference, source and member/output SHA-256 and size, Linux/amd64 architecture,
 SPDX/license data, and the rootfs/agent build recipe, source revision,
-toolchain, input-lock and SBOM digests. Release archives use an exact
+toolchain, input-manifest and SBOM member SHA-256/size pairs. Release archives use an exact
 `release:vX.Y.Z` URL identity, object sources use the URL's exact
-`version-id:...`, and project outputs use `commit:<40-lowercase-hex>`.
+`version-id:...`, and project outputs use `commit:<40-lowercase-hex>` from the
+exact `github.com/0x63616c/agent-runtime` `commit-<revision>` release-asset
+trust root. Project outputs are tar.gz bundles: each has an exact artifact
+member plus bounded, separately verified input-manifest and SBOM members. A
+digest assertion without its corresponding bounded bytes is not accepted.
+Project-bundle traversal permits only its lock-declared regular members (at most
+eight) and stops before the smaller of the lock-derived uncompressed-member
+budget or the independent 4 GiB ceiling can be exceeded.
 `latest`, `main`, floating release URLs, and cross-kind identities are refused.
 Fixture URLs are also log-safe identities: userinfo, fragments, and all query
 parameters are refused, except for exactly one `versionId` matching a
@@ -31,9 +38,12 @@ walk rejects duplicate keys at every nested object and refuses case aliases, so
 JSON's last-key-wins and case-insensitive decoder behavior cannot change a
 reviewed identity. It does not supply a lock file or authorize a fetch by itself.
 
-The rootfs project-build source is a verified tar.gz containing the ext4 member
-and a bounded `rootfs-attestation.json` sidecar. Before staging the image, the
-fixture validator verifies that the sidecar's rootfs digest/size and
+The rootfs project-build source is a verified tar.gz containing the ext4 member,
+bounded input-manifest and SBOM sidecars, and a bounded
+`rootfs-attestation.json` sidecar. The guest-agent source is likewise a
+verified tar.gz bundle with exact binary, input-manifest, and SBOM members.
+Before staging the image, the fixture validator verifies every provenance member
+against its exact lock digest/size, then verifies that the rootfs attestation's rootfs digest/size and
 `/sbin/init` digest/size equal the separately verified static Linux/amd64
 guest-agent artifact. This checks the immutable build bundle, not the contents
 of a booted ext4 image. No command in this directory updates a lock

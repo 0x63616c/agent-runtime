@@ -30,7 +30,14 @@ var (
 	ErrSmokeUnavailable = errors.New("Firecracker smoke harness unavailable")
 )
 
-const maximumFixtureLockBytes = 256 << 10
+const (
+	maximumFixtureLockBytes            = 256 << 10
+	maximumBuildProvenanceMemberBytes  = 64 << 10
+	maximumProjectBuildBundleEntries   = 8
+	maximumProjectBuildBundleBytes     = uint64(4) << 30
+	projectBuildReleaseTrustRoot       = "/0x63616c/agent-runtime/releases/download/"
+	projectBuildReleaseReferencePrefix = "commit-"
+)
 
 // FixtureName identifies one non-interchangeable Firecracker fixture.
 type FixtureName string
@@ -93,8 +100,12 @@ type BuildProvenance struct {
 	RecipePath        string         `json:"recipe_path"`
 	SourceRevision    string         `json:"source_revision"`
 	Toolchain         string         `json:"toolchain"`
+	InputsMember      string         `json:"inputs_member"`
 	InputsDigest      sandbox.Digest `json:"inputs_sha256"`
+	InputsSizeBytes   uint64         `json:"inputs_size_bytes"`
+	SBOMMember        string         `json:"sbom_member"`
 	SBOMDigest        sandbox.Digest `json:"sbom_sha256"`
+	SBOMSizeBytes     uint64         `json:"sbom_size_bytes"`
 	Static            bool           `json:"static"`
 	GuestAgentDigest  sandbox.Digest `json:"guest_agent_sha256,omitempty"`
 	AttestationMember string         `json:"attestation_member,omitempty"`
@@ -200,8 +211,12 @@ var fixtureLockJSONArtifact = fixtureLockJSONShape{fields: map[string]fixtureLoc
 		"recipe_path":        fixtureLockJSONScalar,
 		"source_revision":    fixtureLockJSONScalar,
 		"toolchain":          fixtureLockJSONScalar,
+		"inputs_member":      fixtureLockJSONScalar,
 		"inputs_sha256":      fixtureLockJSONScalar,
+		"inputs_size_bytes":  fixtureLockJSONScalar,
+		"sbom_member":        fixtureLockJSONScalar,
 		"sbom_sha256":        fixtureLockJSONScalar,
+		"sbom_size_bytes":    fixtureLockJSONScalar,
 		"static":             fixtureLockJSONScalar,
 		"guest_agent_sha256": fixtureLockJSONScalar,
 		"attestation_member": fixtureLockJSONScalar,
@@ -296,7 +311,7 @@ func (lock FixtureLock) Validate() error {
 	want := map[FixtureName]bool{FixtureFirecracker: false, FixtureJailer: false, FixtureKernel: false, FixtureRootFS: false, FixtureGuestAgent: false}
 	var firecrackerSourceID, jailerSourceID string
 	var guestAgentDigest sandbox.Digest
-	var rootFS *LockedArtifact
+	var rootFS, guestAgent *LockedArtifact
 	for _, artifact := range lock.Artifacts {
 		seen, known := want[artifact.Name]
 		source, found := sources[artifact.SourceID]
@@ -311,6 +326,8 @@ func (lock FixtureLock) Validate() error {
 		}
 		if artifact.Name == FixtureGuestAgent {
 			guestAgentDigest = artifact.Digest
+			copy := artifact
+			guestAgent = &copy
 		}
 		if artifact.Name == FixtureRootFS {
 			copy := artifact
@@ -323,8 +340,12 @@ func (lock FixtureLock) Validate() error {
 			return fmt.Errorf("%w: missing %s", ErrFixtureLock, name)
 		}
 	}
-	if firecrackerSourceID == "" || firecrackerSourceID != jailerSourceID || rootFS == nil || rootFS.Build == nil || rootFS.Build.GuestAgentDigest != guestAgentDigest {
+	if firecrackerSourceID == "" || firecrackerSourceID != jailerSourceID || rootFS == nil || guestAgent == nil || rootFS.Build == nil || rootFS.Build.GuestAgentDigest != guestAgentDigest {
 		return fmt.Errorf("%w: Firecracker and Jailer must share one verified bundle and rootfs must bind the guest agent digest", ErrFixtureLock)
+	}
+	rootFSSource, guestAgentSource := sources[rootFS.SourceID], sources[guestAgent.SourceID]
+	if rootFS.SourceID == guestAgent.SourceID || rootFSSource.URL == guestAgentSource.URL || rootFS.Member == guestAgent.Member || rootFS.Digest == guestAgent.Digest {
+		return fmt.Errorf("%w: rootfs and guest agent require distinct project source and artifact identities", ErrFixtureLock)
 	}
 	return nil
 }
@@ -346,7 +367,7 @@ func validFixtureSource(source LockedSource) bool {
 		return ok && validObjectVersionID(versionID) && source.Format == FixtureSourceFile && len(parsed.Query()) == 1 && len(parsed.Query()["versionId"]) == 1 && parsed.Query().Get("versionId") == versionID
 	case FixtureSourceProjectBuild:
 		revision, ok := strings.CutPrefix(source.Reference, "commit:")
-		return ok && validRevision(revision) && len(parsed.Query()) == 0 && (source.Format == FixtureSourceFile || source.Format == FixtureSourceTarGzip)
+		return ok && validRevision(revision) && source.Format == FixtureSourceTarGzip && validProjectBuildSourceURL(parsed, revision)
 	default:
 		return false
 	}
@@ -375,9 +396,9 @@ func validArtifactDerivation(artifact LockedArtifact, source LockedSource) bool 
 	case FixtureKernel:
 		return source.Kind == FixtureSourceVersionedObject && source.Format == FixtureSourceFile && artifact.Build == nil
 	case FixtureRootFS:
-		return source.Kind == FixtureSourceProjectBuild && source.Format == FixtureSourceTarGzip && validBuildProvenance(artifact.Build, false) && provenanceMatchesSource(artifact.Build, source) && validBundleMember(artifact.Build.AttestationMember)
+		return source.Kind == FixtureSourceProjectBuild && source.Format == FixtureSourceTarGzip && validBuildProvenance(artifact.Build, false) && provenanceMatchesSource(artifact.Build, source) && artifact.Member != artifact.Build.InputsMember && artifact.Member != artifact.Build.SBOMMember && artifact.Member != artifact.Build.AttestationMember
 	case FixtureGuestAgent:
-		return source.Kind == FixtureSourceProjectBuild && source.Format == FixtureSourceFile && validBuildProvenance(artifact.Build, true) && provenanceMatchesSource(artifact.Build, source) && artifact.Build.AttestationMember == ""
+		return source.Kind == FixtureSourceProjectBuild && source.Format == FixtureSourceTarGzip && validBuildProvenance(artifact.Build, true) && provenanceMatchesSource(artifact.Build, source) && artifact.Member != artifact.Build.InputsMember && artifact.Member != artifact.Build.SBOMMember && artifact.Build.AttestationMember == ""
 	default:
 		return false
 	}
@@ -433,10 +454,29 @@ func validBundleMember(value string) bool {
 }
 
 func validBuildProvenance(provenance *BuildProvenance, requireStatic bool) bool {
-	if provenance == nil || provenance.Static != requireStatic || !strings.HasPrefix(provenance.RecipePath, "tools/firecracker/") || path.Clean(provenance.RecipePath) != provenance.RecipePath || strings.Contains(provenance.RecipePath, "\\") || !validRevision(provenance.SourceRevision) || strings.TrimSpace(provenance.Toolchain) == "" || !validSHA256(provenance.InputsDigest) || !validSHA256(provenance.SBOMDigest) {
+	if provenance == nil || provenance.Static != requireStatic || !strings.HasPrefix(provenance.RecipePath, "tools/firecracker/") || path.Clean(provenance.RecipePath) != provenance.RecipePath || strings.Contains(provenance.RecipePath, "\\") || !validRevision(provenance.SourceRevision) || strings.TrimSpace(provenance.Toolchain) == "" || !validBuildProvenanceMember(provenance.InputsMember, provenance.InputsDigest, provenance.InputsSizeBytes) || !validBuildProvenanceMember(provenance.SBOMMember, provenance.SBOMDigest, provenance.SBOMSizeBytes) || provenance.InputsMember == provenance.SBOMMember {
 		return false
 	}
-	return !requireStatic || provenance.GuestAgentDigest == ""
+	if requireStatic {
+		return provenance.GuestAgentDigest == "" && provenance.AttestationMember == ""
+	}
+	return validSHA256(provenance.GuestAgentDigest) && validBundleMember(provenance.AttestationMember) && provenance.AttestationMember != provenance.InputsMember && provenance.AttestationMember != provenance.SBOMMember
+}
+
+func validBuildProvenanceMember(member string, digest sandbox.Digest, sizeBytes uint64) bool {
+	return validBundleMember(member) && validSHA256(digest) && sizeBytes > 0 && sizeBytes <= maximumBuildProvenanceMemberBytes
+}
+
+func validProjectBuildSourceURL(parsed *url.URL, revision string) bool {
+	if parsed.Host != "github.com" || parsed.RawPath != "" || parsed.RawQuery != "" || parsed.ForceQuery {
+		return false
+	}
+	prefix := projectBuildReleaseTrustRoot + projectBuildReleaseReferencePrefix + revision + "/"
+	if !strings.HasPrefix(parsed.Path, prefix) {
+		return false
+	}
+	asset := strings.TrimPrefix(parsed.Path, prefix)
+	return asset != "" && !strings.Contains(asset, "/") && path.Clean(asset) == asset && asset != "." && asset != ".."
 }
 
 func provenanceMatchesSource(provenance *BuildProvenance, source LockedSource) bool {
@@ -533,6 +573,9 @@ func ProvisionFixtures(ctx context.Context, lock FixtureLock, fetcher FixtureFet
 	if err != nil {
 		return FixtureSet{}, err
 	}
+	if err := verifyProjectBuildProvenance(lock, stagedSources); err != nil {
+		return FixtureSet{}, err
+	}
 	if err := verifyRootFSAgentBinding(lock, stagedSources); err != nil {
 		return FixtureSet{}, err
 	}
@@ -557,6 +600,97 @@ func ProvisionFixtures(ctx context.Context, lock FixtureLock, fetcher FixtureFet
 	return set, nil
 }
 
+func verifyProjectBuildProvenance(lock FixtureLock, stagedSources map[string]string) error {
+	for index := range lock.Artifacts {
+		artifact := lock.Artifacts[index]
+		if artifact.Build == nil {
+			continue
+		}
+		source, found := findFixtureSource(lock.Sources, artifact.SourceID)
+		if !found || source.Kind != FixtureSourceProjectBuild || source.Format != FixtureSourceTarGzip {
+			return fmt.Errorf("%w: project build source for %s is absent", ErrArtifactIntegrity, artifact.Name)
+		}
+		sourcePath, found := stagedSources[source.ID]
+		if !found {
+			return fmt.Errorf("%w: staged project build source for %s is absent", ErrArtifactIntegrity, artifact.Name)
+		}
+		bundlePolicy, err := compileProjectBuildBundlePolicy(lock, source.ID)
+		if err != nil {
+			return err
+		}
+		if err := verifyBuildProvenanceMember(sourcePath, source.ID, artifact.Build.InputsMember, artifact.Build.InputsDigest, artifact.Build.InputsSizeBytes, bundlePolicy); err != nil {
+			return fmt.Errorf("%w: verify input manifest for %s: %v", ErrArtifactIntegrity, artifact.Name, err)
+		}
+		if err := verifyBuildProvenanceMember(sourcePath, source.ID, artifact.Build.SBOMMember, artifact.Build.SBOMDigest, artifact.Build.SBOMSizeBytes, bundlePolicy); err != nil {
+			return fmt.Errorf("%w: verify SBOM for %s: %v", ErrArtifactIntegrity, artifact.Name, err)
+		}
+	}
+	return nil
+}
+
+func verifyBuildProvenanceMember(sourcePath, sourceID, member string, wantDigest sandbox.Digest, wantSize uint64, bundlePolicy projectBuildBundlePolicy) error {
+	contents, err := readVerifiedBundleMember(sourcePath, sourceID, member, maximumBuildProvenanceMemberBytes, bundlePolicy)
+	if err != nil {
+		return err
+	}
+	if uint64(len(contents)) != wantSize || digest(contents) != wantDigest {
+		return fmt.Errorf("bundle member %s digest or size does not match lock", member)
+	}
+	return nil
+}
+
+type projectBuildBundleMember struct {
+	maximumSize uint64
+	exactSize   bool
+}
+
+type projectBuildBundlePolicy struct {
+	members      map[string]projectBuildBundleMember
+	maximumBytes uint64
+}
+
+func compileProjectBuildBundlePolicy(lock FixtureLock, sourceID string) (projectBuildBundlePolicy, error) {
+	policy := projectBuildBundlePolicy{members: make(map[string]projectBuildBundleMember)}
+	add := func(name string, size uint64, exactSize bool) error {
+		if _, exists := policy.members[name]; exists || size > maximumProjectBuildBundleBytes-policy.maximumBytes {
+			return fmt.Errorf("%w: project source %s exceeds its exact bounded member policy", ErrArtifactIntegrity, sourceID)
+		}
+		policy.members[name] = projectBuildBundleMember{maximumSize: size, exactSize: exactSize}
+		policy.maximumBytes += size
+		return nil
+	}
+	for _, artifact := range lock.Artifacts {
+		if artifact.SourceID != sourceID {
+			continue
+		}
+		if artifact.Build == nil {
+			return projectBuildBundlePolicy{}, fmt.Errorf("%w: project source %s contains an artifact without build provenance", ErrArtifactIntegrity, sourceID)
+		}
+		for _, member := range []struct {
+			name      string
+			size      uint64
+			exactSize bool
+		}{
+			{name: artifact.Member, size: artifact.SizeBytes, exactSize: true},
+			{name: artifact.Build.InputsMember, size: artifact.Build.InputsSizeBytes, exactSize: true},
+			{name: artifact.Build.SBOMMember, size: artifact.Build.SBOMSizeBytes, exactSize: true},
+		} {
+			if err := add(member.name, member.size, member.exactSize); err != nil {
+				return projectBuildBundlePolicy{}, err
+			}
+		}
+		if artifact.Build.AttestationMember != "" {
+			if err := add(artifact.Build.AttestationMember, maximumBuildProvenanceMemberBytes, false); err != nil {
+				return projectBuildBundlePolicy{}, err
+			}
+		}
+	}
+	if len(policy.members) == 0 {
+		return projectBuildBundlePolicy{}, fmt.Errorf("%w: project source %s has no bounded member policy", ErrArtifactIntegrity, sourceID)
+	}
+	return policy, nil
+}
+
 func verifyRootFSAgentBinding(lock FixtureLock, stagedSources map[string]string) error {
 	var rootFS, guestAgent *LockedArtifact
 	for index := range lock.Artifacts {
@@ -579,7 +713,11 @@ func verifyRootFSAgentBinding(lock FixtureLock, stagedSources map[string]string)
 	if !found {
 		return fmt.Errorf("%w: staged rootfs source is absent", ErrArtifactIntegrity)
 	}
-	contents, err := readVerifiedBundleMember(sourcePath, source.ID, rootFS.Build.AttestationMember, 64<<10)
+	bundlePolicy, err := compileProjectBuildBundlePolicy(lock, source.ID)
+	if err != nil {
+		return err
+	}
+	contents, err := readVerifiedBundleMember(sourcePath, source.ID, rootFS.Build.AttestationMember, maximumBuildProvenanceMemberBytes, bundlePolicy)
 	if err != nil {
 		return fmt.Errorf("%w: read rootfs attestation: %v", ErrArtifactIntegrity, err)
 	}
@@ -599,7 +737,7 @@ func validRootFSAttestation(attestation RootFSAttestation, rootFS, guestAgent Lo
 	return attestation.SchemaVersion == "agent-runtime.firecracker.rootfs-attestation/v1" && attestation.RootFSDigest == rootFS.Digest && attestation.RootFSSize == rootFS.SizeBytes && attestation.InitPath == "/sbin/init" && attestation.InitDigest == guestAgent.Digest && attestation.InitSize == guestAgent.SizeBytes && attestation.Platform == guestAgent.Platform && validFixturePlatform(attestation.Platform) && attestation.Static
 }
 
-func readVerifiedBundleMember(sourcePath, sourceID, member string, maximumSize uint64) ([]byte, error) {
+func readVerifiedBundleMember(sourcePath, sourceID, member string, maximumSize uint64, bundlePolicy projectBuildBundlePolicy) ([]byte, error) {
 	file, err := os.Open(sourcePath)
 	if err != nil {
 		return nil, fmt.Errorf("open staged bundle %s: %w", sourceID, err)
@@ -612,6 +750,8 @@ func readVerifiedBundleMember(sourcePath, sourceID, member string, maximumSize u
 	defer reader.Close()
 	tarReader := tar.NewReader(reader)
 	var contents []byte
+	var entries, declaredBytes uint64
+	seenMembers := make(map[string]struct{}, len(bundlePolicy.members))
 	for {
 		header, nextErr := tarReader.Next()
 		if errors.Is(nextErr, io.EOF) {
@@ -620,6 +760,16 @@ func readVerifiedBundleMember(sourcePath, sourceID, member string, maximumSize u
 		if nextErr != nil {
 			return nil, fmt.Errorf("read bundle %s: %w", sourceID, nextErr)
 		}
+		entries++
+		memberPolicy, allowed := bundlePolicy.members[header.Name]
+		if _, duplicate := seenMembers[header.Name]; duplicate {
+			return nil, fmt.Errorf("bundle %s repeats a declared member", sourceID)
+		}
+		if entries > maximumProjectBuildBundleEntries || !allowed || header.Typeflag != tar.TypeReg || header.Size < 0 || (memberPolicy.exactSize && uint64(header.Size) != memberPolicy.maximumSize) || (!memberPolicy.exactSize && uint64(header.Size) > memberPolicy.maximumSize) || uint64(header.Size) > bundlePolicy.maximumBytes-declaredBytes {
+			return nil, fmt.Errorf("bundle %s exceeds bounded regular-member budget", sourceID)
+		}
+		seenMembers[header.Name] = struct{}{}
+		declaredBytes += uint64(header.Size)
 		if header.Name != member {
 			continue
 		}

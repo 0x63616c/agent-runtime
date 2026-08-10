@@ -69,8 +69,17 @@ refused. Fixture URLs reject userinfo, fragments, presigned parameters and every
 query other than one matching `versionId` on an object-store source. Every
 bootable artifact must declare Linux/amd64 before staging.
 
-The rootfs is a project-build tar.gz source with separately verified ext4 and
-bounded attestation members. Provisioning parses the attestation and checks its
+The project-built rootfs and guest-agent sources are tar.gz bundles from the
+exact `github.com/0x63616c/agent-runtime` `commit-<revision>` release-asset
+trust root. Each carries a separately verified artifact member plus bounded
+input-manifest and SBOM members with exact lock digest/size identities.
+Provisioning rejects an arbitrary project HTTPS origin, missing/duplicate/
+oversized provenance member, or a source-verified bundle whose provenance bytes
+do not match the lock. It also rejects every project tar.gz header outside the
+lock-declared member set, caps traversal at eight regular members, and applies
+the smaller of its lock-derived total uncompressed-member budget or the
+independent 4 GiB ceiling. It then
+parses the rootfs attestation and checks its
 rootfs digest/size and `/sbin/init` digest/size against the verified static
 guest-agent artifact. This is stronger than a lock assertion, but is still not
 an ext4 filesystem inspection or proof that a guest has booted.

@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -17,6 +18,8 @@ import (
 
 	"github.com/0x63616c/agent-runtime/sandbox"
 )
+
+const testProjectBuildBundleEntryBudget = 8
 
 func TestFixtureLockAdmitsOnlyCompleteImmutableArtifacts(t *testing.T) {
 	lock := validFixtureLock()
@@ -196,6 +199,267 @@ func TestFixtureLockV2RejectsCredentialedFragmentedAndPresignedSourceURLs(t *tes
 		if err := lock.Validate(); !errors.Is(err, ErrFixtureLock) {
 			t.Errorf("Validate() error = %v, want secret-bearing source URL refusal", err)
 		}
+	}
+}
+
+func TestFixtureLockV2RefusesProjectBuildSourcesOutsideTheAgentRuntimeReleaseTrustRoot(t *testing.T) {
+	for name, mutate := range map[string]func(*LockedSource){
+		"untrusted host": func(source *LockedSource) { source.URL = "https://fixtures.invalid/rootfs-bundle.tar.gz" },
+		"different repository": func(source *LockedSource) {
+			source.URL = "https://github.com/other/agent-runtime/releases/download/commit-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/rootfs-bundle.tar.gz"
+		},
+		"different release reference": func(source *LockedSource) {
+			source.URL = "https://github.com/0x63616c/agent-runtime/releases/download/commit-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb/rootfs-bundle.tar.gz"
+		},
+		"nested release asset": func(source *LockedSource) {
+			source.URL = "https://github.com/0x63616c/agent-runtime/releases/download/commit-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/nested/rootfs-bundle.tar.gz"
+		},
+		"encoded repository path": func(source *LockedSource) {
+			source.URL = "https://github.com/0x63616c%2Fagent-runtime/releases/download/commit-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/rootfs-bundle.tar.gz"
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			lock := validFixtureLock()
+			for index := range lock.Sources {
+				if lock.Sources[index].ID == "rootfs" {
+					mutate(&lock.Sources[index])
+				}
+			}
+
+			if err := lock.Validate(); !errors.Is(err, ErrFixtureLock) {
+				t.Fatalf("Validate() error = %v, want project trust-root refusal", err)
+			}
+		})
+	}
+}
+
+func TestFixtureLockV2RefusesUnboundedOrAmbiguousProjectBuildProvenanceMembers(t *testing.T) {
+	for name, mutate := range map[string]func(*BuildProvenance){
+		"traversal input manifest":     func(build *BuildProvenance) { build.InputsMember = "../inputs.json" },
+		"same input manifest and SBOM": func(build *BuildProvenance) { build.SBOMMember = build.InputsMember },
+		"input manifest reuses rootfs": func(build *BuildProvenance) { build.InputsMember = "rootfs.ext4" },
+		"unbounded input manifest":     func(build *BuildProvenance) { build.InputsSizeBytes = maximumBuildProvenanceMemberBytes + 1 },
+		"unbounded SBOM":               func(build *BuildProvenance) { build.SBOMSizeBytes = maximumBuildProvenanceMemberBytes + 1 },
+	} {
+		t.Run(name, func(t *testing.T) {
+			lock := validFixtureLock()
+			mutate(lock.Artifacts[3].Build)
+			if err := lock.Validate(); !errors.Is(err, ErrFixtureLock) {
+				t.Fatalf("Validate() error = %v, want bounded project-provenance-member refusal", err)
+			}
+		})
+	}
+}
+
+func TestFixtureLockV2RefusesCrossArtifactProjectBuildAliases(t *testing.T) {
+	for name, mutate := range map[string]func(*FixtureLock){
+		"shared source identity": func(lock *FixtureLock) {
+			lock.Artifacts[4].SourceID = "rootfs"
+			lock.Sources = lock.Sources[:3]
+		},
+		"shared source URL": func(lock *FixtureLock) {
+			lock.Sources[3].URL = lock.Sources[2].URL
+			lock.Sources[3].Digest = lock.Sources[2].Digest
+			lock.Sources[3].SizeBytes = lock.Sources[2].SizeBytes
+		},
+		"shared artifact member":           func(lock *FixtureLock) { lock.Artifacts[4].Member = lock.Artifacts[3].Member },
+		"attestation reuses rootfs member": func(lock *FixtureLock) { lock.Artifacts[3].Build.AttestationMember = lock.Artifacts[3].Member },
+		"same artifact bytes": func(lock *FixtureLock) {
+			lock.Artifacts[3].Digest = lock.Artifacts[4].Digest
+			lock.Artifacts[3].SizeBytes = lock.Artifacts[4].SizeBytes
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			lock := validFixtureLock()
+			mutate(&lock)
+			if err := lock.Validate(); !errors.Is(err, ErrFixtureLock) {
+				t.Fatalf("Validate() error = %v, want cross-artifact project-build alias refusal", err)
+			}
+		})
+	}
+}
+
+func TestFixtureProvisionerRejectsProjectBuildBundlesWithoutByteBackedInputManifestAndSBOM(t *testing.T) {
+	for _, sourceID := range []string{"rootfs", "guest-agent"} {
+		t.Run(sourceID, func(t *testing.T) {
+			lock := validFixtureLock()
+			contents := fixtureContents(lock)
+			source := fixtureSource(lock, sourceID)
+			missingProvenanceBundle := fixtureRootFSBundleWithoutBuildProvenance(lock, lock.Artifacts[4].Digest)
+			if sourceID == "guest-agent" {
+				missingProvenanceBundle = fixtureGuestAgentBundleWithoutBuildProvenance(lock)
+			}
+			contents[source.URL] = missingProvenanceBundle
+			for index := range lock.Sources {
+				if lock.Sources[index].ID == source.ID {
+					lock.Sources[index].Digest = digest(missingProvenanceBundle)
+					lock.Sources[index].SizeBytes = uint64(len(missingProvenanceBundle))
+				}
+			}
+
+			_, err := ProvisionFixtures(context.Background(), lock, fixtureStoreFunc(func(_ context.Context, source string) (io.ReadCloser, error) {
+				return io.NopCloser(bytes.NewReader(contents[source])), nil
+			}), t.TempDir())
+			if !errors.Is(err, ErrArtifactIntegrity) {
+				t.Fatalf("ProvisionFixtures() error = %v, want missing project-provenance-byte refusal", err)
+			}
+		})
+	}
+}
+
+func TestFixtureProvisionerRejectsProjectBuildProvenanceMemberSubstitutionAfterSourceVerification(t *testing.T) {
+	for _, sourceID := range []string{"rootfs", "guest-agent"} {
+		t.Run(sourceID, func(t *testing.T) {
+			lock := validFixtureLock()
+			contents := fixtureContents(lock)
+			source := fixtureSource(lock, sourceID)
+			substitutedBundle := fixtureRootFSBundleWithBuildProvenance(lock, lock.Artifacts[4].Digest, []byte("fixture-rootfs-inputs"), []byte("substituted-rootfs-sbom"))
+			if sourceID == "guest-agent" {
+				substitutedBundle = fixtureGuestAgentBundleWithBuildProvenance(lock, []byte("fixture-guest-agent-inputs"), []byte("substituted-guest-agent-sbom"))
+			}
+			contents[source.URL] = substitutedBundle
+			for index := range lock.Sources {
+				if lock.Sources[index].ID == source.ID {
+					lock.Sources[index].Digest = digest(substitutedBundle)
+					lock.Sources[index].SizeBytes = uint64(len(substitutedBundle))
+				}
+			}
+
+			_, err := ProvisionFixtures(context.Background(), lock, fixtureStoreFunc(func(_ context.Context, source string) (io.ReadCloser, error) {
+				return io.NopCloser(bytes.NewReader(contents[source])), nil
+			}), t.TempDir())
+			if !errors.Is(err, ErrArtifactIntegrity) {
+				t.Fatalf("ProvisionFixtures() error = %v, want project-provenance-substitution refusal", err)
+			}
+		})
+	}
+}
+
+func TestFixtureProvisionerRejectsAnOversizedProjectBuildProvenanceMemberAfterSourceVerification(t *testing.T) {
+	for _, sourceID := range []string{"rootfs", "guest-agent"} {
+		t.Run(sourceID, func(t *testing.T) {
+			lock := validFixtureLock()
+			contents := fixtureContents(lock)
+			source := fixtureSource(lock, sourceID)
+			oversizedBundle := fixtureRootFSBundleWithBuildProvenance(lock, lock.Artifacts[4].Digest, bytes.Repeat([]byte("i"), maximumBuildProvenanceMemberBytes+1), []byte("fixture-rootfs-sbom"))
+			if sourceID == "guest-agent" {
+				oversizedBundle = fixtureGuestAgentBundleWithBuildProvenance(lock, bytes.Repeat([]byte("i"), maximumBuildProvenanceMemberBytes+1), []byte("fixture-guest-agent-sbom"))
+			}
+			contents[source.URL] = oversizedBundle
+			for index := range lock.Sources {
+				if lock.Sources[index].ID == source.ID {
+					lock.Sources[index].Digest = digest(oversizedBundle)
+					lock.Sources[index].SizeBytes = uint64(len(oversizedBundle))
+				}
+			}
+
+			_, err := ProvisionFixtures(context.Background(), lock, fixtureStoreFunc(func(_ context.Context, source string) (io.ReadCloser, error) {
+				return io.NopCloser(bytes.NewReader(contents[source])), nil
+			}), t.TempDir())
+			if !errors.Is(err, ErrArtifactIntegrity) {
+				t.Fatalf("ProvisionFixtures() error = %v, want bounded project-provenance-member refusal", err)
+			}
+		})
+	}
+}
+
+func TestFixtureProvisionerRejectsProjectBuildBundlesThatExceedTheirDeclaredMemberBudget(t *testing.T) {
+	lock := validFixtureLock()
+	contents := fixtureContents(lock)
+	rootFSSource := fixtureSource(lock, "rootfs")
+	oversizedBundle := fixtureRootFSBundleWithUntrackedMembers(lock, lock.Artifacts[4].Digest, []fixtureBundleMember{{name: "untracked.bin", content: bytes.Repeat([]byte("x"), 128<<10)}})
+	contents[rootFSSource.URL] = oversizedBundle
+	for index := range lock.Sources {
+		if lock.Sources[index].ID == rootFSSource.ID {
+			lock.Sources[index].Digest = digest(oversizedBundle)
+			lock.Sources[index].SizeBytes = uint64(len(oversizedBundle))
+		}
+	}
+
+	_, err := ProvisionFixtures(context.Background(), lock, fixtureStoreFunc(func(_ context.Context, source string) (io.ReadCloser, error) {
+		return io.NopCloser(bytes.NewReader(contents[source])), nil
+	}), t.TempDir())
+	if !errors.Is(err, ErrArtifactIntegrity) {
+		t.Fatalf("ProvisionFixtures() error = %v, want whole-bundle budget refusal", err)
+	}
+}
+
+func TestFixtureProvisionerRejectsProjectBuildBundlesThatExceedTheirEntryBudget(t *testing.T) {
+	lock := validFixtureLock()
+	contents := fixtureContents(lock)
+	rootFSSource := fixtureSource(lock, "rootfs")
+	entries := make([]fixtureBundleMember, testProjectBuildBundleEntryBudget)
+	for index := range entries {
+		entries[index] = fixtureBundleMember{name: fmt.Sprintf("untracked-%02d", index), content: []byte("x")}
+	}
+	overpopulatedBundle := fixtureRootFSBundleWithUntrackedMembers(lock, lock.Artifacts[4].Digest, entries)
+	contents[rootFSSource.URL] = overpopulatedBundle
+	for index := range lock.Sources {
+		if lock.Sources[index].ID == rootFSSource.ID {
+			lock.Sources[index].Digest = digest(overpopulatedBundle)
+			lock.Sources[index].SizeBytes = uint64(len(overpopulatedBundle))
+		}
+	}
+
+	_, err := ProvisionFixtures(context.Background(), lock, fixtureStoreFunc(func(_ context.Context, source string) (io.ReadCloser, error) {
+		return io.NopCloser(bytes.NewReader(contents[source])), nil
+	}), t.TempDir())
+	if !errors.Is(err, ErrArtifactIntegrity) {
+		t.Fatalf("ProvisionFixtures() error = %v, want whole-bundle entry-budget refusal", err)
+	}
+}
+
+func TestFixtureProvisionerRejectsAnUndeclaredProjectBuildMemberBeforeArtifactStaging(t *testing.T) {
+	lock := validFixtureLock()
+	rootFSContent := bytes.Repeat([]byte("r"), 512<<10)
+	lock.Artifacts[3].Digest = digest(rootFSContent)
+	lock.Artifacts[3].SizeBytes = uint64(len(rootFSContent))
+	contents := fixtureContents(lock)
+	rootFSSource := fixtureSource(lock, "rootfs")
+	undeclaredBundle := fixtureRootFSBundleWithRootFSContent(lock, lock.Artifacts[4].Digest, rootFSContent, []byte("fixture-rootfs-inputs"), []byte("fixture-rootfs-sbom"), []fixtureBundleMember{{name: "undeclared.bin", content: bytes.Repeat([]byte("x"), 32<<10)}})
+	contents[rootFSSource.URL] = undeclaredBundle
+	for index := range lock.Sources {
+		if lock.Sources[index].ID == rootFSSource.ID {
+			lock.Sources[index].Digest = digest(undeclaredBundle)
+			lock.Sources[index].SizeBytes = uint64(len(undeclaredBundle))
+		}
+	}
+
+	_, err := ProvisionFixtures(context.Background(), lock, fixtureStoreFunc(func(_ context.Context, source string) (io.ReadCloser, error) {
+		return io.NopCloser(bytes.NewReader(contents[source])), nil
+	}), t.TempDir())
+	if !errors.Is(err, ErrArtifactIntegrity) {
+		t.Fatalf("ProvisionFixtures() error = %v, want undeclared project-member refusal", err)
+	}
+}
+
+func TestFixtureProvisionerRejectsARepeatedDeclaredProjectBuildMemberBeforeArtifactStaging(t *testing.T) {
+	lock := validFixtureLock()
+	contents := fixtureContents(lock)
+	rootFSSource := fixtureSource(lock, "rootfs")
+	repeatedBundle := fixtureRootFSBundleWithUntrackedMembers(lock, lock.Artifacts[4].Digest, []fixtureBundleMember{{name: lock.Artifacts[3].Build.InputsMember, content: []byte("fixture-rootfs-inputs")}})
+	contents[rootFSSource.URL] = repeatedBundle
+	for index := range lock.Sources {
+		if lock.Sources[index].ID == rootFSSource.ID {
+			lock.Sources[index].Digest = digest(repeatedBundle)
+			lock.Sources[index].SizeBytes = uint64(len(repeatedBundle))
+		}
+	}
+
+	_, err := ProvisionFixtures(context.Background(), lock, fixtureStoreFunc(func(_ context.Context, source string) (io.ReadCloser, error) {
+		return io.NopCloser(bytes.NewReader(contents[source])), nil
+	}), t.TempDir())
+	if !errors.Is(err, ErrArtifactIntegrity) {
+		t.Fatalf("ProvisionFixtures() error = %v, want repeated project-member refusal", err)
+	}
+}
+
+func TestProjectBuildBundlePolicyRefusesAProjectArtifactAboveTheIndependentBundleCeiling(t *testing.T) {
+	lock := validFixtureLock()
+	lock.Artifacts[3].SizeBytes = maximumProjectBuildBundleBytes
+
+	if _, err := compileProjectBuildBundlePolicy(lock, "rootfs"); !errors.Is(err, ErrArtifactIntegrity) {
+		t.Fatalf("compileProjectBuildBundlePolicy() error = %v, want independent bundle-ceiling refusal", err)
 	}
 }
 
@@ -449,11 +713,19 @@ func TestValidateKVMPreflightRequiresLinuxAMD64CharacterKVMAndCgroupV2(t *testin
 
 func validFixtureLock() FixtureLock {
 	const revision = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	const rootFSInputsMember = "rootfs-inputs.json"
+	const rootFSSBOMMember = "rootfs-sbom.spdx.json"
+	const guestAgentInputsMember = "guest-agent-inputs.json"
+	const guestAgentSBOMMember = "guest-agent-sbom.spdx.json"
 	firecrackerContent := []byte("fixture-firecracker")
 	jailerContent := []byte("fixture-jailer")
 	kernelContent := []byte("fixture-kernel")
 	rootFSContent := []byte("fixture-rootfs")
 	guestAgentContent := []byte("fixture-guest-agent")
+	rootFSInputs := []byte("fixture-rootfs-inputs")
+	rootFSSBOM := []byte("fixture-rootfs-sbom")
+	guestAgentInputs := []byte("fixture-guest-agent-inputs")
+	guestAgentSBOM := []byte("fixture-guest-agent-sbom")
 	bundleContent := fixtureBundle(map[string][]byte{
 		"release/firecracker": firecrackerContent,
 		"release/jailer":      jailerContent,
@@ -465,20 +737,23 @@ func validFixtureLock() FixtureLock {
 		Sources: []LockedSource{
 			{ID: "firecracker-release", Kind: FixtureSourceReleaseArchive, URL: "https://github.com/firecracker-microvm/firecracker/releases/download/v1.16.1/firecracker-v1.16.1-x86_64.tgz", Reference: "release:v1.16.1", Format: FixtureSourceTarGzip, Digest: digest(bundleContent), SizeBytes: uint64(len(bundleContent)), License: "Apache-2.0"},
 			{ID: "kernel", Kind: FixtureSourceVersionedObject, URL: "https://fixtures.invalid/vmlinux?versionId=kernel-20260805", Reference: "version-id:kernel-20260805", Format: FixtureSourceFile, Digest: digest(kernelContent), SizeBytes: uint64(len(kernelContent)), License: "GPL-2.0-only"},
-			{ID: "rootfs", Kind: FixtureSourceProjectBuild, URL: "https://fixtures.invalid/rootfs-bundle", Reference: "commit:" + revision, Format: FixtureSourceTarGzip, Digest: "", SizeBytes: 0, License: "LicenseRef-agent-runtime-rootfs-sbom"},
-			{ID: "guest-agent", Kind: FixtureSourceProjectBuild, URL: "https://fixtures.invalid/guest-agent", Reference: "commit:" + revision, Format: FixtureSourceFile, Digest: guestAgentDigest, SizeBytes: uint64(len(guestAgentContent)), License: "MIT"},
+			{ID: "rootfs", Kind: FixtureSourceProjectBuild, URL: "https://github.com/0x63616c/agent-runtime/releases/download/commit-" + revision + "/rootfs-bundle.tar.gz", Reference: "commit:" + revision, Format: FixtureSourceTarGzip, Digest: "", SizeBytes: 0, License: "LicenseRef-agent-runtime-rootfs-sbom"},
+			{ID: "guest-agent", Kind: FixtureSourceProjectBuild, URL: "https://github.com/0x63616c/agent-runtime/releases/download/commit-" + revision + "/guest-agent-bundle.tar.gz", Reference: "commit:" + revision, Format: FixtureSourceTarGzip, Digest: "", SizeBytes: 0, License: "MIT"},
 		},
 		Artifacts: []LockedArtifact{
 			{Name: FixtureFirecracker, SourceID: "firecracker-release", Member: "release/firecracker", Digest: digest(firecrackerContent), SizeBytes: uint64(len(firecrackerContent)), License: "Apache-2.0", Platform: FixturePlatform{OS: "linux", Architecture: "amd64"}},
 			{Name: FixtureJailer, SourceID: "firecracker-release", Member: "release/jailer", Digest: digest(jailerContent), SizeBytes: uint64(len(jailerContent)), License: "Apache-2.0", Platform: FixturePlatform{OS: "linux", Architecture: "amd64"}},
 			{Name: FixtureKernel, SourceID: "kernel", Digest: digest(kernelContent), SizeBytes: uint64(len(kernelContent)), License: "GPL-2.0-only", Platform: FixturePlatform{OS: "linux", Architecture: "amd64"}},
-			{Name: FixtureRootFS, SourceID: "rootfs", Member: "rootfs.ext4", Digest: digest(rootFSContent), SizeBytes: uint64(len(rootFSContent)), License: "LicenseRef-agent-runtime-rootfs-sbom", Platform: FixturePlatform{OS: "linux", Architecture: "amd64"}, Build: &BuildProvenance{RecipePath: "tools/firecracker/build-rootfs.sh", SourceRevision: revision, Toolchain: "go1.26.0+e2fsprogs", InputsDigest: digest([]byte("rootfs-inputs")), SBOMDigest: digest([]byte("rootfs-sbom")), GuestAgentDigest: guestAgentDigest, AttestationMember: "rootfs-attestation.json"}},
-			{Name: FixtureGuestAgent, SourceID: "guest-agent", Digest: guestAgentDigest, SizeBytes: uint64(len(guestAgentContent)), License: "MIT", Platform: FixturePlatform{OS: "linux", Architecture: "amd64"}, Build: &BuildProvenance{RecipePath: "tools/firecracker/build-guest-agent.sh", SourceRevision: revision, Toolchain: "go1.26.0", InputsDigest: digest([]byte("guest-agent-inputs")), SBOMDigest: digest([]byte("guest-agent-sbom")), Static: true}},
+			{Name: FixtureRootFS, SourceID: "rootfs", Member: "rootfs.ext4", Digest: digest(rootFSContent), SizeBytes: uint64(len(rootFSContent)), License: "LicenseRef-agent-runtime-rootfs-sbom", Platform: FixturePlatform{OS: "linux", Architecture: "amd64"}, Build: &BuildProvenance{RecipePath: "tools/firecracker/build-rootfs.sh", SourceRevision: revision, Toolchain: "go1.26.0+e2fsprogs", InputsMember: rootFSInputsMember, InputsDigest: digest(rootFSInputs), InputsSizeBytes: uint64(len(rootFSInputs)), SBOMMember: rootFSSBOMMember, SBOMDigest: digest(rootFSSBOM), SBOMSizeBytes: uint64(len(rootFSSBOM)), GuestAgentDigest: guestAgentDigest, AttestationMember: "rootfs-attestation.json"}},
+			{Name: FixtureGuestAgent, SourceID: "guest-agent", Member: "guest-agent", Digest: guestAgentDigest, SizeBytes: uint64(len(guestAgentContent)), License: "MIT", Platform: FixturePlatform{OS: "linux", Architecture: "amd64"}, Build: &BuildProvenance{RecipePath: "tools/firecracker/build-guest-agent.sh", SourceRevision: revision, Toolchain: "go1.26.0", InputsMember: guestAgentInputsMember, InputsDigest: digest(guestAgentInputs), InputsSizeBytes: uint64(len(guestAgentInputs)), SBOMMember: guestAgentSBOMMember, SBOMDigest: digest(guestAgentSBOM), SBOMSizeBytes: uint64(len(guestAgentSBOM)), Static: true}},
 		},
 	}
 	rootFSBundle := fixtureRootFSBundle(lock, guestAgentDigest)
 	lock.Sources[2].Digest = digest(rootFSBundle)
 	lock.Sources[2].SizeBytes = uint64(len(rootFSBundle))
+	guestAgentBundle := fixtureGuestAgentBundle(lock)
+	lock.Sources[3].Digest = digest(guestAgentBundle)
+	lock.Sources[3].SizeBytes = uint64(len(guestAgentBundle))
 	return lock
 }
 
@@ -487,7 +762,7 @@ func fixtureContents(lock FixtureLock) map[string][]byte {
 		fixtureSource(lock, "firecracker-release").URL: fixtureBundle(map[string][]byte{"release/firecracker": []byte("fixture-firecracker"), "release/jailer": []byte("fixture-jailer")}),
 		fixtureSource(lock, "kernel").URL:              []byte("fixture-kernel"),
 		fixtureSource(lock, "rootfs").URL:              fixtureRootFSBundle(lock, lock.Artifacts[4].Digest),
-		fixtureSource(lock, "guest-agent").URL:         []byte("fixture-guest-agent"),
+		fixtureSource(lock, "guest-agent").URL:         fixtureGuestAgentBundle(lock),
 	}
 }
 
@@ -523,6 +798,70 @@ func fixtureBundle(members map[string][]byte) []byte {
 }
 
 func fixtureRootFSBundle(lock FixtureLock, agentDigest sandbox.Digest) []byte {
+	return fixtureRootFSBundleWithBuildProvenance(lock, agentDigest, []byte("fixture-rootfs-inputs"), []byte("fixture-rootfs-sbom"))
+}
+
+func fixtureRootFSBundleWithBuildProvenance(lock FixtureLock, agentDigest sandbox.Digest, inputs, sbom []byte) []byte {
+	return fixtureRootFSBundleWithMembers(lock, agentDigest, inputs, sbom, nil)
+}
+
+type fixtureBundleMember struct {
+	name    string
+	content []byte
+}
+
+func fixtureRootFSBundleWithUntrackedMembers(lock FixtureLock, agentDigest sandbox.Digest, untracked []fixtureBundleMember) []byte {
+	return fixtureRootFSBundleWithMembers(lock, agentDigest, []byte("fixture-rootfs-inputs"), []byte("fixture-rootfs-sbom"), untracked)
+}
+
+func fixtureRootFSBundleWithMembers(lock FixtureLock, agentDigest sandbox.Digest, inputs, sbom []byte, untracked []fixtureBundleMember) []byte {
+	return fixtureRootFSBundleWithRootFSContent(lock, agentDigest, []byte("fixture-rootfs"), inputs, sbom, untracked)
+}
+
+func fixtureRootFSBundleWithRootFSContent(lock FixtureLock, agentDigest sandbox.Digest, rootFSContent, inputs, sbom []byte, untracked []fixtureBundleMember) []byte {
+	rootFS := lock.Artifacts[3]
+	guestAgent := lock.Artifacts[4]
+	attestation, err := json.Marshal(RootFSAttestation{
+		SchemaVersion: "agent-runtime.firecracker.rootfs-attestation/v1",
+		RootFSDigest:  rootFS.Digest,
+		RootFSSize:    rootFS.SizeBytes,
+		InitPath:      "/sbin/init",
+		InitDigest:    agentDigest,
+		InitSize:      guestAgent.SizeBytes,
+		Platform:      guestAgent.Platform,
+		Static:        true,
+	})
+	if err != nil {
+		panic(err)
+	}
+	var buffer bytes.Buffer
+	gzipWriter := gzip.NewWriter(&buffer)
+	tarWriter := tar.NewWriter(gzipWriter)
+	members := []fixtureBundleMember{
+		{"rootfs.ext4", rootFSContent},
+		{"rootfs-attestation.json", attestation},
+		{rootFS.Build.InputsMember, inputs},
+		{rootFS.Build.SBOMMember, sbom},
+	}
+	members = append(members, untracked...)
+	for _, member := range members {
+		if err := tarWriter.WriteHeader(&tar.Header{Name: member.name, Mode: 0o600, Size: int64(len(member.content))}); err != nil {
+			panic(err)
+		}
+		if _, err := tarWriter.Write(member.content); err != nil {
+			panic(err)
+		}
+	}
+	if err := tarWriter.Close(); err != nil {
+		panic(err)
+	}
+	if err := gzipWriter.Close(); err != nil {
+		panic(err)
+	}
+	return buffer.Bytes()
+}
+
+func fixtureRootFSBundleWithoutBuildProvenance(lock FixtureLock, agentDigest sandbox.Digest) []byte {
 	rootFS := lock.Artifacts[3]
 	guestAgent := lock.Artifacts[4]
 	attestation, err := json.Marshal(RootFSAttestation{
@@ -551,6 +890,59 @@ func fixtureRootFSBundle(lock FixtureLock, agentDigest sandbox.Digest) []byte {
 		if _, err := tarWriter.Write(member.content); err != nil {
 			panic(err)
 		}
+	}
+	if err := tarWriter.Close(); err != nil {
+		panic(err)
+	}
+	if err := gzipWriter.Close(); err != nil {
+		panic(err)
+	}
+	return buffer.Bytes()
+}
+
+func fixtureGuestAgentBundle(lock FixtureLock) []byte {
+	return fixtureGuestAgentBundleWithBuildProvenance(lock, []byte("fixture-guest-agent-inputs"), []byte("fixture-guest-agent-sbom"))
+}
+
+func fixtureGuestAgentBundleWithBuildProvenance(lock FixtureLock, inputs, sbom []byte) []byte {
+	guestAgent := lock.Artifacts[4]
+	var buffer bytes.Buffer
+	gzipWriter := gzip.NewWriter(&buffer)
+	tarWriter := tar.NewWriter(gzipWriter)
+	for _, member := range []struct {
+		name    string
+		content []byte
+	}{
+		{guestAgent.Member, []byte("fixture-guest-agent")},
+		{guestAgent.Build.InputsMember, inputs},
+		{guestAgent.Build.SBOMMember, sbom},
+	} {
+		if err := tarWriter.WriteHeader(&tar.Header{Name: member.name, Mode: 0o600, Size: int64(len(member.content))}); err != nil {
+			panic(err)
+		}
+		if _, err := tarWriter.Write(member.content); err != nil {
+			panic(err)
+		}
+	}
+	if err := tarWriter.Close(); err != nil {
+		panic(err)
+	}
+	if err := gzipWriter.Close(); err != nil {
+		panic(err)
+	}
+	return buffer.Bytes()
+}
+
+func fixtureGuestAgentBundleWithoutBuildProvenance(lock FixtureLock) []byte {
+	guestAgent := lock.Artifacts[4]
+	var buffer bytes.Buffer
+	gzipWriter := gzip.NewWriter(&buffer)
+	tarWriter := tar.NewWriter(gzipWriter)
+	if err := tarWriter.WriteHeader(&tar.Header{Name: guestAgent.Member, Mode: 0o600, Size: int64(len("fixture-guest-agent"))}); err != nil {
+		panic(err)
+	}
+	if _, err := tarWriter.Write([]byte("fixture-guest-agent")); err != nil {
+		panic(err)
 	}
 	if err := tarWriter.Close(); err != nil {
 		panic(err)
