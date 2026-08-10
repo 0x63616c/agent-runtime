@@ -29,7 +29,12 @@ if profile == 'ci':
     if k8s_context() != ci_context or not ci_context.startswith(ci_context_prefix):
         fail('CI profile must use its generated private agent-runtime k3d context')
     ci_identity = ci_context[len(ci_context_prefix):]
-    if not ci_identity or not ci_registry_host.startswith('localhost:') or ci_registry_host_from_cluster != 'k3d-ar-reg-' + ci_identity + '.localhost:5000':
+    ci_registry_port = ci_registry_host[len('localhost:'):] if ci_registry_host.startswith('localhost:') else ''
+    if not ci_identity or not ci_registry_port or ci_registry_host_from_cluster != 'k3d-ar-reg-' + ci_identity + '.localhost:' + ci_registry_port:
+        fail('CI infrastructure inputs must use generated agent-runtime k3d identities')
+    for digit in ['0', '1', '2', '3', '4', '5', '6', '7', '8', '9']:
+        ci_registry_port = ci_registry_port.replace(digit, '')
+    if ci_registry_port:
         fail('CI infrastructure inputs must use generated agent-runtime k3d identities')
 ci_readiness_timeout = '12m' if profile == 'ci' else '10m'
 ci_settings(readiness_timeout=ci_readiness_timeout)
