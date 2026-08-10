@@ -53,6 +53,46 @@ func TestLinuxJailerStarterStartsOnlyTheAuthorityBoundJailerAndStage(t *testing.
 	}
 }
 
+func TestLinuxJailerStarterExposesTheBoundedNonDaemonizedSerialOutput(t *testing.T) {
+	plan := mustCompile(t, validProfile())
+	fixtures := verifiedPlanFixtures(plan)
+	stage := validBoundJailedResourceStage(plan, fixtures, "/run/agent-runtime/sandbox-001/rootfs.ext4")
+	command := &serialRecordingOSJailerCommand{
+		recordingOSJailerCommand: &recordingOSJailerCommand{closeOnTerminate: true},
+		output:                   newBoundedJailerOutput(1024),
+	}
+	starter := LinuxJailerStarter{
+		goos:               "linux",
+		kernelCapabilities: func() error { return nil },
+		cgroupPrerequisite: func(JailerExecutionAuthority) error { return nil },
+		trustArtifact:      func(PinnedArtifact) error { return nil },
+		verifyArtifact:     func(context.Context, PinnedArtifact) error { return nil },
+		trustStageRoot:     func(string) error { return nil },
+		command:            func(string, []string, string) jailerCommand { return command },
+		removeNamespace:    func(string) error { return nil },
+		removeCgroup:       func(string) error { return nil },
+	}
+
+	process, err := starter.Start(context.Background(), JailerStartRequest{Authority: mustCompileJailerExecutionAuthority(t, plan), Stage: stage})
+	if err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	serial, ok := process.(JailerSerialObserver)
+	if !ok {
+		t.Fatalf("process = %T, want JailerSerialObserver sourced from Jailer stdout", process)
+	}
+	marker := BootInput{VMID: plan.VMID(), FixtureVersion: fixtures.FixtureVersion()}.serialMarker()
+	if _, err := command.output.Write([]byte(marker + "\n")); err != nil {
+		t.Fatalf("write serial marker: %v", err)
+	}
+	if err := serial.AwaitSerial(context.Background(), marker); err != nil {
+		t.Fatalf("AwaitSerial() error = %v", err)
+	}
+	if err := process.Terminate(context.Background()); err != nil {
+		t.Fatalf("Terminate() error = %v", err)
+	}
+}
+
 func TestLinuxJailerStarterRefusesAnUnboundAuthorityOrStageBeforeHostIO(t *testing.T) {
 	plan := mustCompile(t, validProfile())
 	fixtures := verifiedPlanFixtures(plan)
@@ -256,6 +296,16 @@ type recordingOSJailerCommand struct {
 	closeOnTerminate bool
 	waitClosed       bool
 	onStart          func()
+	output           *boundedJailerOutput
+}
+
+type serialRecordingOSJailerCommand struct {
+	*recordingOSJailerCommand
+	output *boundedJailerOutput
+}
+
+func (command *serialRecordingOSJailerCommand) SerialOutput() *boundedJailerOutput {
+	return command.output
 }
 
 func (command *recordingOSJailerCommand) Start() error {
@@ -285,6 +335,13 @@ func (command *recordingOSJailerCommand) Signal(signal os.Signal) error {
 		close(command.waitDone)
 	}
 	return nil
+}
+
+func (command *recordingOSJailerCommand) SerialOutput() *boundedJailerOutput {
+	if command.output == nil {
+		command.output = newBoundedJailerOutput(maximumJailerOutputSize)
+	}
+	return command.output
 }
 
 func mustCompileJailerExecutionAuthority(t *testing.T, plan Plan) JailerExecutionAuthority {

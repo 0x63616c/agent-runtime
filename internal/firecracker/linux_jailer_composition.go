@@ -16,14 +16,13 @@ type LinuxJailerHostConfig struct {
 	RootFSCopyPath string
 	Authority      JailerExecutionAuthority
 	UnixDialer     unixSocketDialer
-	Guest          GuestChannel
 }
 
-// NewLinuxJailerHost composes only the reviewed resource stager, Jailer starter, fixed private Unix REST port, and guest channel.
+// NewLinuxJailerHost composes only the reviewed resource stager, Jailer starter, fixed private Unix REST port, and starter-owned serial observer; guest control remains deferred.
 // It validates immutable authority before construction but leaves all host I/O to the explicit SmokeHost lifecycle.
 func NewLinuxJailerHost(config LinuxJailerHostConfig) (*LinuxJailerHost, error) {
-	if !validCompiledPlan(config.Plan) || !validJailerExecutionAuthority(config.Authority, config.Plan) || !safeAbsolutePath(config.RootFSCopyPath) || config.Guest == nil {
-		return nil, fmt.Errorf("%w: compiled plan, exact Jailer authority, private rootfs copy, and guest channel are required", ErrSmokeUnavailable)
+	if !validCompiledPlan(config.Plan) || !validJailerExecutionAuthority(config.Authority, config.Plan) || !safeAbsolutePath(config.RootFSCopyPath) {
+		return nil, fmt.Errorf("%w: compiled plan, exact Jailer authority, and private rootfs copy are required", ErrSmokeUnavailable)
 	}
 	if err := config.PreflightState.Validate(); err != nil {
 		return nil, err
@@ -39,7 +38,6 @@ func NewLinuxJailerHost(config LinuxJailerHostConfig) (*LinuxJailerHost, error) 
 		Authority:      cloneJailerExecutionAuthority(config.Authority),
 		Jailer:         LinuxJailerStarter{},
 		HTTP:           http,
-		Guest:          config.Guest,
 		configured:     true,
 		configuredPlan: cloneLinuxJailerPlan(config.Plan),
 	}, nil
