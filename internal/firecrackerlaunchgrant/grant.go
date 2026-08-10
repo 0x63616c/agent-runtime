@@ -31,8 +31,8 @@ const (
 	maximumWireBytes = 16 << 10
 )
 
-// EnvelopeTuple is the non-secret, already-authenticated M3 assignment identity bound to one grant.
-// It intentionally excludes the signed envelope payload, its delivery nonce, and its signature.
+// EnvelopeTuple is the already-authenticated M3 assignment identity bound to one grant.
+// It carries the bounded delivery nonce and validity interval, but excludes the signed envelope payload and signature.
 type EnvelopeTuple struct {
 	EnvelopeID             string         `json:"envelope_id"`
 	DeliveryID             string         `json:"delivery_id"`
