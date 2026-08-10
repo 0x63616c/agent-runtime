@@ -14,6 +14,7 @@ import (
 	"crypto/x509/pkix"
 	"encoding/base64"
 	"encoding/hex"
+	"encoding/json"
 	"encoding/pem"
 	"fmt"
 	"math/big"
@@ -23,6 +24,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -39,7 +41,7 @@ func TestReferenceHostMultiProcessLostAckQuarantineCleanupAndReassignment(t *tes
 	dsn := requiredEnvironment(t, "AR_SANDBOXCONTROL_POSTGRES_DSN")
 	directory := t.TempDir()
 	identities := writeIdentities(t, directory)
-	publicAddress, hostAddress := reserveAddress(t), reserveAddress(t)
+	publicAddress, hostAddress := "127.0.0.1:0", "0.0.0.0:0"
 	controlPublic, controlPrivate, _ := ed25519.GenerateKey(rand.Reader)
 	hostPublic1, hostPrivate1, _ := ed25519.GenerateKey(rand.Reader)
 	controlConfig := writeControlConfig(t, directory, publicAddress, hostAddress, identities)
@@ -48,6 +50,9 @@ func TestReferenceHostMultiProcessLostAckQuarantineCleanupAndReassignment(t *tes
 	controlSigning := base64.RawStdEncoding.EncodeToString(controlPrivate)
 	control := startProcess(t, controlBinary, []string{"--config", controlConfig}, map[string]string{"TEST_DATABASE_DSN": dsn, "TEST_AUTHORIZATION": authorization, "TEST_ASSERTION_KEY": assertionKey, "TEST_CONTROL_SIGNING_KEY": controlSigning})
 	defer control.stop(t, true, authorization, assertionKey, dsn, controlSigning)
+	addresses := control.awaitControlReady(t)
+	publicAddress = addresses.Public
+	hostAddress = loopbackAddress(t, addresses.HostControl)
 	client := connectPublicClient(t, "https://"+publicAddress, identities.caPEM, authorization)
 	defer client.Close(context.Background())
 
@@ -78,6 +83,7 @@ func TestReferenceHostMultiProcessLostAckQuarantineCleanupAndReassignment(t *tes
 	resumeConfig := writeHostConfig(t, directory, "host-resume.json", hostAddress, identities, 1, journalPath, false, false, false)
 	resumed := startProcess(t, hostBinary, hostArguments(resumeConfig), map[string]string{"TEST_CONTROL_PUBLIC_KEY": controlVerify, "TEST_HOST_SIGNING_KEY": hostSigning1})
 	waitForOperationState(t, client, request.ID, sandbox.OperationUncertain)
+	resumed.awaitHostPoll(t)
 	resumed.stop(t, true, controlVerify, hostSigning1)
 	got, err := client.GetOperation(context.Background(), request.ID)
 	if err != nil || got.State != sandbox.OperationUncertain {
@@ -99,6 +105,7 @@ func TestReferenceHostMultiProcessLostAckQuarantineCleanupAndReassignment(t *tes
 	resultResumeConfig := writeHostConfig(t, directory, "host-result-resume.json", hostAddress, identities, 1, resultJournalPath, false, false, false)
 	resultResumed := startProcess(t, hostBinary, hostArguments(resultResumeConfig), map[string]string{"TEST_CONTROL_PUBLIC_KEY": controlVerify, "TEST_HOST_SIGNING_KEY": hostSigning1})
 	waitForOperationState(t, client, resultRetryRequest.ID, sandbox.OperationUncertain)
+	resultResumed.awaitHostPoll(t)
 	resultResumed.stop(t, true, controlVerify, hostSigning1)
 	got, err = client.GetOperation(context.Background(), resultRetryRequest.ID)
 	if err != nil || got.State != sandbox.OperationUncertain {
@@ -140,6 +147,7 @@ func TestReferenceHostMultiProcessLostAckQuarantineCleanupAndReassignment(t *tes
 	reassignedConfig := writeHostConfig(t, directory, "host-reassigned.json", hostAddress, identities, 2, filepath.Join(directory, "reassigned-receipts.json"), false, false, false)
 	reassigned := startProcess(t, hostBinary, hostArguments(reassignedConfig), map[string]string{"TEST_CONTROL_PUBLIC_KEY": controlVerify, "TEST_HOST_SIGNING_KEY": base64.RawStdEncoding.EncodeToString(hostPrivate2)})
 	waitForOperationState(t, client, quarantineRequest.ID, sandbox.OperationUncertain)
+	reassigned.awaitHostPoll(t)
 	reassigned.stop(t, true, controlVerify)
 	got, err = client.GetOperation(context.Background(), quarantineRequest.ID)
 	if err != nil || got.State != sandbox.OperationUncertain {
@@ -232,22 +240,64 @@ func writeHostConfig(t *testing.T, directory, name, address string, identity ide
 
 type process struct {
 	command *exec.Cmd
-	output  *bytes.Buffer
+	stdout  *processOutput
+	stderr  *boundedOutput
+	done    chan struct{}
+	mu      sync.Mutex
+	waitErr error
 }
 
 func startProcess(t *testing.T, binary string, args []string, environment map[string]string) *process {
 	t.Helper()
-	output := new(bytes.Buffer)
+	stdout := newProcessOutput()
+	stderr := newBoundedOutput()
 	command := exec.Command(binary, args...)
 	command.Env = os.Environ()
 	for name, value := range environment {
 		command.Env = append(command.Env, name+"="+value)
 	}
-	command.Stdout, command.Stderr = output, output
+	command.Stdout, command.Stderr = stdout, stderr
 	if err := command.Start(); err != nil {
 		t.Fatal(err)
 	}
-	return &process{command: command, output: output}
+	process := &process{command: command, stdout: stdout, stderr: stderr, done: make(chan struct{})}
+	go func() {
+		process.mu.Lock()
+		process.waitErr = command.Wait()
+		process.mu.Unlock()
+		close(process.done)
+	}()
+	return process
+}
+
+func (process *process) awaitControlReady(t *testing.T) controlReady {
+	t.Helper()
+	return awaitReady(t, process, process.stdout.controlReady, "sandbox-control")
+}
+
+func (process *process) awaitHostPoll(t *testing.T) hostPoll {
+	t.Helper()
+	return awaitReady(t, process, process.stdout.hostPoll, "sandbox-host")
+}
+
+func awaitReady[T any](t *testing.T, process *process, ready <-chan T, role string) T {
+	t.Helper()
+	timeout, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	select {
+	case value := <-ready:
+		return value
+	case <-process.done:
+		t.Fatalf("%s exited before readiness: %v; diagnostics=%s", role, process.wait(), process.diagnostics())
+	case <-timeout.Done():
+		if process.command.ProcessState == nil {
+			_ = process.command.Process.Signal(syscall.SIGTERM)
+		}
+		_ = process.wait()
+		t.Fatalf("%s did not report readiness: diagnostics=%s", role, process.diagnostics())
+	}
+	var zero T
+	return zero
 }
 
 func hostArguments(config string) []string {
@@ -261,18 +311,134 @@ func (process *process) stop(t *testing.T, expectSuccess bool, secrets ...string
 			t.Fatal(err)
 		}
 	}
-	err := process.command.Wait()
+	err := process.wait()
 	if expectSuccess && err != nil {
-		t.Fatalf("process failed: %v output=%s", err, process.output.String())
+		t.Fatalf("process failed: %v diagnostics=%s", err, process.diagnostics(secrets...))
 	}
 	if !expectSuccess && err == nil {
-		t.Fatalf("process unexpectedly succeeded: output=%s", process.output.String())
+		t.Fatalf("process unexpectedly succeeded: diagnostics=%s", process.diagnostics(secrets...))
 	}
 	for _, secret := range secrets {
-		if strings.Contains(process.output.String(), secret) {
-			t.Fatalf("process disclosed secret: %s", process.output.String())
+		if strings.Contains(process.stdout.String(), secret) || strings.Contains(process.stderr.String(), secret) {
+			t.Fatalf("process disclosed secret: %s", process.diagnostics(secrets...))
 		}
 	}
+}
+
+func (process *process) wait() error {
+	<-process.done
+	process.mu.Lock()
+	defer process.mu.Unlock()
+	return process.waitErr
+}
+
+func (process *process) diagnostics(secrets ...string) string {
+	return redactDiagnostics(process.stdout.String()+process.stderr.String(), secrets...)
+}
+
+type controlReady struct {
+	Public      string `json:"public_address"`
+	HostControl string `json:"host_control_address"`
+}
+
+type hostPoll struct {
+	Ready bool `json:"ready"`
+}
+
+type processOutput struct {
+	mu           sync.Mutex
+	data         []byte
+	pending      []byte
+	controlReady chan controlReady
+	hostPoll     chan hostPoll
+}
+
+func newProcessOutput() *processOutput {
+	return &processOutput{controlReady: make(chan controlReady, 1), hostPoll: make(chan hostPoll, 1)}
+}
+
+func (output *processOutput) Write(input []byte) (int, error) {
+	output.mu.Lock()
+	defer output.mu.Unlock()
+	output.data = appendBounded(output.data, input)
+	output.pending = appendBounded(output.pending, input)
+	for {
+		index := bytes.IndexByte(output.pending, '\n')
+		if index < 0 {
+			break
+		}
+		line := output.pending[:index]
+		output.pending = output.pending[index+1:]
+		var record struct {
+			Message string `json:"msg"`
+			Role    string `json:"role"`
+			controlReady
+			hostPoll
+		}
+		if json.Unmarshal(line, &record) != nil {
+			continue
+		}
+		switch {
+		case record.Message == "sandbox control ready" && record.Role == "sandbox-control" && record.Public != "":
+			select {
+			case output.controlReady <- record.controlReady:
+			default:
+			}
+		case record.Message == "sandbox host poll":
+			select {
+			case output.hostPoll <- record.hostPoll:
+			default:
+			}
+		}
+	}
+	return len(input), nil
+}
+
+func (output *processOutput) String() string {
+	output.mu.Lock()
+	defer output.mu.Unlock()
+	return string(output.data)
+}
+
+type boundedOutput struct {
+	mu   sync.Mutex
+	data []byte
+}
+
+func newBoundedOutput() *boundedOutput { return &boundedOutput{} }
+
+func (output *boundedOutput) Write(input []byte) (int, error) {
+	output.mu.Lock()
+	defer output.mu.Unlock()
+	output.data = appendBounded(output.data, input)
+	return len(input), nil
+}
+
+func (output *boundedOutput) String() string {
+	output.mu.Lock()
+	defer output.mu.Unlock()
+	return string(output.data)
+}
+
+const maximumDiagnosticsBytes = 4 << 10
+
+func appendBounded(current, input []byte) []byte {
+	if len(input) >= maximumDiagnosticsBytes {
+		return append(current[:0], input[len(input)-maximumDiagnosticsBytes:]...)
+	}
+	if len(current)+len(input) > maximumDiagnosticsBytes {
+		current = append(current[:0], current[len(current)+len(input)-maximumDiagnosticsBytes:]...)
+	}
+	return append(current, input...)
+}
+
+func redactDiagnostics(value string, secrets ...string) string {
+	for _, secret := range secrets {
+		if secret != "" {
+			value = strings.ReplaceAll(value, secret, "[redacted]")
+		}
+	}
+	return value
 }
 
 func waitForOperationState(t *testing.T, client sandbox.Client, id sandbox.OperationID, want sandbox.OperationState) {
@@ -330,15 +496,14 @@ func openLedger(t *testing.T, dsn string) (*sandboxcontrol.PostgresLedger, *pgxp
 	return ledger, pool
 }
 
-func reserveAddress(t *testing.T) string {
+func loopbackAddress(t *testing.T, address string) string {
 	t.Helper()
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
+	host, port, err := net.SplitHostPort(address)
+	if err != nil || port == "" {
+		t.Fatalf("parse bound host control address %q: %v", address, err)
 	}
-	address := listener.Addr().String()
-	if err := listener.Close(); err != nil {
-		t.Fatal(err)
+	if host == "0.0.0.0" || host == "::" {
+		return net.JoinHostPort("127.0.0.1", port)
 	}
 	return address
 }

@@ -10,6 +10,7 @@ import (
 	"crypto/rand"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/json"
 	"encoding/pem"
 	"fmt"
 	"math/big"
@@ -18,6 +19,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -30,7 +32,7 @@ func TestSandboxControlSeparateProcessReconnectsAcrossRestart(t *testing.T) {
 	dsn := requiredEnvironment(t, "AR_SANDBOXCONTROL_POSTGRES_DSN")
 	directory := t.TempDir()
 	certificatePath, keyPath, roots := writeTestIdentity(t, directory)
-	address := reserveAddress(t)
+	address := "127.0.0.1:0"
 	configPath := filepath.Join(directory, "control.json")
 	config := fmt.Sprintf(`{
   "version":1,"listen_address":%q,
@@ -52,6 +54,7 @@ func TestSandboxControlSeparateProcessReconnectsAcrossRestart(t *testing.T) {
 	const authorization = "integration-authorization-secret"
 	const assertionKey = "4242424242424242424242424242424242424242424242424242424242424242"
 	first := startControlProcess(t, binary, configPath, dsn, authorization, assertionKey)
+	address = first.awaitReady(t).Public
 	client := connectClient(t, "https://"+address, roots, authorization)
 	request := sandbox.OperationRequest{ID: "op_process_restart", Kind: sandbox.OperationCloseSandbox, CloseSandbox: &sandbox.CloseSandboxRequest{SandboxID: "sbx_process_restart"}}
 	ref, err := client.Submit(context.Background(), request)
@@ -65,6 +68,7 @@ func TestSandboxControlSeparateProcessReconnectsAcrossRestart(t *testing.T) {
 
 	second := startControlProcess(t, binary, configPath, dsn, authorization, assertionKey)
 	defer second.stop(t, authorization, assertionKey, dsn)
+	address = second.awaitReady(t).Public
 	reconnected := connectClient(t, "https://"+address, roots, authorization)
 	defer reconnected.Close(context.Background())
 	got, err := reconnected.GetOperation(context.Background(), request.ID)
@@ -79,19 +83,74 @@ func TestSandboxControlSeparateProcessReconnectsAcrossRestart(t *testing.T) {
 
 type controlProcess struct {
 	command *exec.Cmd
-	output  *bytes.Buffer
+	stdout  *controlOutput
+	stderr  *boundedOutput
+	done    chan struct{}
+	mu      sync.Mutex
+	waitErr error
 }
 
 func startControlProcess(t *testing.T, binary, configPath, dsn, authorization, assertionKey string) *controlProcess {
 	t.Helper()
-	output := new(bytes.Buffer)
-	command := exec.Command(binary, "--config", configPath)
-	command.Env = append(os.Environ(), "TEST_DATABASE_DSN="+dsn, "TEST_AUTHORIZATION="+authorization, "TEST_ASSERTION_KEY="+assertionKey)
-	command.Stdout, command.Stderr = output, output
+	return startCommand(t, binary, []string{"--config", configPath}, map[string]string{"TEST_DATABASE_DSN": dsn, "TEST_AUTHORIZATION": authorization, "TEST_ASSERTION_KEY": assertionKey})
+}
+
+func startCommand(t *testing.T, binary string, arguments []string, environment map[string]string) *controlProcess {
+	t.Helper()
+	stdout := newControlOutput()
+	stderr := newBoundedOutput()
+	command := exec.Command(binary, arguments...)
+	command.Env = os.Environ()
+	for name, value := range environment {
+		command.Env = append(command.Env, name+"="+value)
+	}
+	command.Stdout, command.Stderr = stdout, stderr
 	if err := command.Start(); err != nil {
 		t.Fatal(err)
 	}
-	return &controlProcess{command: command, output: output}
+	process := &controlProcess{command: command, stdout: stdout, stderr: stderr, done: make(chan struct{})}
+	go func() {
+		process.mu.Lock()
+		process.waitErr = command.Wait()
+		process.mu.Unlock()
+		close(process.done)
+	}()
+	return process
+}
+
+func TestControlProcessHarnessRedactsEarlyExitDiagnostics(t *testing.T) {
+	if os.Getenv("CONTROL_PROCESS_EARLY_EXIT_HELPER") == "1" {
+		_, _ = fmt.Fprintln(os.Stderr, os.Getenv("CONTROL_PROCESS_EARLY_EXIT_SECRET"))
+		os.Exit(7)
+	}
+	const secret = "control-process-secret"
+	process := startCommand(t, os.Args[0], []string{"-test.run=^TestControlProcessHarnessRedactsEarlyExitDiagnostics$"}, map[string]string{"CONTROL_PROCESS_EARLY_EXIT_HELPER": "1", "CONTROL_PROCESS_EARLY_EXIT_SECRET": secret})
+	if err := process.wait(); err == nil {
+		t.Fatal("early-exit process error = nil")
+	}
+	diagnostics := process.diagnostics(secret)
+	if strings.Contains(diagnostics, secret) || !strings.Contains(diagnostics, "[redacted]") {
+		t.Fatalf("early-exit diagnostics = %q", diagnostics)
+	}
+}
+
+func (process *controlProcess) awaitReady(t *testing.T) controlReady {
+	t.Helper()
+	timeout, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	select {
+	case ready := <-process.stdout.ready:
+		return ready
+	case <-process.done:
+		t.Fatalf("sandbox-control exited before readiness: %v; diagnostics=%s", process.wait(), process.diagnostics())
+	case <-timeout.Done():
+		if process.command.ProcessState == nil {
+			_ = process.command.Process.Signal(syscall.SIGTERM)
+		}
+		_ = process.wait()
+		t.Fatalf("sandbox-control did not report readiness: diagnostics=%s", process.diagnostics())
+	}
+	return controlReady{}
 }
 
 func (process *controlProcess) stop(t *testing.T, secrets ...string) {
@@ -100,15 +159,114 @@ func (process *controlProcess) stop(t *testing.T, secrets ...string) {
 		if err := process.command.Process.Signal(syscall.SIGTERM); err != nil {
 			t.Fatalf("signal sandbox-control: %v", err)
 		}
-		if err := process.command.Wait(); err != nil {
-			t.Fatalf("wait sandbox-control: %v; output=%s", err, process.output.String())
-		}
+	}
+	if err := process.wait(); err != nil {
+		t.Fatalf("wait sandbox-control: %v; diagnostics=%s", err, process.diagnostics(secrets...))
 	}
 	for _, secret := range secrets {
-		if strings.Contains(process.output.String(), secret) {
-			t.Fatalf("sandbox-control output disclosed a secret: %q", process.output.String())
+		if strings.Contains(process.stdout.String(), secret) || strings.Contains(process.stderr.String(), secret) {
+			t.Fatalf("sandbox-control output disclosed a secret: %s", process.diagnostics(secrets...))
 		}
 	}
+}
+
+func (process *controlProcess) wait() error {
+	<-process.done
+	process.mu.Lock()
+	defer process.mu.Unlock()
+	return process.waitErr
+}
+
+func (process *controlProcess) diagnostics(secrets ...string) string {
+	return redactDiagnostics(process.stdout.String()+process.stderr.String(), secrets...)
+}
+
+type controlReady struct {
+	Public      string `json:"public_address"`
+	HostControl string `json:"host_control_address"`
+}
+
+type controlOutput struct {
+	mu      sync.Mutex
+	data    []byte
+	pending []byte
+	ready   chan controlReady
+}
+
+func newControlOutput() *controlOutput { return &controlOutput{ready: make(chan controlReady, 1)} }
+
+func (output *controlOutput) Write(input []byte) (int, error) {
+	output.mu.Lock()
+	defer output.mu.Unlock()
+	output.data = appendBounded(output.data, input)
+	output.pending = appendBounded(output.pending, input)
+	for {
+		index := bytes.IndexByte(output.pending, '\n')
+		if index < 0 {
+			break
+		}
+		line := output.pending[:index]
+		output.pending = output.pending[index+1:]
+		var record struct {
+			Message string `json:"msg"`
+			Role    string `json:"role"`
+			controlReady
+		}
+		if json.Unmarshal(line, &record) == nil && record.Message == "sandbox control ready" && record.Role == "sandbox-control" && record.Public != "" {
+			select {
+			case output.ready <- record.controlReady:
+			default:
+			}
+		}
+	}
+	return len(input), nil
+}
+
+func (output *controlOutput) String() string {
+	output.mu.Lock()
+	defer output.mu.Unlock()
+	return string(output.data)
+}
+
+type boundedOutput struct {
+	mu   sync.Mutex
+	data []byte
+}
+
+func newBoundedOutput() *boundedOutput { return &boundedOutput{} }
+
+func (output *boundedOutput) Write(input []byte) (int, error) {
+	output.mu.Lock()
+	defer output.mu.Unlock()
+	output.data = appendBounded(output.data, input)
+	return len(input), nil
+}
+
+func (output *boundedOutput) String() string {
+	output.mu.Lock()
+	defer output.mu.Unlock()
+	return string(output.data)
+}
+
+const maximumDiagnosticsBytes = 4 << 10
+
+func appendBounded(current, input []byte) []byte {
+	if len(input) >= maximumDiagnosticsBytes {
+		return append(current[:0], input[len(input)-maximumDiagnosticsBytes:]...)
+	}
+	if len(current)+len(input) > maximumDiagnosticsBytes {
+		current = append(current[:0], current[len(current)+len(input)-maximumDiagnosticsBytes:]...)
+	}
+	return append(current, input...)
+}
+
+func redactDiagnostics(value string, secrets ...string) string {
+	for _, secret := range secrets {
+		if secret != "" {
+			value = strings.ReplaceAll(value, secret, "[redacted]")
+		}
+	}
+	return value
 }
 
 func connectClient(t *testing.T, endpoint string, roots []byte, authorization string) sandbox.Client {
@@ -136,19 +294,6 @@ type integrationCredentials string
 
 func (credential integrationCredentials) Apply(_ context.Context, sink sandbox.CredentialSink) error {
 	return sink.SetAuthorization("Bearer", string(credential))
-}
-
-func reserveAddress(t *testing.T) string {
-	t.Helper()
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	address := listener.Addr().String()
-	if err := listener.Close(); err != nil {
-		t.Fatal(err)
-	}
-	return address
 }
 
 func writeTestIdentity(t *testing.T, directory string) (string, string, []byte) {

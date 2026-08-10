@@ -29,8 +29,14 @@ type SecretLookup func(string) (string, bool)
 // Run starts the TLS sandbox-control process and blocks until cancellation or
 // a server failure. It never creates or migrates infrastructure.
 func Run(ctx context.Context, config Config, lookup SecretLookup) error {
-	if ctx == nil || lookup == nil {
-		return errors.New("run sandbox-control process: context and secret lookup are required")
+	return RunWithReady(ctx, config, lookup, func(BoundAddresses) {})
+}
+
+// RunWithReady starts the TLS sandbox-control process and reports bound local
+// listener addresses after every declared listener is held and serving.
+func RunWithReady(ctx context.Context, config Config, lookup SecretLookup, onReady func(BoundAddresses)) error {
+	if ctx == nil || lookup == nil || onReady == nil {
+		return errors.New("run sandbox-control process: context, secret lookup and readiness observer are required")
 	}
 	dsn, err := requiredSecret(lookup, config.databaseDSNEnvironment)
 	if err != nil {
@@ -76,29 +82,35 @@ func Run(ctx context.Context, config Config, lookup SecretLookup) error {
 	if err != nil {
 		return errors.Wrap(err, "run sandbox-control process: load TLS identity")
 	}
-	listener, err := net.Listen("tcp", config.listenAddress)
-	if err != nil {
-		return errors.Wrap(err, "run sandbox-control process: listen")
-	}
-	defer func() { _ = listener.Close() }()
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", ready)
 	mux.HandleFunc("GET /readyz", ready)
 	mux.Handle("/", handler)
-	servers := []runningServer{{server: boundedHTTPServer(mux, &tls.Config{MinVersion: tls.VersionTLS13, Certificates: []tls.Certificate{certificate}}), listener: listener}}
+	publicServer := boundedHTTPServer(mux, &tls.Config{MinVersion: tls.VersionTLS13, Certificates: []tls.Certificate{certificate}})
+	var hostServer *http.Server
 	if config.hostControl != nil {
-		host, err := newHostControlServer(config.hostControl, lookup, store)
+		hostServer, err = newHostControlServer(config.hostControl, lookup, store)
 		if err != nil {
 			return err
 		}
-		defer func() { _ = host.listener.Close() }()
-		servers = append(servers, host)
+	}
+	var bound BoundAddresses
+	listeners, err := bindListeners(config.listenAddress, config.hostControl, net.Listen, func(addresses BoundAddresses) { bound = addresses })
+	if err != nil {
+		return err
+	}
+	defer func() { _ = listeners.public.Close() }()
+	servers := []runningServer{{server: publicServer, listener: listeners.public}}
+	if hostServer != nil {
+		defer func() { _ = listeners.host.Close() }()
+		servers = append(servers, runningServer{server: hostServer, listener: listeners.host})
 	}
 	serverResult := make(chan error, len(servers))
 	for _, running := range servers {
 		running := running
 		go func() { serverResult <- running.server.ServeTLS(running.listener, "", "") }()
 	}
+	onReady(bound)
 	select {
 	case err := <-serverResult:
 		if err == nil || errors.Is(err, http.ErrServerClosed) {
@@ -128,39 +140,74 @@ type runningServer struct {
 	listener net.Listener
 }
 
-func newHostControlServer(config *hostControlConfig, lookup SecretLookup, store sandboxcontrol.HostControlStore) (runningServer, error) {
+// BoundAddresses identifies the local control listeners that were successfully bound.
+// It contains no configuration, credential, request, or backend identity material.
+type BoundAddresses struct {
+	Public      string
+	HostControl string
+}
+
+type boundListeners struct {
+	public net.Listener
+	host   net.Listener
+}
+
+func bindListeners(publicAddress string, hostControl *hostControlConfig, listen func(string, string) (net.Listener, error), ready func(BoundAddresses)) (boundListeners, error) {
+	if publicAddress == "" || listen == nil || ready == nil {
+		return boundListeners{}, errors.New("bind sandbox-control listeners: explicit addresses, listener and readiness observer are required")
+	}
+	public, err := listen("tcp", publicAddress)
+	if err != nil {
+		return boundListeners{}, errors.Wrap(err, "bind sandbox-control public listener")
+	}
+	listeners := boundListeners{public: public}
+	if hostControl != nil {
+		host, err := listen("tcp", hostControl.listenAddress)
+		if err != nil {
+			_ = public.Close()
+			return boundListeners{}, errors.Wrap(err, "bind sandbox-control host listener")
+		}
+		listeners.host = host
+	}
+	ready(BoundAddresses{Public: public.Addr().String(), HostControl: listenerAddress(listeners.host)})
+	return listeners, nil
+}
+
+func listenerAddress(listener net.Listener) string {
+	if listener == nil {
+		return ""
+	}
+	return listener.Addr().String()
+}
+
+func newHostControlServer(config *hostControlConfig, lookup SecretLookup, store sandboxcontrol.HostControlStore) (*http.Server, error) {
 	encodedKey, err := requiredSecret(lookup, config.controlSigningKeyEnvironment)
 	if err != nil {
-		return runningServer{}, err
+		return nil, err
 	}
 	privateKey, err := base64.RawStdEncoding.DecodeString(encodedKey)
 	if err != nil || len(privateKey) != ed25519.PrivateKeySize {
-		return runningServer{}, errors.New("run sandbox-control process: host-control signing key is invalid")
+		return nil, errors.New("run sandbox-control process: host-control signing key is invalid")
 	}
 	certificate, err := tls.LoadX509KeyPair(config.tlsCertificateFile, config.tlsPrivateKeyFile)
 	if err != nil {
-		return runningServer{}, errors.Wrap(err, "run sandbox-control process: load host-control TLS identity")
+		return nil, errors.Wrap(err, "run sandbox-control process: load host-control TLS identity")
 	}
 	clientPEM, err := os.ReadFile(config.clientCAFile)
 	if err != nil || len(clientPEM) == 0 || len(clientPEM) > 1<<20 {
-		return runningServer{}, errors.New("run sandbox-control process: host client CA is unavailable")
+		return nil, errors.New("run sandbox-control process: host client CA is unavailable")
 	}
 	clientCAs := x509.NewCertPool()
 	if !clientCAs.AppendCertsFromPEM(clientPEM) {
-		return runningServer{}, errors.New("run sandbox-control process: host client CA is invalid")
+		return nil, errors.New("run sandbox-control process: host client CA is invalid")
 	}
 	publicKey := ed25519.PrivateKey(privateKey).Public().(ed25519.PublicKey)
 	trust := sandboxhostprotocol.TrustBundle{Version: config.trustVersion, RevocationEpoch: config.revocationEpoch, Current: sandboxhostprotocol.SigningKey{ID: config.controlKeyID, Version: config.keyVersion, PublicKey: publicKey, NotBefore: config.keyNotBefore, NotAfter: config.keyNotAfter}}
 	handler, err := sandboxhostapi.NewHandler(sandboxhostapi.Config{Store: store, ControlTrust: trust, ControlSigningKey: ed25519.PrivateKey(privateKey), Entropy: rand.Reader, Clock: systemClock{}, LeaseDuration: config.lease})
 	if err != nil {
-		return runningServer{}, err
+		return nil, err
 	}
-	listener, err := net.Listen("tcp", config.listenAddress)
-	if err != nil {
-		return runningServer{}, errors.Wrap(err, "run sandbox-control process: listen for enrolled hosts")
-	}
-	server := boundedHTTPServer(handler, &tls.Config{MinVersion: tls.VersionTLS13, Certificates: []tls.Certificate{certificate}, ClientAuth: tls.RequireAndVerifyClientCert, ClientCAs: clientCAs})
-	return runningServer{server: server, listener: listener}, nil
+	return boundedHTTPServer(handler, &tls.Config{MinVersion: tls.VersionTLS13, Certificates: []tls.Certificate{certificate}, ClientAuth: tls.RequireAndVerifyClientCert, ClientCAs: clientCAs}), nil
 }
 
 func boundedHTTPServer(handler http.Handler, tlsConfig *tls.Config) *http.Server {
