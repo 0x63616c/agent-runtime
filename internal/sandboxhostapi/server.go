@@ -143,12 +143,17 @@ func (server *server) bootProbeStarted(writer http.ResponseWriter, request *http
 		writeDenied(writer)
 		return
 	}
+	now := server.config.Clock.Now().UTC()
 	snapshot, err := server.config.BootProbeStore.LoadBootProbeSession(request.Context(), body.HostInstanceSessionID)
-	if err != nil || snapshot.Version != body.Version {
+	if err != nil {
 		writeDenied(writer)
 		return
 	}
-	snapshot, err = server.config.BootProbeStore.RecordBootProbeLaunchStarted(request.Context(), identity, snapshot, server.config.Clock.Now().UTC())
+	if snapshot.Version != body.Version {
+		snapshot, err = server.config.BootProbeStore.RecoverBootProbeLaunchStarted(request.Context(), identity, body.HostInstanceSessionID, body.Version, now)
+	} else {
+		snapshot, err = server.config.BootProbeStore.RecordBootProbeLaunchStarted(request.Context(), identity, snapshot, now)
+	}
 	if err != nil {
 		writeStoreError(writer, err)
 		return

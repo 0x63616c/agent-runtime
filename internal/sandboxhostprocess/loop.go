@@ -51,6 +51,11 @@ func Run(ctx context.Context, config Config, lookup SecretLookup, source clock.C
 	if ctx == nil || lookup == nil || source == nil || wait == nil || observe == nil || interval <= 0 || interval > maximumPollInterval {
 		return errors.New("run sandbox reference host: explicit finite context, dependencies and poll interval are required")
 	}
+	if config.bootProbe != nil {
+		err := RunOnce(ctx, config, lookup, source)
+		observe(Summary{ObservedAt: source.Now().UTC(), Outcome: outcomeFor(err), Ready: err == nil})
+		return err
+	}
 	return loop(ctx, source, interval, wait, func(ctx context.Context) error {
 		return RunOnce(ctx, config, lookup, source)
 	}, observe)
@@ -64,9 +69,24 @@ func RunWithExecutor(ctx context.Context, config Config, lookup SecretLookup, so
 	if ctx == nil || lookup == nil || source == nil || wait == nil || observe == nil || interval <= 0 || interval > maximumPollInterval {
 		return errors.New("run sandbox reference host: explicit finite context, dependencies and poll interval are required")
 	}
+	if config.bootProbe != nil {
+		err := RunOnceWithExecutor(ctx, config, lookup, source, executor)
+		observe(Summary{ObservedAt: source.Now().UTC(), Outcome: outcomeFor(err), Ready: err == nil})
+		return err
+	}
 	return loop(ctx, source, interval, wait, func(ctx context.Context) error {
 		return RunOnceWithExecutor(ctx, config, lookup, source, executor)
 	}, observe)
+}
+
+func outcomeFor(err error) Outcome {
+	if errors.Is(err, ErrNoWork) {
+		return OutcomeNoWork
+	}
+	if errors.Is(err, ErrRetryable) {
+		return OutcomeRetrying
+	}
+	return OutcomeSucceeded
 }
 
 func loop(ctx context.Context, source clock.Clock, interval time.Duration, wait Wait, poll func(context.Context) error, observe Observer) error {

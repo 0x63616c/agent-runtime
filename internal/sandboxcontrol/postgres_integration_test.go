@@ -54,6 +54,18 @@ func TestPostgresBootProbeV2RefusesRevokedAndStaleLeaseSessions(t *testing.T) {
 	if _, _, err := ledger.CreateBootProbeSession(ctx, identity, op.Principal, op.ID, "host-instance-competing", initial, now); err == nil {
 		t.Fatal("CreateBootProbeSession accepted two host-instance sessions for one assignment/fence")
 	}
+	authorized, err := ledger.AuthorizeBootProbeLaunch(ctx, identity, created, now.Add(time.Second))
+	if err != nil || authorized.Session.Lifecycle.Phase != firecrackerbootprobev2.LifecycleLaunchAuthorized {
+		t.Fatalf("AuthorizeBootProbeLaunch() = %#v, %v", authorized, err)
+	}
+	started, err := ledger.RecordBootProbeLaunchStarted(ctx, identity, authorized, now.Add(2*time.Second))
+	if err != nil || started.Session.Lifecycle.Phase != firecrackerbootprobev2.LifecycleLaunchStarted {
+		t.Fatalf("RecordBootProbeLaunchStarted() = %#v, %v", started, err)
+	}
+	recovered, err := ledger.RecoverBootProbeLaunchStarted(ctx, identity, created.Session.Delivery.HostInstanceSessionID, authorized.Version, now.Add(3*time.Second))
+	if err != nil || recovered.Version != started.Version || string(recovered.Wire) != string(started.Wire) {
+		t.Fatalf("RecoverBootProbeLaunchStarted(lost ACK) = %#v, %v; want %#v", recovered, err, started)
+	}
 	successor := created.Session.Delivery.Current
 	successor.EnvelopeID = "fc-envelope-02"
 	successor.DeliveryID = "fc-delivery-02"
@@ -80,6 +92,38 @@ func TestPostgresBootProbeV2RefusesRevokedAndStaleLeaseSessions(t *testing.T) {
 	}
 	if _, err := ledger.RecordBootProbeLaunchStarted(ctx, identity, created, now.Add(2*time.Second)); err == nil {
 		t.Fatal("RecordBootProbeLaunchStarted accepted revoked stale session")
+	}
+
+	quarantineHost := host
+	quarantineHost.HostID, quarantineHost.CertificateDigest = "host_v2_quarantine", digest("6")
+	if err := ledger.ProvisionHost(ctx, quarantineHost, AttestationInput{Profile: AttestationProfileLocalMetadata}, nil); err != nil {
+		t.Fatal(err)
+	}
+	quarantineOperation := op
+	quarantineOperation.Principal, quarantineOperation.ID, quarantineOperation.TargetID = "tenant_v2:quarantine", "op_v2_quarantine", "sbx_v2_quarantine"
+	if _, _, err := ledger.Accept(ctx, quarantineOperation); err != nil {
+		t.Fatal(err)
+	}
+	quarantineIdentity := HostIdentity{HostID: quarantineHost.HostID, Generation: quarantineHost.Generation, CertificateDigest: quarantineHost.CertificateDigest}
+	quarantineInitial := initial
+	quarantineInitial.EnvelopeID, quarantineInitial.DeliveryID, quarantineInitial.Nonce = "fc-envelope-quarantine", "fc-delivery-quarantine", "MDEyMzQ1Njc4OWFiY2RlZg"
+	quarantineCreated, _, err := ledger.CreateBootProbeSession(ctx, quarantineIdentity, quarantineOperation.Principal, quarantineOperation.ID, "host-instance-quarantine", quarantineInitial, now)
+	if err != nil || quarantineCreated.Version != 1 {
+		t.Fatalf("CreateBootProbeSession(quarantine) = %#v, %v", quarantineCreated, err)
+	}
+	if _, err := ledger.QuarantineHost(ctx, quarantineIdentity, "invalid-v2-binding", now.Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	firstQuarantine, err := ledger.LoadBootProbeSession(ctx, "host-instance-quarantine")
+	if err != nil || firstQuarantine.Session.Lifecycle.Phase != firecrackerbootprobev2.LifecycleCleanupPending {
+		t.Fatalf("first v2 quarantine = %#v, %v", firstQuarantine, err)
+	}
+	if _, err := ledger.QuarantineHost(ctx, quarantineIdentity, "repeat-invalid-v2-binding", now.Add(2*time.Second)); err != nil {
+		t.Fatalf("repeat QuarantineHost() = %v", err)
+	}
+	secondQuarantine, err := ledger.LoadBootProbeSession(ctx, "host-instance-quarantine")
+	if err != nil || secondQuarantine.Version != firstQuarantine.Version || string(secondQuarantine.Wire) != string(firstQuarantine.Wire) {
+		t.Fatalf("repeat v2 quarantine rolled back or changed cleanup = %#v, %v; want %#v", secondQuarantine, err, firstQuarantine)
 	}
 }
 

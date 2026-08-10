@@ -31,6 +31,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/0x63616c/agent-runtime/internal/firecrackerbootprobev2"
 	"github.com/0x63616c/agent-runtime/internal/sandboxcontrol"
 	"github.com/0x63616c/agent-runtime/internal/sandboxhostprotocol"
 	"github.com/0x63616c/agent-runtime/sandbox"
@@ -157,6 +158,118 @@ func TestReferenceHostMultiProcessLostAckQuarantineCleanupAndReassignment(t *tes
 	}
 }
 
+// TestFirecrackerBootProbeV2MultiProcessRoute proves the private v2 route is
+// composed by the actual control and host binaries.  It never seeds or calls
+// the v1 pull/receipt path: the host's boot_probe stanza creates the v2
+// assignment, fsyncs its journal intent, and records launch-started through
+// the mTLS control listener.
+func TestFirecrackerBootProbeV2MultiProcessRoute(t *testing.T) {
+	controlBinary := requiredEnvironment(t, "AR_SANDBOXCONTROL_BINARY")
+	hostBinary := requiredEnvironment(t, "AR_SANDBOXHOST_BINARY")
+	dsn := requiredEnvironment(t, "AR_SANDBOXCONTROL_POSTGRES_DSN")
+	directory := t.TempDir()
+	identities := writeIdentities(t, directory)
+	controlPublic, controlPrivate, _ := ed25519.GenerateKey(rand.Reader)
+	hostPublic1, hostPrivate1, _ := ed25519.GenerateKey(rand.Reader)
+	const authorization = "boot-probe-integration-authorization"
+	const assertionKey = "5454545454545454545454545454545454545454545454545454545454545454"
+	controlSigning := base64.RawStdEncoding.EncodeToString(controlPrivate)
+	controlConfig := writeControlConfig(t, directory, "127.0.0.1:0", "0.0.0.0:0", identities)
+	control := startProcess(t, controlBinary, []string{"--config", controlConfig}, map[string]string{"TEST_DATABASE_DSN": dsn, "TEST_AUTHORIZATION": authorization, "TEST_ASSERTION_KEY": assertionKey, "TEST_CONTROL_SIGNING_KEY": controlSigning})
+	defer control.stop(t, true, authorization, assertionKey, dsn, controlSigning)
+	addresses := control.awaitControlReady(t)
+	hostAddress := loopbackAddress(t, addresses.HostControl)
+	ledger, pool := openLedger(t, dsn)
+	defer pool.Close()
+	ctx := context.Background()
+	if _, err := pool.Exec(ctx, `TRUNCATE runtime.firecracker_boot_probe_sessions, runtime.sandbox_host_outputs, runtime.sandbox_host_dispatches, runtime.sandbox_host_enrollments, runtime.sandbox_operation_outbox, runtime.sandbox_operations RESTART IDENTITY`); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	host1 := sandboxcontrol.HostEnrollment{HostID: "host_01", Tenant: "tenant_01", Pool: "reference", Generation: 1, ProtocolVersion: sandboxhostprotocol.Version, CertificateDigest: certificateDigest(identities.host1Certificate), SigningPublicKey: hostPublic1, CapabilityDigest: v2Digest('a'), Status: sandboxcontrol.HostActive, ExpiresAt: now.Add(time.Hour)}
+	if err := ledger.ProvisionHost(ctx, host1, sandboxcontrol.AttestationInput{Profile: sandboxcontrol.AttestationProfileLocalMetadata}, nil); err != nil {
+		t.Fatal(err)
+	}
+	op := sandboxcontrol.Operation{Principal: "tenant_01:runtime_01", Tenant: host1.Tenant, ID: "op_firecracker_v2", Kind: "firecracker-boot-probe", TargetKind: "sandbox", TargetID: "sbx_firecracker_v2", InputDigest: v2Digest('b'), CanonicalDigest: v2Digest('c'), EffectiveSpecDigest: v2Digest('d'), CapabilityDigest: host1.CapabilityDigest, DispatchBody: `{"version":"sandbox.control/v1"}`, AcceptedAt: now, RetentionExpiresAt: now.Add(time.Hour), CleanupRequired: true}
+	if _, _, err := ledger.Accept(ctx, op); err != nil {
+		t.Fatal(err)
+	}
+	controlVerify := base64.RawStdEncoding.EncodeToString(controlPublic)
+	hostSigning1 := base64.RawStdEncoding.EncodeToString(hostPrivate1)
+	journal1 := filepath.Join(directory, "boot-probe-1.json")
+	config1 := writeBootProbeHostConfig(t, directory, "boot-probe-host-1.json", hostAddress, identities, 1, journal1, op.Principal, op.ID, "instance-v2-1")
+	runBootProbeHost(t, hostBinary, config1, map[string]string{"TEST_CONTROL_PUBLIC_KEY": controlVerify, "TEST_HOST_SIGNING_KEY": hostSigning1}, true)
+	started1 := waitForBootProbeSession(t, ledger, "instance-v2-1", firecrackerbootprobev2.LifecycleLaunchStarted)
+	if started1.Version != 3 {
+		t.Fatalf("first v2 control snapshot version = %d, want create/authorize/start version 3", started1.Version)
+	}
+	journalWire, err := os.ReadFile(journal1)
+	if err != nil || !bytes.Contains(journalWire, []byte(`"snapshot_version":2`)) || !bytes.Contains(journalWire, []byte(`"phase":"launch-authorized"`)) {
+		t.Fatalf("fsynced v2 launch intent = %s, %v", journalWire, err)
+	}
+	// The second host process has only the old fsynced intent.  It exercises
+	// the route's lost-ACK recovery rather than preparing or launching again.
+	runBootProbeHost(t, hostBinary, config1, map[string]string{"TEST_CONTROL_PUBLIC_KEY": controlVerify, "TEST_HOST_SIGNING_KEY": hostSigning1}, true)
+	recovered1 := waitForBootProbeSession(t, ledger, "instance-v2-1", firecrackerbootprobev2.LifecycleLaunchStarted)
+	if recovered1.Version != started1.Version || !bytes.Equal(recovered1.Wire, started1.Wire) {
+		t.Fatalf("v2 lost-ACK restart changed launch state: %#v want %#v", recovered1, started1)
+	}
+	concurrent := op
+	concurrent.ID, concurrent.TargetID = "op_firecracker_v2_concurrent", "sbx_firecracker_v2_concurrent"
+	if _, _, err := ledger.Accept(ctx, concurrent); err != nil {
+		t.Fatal(err)
+	}
+	concurrentA := writeBootProbeHostConfig(t, directory, "boot-probe-host-concurrent-a.json", hostAddress, identities, 1, filepath.Join(directory, "boot-probe-concurrent-a.json"), concurrent.Principal, concurrent.ID, "instance-v2-concurrent")
+	concurrentB := writeBootProbeHostConfig(t, directory, "boot-probe-host-concurrent-b.json", hostAddress, identities, 1, filepath.Join(directory, "boot-probe-concurrent-b.json"), concurrent.Principal, concurrent.ID, "instance-v2-concurrent")
+	processA := startProcess(t, hostBinary, hostArguments(concurrentA), map[string]string{"TEST_CONTROL_PUBLIC_KEY": controlVerify, "TEST_HOST_SIGNING_KEY": hostSigning1})
+	processB := startProcess(t, hostBinary, hostArguments(concurrentB), map[string]string{"TEST_CONTROL_PUBLIC_KEY": controlVerify, "TEST_HOST_SIGNING_KEY": hostSigning1})
+	errA, errB := processA.wait(), processB.wait()
+	if (errA == nil) == (errB == nil) {
+		t.Fatalf("competing v2 host processes results = %v/%v; diagnostics=%s / %s", errA, errB, processA.diagnostics(), processB.diagnostics())
+	}
+	_ = waitForBootProbeSession(t, ledger, "instance-v2-concurrent", firecrackerbootprobev2.LifecycleLaunchStarted)
+	if err := ledger.RevokeHost(ctx, host1.HostID, host1.Generation, time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	fenced1 := waitForBootProbeSession(t, ledger, "instance-v2-1", firecrackerbootprobev2.LifecycleCleanupPending)
+	runBootProbeHost(t, hostBinary, config1, map[string]string{"TEST_CONTROL_PUBLIC_KEY": controlVerify, "TEST_HOST_SIGNING_KEY": hostSigning1}, false)
+	if afterRefusal, err := ledger.LoadBootProbeSession(ctx, "instance-v2-1"); err != nil || afterRefusal.Version != fenced1.Version || !bytes.Equal(afterRefusal.Wire, fenced1.Wire) {
+		t.Fatalf("revoked host changed or recovered v2 launch: %#v, %v", afterRefusal, err)
+	}
+	fencedOperation, err := ledger.Get(ctx, op.Principal, op.ID)
+	if err != nil || fencedOperation.State != sandboxcontrol.StateUncertain {
+		t.Fatalf("revoked v2 operation = %#v, %v", fencedOperation, err)
+	}
+	if _, err := ledger.ConfirmHostCleanupAndRequeue(ctx, op.Principal, op.ID, fencedOperation.Version, time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	hostPublic2, hostPrivate2, _ := ed25519.GenerateKey(rand.Reader)
+	host2 := host1
+	host2.Generation, host2.CertificateDigest, host2.SigningPublicKey, host2.ExpiresAt = 2, certificateDigest(identities.host2Certificate), hostPublic2, time.Now().UTC().Add(time.Hour)
+	if err := ledger.ProvisionHost(ctx, host2, sandboxcontrol.AttestationInput{Profile: sandboxcontrol.AttestationProfileLocalMetadata}, nil); err != nil {
+		t.Fatal(err)
+	}
+	journal2 := filepath.Join(directory, "boot-probe-2.json")
+	config2 := writeBootProbeHostConfig(t, directory, "boot-probe-host-2.json", hostAddress, identities, 2, journal2, op.Principal, op.ID, "instance-v2-2")
+	runBootProbeHost(t, hostBinary, config2, map[string]string{"TEST_CONTROL_PUBLIC_KEY": controlVerify, "TEST_HOST_SIGNING_KEY": base64.RawStdEncoding.EncodeToString(hostPrivate2)}, true)
+	started2 := waitForBootProbeSession(t, ledger, "instance-v2-2", firecrackerbootprobev2.LifecycleLaunchStarted)
+	identity2 := sandboxcontrol.HostIdentity{HostID: host2.HostID, Generation: host2.Generation, CertificateDigest: host2.CertificateDigest}
+	if _, err := ledger.QuarantineHost(ctx, identity2, "invalid-v2-host-proof", time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	quarantined2 := waitForBootProbeSession(t, ledger, "instance-v2-2", firecrackerbootprobev2.LifecycleCleanupPending)
+	if _, err := ledger.QuarantineHost(ctx, identity2, "repeat-invalid-v2-host-proof", time.Now().UTC()); err != nil {
+		t.Fatalf("repeat v2 quarantine = %v", err)
+	}
+	if afterRepeat, err := ledger.LoadBootProbeSession(ctx, "instance-v2-2"); err != nil || afterRepeat.Version != quarantined2.Version || !bytes.Equal(afterRepeat.Wire, quarantined2.Wire) {
+		t.Fatalf("repeat quarantine changed cleanup pending v2 session: %#v, %v", afterRepeat, err)
+	}
+	runBootProbeHost(t, hostBinary, config2, map[string]string{"TEST_CONTROL_PUBLIC_KEY": controlVerify, "TEST_HOST_SIGNING_KEY": base64.RawStdEncoding.EncodeToString(hostPrivate2)}, false)
+	if started2.Version != 3 {
+		t.Fatalf("reassigned v2 session version = %d, want 3", started2.Version)
+	}
+}
+
 func TestHostProcessHarnessKillsAnUnresponsiveChild(t *testing.T) {
 	if os.Getenv("HOST_PROCESS_IGNORE_TERM_HELPER") == "1" {
 		signal.Ignore(syscall.SIGTERM)
@@ -275,6 +388,64 @@ func writeHostConfig(t *testing.T, directory, name, address string, identity ide
 	}
 	return path
 }
+
+func writeBootProbeHostConfig(t *testing.T, directory, name, address string, identity identities, generation uint64, journal, principal, operationID, instanceID string) string {
+	t.Helper()
+	path := writeHostConfig(t, directory, name, address, identity, generation, filepath.Join(directory, name+".receipts"), false, false, false)
+	wire, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var document map[string]any
+	if err := json.Unmarshal(wire, &document); err != nil {
+		t.Fatal(err)
+	}
+	document["boot_probe"] = map[string]string{
+		"principal":                principal,
+		"operation_id":             operationID,
+		"host_instance_session_id": instanceID,
+		"journal_file":             journal,
+	}
+	wire, err = json.Marshal(document)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, wire, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+func runBootProbeHost(t *testing.T, binary, config string, environment map[string]string, expectSuccess bool) {
+	t.Helper()
+	process := startProcess(t, binary, hostArguments(config), environment)
+	err := process.wait()
+	if expectSuccess && err != nil {
+		t.Fatalf("v2 sandbox-host failed: %v diagnostics=%s", err, process.diagnostics())
+	}
+	if !expectSuccess && err == nil {
+		t.Fatalf("v2 sandbox-host unexpectedly succeeded: diagnostics=%s", process.diagnostics())
+	}
+}
+
+func waitForBootProbeSession(t *testing.T, ledger *sandboxcontrol.PostgresLedger, instanceID string, phase firecrackerbootprobev2.LifecyclePhase) firecrackerbootprobev2.Snapshot {
+	t.Helper()
+	deadline := time.Now().Add(15 * time.Second)
+	for {
+		snapshot, err := ledger.LoadBootProbeSession(context.Background(), instanceID)
+		if err == nil && snapshot.Session.Lifecycle.Phase == phase {
+			return snapshot
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("v2 session %s did not reach %s: %#v, %v", instanceID, phase, snapshot, err)
+		}
+		wait, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+		<-wait.Done()
+		cancel()
+	}
+}
+
+func v2Digest(character rune) string { return "sha256:" + strings.Repeat(string(character), 64) }
 
 type process struct {
 	command    *exec.Cmd
