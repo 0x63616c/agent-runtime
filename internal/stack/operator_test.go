@@ -21,6 +21,8 @@ type fakeKubernetesOperator struct {
 	applies   int
 	observes  int
 	teardowns int
+	upgrades  int
+	rollbacks int
 }
 
 func (*fakeKubernetesOperator) BootstrapNamespace(_ context.Context, _ stack.OperatorTarget, _ stack.KubernetesManifests, _ string) (stack.KubernetesNamespaceObservation, error) {
@@ -60,6 +62,16 @@ func (operator *fakeKubernetesOperator) Diff(_ context.Context, _ stack.Operator
 
 func (operator *fakeKubernetesOperator) Teardown(_ context.Context, _ stack.OperatorTarget, _ stack.Rendered, _ stack.KubernetesManifests, _ stack.BootstrapAuthority) error {
 	operator.teardowns++
+	return nil
+}
+
+func (operator *fakeKubernetesOperator) Upgrade(_ context.Context, _ stack.OperatorTarget, _ stack.Rendered, _ stack.BootstrapAuthority) error {
+	operator.upgrades++
+	return nil
+}
+
+func (operator *fakeKubernetesOperator) Rollback(_ context.Context, _ stack.OperatorTarget, _ stack.Rendered, _ stack.Rendered, _ stack.BootstrapAuthority) error {
+	operator.rollbacks++
 	return nil
 }
 
@@ -129,6 +141,33 @@ var _ = Describe("Audited Kubernetes operator", func() {
 		Expect(reconcileErr).To(MatchError(ContainSubstring("render digest")))
 		Expect(teardownErr).To(MatchError(ContainSubstring("render digest")))
 		Expect(adapter.applies).To(BeZero())
+		Expect(adapter.teardowns).To(BeZero())
+	})
+
+	It("refuses every migration-capable lifecycle action when the render-digest authority is stale", func() {
+		spec, err := stack.Parse(strings.NewReader(databaseStack(`{"database":"agent_runtime","schema":"runtime","connection_reference":"database-secret","migration_target":"postgres","migrations":[{"version":1,"upgrade_digest":"sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","rollback_digest":"sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc","upgrade_artifact":"migrations/v1.up.sql","rollback_artifact":"migrations/v1.down.sql"}]}`)))
+		Expect(err).NotTo(HaveOccurred())
+		rendered, err := stack.Render(spec, stack.ProfileLocal)
+		Expect(err).NotTo(HaveOccurred())
+		adapter := &fakeKubernetesOperator{changes: []stack.Change{{Resource: "postgres"}}}
+		operator, err := stack.NewKubernetesOperator(adapter, &recordedAudit{})
+		Expect(err).NotTo(HaveOccurred())
+		request := operatorRequest(rendered)
+		request.Target.MigrationRoot = "/reviewed-migrations"
+		request.BootstrapAuthority.RenderDigest = "sha256:" + strings.Repeat("0", 64)
+
+		_, applyErr := operator.Apply(context.Background(), request, rendered)
+		_, reconcileErr := operator.Reconcile(context.Background(), request, rendered)
+		_, rollbackErr := operator.Rollback(context.Background(), request, rendered, rendered)
+		teardownErr := operator.Teardown(context.Background(), request, rendered)
+
+		Expect(applyErr).To(MatchError(ContainSubstring("render digest")))
+		Expect(reconcileErr).To(MatchError(ContainSubstring("render digest")))
+		Expect(rollbackErr).To(MatchError(ContainSubstring("render digest")))
+		Expect(teardownErr).To(MatchError(ContainSubstring("render digest")))
+		Expect(adapter.applies).To(BeZero())
+		Expect(adapter.upgrades).To(BeZero())
+		Expect(adapter.rollbacks).To(BeZero())
 		Expect(adapter.teardowns).To(BeZero())
 	})
 
