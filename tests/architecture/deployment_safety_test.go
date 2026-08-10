@@ -161,6 +161,7 @@ var _ = Describe("M1 deployment safety boundaries", func() {
 			"Preload and prove the local-path helper image",
 			"local-path helper configuration did not become available",
 			"unexpected local-path helper configuration",
+			`tr -d '"'`,
 			"rancher/mirrored-library-busybox@sha256:101b4afd76732482eff9b95cae5f94bcf295e521fbec4e01b69c5421f3f3f3e5",
 			"docker buildx imagetools inspect --raw",
 			"timeout 120s docker pull \"$helper_digest_ref\"",

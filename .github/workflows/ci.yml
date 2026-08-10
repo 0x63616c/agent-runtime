@@ -327,7 +327,7 @@ jobs:
             fi
             sleep 2
           done
-          configured_helper_image="$(printf '%s\n' "$helper_pod_yaml" | sed -nE 's/^[[:space:]]*image:[[:space:]]*([^[:space:]#]+).*$/\1/p' | head -n 1)"
+          configured_helper_image="$(printf '%s\n' "$helper_pod_yaml" | sed -nE 's/^[[:space:]]*image:[[:space:]]*([^[:space:]#]+).*$/\1/p' | head -n 1 | tr -d '"')"
           configured_pull_policy="$(printf '%s\n' "$helper_pod_yaml" | sed -nE 's/^[[:space:]]*imagePullPolicy:[[:space:]]*([^[:space:]#]+).*$/\1/p' | head -n 1)"
           if [[ "$configured_helper_image" != "$helper_image" || "$configured_pull_policy" != IfNotPresent ]]; then
             printf 'unexpected local-path helper configuration: image=%q pull_policy=%q\n' "$configured_helper_image" "$configured_pull_policy" >&2
