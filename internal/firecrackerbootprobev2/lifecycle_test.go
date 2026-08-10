@@ -202,7 +202,7 @@ func TestSessionUsesOneCanonicalWireAndRejectsDetachedLifecycleMeaning(t *testin
 		t.Fatalf("DecodeSession(EncodeSession()) = (%#v, %v), want (%#v, nil)", recovered, err, authorized)
 	}
 	detached := authorized
-	detached.Lifecycle.LaunchDelivery = &Delivery{DeliveryID: "delivery-unknown", Nonce: "MDEyMzQ1Njc4OWFiY2RlZg", IssuedAt: now, ExpiresAt: now.Add(time.Minute), LeaseEpoch: 99, FencingToken: 99}
+	detached.Lifecycle.LaunchDelivery = &Delivery{EnvelopeID: "envelope-unknown", DeliveryID: "delivery-unknown", Nonce: "MDEyMzQ1Njc4OWFiY2RlZg", IssuedAt: now, ExpiresAt: now.Add(time.Minute), LeaseEpoch: 99, FencingToken: 99}
 	if _, err := EncodeSession(detached); !errors.Is(err, ErrInvalidLifecycle) {
 		t.Fatalf("EncodeSession(detached lifecycle) error = %v, want ErrInvalidLifecycle", err)
 	}

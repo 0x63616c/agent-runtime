@@ -51,6 +51,7 @@ type Binding struct {
 // Delivery is the bounded metadata for one already-authenticated control delivery.
 // Nonce is canonical raw base64url text, so encoding differences cannot create distinct delivery identities.
 type Delivery struct {
+	EnvelopeID   string    `json:"envelope_id"`
 	DeliveryID   string    `json:"delivery_id"`
 	Nonce        string    `json:"nonce"`
 	IssuedAt     time.Time `json:"issued_at"`
@@ -184,6 +185,7 @@ func (state State) Validate() error {
 	if state.Version != stateVersion || !state.Binding.valid() || !validSessionID(state.HostInstanceSessionID) || !state.Current.valid() || state.Superseded == nil || len(state.Superseded) > maximumHistory {
 		return errors.Wrap(ErrInvalidState, "validate boot-probe v2 state shape")
 	}
+	seenEnvelopeIDs := map[string]struct{}{state.Current.EnvelopeID: {}}
 	seenDeliveryIDs := map[string]struct{}{state.Current.DeliveryID: {}}
 	seenNonces := map[string]struct{}{state.Current.Nonce: {}}
 	previous := Delivery{}
@@ -191,12 +193,16 @@ func (state State) Validate() error {
 		if !delivery.valid() {
 			return errors.Wrap(ErrInvalidState, "validate superseded boot-probe v2 delivery")
 		}
+		if _, exists := seenEnvelopeIDs[delivery.EnvelopeID]; exists {
+			return errors.Wrap(ErrInvalidState, "validate unique boot-probe v2 envelope ID")
+		}
 		if _, exists := seenDeliveryIDs[delivery.DeliveryID]; exists {
 			return errors.Wrap(ErrInvalidState, "validate unique boot-probe v2 delivery ID")
 		}
 		if _, exists := seenNonces[delivery.Nonce]; exists {
 			return errors.Wrap(ErrInvalidState, "validate unique boot-probe v2 nonce")
 		}
+		seenEnvelopeIDs[delivery.EnvelopeID] = struct{}{}
 		seenDeliveryIDs[delivery.DeliveryID] = struct{}{}
 		seenNonces[delivery.Nonce] = struct{}{}
 		if index > 0 && !isExactSuccessor(previous, delivery) {
@@ -218,7 +224,7 @@ func validSuccessor(state State, successor Delivery, now time.Time) bool {
 		return false
 	}
 	for _, delivery := range append(append([]Delivery(nil), state.Superseded...), state.Current) {
-		if successor.DeliveryID == delivery.DeliveryID || successor.Nonce == delivery.Nonce {
+		if successor.EnvelopeID == delivery.EnvelopeID || successor.DeliveryID == delivery.DeliveryID || successor.Nonce == delivery.Nonce {
 			return false
 		}
 	}
@@ -234,7 +240,7 @@ func (binding Binding) valid() bool {
 }
 
 func (delivery Delivery) valid() bool {
-	return validID(delivery.DeliveryID, 128) && validNonce(delivery.Nonce) && validDeadline(delivery.IssuedAt, delivery.ExpiresAt) && delivery.LeaseEpoch > 0 && delivery.FencingToken > 0
+	return validID(delivery.EnvelopeID, 128) && validID(delivery.DeliveryID, 128) && validNonce(delivery.Nonce) && validDeadline(delivery.IssuedAt, delivery.ExpiresAt) && delivery.LeaseEpoch > 0 && delivery.FencingToken > 0
 }
 
 func (acknowledgement Acknowledgement) valid() bool {

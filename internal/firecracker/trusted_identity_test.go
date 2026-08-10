@@ -1,12 +1,39 @@
 package firecracker
 
 import (
+	"errors"
 	"reflect"
 	"strings"
 	"testing"
 
 	"github.com/0x63616c/agent-runtime/sandbox"
 )
+
+func TestCompiledM4IdentityVerifierAcceptsOnlyTheExactCompilerOutput(t *testing.T) {
+	plan := mustCompile(t, validProfile())
+	fixtures := verifiedPlanFixtures(plan)
+	stage := validBoundJailedResourceStage(plan, fixtures, "/run/agent-runtime/sandbox-001/rootfs.ext4")
+	authority := mustCompileJailerExecutionAuthority(t, plan)
+	identity, err := CompileTrustedM4Identity(plan, fixtures, authority, stage)
+	if err != nil {
+		t.Fatalf("CompileTrustedM4Identity() error = %v", err)
+	}
+	verifier, err := NewCompiledM4IdentityVerifier(identity)
+	if err != nil {
+		t.Fatalf("NewCompiledM4IdentityVerifier() error = %v", err)
+	}
+	if err := verifier.VerifyTrustedM4Identity(identity.launchGrantIdentity()); err != nil {
+		t.Fatalf("VerifyTrustedM4Identity(exact) error = %v", err)
+	}
+	altered := identity.launchGrantIdentity()
+	altered.AuthorityDigest = trustedIdentityTestDigest('f')
+	if err := verifier.VerifyTrustedM4Identity(altered); !errors.Is(err, ErrInvalidProfile) {
+		t.Fatalf("VerifyTrustedM4Identity(altered) error = %v, want ErrInvalidProfile", err)
+	}
+	if _, err := NewCompiledM4IdentityVerifier(TrustedM4Identity{}); !errors.Is(err, ErrInvalidProfile) {
+		t.Fatalf("NewCompiledM4IdentityVerifier(uncompiled) error = %v, want ErrInvalidProfile", err)
+	}
+}
 
 func TestCompileTrustedM4IdentityReturnsDeterministicRedactedBindings(t *testing.T) {
 	plan := mustCompile(t, validProfile())
@@ -32,17 +59,17 @@ func TestCompileTrustedM4IdentityReturnsDeterministicRedactedBindings(t *testing
 	if !reflect.DeepEqual(first, second) {
 		t.Fatalf("CompileTrustedM4Identity() = %#v then %#v, want deterministic identity", first, second)
 	}
-	if first.VMID != plan.VMID() || first.FixtureVersion != fixtures.FixtureVersion() {
-		t.Fatalf("identity labels = (%q, %q), want (%q, %q)", first.VMID, first.FixtureVersion, plan.VMID(), fixtures.FixtureVersion())
+	if first.VMID() != plan.VMID() || first.FixtureVersion() != fixtures.FixtureVersion() {
+		t.Fatalf("identity labels = (%q, %q), want (%q, %q)", first.VMID(), first.FixtureVersion(), plan.VMID(), fixtures.FixtureVersion())
 	}
 	for name, value := range map[string]sandbox.Digest{
-		"plan": first.PlanDigest, "fixture": first.FixtureDigest, "stage": first.StageDigest, "authority": first.AuthorityDigest,
+		"plan": first.PlanDigest(), "fixture": first.FixtureDigest(), "stage": first.StageDigest(), "authority": first.AuthorityDigest(),
 	} {
 		if !validSHA256(value) {
 			t.Fatalf("%s digest = %q, want canonical SHA-256", name, value)
 		}
 	}
-	if first.PlanDigest == first.FixtureDigest || first.PlanDigest == first.StageDigest || first.PlanDigest == first.AuthorityDigest || first.FixtureDigest == first.StageDigest || first.FixtureDigest == first.AuthorityDigest || first.StageDigest == first.AuthorityDigest {
+	if first.PlanDigest() == first.FixtureDigest() || first.PlanDigest() == first.StageDigest() || first.PlanDigest() == first.AuthorityDigest() || first.FixtureDigest() == first.StageDigest() || first.FixtureDigest() == first.AuthorityDigest() || first.StageDigest() == first.AuthorityDigest() {
 		t.Fatalf("trusted identity digests = %#v, want domain-separated values", first)
 	}
 	if rendered := first.String(); strings.Contains(rendered, "operator-secret") || strings.Contains(rendered, "/private/") {
@@ -70,7 +97,7 @@ func TestCompileTrustedM4IdentityChangesWhenOneVerifiedFixtureIsSubstituted(t *t
 	if err != nil {
 		t.Fatalf("CompileTrustedM4Identity() substituted error = %v", err)
 	}
-	if baseline.PlanDigest == substituted.PlanDigest || baseline.FixtureDigest == substituted.FixtureDigest || baseline.StageDigest == substituted.StageDigest || baseline.AuthorityDigest == substituted.AuthorityDigest {
+	if baseline.PlanDigest() == substituted.PlanDigest() || baseline.FixtureDigest() == substituted.FixtureDigest() || baseline.StageDigest() == substituted.StageDigest() || baseline.AuthorityDigest() == substituted.AuthorityDigest() {
 		t.Fatalf("substituted identity = %#v, want every exact object binding to change from %#v", substituted, baseline)
 	}
 }
@@ -91,8 +118,8 @@ func TestCompileTrustedM4IdentityChangesWhenCompiledPlanCapabilitiesDrift(t *tes
 	if err != nil {
 		t.Fatalf("CompileTrustedM4Identity() drifted error = %v", err)
 	}
-	if baseline.PlanDigest == drifted.PlanDigest {
-		t.Fatalf("drifted plan digest = %q, want a changed exact-plan identity", drifted.PlanDigest)
+	if baseline.PlanDigest() == drifted.PlanDigest() {
+		t.Fatalf("drifted plan digest = %q, want a changed exact-plan identity", drifted.PlanDigest())
 	}
 }
 

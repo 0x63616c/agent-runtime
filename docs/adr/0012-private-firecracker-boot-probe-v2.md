@@ -43,6 +43,17 @@ environment, certificates, enrollment policy, and migrations. Enrollment must
 declare the permitted M4 fixture/authority profile; a host's self-reported
 identity alone is not authority to launch.
 
+The current private codec boundary is
+`internal/firecrackerbootprobeprotocol`. It accepts a command only when a
+launch-authorized v2 session's exact envelope/delivery/nonce/lease/fence tuple
+matches the existing launch grant, an enrollment resolver binds both command
+and observation keys to that host generation, and a locally compiled M4
+identity verifier accepts the grant tuple. The verifier is a sealed
+Firecracker compiler output, not an injectable host assertion. It verifies an
+M4 observation only through an opaque command-verification result. The contract proves no
+PostgreSQL, network route, journal, Jailer, guest, or Linux/KVM execution;
+those remain separate required evidence.
+
 ## Why v1 cannot carry this path
 
 The current v1 host protocol remains the generic enrolled reference-host

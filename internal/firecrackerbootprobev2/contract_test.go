@@ -68,6 +68,7 @@ func TestStateRefusesForkedStaleOrNonExtendingSuccessorsAndCrossInstanceSessions
 
 	for name, mutate := range map[string]func(*Delivery){
 		"stale current delivery":  func(candidate *Delivery) { *candidate = initial },
+		"reused envelope ID":      func(candidate *Delivery) { candidate.EnvelopeID = initial.EnvelopeID },
 		"forked epoch":            func(candidate *Delivery) { candidate.LeaseEpoch++ },
 		"forked fence":            func(candidate *Delivery) { candidate.FencingToken++ },
 		"non-extending issued at": func(candidate *Delivery) { candidate.IssuedAt = initial.IssuedAt },
@@ -225,6 +226,7 @@ func validBinding() Binding {
 
 func validDelivery(issuedAt time.Time) Delivery {
 	return Delivery{
+		EnvelopeID:   "envelope_01",
 		DeliveryID:   "delivery_01",
 		Nonce:        "MDEyMzQ1Njc4OWFiY2RlZg",
 		IssuedAt:     issuedAt,
@@ -236,6 +238,7 @@ func validDelivery(issuedAt time.Time) Delivery {
 
 func exactSuccessor(previous Delivery, issuedAt time.Time) Delivery {
 	return Delivery{
+		EnvelopeID:   "envelope_02",
 		DeliveryID:   "delivery_02",
 		Nonce:        "ZmVkY2JhOTg3NjU0MzIxMA",
 		IssuedAt:     issuedAt,
@@ -247,6 +250,7 @@ func exactSuccessor(previous Delivery, issuedAt time.Time) Delivery {
 
 func uniqueSuccessor(previous Delivery, sequence int, issuedAt time.Time) Delivery {
 	return Delivery{
+		EnvelopeID:   fmt.Sprintf("envelope-%03d", sequence+1),
 		DeliveryID:   fmt.Sprintf("delivery-%03d", sequence+1),
 		Nonce:        base64.RawURLEncoding.EncodeToString([]byte(fmt.Sprintf("nonce-value-%05d", sequence))),
 		IssuedAt:     issuedAt,
@@ -275,6 +279,7 @@ func maximumLengthBinding() Binding {
 
 func maximumLengthDelivery(sequence int, issuedAt time.Time) Delivery {
 	return Delivery{
+		EnvelopeID:   fmt.Sprintf("envelope-%0119d", sequence),
 		DeliveryID:   fmt.Sprintf("delivery-%0119d", sequence),
 		Nonce:        base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{byte(sequence)}, 64)),
 		IssuedAt:     issuedAt,
@@ -303,6 +308,7 @@ func maximumEscapedBinding() Binding {
 
 func maximumEscapedDelivery(sequence int, issuedAt time.Time) Delivery {
 	return Delivery{
+		EnvelopeID:   strings.Repeat("\x01", 127) + string(rune(sequence+1)),
 		DeliveryID:   strings.Repeat("\x01", 127) + string(rune(sequence+1)),
 		Nonce:        base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{byte(sequence)}, 64)),
 		IssuedAt:     issuedAt,

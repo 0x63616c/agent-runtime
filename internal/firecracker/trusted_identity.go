@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"github.com/0x63616c/agent-runtime/internal/firecrackerlaunchgrant"
 	"github.com/0x63616c/agent-runtime/sandbox"
 )
 
@@ -12,17 +13,60 @@ const trustedM4IdentityVersion = "agent-runtime.firecracker.trusted-m4/v1"
 // TrustedM4Identity is the redacted, domain-separated identity of the exact M4 objects required by a private Firecracker boot-probe grant.
 // It is an immutable value only: compiling it neither interprets a control request nor starts a Jailer, VMM, guest, or vsock connection.
 type TrustedM4Identity struct {
-	VMID            string
-	FixtureVersion  string
-	PlanDigest      sandbox.Digest
-	FixtureDigest   sandbox.Digest
-	StageDigest     sandbox.Digest
-	AuthorityDigest sandbox.Digest
+	vmID            string
+	fixtureVersion  string
+	planDigest      sandbox.Digest
+	fixtureDigest   sandbox.Digest
+	stageDigest     sandbox.Digest
+	authorityDigest sandbox.Digest
+	compiled        bool
 }
+
+// VMID returns the exact compiled VM identity.
+func (identity TrustedM4Identity) VMID() string { return identity.vmID }
+
+// FixtureVersion returns the exact compiled fixture-set version.
+func (identity TrustedM4Identity) FixtureVersion() string { return identity.fixtureVersion }
+
+// PlanDigest returns the opaque compiled-plan commitment.
+func (identity TrustedM4Identity) PlanDigest() sandbox.Digest { return identity.planDigest }
+
+// FixtureDigest returns the opaque verified-fixture commitment.
+func (identity TrustedM4Identity) FixtureDigest() sandbox.Digest { return identity.fixtureDigest }
+
+// StageDigest returns the opaque jailed-stage commitment.
+func (identity TrustedM4Identity) StageDigest() sandbox.Digest { return identity.stageDigest }
+
+// AuthorityDigest returns the opaque Jailer-authority commitment.
+func (identity TrustedM4Identity) AuthorityDigest() sandbox.Digest { return identity.authorityDigest }
 
 // String returns the safe labels and opaque digests that may cross the private M3/M4 binding seam.
 func (identity TrustedM4Identity) String() string {
-	return fmt.Sprintf("%s vm_id=%q fixture_version=%q plan_digest=%s fixture_digest=%s stage_digest=%s authority_digest=%s", trustedM4IdentityVersion, identity.VMID, identity.FixtureVersion, identity.PlanDigest, identity.FixtureDigest, identity.StageDigest, identity.AuthorityDigest)
+	return fmt.Sprintf("%s vm_id=%q fixture_version=%q plan_digest=%s fixture_digest=%s stage_digest=%s authority_digest=%s", trustedM4IdentityVersion, identity.vmID, identity.fixtureVersion, identity.planDigest, identity.fixtureDigest, identity.stageDigest, identity.authorityDigest)
+}
+
+// CompiledM4IdentityVerifier compares a launch-grant identity to an opaque locally compiled M4 identity.
+// It can be constructed only from CompileTrustedM4Identity output and performs no host effect.
+type CompiledM4IdentityVerifier struct{ identity TrustedM4Identity }
+
+// NewCompiledM4IdentityVerifier seals one locally compiled M4 identity for a private host-control verifier.
+func NewCompiledM4IdentityVerifier(identity TrustedM4Identity) (CompiledM4IdentityVerifier, error) {
+	if !identity.compiled {
+		return CompiledM4IdentityVerifier{}, fmt.Errorf("%w: compiled trusted M4 identity is required", ErrInvalidProfile)
+	}
+	return CompiledM4IdentityVerifier{identity: identity}, nil
+}
+
+// VerifyTrustedM4Identity refuses a grant identity that differs from the exact locally compiled M4 identity.
+func (verifier CompiledM4IdentityVerifier) VerifyTrustedM4Identity(candidate firecrackerlaunchgrant.TrustedM4Identity) error {
+	if !verifier.identity.compiled || candidate != verifier.identity.launchGrantIdentity() {
+		return fmt.Errorf("%w: Firecracker launch grant does not match the locally compiled M4 identity", ErrInvalidProfile)
+	}
+	return nil
+}
+
+func (identity TrustedM4Identity) launchGrantIdentity() firecrackerlaunchgrant.TrustedM4Identity {
+	return firecrackerlaunchgrant.TrustedM4Identity{VMID: identity.vmID, FixtureVersion: identity.fixtureVersion, PlanDigest: identity.planDigest, FixtureDigest: identity.fixtureDigest, StageDigest: identity.stageDigest, AuthorityDigest: identity.authorityDigest}
 }
 
 // CompileTrustedM4Identity commits to one exact compiled plan, verified fixture set, Jailer authority, and staged namespace without exposing host paths, fixture sources, launch argv, or secrets.
@@ -57,12 +101,13 @@ func CompileTrustedM4Identity(plan Plan, fixtures FixtureSet, authority JailerEx
 		return TrustedM4Identity{}, err
 	}
 	return TrustedM4Identity{
-		VMID:            plan.VMID(),
-		FixtureVersion:  fixtures.FixtureVersion(),
-		PlanDigest:      planDigest,
-		FixtureDigest:   fixtureDigest,
-		StageDigest:     stageDigest,
-		AuthorityDigest: authorityDigest,
+		vmID:            plan.VMID(),
+		fixtureVersion:  fixtures.FixtureVersion(),
+		planDigest:      planDigest,
+		fixtureDigest:   fixtureDigest,
+		stageDigest:     stageDigest,
+		authorityDigest: authorityDigest,
+		compiled:        true,
 	}, nil
 }
 
