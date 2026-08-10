@@ -75,4 +75,25 @@ func TestParseReferenceHostRejectsAmbientOrUnknownConfiguration(t *testing.T) {
 	}
 }
 
+func TestParseReferenceHostConfigurationBoundsItsInputBeforeAcceptingTrailingWhitespace(t *testing.T) {
+	t.Parallel()
+
+	const maximum = 64 << 10
+	input := &countingReader{Reader: strings.NewReader(validHostDocument + strings.Repeat(" ", maximum+128))}
+	if _, err := Parse(input); err == nil || input.read > maximum+1 {
+		t.Fatalf("Parse(oversized) error=%v bytes-read=%d", err, input.read)
+	}
+}
+
 const validHostDocument = `{"version":2,"control_url":"https://sandbox-control.internal:9443","server_name":"sandbox-control.internal","trust_bundle_file":"/run/sandbox-host/control-ca.crt","client_certificate_file":"/run/sandbox-host/tls.crt","client_private_key_file":"/run/sandbox-host/tls.key","host_id":"host_01","host_generation":2,"journal_file":"/var/lib/sandbox-host/receipts.json","maximum_receipts":100,"control_trust":{"version":3,"revocation_epoch":9,"current":{"id":"control_01","version":4,"public_key_environment":"CONTROL_PUBLIC_KEY","not_before":"2026-08-08T00:00:00Z","not_after":"2026-08-09T00:00:00Z"},"next":{"id":"control_02","version":5,"public_key_environment":"CONTROL_NEXT_PUBLIC_KEY","not_before":"2026-08-08T00:00:00Z","not_after":"2026-08-09T00:00:00Z"}},"host_signing_key_environment":"HOST_SIGNING_KEY","request_timeout_seconds":5,"test_fault_after_journal":false,"test_fault_after_receipt":false,"test_fault_after_result_send":false}`
+
+type countingReader struct {
+	*strings.Reader
+	read int
+}
+
+func (reader *countingReader) Read(target []byte) (int, error) {
+	count, err := reader.Reader.Read(target)
+	reader.read += count
+	return count, err
+}

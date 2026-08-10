@@ -44,21 +44,6 @@ type Config struct {
 
 type server struct{ config Config }
 
-type pullRequest struct {
-	ProtocolVersion string `json:"protocol_version"`
-	Kind            string `json:"kind"`
-	HostID          string `json:"host_id"`
-	HostGeneration  uint64 `json:"host_generation"`
-}
-
-type receiptRequest struct {
-	ProtocolVersion string `json:"protocol_version"`
-	Kind            string `json:"kind"`
-	AssignmentID    string `json:"assignment_id"`
-	FencingToken    uint64 `json:"fencing_token"`
-	ReceiptDigest   string `json:"receipt_digest"`
-}
-
 type heartbeatRequest struct {
 	ProtocolVersion string `json:"protocol_version"`
 	Kind            string `json:"kind"`
@@ -94,8 +79,8 @@ func (server *server) pull(writer http.ResponseWriter, request *http.Request) {
 	if !ok {
 		return
 	}
-	var body pullRequest
-	if !decodeCanonical(writer, request, &body) || body.ProtocolVersion != sandboxhostprotocol.Version || body.Kind != "pull" || body.HostID != identity.HostID || body.HostGeneration != identity.Generation {
+	var body sandboxhostprotocol.PullRequest
+	if !decodeCanonical(request, &body) || body.ProtocolVersion != sandboxhostprotocol.Version || body.Kind != "pull" || body.HostID != identity.HostID || body.HostGeneration != identity.Generation {
 		writeDenied(writer)
 		return
 	}
@@ -122,10 +107,9 @@ func (server *server) receipt(writer http.ResponseWriter, request *http.Request)
 	if !ok {
 		return
 	}
-	var body receiptRequest
-	if !decodeCanonical(writer, request, &body) || body.ProtocolVersion != sandboxhostprotocol.Version || body.Kind != "receipt" {
-		server.quarantine(request.Context(), identity, "invalid-receipt-envelope")
-		writeDenied(writer)
+	var body sandboxhostprotocol.ReceiptRequest
+	if !decodeCanonical(request, &body) || body.ProtocolVersion != sandboxhostprotocol.Version || body.Kind != "receipt" {
+		server.denyWithQuarantine(writer, request.Context(), identity, "invalid-receipt-envelope")
 		return
 	}
 	duplicate, err := server.config.Store.AcknowledgeHostAssignment(request.Context(), identity, body.AssignmentID, body.FencingToken, body.ReceiptDigest, server.config.Clock.Now().UTC())
@@ -142,9 +126,8 @@ func (server *server) heartbeat(writer http.ResponseWriter, request *http.Reques
 		return
 	}
 	var body heartbeatRequest
-	if !decodeCanonical(writer, request, &body) || body.ProtocolVersion != sandboxhostprotocol.Version || body.Kind != "heartbeat" {
-		server.quarantine(request.Context(), identity, "invalid-heartbeat-envelope")
-		writeDenied(writer)
+	if !decodeCanonical(request, &body) || body.ProtocolVersion != sandboxhostprotocol.Version || body.Kind != "heartbeat" {
+		server.denyWithQuarantine(writer, request.Context(), identity, "invalid-heartbeat-envelope")
 		return
 	}
 	now := server.config.Clock.Now().UTC()
@@ -166,16 +149,15 @@ func (server *server) result(writer http.ResponseWriter, request *http.Request) 
 	if !ok {
 		return
 	}
-	wire, ok := readBody(writer, request)
+	wire, ok := readBody(request)
 	if !ok {
-		server.quarantine(request.Context(), identity, "invalid-result-envelope")
+		server.denyWithQuarantine(writer, request.Context(), identity, "invalid-result-envelope")
 		return
 	}
 	now := server.config.Clock.Now().UTC()
 	result, err := sandboxhostprotocol.VerifyResult(wire, now, enrollment.SigningPublicKey)
 	if err != nil || result.HostID != identity.HostID || result.HostGeneration != identity.Generation {
-		server.quarantine(request.Context(), identity, "invalid-result-signature")
-		writeDenied(writer)
+		server.denyWithQuarantine(writer, request.Context(), identity, "invalid-result-signature")
 		return
 	}
 	if _, err := server.config.Store.RecordAuthenticatedHostResult(request.Context(), identity, result, now); err != nil {
@@ -190,16 +172,15 @@ func (server *server) output(writer http.ResponseWriter, request *http.Request) 
 	if !ok {
 		return
 	}
-	wire, ok := readBody(writer, request)
+	wire, ok := readBody(request)
 	if !ok {
-		server.quarantine(request.Context(), identity, "invalid-output-envelope")
+		server.denyWithQuarantine(writer, request.Context(), identity, "invalid-output-envelope")
 		return
 	}
 	now := server.config.Clock.Now().UTC()
 	output, err := sandboxhostprotocol.VerifyOutput(wire, now, enrollment.SigningPublicKey)
 	if err != nil || output.HostID != identity.HostID || output.HostGeneration != identity.Generation {
-		server.quarantine(request.Context(), identity, "invalid-output-signature")
-		writeDenied(writer)
+		server.denyWithQuarantine(writer, request.Context(), identity, "invalid-output-signature")
 		return
 	}
 	duplicate, err := server.config.Store.RecordAuthenticatedHostOutput(request.Context(), identity, output, now)
@@ -266,49 +247,56 @@ func (server *server) sign(envelope sandboxhostprotocol.Envelope) ([]byte, error
 
 func (server *server) protocolStoreError(writer http.ResponseWriter, ctx context.Context, identity sandboxcontrol.HostIdentity, err error, reason string) {
 	if errors.Is(err, sandboxcontrol.ErrStaleFence) || errors.Is(err, sandboxcontrol.ErrHostProtocolViolation) || errors.Is(err, sandboxcontrol.ErrInvalidTransition) {
-		server.quarantine(ctx, identity, reason)
+		if err := server.quarantine(ctx, identity, reason); err != nil {
+			writeStoreError(writer, err)
+			return
+		}
 		writeDenied(writer)
 		return
 	}
 	writeStoreError(writer, err)
 }
 
-func (server *server) quarantine(ctx context.Context, identity sandboxcontrol.HostIdentity, reason string) {
-	_, _ = server.config.Store.QuarantineHost(ctx, identity, reason, server.config.Clock.Now().UTC())
+func (server *server) denyWithQuarantine(writer http.ResponseWriter, ctx context.Context, identity sandboxcontrol.HostIdentity, reason string) {
+	if err := server.quarantine(ctx, identity, reason); err != nil {
+		writeStoreError(writer, err)
+		return
+	}
+	writeDenied(writer)
 }
 
-func decodeCanonical(writer http.ResponseWriter, request *http.Request, destination any) bool {
-	wire, ok := readBody(writer, request)
+func (server *server) quarantine(ctx context.Context, identity sandboxcontrol.HostIdentity, reason string) error {
+	_, err := server.config.Store.QuarantineHost(ctx, identity, reason, server.config.Clock.Now().UTC())
+	return err
+}
+
+func decodeCanonical(request *http.Request, destination any) bool {
+	wire, ok := readBody(request)
 	if !ok {
 		return false
 	}
 	decoder := json.NewDecoder(bytes.NewReader(wire))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(destination); err != nil {
-		writeDenied(writer)
 		return false
 	}
 	var trailing any
 	if err := decoder.Decode(&trailing); err != io.EOF {
-		writeDenied(writer)
 		return false
 	}
 	canonical, err := json.Marshal(destination)
 	if err != nil || !bytes.Equal(canonical, wire) {
-		writeDenied(writer)
 		return false
 	}
 	return true
 }
 
-func readBody(writer http.ResponseWriter, request *http.Request) ([]byte, bool) {
+func readBody(request *http.Request) ([]byte, bool) {
 	if request.Header.Get("Content-Type") != "application/json" {
-		writeDenied(writer)
 		return nil, false
 	}
 	wire, err := io.ReadAll(io.LimitReader(request.Body, maxBodyBytes+1))
 	if err != nil || len(wire) == 0 || len(wire) > maxBodyBytes {
-		writeDenied(writer)
 		return nil, false
 	}
 	return wire, true

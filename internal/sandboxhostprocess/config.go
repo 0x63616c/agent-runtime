@@ -3,6 +3,7 @@
 package sandboxhostprocess
 
 import (
+	"bytes"
 	"encoding/json"
 	"io"
 	"net/url"
@@ -14,6 +15,8 @@ import (
 )
 
 var environmentName = regexp.MustCompile(`^[A-Z_][A-Z0-9_]{0,127}$`)
+
+const maxConfigurationBytes = 64 << 10
 
 // Config is one validated immutable reference-host declaration.
 type Config struct {
@@ -90,7 +93,11 @@ func Parse(input io.Reader) (Config, error) {
 	if input == nil {
 		return Config{}, errors.New("parse sandbox-host configuration: input is required")
 	}
-	decoder := json.NewDecoder(input)
+	wire, err := io.ReadAll(io.LimitReader(input, maxConfigurationBytes+1))
+	if err != nil || len(wire) == 0 || len(wire) > maxConfigurationBytes {
+		return Config{}, errors.New("parse sandbox-host configuration: invalid bounded input")
+	}
+	decoder := json.NewDecoder(bytes.NewReader(wire))
 	decoder.DisallowUnknownFields()
 	var decoded document
 	if err := decoder.Decode(&decoded); err != nil {

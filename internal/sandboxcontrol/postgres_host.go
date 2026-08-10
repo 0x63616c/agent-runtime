@@ -319,7 +319,7 @@ func (ledger *PostgresLedger) RecordAuthenticatedHostResult(ctx context.Context,
 		if err != nil {
 			return ErrHostProtocolViolation
 		}
-		if operation.State == next && isTerminalState(next) {
+		if operation.State == next {
 			if fields.ResultDigest == resultDigest {
 				updated = operation
 				return nil
@@ -328,13 +328,6 @@ func (ledger *PostgresLedger) RecordAuthenticatedHostResult(ctx context.Context,
 		}
 		if !validHostResultLiveBinding(operation, result, receivedAt) {
 			return ErrStaleFence
-		}
-		if operation.State == next {
-			if fields.ResultDigest == resultDigest {
-				updated = operation
-				return nil
-			}
-			return ErrHostProtocolViolation
 		}
 		if !permits(operation.State, next) {
 			return ErrInvalidTransition
@@ -381,12 +374,21 @@ func (ledger *PostgresLedger) ConfirmHostCleanupAndRequeue(ctx context.Context, 
 		if err != nil {
 			return err
 		}
-		if operation.State != StateUncertain || operation.Version != version || operation.Assignment.HostID != "" || !operation.CleanupRequired || observedAt.IsZero() {
+		if operation.State != StateUncertain || operation.Version != version || !operation.CleanupRequired || observedAt.IsZero() {
 			return ErrInvalidTransition
+		}
+		if operation.Assignment.HostID != "" {
+			if operation.Assignment.FencingToken >= math.MaxInt64 {
+				return ErrInvalidTransition
+			}
+			operation.Assignment = Assignment{FencingToken: operation.Assignment.FencingToken + 1}
 		}
 		operation.State, operation.Version = StateAccepted, operation.Version+1
 		if err := updateOperation(ctx, tx, operation); err != nil {
 			return err
+		}
+		if _, err := tx.Exec(ctx, `DELETE FROM runtime.sandbox_host_dispatches WHERE principal=$1 AND operation_id=$2`, principal, operationID); err != nil {
+			return errors.Wrap(err, "remove recovered sandbox host dispatch")
 		}
 		updated = operation
 		return insertOutbox(ctx, tx, operation, OutboxStateChanged)

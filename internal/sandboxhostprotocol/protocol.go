@@ -23,6 +23,23 @@ const (
 	maxPayloadLen = 768 << 10
 )
 
+// PullRequest is the canonical private host poll request accepted by control.
+type PullRequest struct {
+	ProtocolVersion string `json:"protocol_version"`
+	Kind            string `json:"kind"`
+	HostID          string `json:"host_id"`
+	HostGeneration  uint64 `json:"host_generation"`
+}
+
+// ReceiptRequest is the canonical private host receipt acknowledgement.
+type ReceiptRequest struct {
+	ProtocolVersion string `json:"protocol_version"`
+	Kind            string `json:"kind"`
+	AssignmentID    string `json:"assignment_id"`
+	FencingToken    uint64 `json:"fencing_token"`
+	ReceiptDigest   string `json:"receipt_digest"`
+}
+
 // Envelope is one immutable, control-signed assignment delivery.
 type Envelope struct {
 	ProtocolVersion        string    `json:"protocol_version"`

@@ -373,7 +373,7 @@ func TestPostgresAttestationTupleConstraintAndCorruptRowRefusal(t *testing.T) {
 	}
 }
 
-func TestPostgresHostControlRecoversTerminalOutputAndResultAcksAfterLeaseExpiry(t *testing.T) {
+func TestPostgresHostControlRecoversNormalUncertainResultAckAndRequeuesAfterCleanup(t *testing.T) {
 	dsn := os.Getenv("AR_SANDBOXCONTROL_POSTGRES_DSN")
 	if dsn == "" {
 		t.Fatal("AR_SANDBOXCONTROL_POSTGRES_DSN is required for the integration suite")
@@ -409,16 +409,26 @@ func TestPostgresHostControlRecoversTerminalOutputAndResultAcksAfterLeaseExpiry(
 	if duplicate, err := ledger.RecordAuthenticatedHostOutput(ctx, identity, output, now.Add(2*time.Second)); err != nil || duplicate {
 		t.Fatalf("RecordAuthenticatedHostOutput(first) = %t, %v", duplicate, err)
 	}
-	result := sandboxhostprotocol.Result{ProtocolVersion: sandboxhostprotocol.Version, ResultID: "result_pg_ack", HostID: host.HostID, HostGeneration: host.Generation, AssignmentID: dispatch.Operation.Assignment.AssignmentID, LeaseEpoch: dispatch.Operation.Assignment.LeaseEpoch, FencingToken: dispatch.Operation.Assignment.FencingToken, Principal: operation.Principal, OperationID: operation.ID, EffectiveSpecDigest: operation.EffectiveSpecDigest, CapabilityDigest: operation.CapabilityDigest, State: "succeeded", ObservedAt: now.Add(3 * time.Second)}
-	if completed, err := ledger.RecordAuthenticatedHostResult(ctx, identity, result, now.Add(3*time.Second)); err != nil || completed.State != StateSucceeded {
-		t.Fatalf("RecordAuthenticatedHostResult(first) = %#v, %v", completed, err)
+	started := sandboxhostprotocol.Result{ProtocolVersion: sandboxhostprotocol.Version, ResultID: "started_pg_ack", HostID: host.HostID, HostGeneration: host.Generation, AssignmentID: dispatch.Operation.Assignment.AssignmentID, LeaseEpoch: dispatch.Operation.Assignment.LeaseEpoch, FencingToken: dispatch.Operation.Assignment.FencingToken, Principal: operation.Principal, OperationID: operation.ID, EffectiveSpecDigest: operation.EffectiveSpecDigest, CapabilityDigest: operation.CapabilityDigest, State: "started", ObservedAt: now.Add(3 * time.Second)}
+	if startedOperation, err := ledger.RecordAuthenticatedHostResult(ctx, identity, started, started.ObservedAt); err != nil || startedOperation.State != StateStarted {
+		t.Fatalf("RecordAuthenticatedHostResult(started) = %#v, %v", startedOperation, err)
+	}
+	uncertain := started
+	uncertain.ResultID, uncertain.State, uncertain.ObservedAt = "uncertain_pg_ack", "uncertain", now.Add(4*time.Second)
+	first, err := ledger.RecordAuthenticatedHostResult(ctx, identity, uncertain, uncertain.ObservedAt)
+	if err != nil || first.State != StateUncertain {
+		t.Fatalf("RecordAuthenticatedHostResult(uncertain) = %#v, %v", first, err)
 	}
 	retryAt := now.Add(2 * time.Minute)
 	if duplicate, err := ledger.RecordAuthenticatedHostOutput(ctx, identity, output, retryAt); err != nil || !duplicate {
 		t.Fatalf("RecordAuthenticatedHostOutput(after lease expiry) = %t, %v", duplicate, err)
 	}
-	if completed, err := ledger.RecordAuthenticatedHostResult(ctx, identity, result, retryAt); err != nil || completed.State != StateSucceeded {
-		t.Fatalf("RecordAuthenticatedHostResult(after lease expiry) = %#v, %v", completed, err)
+	if replay, err := ledger.RecordAuthenticatedHostResult(ctx, identity, uncertain, retryAt); err != nil || replay.State != StateUncertain || replay.Version != first.Version {
+		t.Fatalf("RecordAuthenticatedHostResult(uncertain after lease expiry) = %#v, %v", replay, err)
+	}
+	requeued, err := ledger.ConfirmHostCleanupAndRequeue(ctx, operation.Principal, operation.ID, first.Version, retryAt)
+	if err != nil || requeued.State != StateAccepted || requeued.Assignment.HostID != "" || requeued.Assignment.FencingToken != first.Assignment.FencingToken+1 {
+		t.Fatalf("ConfirmHostCleanupAndRequeue(normal uncertain) = %#v, %v", requeued, err)
 	}
 	if _, err := ledger.AuthenticateHost(ctx, identity, retryAt); err != nil {
 		t.Fatalf("host was quarantined after exact ACK recovery: %v", err)

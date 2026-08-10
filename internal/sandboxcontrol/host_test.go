@@ -246,6 +246,51 @@ func TestMemoryHostControlRecoversTerminalOutputAndResultAcksAfterLeaseExpiry(t 
 	}
 }
 
+func TestMemoryHostControlRoutesNormalUncertainResultThroughCleanupAndAcceptsItsExactLateReplay(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 8, 7, 14, 0, 0, 0, time.UTC)
+	ledger := NewMemoryLedger()
+	hostPublic, _, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	host := HostEnrollment{HostID: "host_uncertain", Tenant: "tenant_01", Pool: "pool_01", Generation: 1, ProtocolVersion: sandboxhostprotocol.Version, CertificateDigest: digest("1"), SigningPublicKey: hostPublic, CapabilityDigest: digest("2"), Status: HostActive, ExpiresAt: now.Add(time.Hour)}
+	if err := ledger.ProvisionHost(context.Background(), host, AttestationInput{Profile: AttestationProfileLocalMetadata}, nil); err != nil {
+		t.Fatal(err)
+	}
+	operation := Operation{Principal: "tenant_01:subject_01", Tenant: host.Tenant, ID: "op_uncertain", Kind: "close-sandbox", TargetKind: "sandbox", TargetID: "sbx_uncertain", InputDigest: digest("3"), CanonicalDigest: digest("4"), EffectiveSpecDigest: digest("5"), CapabilityDigest: host.CapabilityDigest, DispatchBody: `{"version":"sandbox.control/v1"}`, AcceptedAt: now, RetentionExpiresAt: now.Add(time.Hour), CleanupRequired: true}
+	if _, _, err := ledger.Accept(context.Background(), operation); err != nil {
+		t.Fatal(err)
+	}
+	identity := HostIdentity{HostID: host.HostID, Generation: host.Generation, CertificateDigest: host.CertificateDigest}
+	dispatch, err := ledger.PullHostAssignment(context.Background(), identity, now, now.Add(time.Minute), DeliverySeed{AssignmentID: "assignment_uncertain", EnvelopeID: "envelope_uncertain", DeliveryID: "delivery_uncertain", Nonce: "nonce_uncertain"}, testEnvelopeSigner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ledger.AcknowledgeHostAssignment(context.Background(), identity, dispatch.Operation.Assignment.AssignmentID, dispatch.Operation.Assignment.FencingToken, digest("6"), now.Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	started := sandboxhostprotocol.Result{ProtocolVersion: sandboxhostprotocol.Version, ResultID: "started_uncertain", HostID: host.HostID, HostGeneration: host.Generation, AssignmentID: dispatch.Operation.Assignment.AssignmentID, LeaseEpoch: dispatch.Operation.Assignment.LeaseEpoch, FencingToken: dispatch.Operation.Assignment.FencingToken, Principal: operation.Principal, OperationID: operation.ID, EffectiveSpecDigest: operation.EffectiveSpecDigest, CapabilityDigest: operation.CapabilityDigest, State: "started", ObservedAt: now.Add(2 * time.Second)}
+	if got, err := ledger.RecordAuthenticatedHostResult(context.Background(), identity, started, started.ObservedAt); err != nil || got.State != StateStarted {
+		t.Fatalf("RecordAuthenticatedHostResult(started) = %#v, %v", got, err)
+	}
+	uncertain := started
+	uncertain.ResultID, uncertain.State, uncertain.ObservedAt = "uncertain_uncertain", "uncertain", now.Add(3*time.Second)
+	first, err := ledger.RecordAuthenticatedHostResult(context.Background(), identity, uncertain, uncertain.ObservedAt)
+	if err != nil || first.State != StateUncertain {
+		t.Fatalf("RecordAuthenticatedHostResult(uncertain) = %#v, %v", first, err)
+	}
+	late := now.Add(2 * time.Minute)
+	if replay, err := ledger.RecordAuthenticatedHostResult(context.Background(), identity, uncertain, late); err != nil || replay.State != StateUncertain || replay.Version != first.Version {
+		t.Fatalf("RecordAuthenticatedHostResult(late uncertain replay) = %#v, %v", replay, err)
+	}
+	requeued, err := ledger.ConfirmHostCleanupAndRequeue(context.Background(), operation.Principal, operation.ID, first.Version, late)
+	if err != nil || requeued.State != StateAccepted || requeued.Assignment.HostID != "" || requeued.Assignment.FencingToken != first.Assignment.FencingToken+1 {
+		t.Fatalf("ConfirmHostCleanupAndRequeue(normal uncertain) = %#v, %v", requeued, err)
+	}
+}
+
 func TestMemoryHostControlRefusesWrongTenantRevokedAndRogueIdentity(t *testing.T) {
 	t.Parallel()
 

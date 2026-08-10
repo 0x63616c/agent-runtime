@@ -45,7 +45,7 @@ func TestHostHandlerPullLostAckReceiptRenewAndResult(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	first := perform(t, handler, certificate, http.MethodPost, pullPath, pullRequest{ProtocolVersion: sandboxhostprotocol.Version, Kind: "pull", HostID: host.HostID, HostGeneration: host.Generation})
+	first := perform(t, handler, certificate, http.MethodPost, pullPath, sandboxhostprotocol.PullRequest{ProtocolVersion: sandboxhostprotocol.Version, Kind: "pull", HostID: host.HostID, HostGeneration: host.Generation})
 	if first.Code != http.StatusOK {
 		t.Fatalf("first pull status=%d body=%s", first.Code, first.Body.String())
 	}
@@ -53,12 +53,12 @@ func TestHostHandlerPullLostAckReceiptRenewAndResult(t *testing.T) {
 	if err != nil || envelope.ControlKeyVersion != 4 || envelope.ControlRevocationEpoch != 9 {
 		t.Fatal(err)
 	}
-	duplicate := perform(t, handler, certificate, http.MethodPost, pullPath, pullRequest{ProtocolVersion: sandboxhostprotocol.Version, Kind: "pull", HostID: host.HostID, HostGeneration: host.Generation})
+	duplicate := perform(t, handler, certificate, http.MethodPost, pullPath, sandboxhostprotocol.PullRequest{ProtocolVersion: sandboxhostprotocol.Version, Kind: "pull", HostID: host.HostID, HostGeneration: host.Generation})
 	if duplicate.Code != http.StatusOK || duplicate.Body.String() != first.Body.String() {
 		t.Fatalf("lost-ack pull status=%d duplicate=%t", duplicate.Code, duplicate.Body.String() == first.Body.String())
 	}
 	receiptDigest := sandboxhostprotocol.Digest([]byte("receipt"))
-	receipt := perform(t, handler, certificate, http.MethodPost, receiptPath, receiptRequest{ProtocolVersion: sandboxhostprotocol.Version, Kind: "receipt", AssignmentID: envelope.AssignmentID, FencingToken: envelope.FencingToken, ReceiptDigest: receiptDigest})
+	receipt := perform(t, handler, certificate, http.MethodPost, receiptPath, sandboxhostprotocol.ReceiptRequest{ProtocolVersion: sandboxhostprotocol.Version, Kind: "receipt", AssignmentID: envelope.AssignmentID, FencingToken: envelope.FencingToken, ReceiptDigest: receiptDigest})
 	if receipt.Code != http.StatusOK {
 		t.Fatalf("receipt status=%d body=%s", receipt.Code, receipt.Body.String())
 	}
@@ -79,7 +79,7 @@ func TestHostHandlerPullLostAckReceiptRenewAndResult(t *testing.T) {
 	if err != nil || renewed.FencingToken != envelope.FencingToken+1 {
 		t.Fatalf("renewed envelope=%#v error=%v", renewed, err)
 	}
-	renewedReceipt := perform(t, handler, certificate, http.MethodPost, receiptPath, receiptRequest{ProtocolVersion: sandboxhostprotocol.Version, Kind: "receipt", AssignmentID: renewed.AssignmentID, FencingToken: renewed.FencingToken, ReceiptDigest: sandboxhostprotocol.Digest([]byte("renewed-receipt"))})
+	renewedReceipt := perform(t, handler, certificate, http.MethodPost, receiptPath, sandboxhostprotocol.ReceiptRequest{ProtocolVersion: sandboxhostprotocol.Version, Kind: "receipt", AssignmentID: renewed.AssignmentID, FencingToken: renewed.FencingToken, ReceiptDigest: sandboxhostprotocol.Digest([]byte("renewed-receipt"))})
 	if renewedReceipt.Code != http.StatusOK {
 		t.Fatalf("renewed receipt status=%d body=%s", renewedReceipt.Code, renewedReceipt.Body.String())
 	}
@@ -136,7 +136,7 @@ func TestHostHandlerRejectsRogueTLSAndQuarantinesBadSignature(t *testing.T) {
 	}
 	handler, _ := NewHandler(Config{Store: store, ControlTrust: testControlTrust(now, controlPrivate.Public().(ed25519.PublicKey)), ControlSigningKey: controlPrivate, Entropy: bytes.NewReader(bytes.Repeat([]byte{0x44}, 4096)), Clock: fakeClock, LeaseDuration: time.Minute})
 	rogue := testPeerCertificate(t, "host_rogue", 1)
-	response := perform(t, handler, rogue, http.MethodPost, pullPath, pullRequest{ProtocolVersion: sandboxhostprotocol.Version, Kind: "pull", HostID: "host_rogue", HostGeneration: 1})
+	response := perform(t, handler, rogue, http.MethodPost, pullPath, sandboxhostprotocol.PullRequest{ProtocolVersion: sandboxhostprotocol.Version, Kind: "pull", HostID: "host_rogue", HostGeneration: 1})
 	if response.Code != http.StatusForbidden {
 		t.Fatalf("rogue pull status=%d", response.Code)
 	}
@@ -148,6 +148,33 @@ func TestHostHandlerRejectsRogueTLSAndQuarantinesBadSignature(t *testing.T) {
 	identity := sandboxcontrol.HostIdentity{HostID: host.HostID, Generation: host.Generation, CertificateDigest: host.CertificateDigest}
 	if _, err := store.AuthenticateHost(context.Background(), identity, now); err == nil {
 		t.Fatal("bad signature did not quarantine enrolled host")
+	}
+}
+
+func TestHostHandlerReturnsUnavailableWhenQuarantineCannotBePersisted(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 8, 7, 12, 0, 0, 0, time.UTC)
+	fakeClock, _ := clock.NewFake(now)
+	controlPublic, controlPrivate, _ := ed25519.GenerateKey(rand.Reader)
+	hostPublic, _, _ := ed25519.GenerateKey(rand.Reader)
+	certificate := testPeerCertificate(t, "host_01", 1)
+	backing := sandboxcontrol.NewMemoryLedger()
+	host := sandboxcontrol.HostEnrollment{HostID: "host_01", Tenant: "tenant_01", Pool: "pool_01", Generation: 1, ProtocolVersion: sandboxhostprotocol.Version, CertificateDigest: certificateDigest(certificate), SigningPublicKey: hostPublic, CapabilityDigest: testDigest('b'), Status: sandboxcontrol.HostActive, ExpiresAt: now.Add(time.Hour)}
+	if err := backing.ProvisionHost(context.Background(), host, sandboxcontrol.AttestationInput{Profile: sandboxcontrol.AttestationProfileLocalMetadata}, nil); err != nil {
+		t.Fatal(err)
+	}
+	handler, err := NewHandler(Config{Store: quarantineFailureStore{HostControlStore: backing}, ControlTrust: testControlTrust(now, controlPublic), ControlSigningKey: controlPrivate, Entropy: bytes.NewReader(bytes.Repeat([]byte{0x44}, 4096)), Clock: fakeClock, LeaseDuration: time.Minute})
+	if err != nil {
+		t.Fatal(err)
+	}
+	response := performBytes(t, handler, certificate, http.MethodPost, resultPath, []byte(`{"protocol_version":"sandbox.host-control/v1","result_id":"bad"}`))
+	if response.Code != http.StatusServiceUnavailable {
+		t.Fatalf("bad result with failed quarantine status=%d body=%s", response.Code, response.Body.String())
+	}
+	identity := sandboxcontrol.HostIdentity{HostID: host.HostID, Generation: host.Generation, CertificateDigest: host.CertificateDigest}
+	if _, err := backing.AuthenticateHost(context.Background(), identity, now); err != nil {
+		t.Fatalf("host was not active after unavailable quarantine: %v", err)
 	}
 }
 
@@ -215,4 +242,12 @@ func certificateDigest(certificate *x509.Certificate) string {
 
 func testDigest(character byte) string {
 	return "sha256:" + string(bytes.Repeat([]byte{character}, 64))
+}
+
+type quarantineFailureStore struct {
+	sandboxcontrol.HostControlStore
+}
+
+func (quarantineFailureStore) QuarantineHost(context.Context, sandboxcontrol.HostIdentity, string, time.Time) ([]sandboxcontrol.Operation, error) {
+	return nil, context.DeadlineExceeded
 }

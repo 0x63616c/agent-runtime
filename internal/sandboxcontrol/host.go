@@ -372,7 +372,7 @@ func (ledger *MemoryLedger) RecordAuthenticatedHostResult(ctx context.Context, i
 	if err != nil {
 		return Operation{}, ErrHostProtocolViolation
 	}
-	if operation.State == next && isTerminalState(next) {
+	if operation.State == next {
 		if fields.ResultDigest == resultDigest {
 			return operation, nil
 		}
@@ -380,12 +380,6 @@ func (ledger *MemoryLedger) RecordAuthenticatedHostResult(ctx context.Context, i
 	}
 	if !validHostResultLiveBinding(operation, result, receivedAt) {
 		return Operation{}, ErrStaleFence
-	}
-	if operation.State == next {
-		if fields.ResultDigest == resultDigest {
-			return operation, nil
-		}
-		return Operation{}, ErrHostProtocolViolation
 	}
 	if !permits(operation.State, next) {
 		return Operation{}, ErrInvalidTransition
@@ -428,12 +422,19 @@ func (ledger *MemoryLedger) ConfirmHostCleanupAndRequeue(ctx context.Context, pr
 	if !exists {
 		return Operation{}, ErrNotFoundOrDenied
 	}
-	if operation.State != StateUncertain || operation.Version != version || operation.Assignment.HostID != "" || !operation.CleanupRequired || observedAt.IsZero() {
+	if operation.State != StateUncertain || operation.Version != version || !operation.CleanupRequired || observedAt.IsZero() {
 		return Operation{}, ErrInvalidTransition
+	}
+	if operation.Assignment.HostID != "" {
+		if operation.Assignment.FencingToken == math.MaxUint64 {
+			return Operation{}, ErrInvalidTransition
+		}
+		operation.Assignment = Assignment{FencingToken: operation.Assignment.FencingToken + 1}
 	}
 	operation.State = StateAccepted
 	operation.Version++
 	ledger.operations[key] = operation
+	delete(ledger.dispatches, key)
 	ledger.appendOutbox(operation, OutboxStateChanged)
 	return operation, nil
 }

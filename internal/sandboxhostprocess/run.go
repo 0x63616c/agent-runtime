@@ -41,21 +41,6 @@ var (
 // SecretLookup resolves only explicitly named already-injected values.
 type SecretLookup func(string) (string, bool)
 
-type pullRequest struct {
-	ProtocolVersion string `json:"protocol_version"`
-	Kind            string `json:"kind"`
-	HostID          string `json:"host_id"`
-	HostGeneration  uint64 `json:"host_generation"`
-}
-
-type receiptRequest struct {
-	ProtocolVersion string `json:"protocol_version"`
-	Kind            string `json:"kind"`
-	AssignmentID    string `json:"assignment_id"`
-	FencingToken    uint64 `json:"fencing_token"`
-	ReceiptDigest   string `json:"receipt_digest"`
-}
-
 // RunOnce polls one reference operation with the explicit unavailable executor.
 // It fails closed to uncertain rather than claiming a fabricated effect.
 func RunOnce(ctx context.Context, config Config, lookup SecretLookup, source clock.Clock) error {
@@ -111,7 +96,7 @@ func RunOnceWithExecutor(ctx context.Context, config Config, lookup SecretLookup
 			return err
 		}
 	}
-	pullBody, _ := json.Marshal(pullRequest{ProtocolVersion: sandboxhostprotocol.Version, Kind: "pull", HostID: config.hostID, HostGeneration: config.hostGeneration})
+	pullBody, _ := json.Marshal(sandboxhostprotocol.PullRequest{ProtocolVersion: sandboxhostprotocol.Version, Kind: "pull", HostID: config.hostID, HostGeneration: config.hostGeneration})
 	response, err := do(ctx, client, config.controlURL+pullPath, pullBody)
 	if err != nil {
 		return err
@@ -134,7 +119,7 @@ func RunOnceWithExecutor(ctx context.Context, config Config, lookup SecretLookup
 	if config.testFaultAfterJournal {
 		return ErrInjectedJournalFault
 	}
-	receiptBody, _ := json.Marshal(receiptRequest{ProtocolVersion: sandboxhostprotocol.Version, Kind: "receipt", AssignmentID: envelope.AssignmentID, FencingToken: envelope.FencingToken, ReceiptDigest: entry.ReceiptDigest})
+	receiptBody, _ := json.Marshal(sandboxhostprotocol.ReceiptRequest{ProtocolVersion: sandboxhostprotocol.Version, Kind: "receipt", AssignmentID: envelope.AssignmentID, FencingToken: envelope.FencingToken, ReceiptDigest: entry.ReceiptDigest})
 	receiptResponse, err := do(ctx, client, config.controlURL+receiptPath, receiptBody)
 	if err != nil {
 		return err
