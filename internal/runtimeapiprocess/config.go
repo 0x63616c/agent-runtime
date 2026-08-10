@@ -21,6 +21,7 @@ type Config struct {
 	maxRequestBytes             int64
 	principals                  []principal
 	observabilityKeyEnvironment string
+	storage                     storage
 }
 
 type document struct {
@@ -34,7 +35,21 @@ type document struct {
 }
 
 type storageDocument struct {
-	Mode string `json:"mode"`
+	Mode                   string          `json:"mode"`
+	DatabaseDSNEnvironment string          `json:"database_dsn_environment,omitempty"`
+	Content                contentDocument `json:"content,omitempty"`
+}
+
+type contentDocument struct {
+	Endpoint             string `json:"endpoint"`
+	AccessKeyEnvironment string `json:"access_key_environment"`
+	SecretKeyEnvironment string `json:"secret_key_environment"`
+	Bucket               string `json:"bucket"`
+}
+
+type storage struct {
+	mode, databaseDSNEnvironment string
+	content                      contentDocument
 }
 
 type observabilityDocument struct {
@@ -75,8 +90,18 @@ func Parse(input io.Reader) (Config, error) {
 	if err != nil || port == "" || (host != "127.0.0.1" && host != "::1") {
 		return Config{}, errors.New("validate runtime API configuration: listen_address must be an explicit loopback bind address")
 	}
-	if decoded.Storage.Mode != "memory-unsafe" {
-		return Config{}, errors.New("validate runtime API configuration: storage mode must explicitly be memory-unsafe until a durable repository is available")
+	storage := storage{mode: decoded.Storage.Mode, databaseDSNEnvironment: decoded.Storage.DatabaseDSNEnvironment, content: decoded.Storage.Content}
+	switch storage.mode {
+	case "memory-unsafe":
+		if storage.databaseDSNEnvironment != "" || storage.content != (contentDocument{}) {
+			return Config{}, errors.New("validate runtime API configuration: memory-unsafe storage has durable fields")
+		}
+	case "postgres":
+		if !environmentName.MatchString(storage.databaseDSNEnvironment) || storage.content.Endpoint == "" || !environmentName.MatchString(storage.content.AccessKeyEnvironment) || !environmentName.MatchString(storage.content.SecretKeyEnvironment) || storage.content.Bucket == "" {
+			return Config{}, errors.New("validate runtime API configuration: durable PostgreSQL and MinIO storage is incomplete")
+		}
+	default:
+		return Config{}, errors.New("validate runtime API configuration: storage mode is unsupported")
 	}
 	if len(decoded.ModelProfiles) == 0 || len(decoded.ModelProfiles) > 32 || decoded.MaxRequestBytes < 3<<20 || decoded.MaxRequestBytes > 16<<20 {
 		return Config{}, errors.New("validate runtime API configuration: profiles and request bound are invalid")
@@ -111,7 +136,7 @@ func Parse(input io.Reader) (Config, error) {
 		}
 		observabilityKeyEnvironment = observability.IdentityCorrelationKeyEnvironment
 	}
-	return Config{listenAddress: decoded.ListenAddress, modelProfiles: append([]string(nil), decoded.ModelProfiles...), maxRequestBytes: decoded.MaxRequestBytes, principals: principals, observabilityKeyEnvironment: observabilityKeyEnvironment}, nil
+	return Config{listenAddress: decoded.ListenAddress, modelProfiles: append([]string(nil), decoded.ModelProfiles...), maxRequestBytes: decoded.MaxRequestBytes, principals: principals, observabilityKeyEnvironment: observabilityKeyEnvironment, storage: storage}, nil
 }
 
 func parseObservability(value json.RawMessage) (observabilityDocument, error) {
