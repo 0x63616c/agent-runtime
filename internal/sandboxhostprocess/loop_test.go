@@ -19,8 +19,8 @@ func TestLoopTreatsVerifiedNoWorkAsReadyAndWaitsWithoutOverlap(t *testing.T) {
 	finished := 0
 	waits := make([]time.Duration, 0, 1)
 	summaries := make([]Summary, 0, 1)
-	err := loop(context.Background(), source, time.Second, func(context.Context, time.Duration) error {
-		waits = append(waits, time.Second)
+	err := loop(context.Background(), source, time.Second, func(_ context.Context, duration time.Duration) error {
+		waits = append(waits, duration)
 		return context.Canceled
 	}, func(context.Context) error {
 		started++
@@ -37,6 +37,9 @@ func TestLoopTreatsVerifiedNoWorkAsReadyAndWaitsWithoutOverlap(t *testing.T) {
 	}
 	if started != 1 || finished != 1 || len(waits) != 1 || len(summaries) != 1 {
 		t.Fatalf("Loop() polls=%d finished=%d waits=%v summaries=%#v", started, finished, waits, summaries)
+	}
+	if waits[0] != time.Second {
+		t.Fatalf("Loop() no-work wait = %s, want configured poll interval %s", waits[0], time.Second)
 	}
 	if !summaries[0].Ready || summaries[0].Outcome != OutcomeNoWork || summaries[0].ObservedAt != source.Now().UTC() || summaries[0].ConsecutiveFailures != 0 {
 		t.Fatalf("Loop() no-work summary = %#v", summaries[0])
