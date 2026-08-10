@@ -118,8 +118,11 @@ The `firecracker-smoke` test performs these concrete steps:
 
 The checked-in `LinuxJailerHost` has the corresponding injected-port contract:
 Jailer start, ordered private REST configuration, guest serial/vsock control,
-then process and resource cleanup. This local contract neither substitutes for
-the runner nor changes the required real-boot evidence above.
+then process and resource cleanup. Its Jailer start carries the exact compiled
+resource enforcement and a per-VM jailed kernel/rootfs/API/vsock path mapping;
+its request is immutable after preparation and its calls are context-fenced.
+This local contract neither substitutes for the runner nor changes the required
+real-boot evidence above.
 
 This is a real KVM proof: a Firecracker process alone is insufficient; the
 guest kernel must boot and execute the marker program. It is also intentionally
