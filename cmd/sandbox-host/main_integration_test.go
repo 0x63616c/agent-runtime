@@ -176,6 +176,22 @@ func TestHostProcessHarnessKillsAnUnresponsiveChild(t *testing.T) {
 	}
 }
 
+func TestHostProcessHarnessRedactsEarlyExitDiagnostics(t *testing.T) {
+	if os.Getenv("HOST_PROCESS_EARLY_EXIT_HELPER") == "1" {
+		_, _ = fmt.Fprintln(os.Stderr, os.Getenv("HOST_PROCESS_EARLY_EXIT_SECRET"))
+		os.Exit(7)
+	}
+	const secret = "host-process-secret"
+	process := startProcess(t, os.Args[0], []string{"-test.run=^TestHostProcessHarnessRedactsEarlyExitDiagnostics$"}, map[string]string{"HOST_PROCESS_EARLY_EXIT_HELPER": "1", "HOST_PROCESS_EARLY_EXIT_SECRET": secret})
+	if err := process.wait(); err == nil {
+		t.Fatal("early-exit process error = nil")
+	}
+	diagnostics := process.diagnostics()
+	if strings.Contains(diagnostics, secret) || !strings.Contains(diagnostics, "[redacted]") {
+		t.Fatalf("early-exit diagnostics = %q", diagnostics)
+	}
+}
+
 type identities struct {
 	caPEM                                []byte
 	publicCertificate, publicKey         string
@@ -260,12 +276,13 @@ func writeHostConfig(t *testing.T, directory, name, address string, identity ide
 }
 
 type process struct {
-	command *exec.Cmd
-	stdout  *processOutput
-	stderr  *boundedOutput
-	done    chan struct{}
-	mu      sync.Mutex
-	waitErr error
+	command    *exec.Cmd
+	stdout     *processOutput
+	stderr     *boundedOutput
+	redactions []string
+	done       chan struct{}
+	mu         sync.Mutex
+	waitErr    error
 }
 
 func startProcess(t *testing.T, binary string, args []string, environment map[string]string) *process {
@@ -281,7 +298,7 @@ func startProcess(t *testing.T, binary string, args []string, environment map[st
 	if err := command.Start(); err != nil {
 		t.Fatal(err)
 	}
-	process := &process{command: command, stdout: stdout, stderr: stderr, done: make(chan struct{})}
+	process := &process{command: command, stdout: stdout, stderr: stderr, redactions: redactionsFromEnvironment(environment), done: make(chan struct{})}
 	go func() {
 		process.mu.Lock()
 		process.waitErr = command.Wait()
@@ -395,7 +412,27 @@ func (process *process) wait() error {
 }
 
 func (process *process) diagnostics(secrets ...string) string {
-	return redactDiagnostics(process.stdout.String()+process.stderr.String(), secrets...)
+	redactions := append(append([]string(nil), process.redactions...), secrets...)
+	return redactDiagnostics(process.stdout.String()+process.stderr.String(), redactions...)
+}
+
+// redactionsFromEnvironment fails closed for each value supplied to the child.
+// The harness must never emit a child-owned value merely because a caller omitted
+// a secret argument on an early-exit/readiness diagnostic path.
+func redactionsFromEnvironment(environment map[string]string) []string {
+	values := make([]string, 0, len(environment))
+	seen := make(map[string]struct{}, len(environment))
+	for _, value := range environment {
+		if value == "" {
+			continue
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		values = append(values, value)
+	}
+	return values
 }
 
 type controlReady struct {

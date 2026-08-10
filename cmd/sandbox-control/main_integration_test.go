@@ -83,12 +83,13 @@ func TestSandboxControlSeparateProcessReconnectsAcrossRestart(t *testing.T) {
 }
 
 type controlProcess struct {
-	command *exec.Cmd
-	stdout  *controlOutput
-	stderr  *boundedOutput
-	done    chan struct{}
-	mu      sync.Mutex
-	waitErr error
+	command    *exec.Cmd
+	stdout     *controlOutput
+	stderr     *boundedOutput
+	redactions []string
+	done       chan struct{}
+	mu         sync.Mutex
+	waitErr    error
 }
 
 func startControlProcess(t *testing.T, binary, configPath, dsn, authorization, assertionKey string) *controlProcess {
@@ -109,7 +110,7 @@ func startCommand(t *testing.T, binary string, arguments []string, environment m
 	if err := command.Start(); err != nil {
 		t.Fatal(err)
 	}
-	process := &controlProcess{command: command, stdout: stdout, stderr: stderr, done: make(chan struct{})}
+	process := &controlProcess{command: command, stdout: stdout, stderr: stderr, redactions: redactionsFromEnvironment(environment), done: make(chan struct{})}
 	go func() {
 		process.mu.Lock()
 		process.waitErr = command.Wait()
@@ -129,7 +130,7 @@ func TestControlProcessHarnessRedactsEarlyExitDiagnostics(t *testing.T) {
 	if err := process.wait(); err == nil {
 		t.Fatal("early-exit process error = nil")
 	}
-	diagnostics := process.diagnostics(secret)
+	diagnostics := process.diagnostics()
 	if strings.Contains(diagnostics, secret) || !strings.Contains(diagnostics, "[redacted]") {
 		t.Fatalf("early-exit diagnostics = %q", diagnostics)
 	}
@@ -314,7 +315,27 @@ func (process *controlProcess) wait() error {
 }
 
 func (process *controlProcess) diagnostics(secrets ...string) string {
-	return redactDiagnostics(process.stdout.String()+process.stderr.String(), secrets...)
+	redactions := append(append([]string(nil), process.redactions...), secrets...)
+	return redactDiagnostics(process.stdout.String()+process.stderr.String(), redactions...)
+}
+
+// redactionsFromEnvironment fails closed for each value supplied to the child.
+// The harness must never emit a child-owned value merely because a caller omitted
+// a secret argument on an early-exit/readiness diagnostic path.
+func redactionsFromEnvironment(environment map[string]string) []string {
+	values := make([]string, 0, len(environment))
+	seen := make(map[string]struct{}, len(environment))
+	for _, value := range environment {
+		if value == "" {
+			continue
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		values = append(values, value)
+	}
+	return values
 }
 
 type controlReady struct {
