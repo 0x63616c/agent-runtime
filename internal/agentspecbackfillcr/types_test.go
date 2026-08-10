@@ -82,6 +82,16 @@ func TestStatusIsBoundedCanonicalAndTerminallyImmutable(t *testing.T) {
 	if err := mutated.ValidateTransitionFrom(status, request, now); err == nil {
 		t.Fatal("ValidateTransitionFrom() accepted terminal status mutation")
 	}
+	overflowGeneration := request
+	overflowGeneration.Metadata.Generation = uint64(1) << 63
+	if _, err := overflowGeneration.Canonical(); err == nil {
+		t.Fatal("Canonical() accepted metadata generation outside Kubernetes int64 domain")
+	}
+	overflowObserved := status
+	overflowObserved.ObservedGeneration = uint64(1) << 63
+	if _, err := overflowObserved.CanonicalFor(request, now); err == nil {
+		t.Fatal("CanonicalFor() accepted observed generation outside Kubernetes int64 domain")
+	}
 	for _, input := range [][]byte{
 		append(append([]byte(nil), canonical...), '\n'),
 		[]byte(strings.Replace(string(canonical), `"phase":"Verified"`, `"phase":"Verified","rawOutput":"forbidden"`, 1)),

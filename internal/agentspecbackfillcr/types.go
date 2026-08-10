@@ -20,6 +20,7 @@ const (
 
 	maximumRequestWireBytes = 4096
 	maximumStatusWireBytes  = 2048
+	maximumGeneration       = uint64(^uint64(0) >> 1)
 )
 
 var opaqueValue = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,127}$`)
@@ -209,7 +210,7 @@ func (status Status) ValidateFor(request Request, now time.Time) error {
 		return err
 	}
 	digest, err := request.Spec.Digest()
-	if err != nil || !opaqueValue.MatchString(request.Metadata.UID) || request.Metadata.Generation == 0 || status.RequestUID != request.Metadata.UID || status.ObservedGeneration != request.Metadata.Generation || status.ControllerImageDigest != request.Spec.ControllerImageDigest || status.RequestDigest != digest || status.SnapshotFingerprint != request.Spec.SnapshotFingerprint || status.SnapshotCount != request.Spec.SnapshotCount || status.ManifestDigest != request.Spec.ManifestDigest || status.StaticReadinessDigest != request.Spec.StaticReadinessDigest || status.VerifiedCount > request.Spec.SnapshotCount {
+	if err != nil || !opaqueValue.MatchString(request.Metadata.UID) || request.Metadata.Generation == 0 || request.Metadata.Generation > maximumGeneration || status.RequestUID != request.Metadata.UID || status.ObservedGeneration != request.Metadata.Generation || status.ObservedGeneration > maximumGeneration || status.ControllerImageDigest != request.Spec.ControllerImageDigest || status.RequestDigest != digest || status.SnapshotFingerprint != request.Spec.SnapshotFingerprint || status.SnapshotCount != request.Spec.SnapshotCount || status.ManifestDigest != request.Spec.ManifestDigest || status.StaticReadinessDigest != request.Spec.StaticReadinessDigest || status.VerifiedCount > request.Spec.SnapshotCount {
 		return errors.New("AgentSpecBackfill status is not bound to the immutable request")
 	}
 	if status.Phase == agentspecbackfill.PhasePending || status.Phase == agentspecbackfill.PhaseVerifying {
@@ -238,7 +239,7 @@ func (status Status) ValidateTransitionFrom(previous Status, request Request, no
 
 func (request Request) validate() error {
 	name, err := request.Spec.Name()
-	if err != nil || request.APIVersion != APIVersion || request.Kind != Kind || request.Metadata.Name != name || request.Metadata.UID != "" && (!opaqueValue.MatchString(request.Metadata.UID) || request.Metadata.Generation == 0) || request.Metadata.UID == "" && request.Metadata.Generation != 0 {
+	if err != nil || request.APIVersion != APIVersion || request.Kind != Kind || request.Metadata.Name != name || request.Metadata.UID != "" && (!opaqueValue.MatchString(request.Metadata.UID) || request.Metadata.Generation == 0 || request.Metadata.Generation > maximumGeneration) || request.Metadata.UID == "" && request.Metadata.Generation != 0 {
 		return errors.New("AgentSpecBackfill request is invalid")
 	}
 	return nil

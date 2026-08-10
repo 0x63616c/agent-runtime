@@ -183,7 +183,7 @@ type Status struct {
 
 // Canonical returns the deterministic bounded CBOR terminal-status envelope.
 func (status Status) Canonical() ([]byte, error) {
-	if (status.Phase != PhaseVerified && status.Phase != PhaseRefused) || !validDigest(status.RequestDigest) || !validDigest(status.SnapshotFingerprint) || status.SnapshotCount == 0 || status.CompletedAt.IsZero() || status.CompletedAt.Location() != time.UTC {
+	if (status.Phase != PhaseVerified && status.Phase != PhaseRefused) || !validDigest(status.RequestDigest) || !validDigest(status.SnapshotFingerprint) || status.SnapshotCount == 0 || status.SnapshotCount > maximumCount || status.CompletedAt.IsZero() || status.CompletedAt.Location() != time.UTC {
 		return nil, errors.New("invalid backfill status")
 	}
 	if (status.Phase == PhaseVerified && status.Reason != "") || (status.Phase == PhaseRefused && !validReason(status.Reason)) {

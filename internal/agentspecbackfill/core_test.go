@@ -90,6 +90,11 @@ func TestRequestUsesCanonicalDigestNameAndBoundedImmutableStatus(t *testing.T) {
 	if _, err := overflowCount.Canonical(); err == nil {
 		t.Fatal("request count outside Kubernetes int64 domain was canonicalized")
 	}
+	overflowStatus := status
+	overflowStatus.SnapshotCount = uint64(1) << 63
+	if _, err := overflowStatus.Canonical(); err == nil {
+		t.Fatal("terminal status count outside Kubernetes int64 domain was canonicalized")
+	}
 }
 
 func TestVerifyRefusesFrozenSnapshotAndImmutableContentFailures(t *testing.T) {
