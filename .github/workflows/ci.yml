@@ -246,11 +246,10 @@ jobs:
             registry_create_succeeded=true
             registry_container_id="$(docker container inspect --format '{{.Id}}' "$registry_container")"
             [[ "$registry_container_id" =~ ^[a-f0-9]{64}$ ]]
-            registry_host_port="$(docker container inspect "$registry_container" | jq -er --arg port "$registry_port/tcp" '.[0].NetworkSettings.Ports[$port] | if type == "array" and length == 1 and .[0].HostIp == "127.0.0.1" and (.[0].HostPort | test("^[1-9][0-9]{0,4}$")) then .[0].HostPort else error("expected one loopback registry port mapping") end')"
+            registry_host_port="$(docker container inspect "$registry_container" | jq -er --arg port "5000/tcp" '.[0].NetworkSettings.Ports[$port] | if type == "array" and length == 1 and .[0].HostIp == "127.0.0.1" and (.[0].HostPort | test("^[1-9][0-9]{0,4}$")) then .[0].HostPort else error("expected one loopback registry port mapping") end')"
             (( registry_host_port <= 65535 ))
-            [[ "$registry_host_port" == "$registry_port" ]]
             registry_host="localhost:$registry_host_port"
-            registry_host_from_cluster="k3d-$registry:$registry_port"
+            registry_host_from_cluster="k3d-$registry:5000"
             write_ownership_record
           else
             write_ownership_record
