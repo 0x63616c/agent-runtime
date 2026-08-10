@@ -4,17 +4,15 @@ package runtimeapi
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"io"
 	"mime"
 	"net/http"
 	"net/url"
+	"reflect"
 	"strconv"
 	"strings"
 
-	"github.com/0x63616c/agent-runtime/internal/runtime/kernel"
 	agentruntime "github.com/0x63616c/agent-runtime/sdk/go"
 	"github.com/cockroachdb/errors"
 )
@@ -35,7 +33,7 @@ type Authenticator interface {
 
 // Config declares every dependency and finite request bound used by the API.
 type Config struct {
-	Kernel          *kernel.Kernel
+	Runtime         Runtime
 	Authenticator   Authenticator
 	RequestIDs      agentruntime.RequestIDSource
 	MaxRequestBytes int64
@@ -43,8 +41,8 @@ type Config struct {
 
 // NewHandler constructs the versioned public HTTP API without starting a listener.
 func NewHandler(config Config) (http.Handler, error) {
-	if config.Kernel == nil || config.Authenticator == nil || config.RequestIDs == nil {
-		return nil, errors.New("create runtime API: kernel, authenticator, and request ID source are required")
+	if runtimeMissing(config.Runtime) || config.Authenticator == nil || config.RequestIDs == nil {
+		return nil, errors.New("create runtime API: runtime, authenticator, and request ID source are required")
 	}
 	limit := config.MaxRequestBytes
 	if limit == 0 {
@@ -60,7 +58,7 @@ func NewHandler(config Config) (http.Handler, error) {
 	if _, err := agentruntime.ParseRequestID(emergencyRequestID.String()); err != nil {
 		return nil, errors.New("create runtime API: request ID source returned an invalid ID")
 	}
-	server := &server{kernel: config.Kernel, authenticator: config.Authenticator, requestIDs: config.RequestIDs, emergencyRequestID: emergencyRequestID, maxRequestBytes: limit}
+	server := &server{runtime: config.Runtime, authenticator: config.Authenticator, requestIDs: config.RequestIDs, emergencyRequestID: emergencyRequestID, maxRequestBytes: limit}
 	mux := http.NewServeMux()
 	mux.HandleFunc(openAPIMethodCreateAgent+" "+openAPIPathCreateAgent, server.createAgent)
 	mux.HandleFunc(openAPIMethodReviseAgent+" "+openAPIPathReviseAgent, server.reviseAgent)
@@ -77,13 +75,26 @@ func NewHandler(config Config) (http.Handler, error) {
 	return server, nil
 }
 
+func runtimeMissing(runtime Runtime) bool {
+	if runtime == nil {
+		return true
+	}
+	value := reflect.ValueOf(runtime)
+	switch value.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
+		return value.IsNil()
+	default:
+		return false
+	}
+}
+
 func (server *server) notFound(writer http.ResponseWriter, request *http.Request) {
 	contextValue := request.Context().Value(requestContextKey{}).(requestContext)
 	server.writeFailure(writer, contextValue.requestID, http.StatusNotFound, agentruntime.Failure{Code: agentruntime.FailureNotFound, Message: "resource not found"})
 }
 
 type server struct {
-	kernel             *kernel.Kernel
+	runtime            Runtime
 	authenticator      Authenticator
 	requestIDs         agentruntime.RequestIDSource
 	emergencyRequestID agentruntime.RequestID
@@ -92,10 +103,8 @@ type server struct {
 }
 
 type requestContext struct {
-	requestID      agentruntime.RequestID
-	tenantScope    kernel.Scope
-	principalScope kernel.Scope
-	admin          bool
+	requestID agentruntime.RequestID
+	identity  Identity
 }
 
 func (server *server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
@@ -137,7 +146,7 @@ func (server *server) ServeHTTP(writer http.ResponseWriter, request *http.Reques
 		server.writeFailure(writer, requestID, http.StatusUnauthorized, agentruntime.Failure{Code: agentruntime.FailureNotFound, Message: "resource not found"})
 		return
 	}
-	contextValue := requestContext{requestID: requestID, tenantScope: scope("tenant", identity.Tenant), principalScope: scope("principal", identity.Tenant+"\x00"+identity.Principal), admin: identity.Admin}
+	contextValue := requestContext{requestID: requestID, identity: identity}
 	if !validQuery(request) {
 		server.writeInvalid(writer, requestID)
 		return
@@ -149,7 +158,7 @@ type requestContextKey struct{}
 
 func (server *server) createAgent(writer http.ResponseWriter, request *http.Request) {
 	contextValue := request.Context().Value(requestContextKey{}).(requestContext)
-	if !contextValue.admin {
+	if !contextValue.identity.Admin {
 		server.writeFailure(writer, contextValue.requestID, http.StatusNotFound, agentruntime.Failure{Code: agentruntime.FailureNotFound, Message: "resource not found"})
 		return
 	}
@@ -162,13 +171,13 @@ func (server *server) createAgent(writer http.ResponseWriter, request *http.Requ
 	if !server.decodeMutation(writer, request, contextValue.requestID, &body) {
 		return
 	}
-	result, err := server.kernel.CreateAgent(request.Context(), contextValue.tenantScope, agentruntime.CreateAgentRequest{IdempotencyKey: request.Header.Get("Idempotency-Key"), Name: body.Name, ModelProfile: body.ModelProfile, Instructions: body.Instructions, Tools: body.Tools})
+	result, err := server.runtime.CreateAgent(request.Context(), contextValue.identity, agentruntime.CreateAgentRequest{IdempotencyKey: request.Header.Get("Idempotency-Key"), Name: body.Name, ModelProfile: body.ModelProfile, Instructions: body.Instructions, Tools: body.Tools})
 	server.writeResult(writer, contextValue.requestID, http.StatusCreated, result, err)
 }
 
 func (server *server) reviseAgent(writer http.ResponseWriter, request *http.Request) {
 	contextValue := request.Context().Value(requestContextKey{}).(requestContext)
-	if !contextValue.admin {
+	if !contextValue.identity.Admin {
 		server.writeFailure(writer, contextValue.requestID, http.StatusNotFound, agentruntime.Failure{Code: agentruntime.FailureNotFound, Message: "resource not found"})
 		return
 	}
@@ -184,13 +193,13 @@ func (server *server) reviseAgent(writer http.ResponseWriter, request *http.Requ
 		}
 		return
 	}
-	result, callErr := server.kernel.ReviseAgent(request.Context(), contextValue.tenantScope, agentruntime.ReviseAgentRequest{AgentID: agentID, IdempotencyKey: request.Header.Get("Idempotency-Key"), ModelProfile: body.ModelProfile, Instructions: body.Instructions, Tools: body.Tools})
+	result, callErr := server.runtime.ReviseAgent(request.Context(), contextValue.identity, agentruntime.ReviseAgentRequest{AgentID: agentID, IdempotencyKey: request.Header.Get("Idempotency-Key"), ModelProfile: body.ModelProfile, Instructions: body.Instructions, Tools: body.Tools})
 	server.writeResult(writer, contextValue.requestID, http.StatusCreated, result, callErr)
 }
 
 func (server *server) getAgentRevision(writer http.ResponseWriter, request *http.Request) {
 	contextValue := request.Context().Value(requestContextKey{}).(requestContext)
-	if !contextValue.admin {
+	if !contextValue.identity.Admin {
 		server.writeFailure(writer, contextValue.requestID, http.StatusNotFound, agentruntime.Failure{Code: agentruntime.FailureNotFound, Message: "resource not found"})
 		return
 	}
@@ -200,7 +209,7 @@ func (server *server) getAgentRevision(writer http.ResponseWriter, request *http
 		server.writeInvalid(writer, contextValue.requestID)
 		return
 	}
-	result, err := server.kernel.GetAgentRevision(request.Context(), contextValue.tenantScope, agentID, revisionID)
+	result, err := server.runtime.GetAgentRevision(request.Context(), contextValue.identity, agentID, revisionID)
 	server.writeResult(writer, contextValue.requestID, http.StatusOK, result, err)
 }
 
@@ -212,12 +221,7 @@ func (server *server) createSession(writer http.ResponseWriter, request *http.Re
 	if !server.decodeMutation(writer, request, contextValue.requestID, &body) {
 		return
 	}
-	revision, err := server.kernel.ResolveAgentRevision(request.Context(), contextValue.tenantScope, body.AgentRevision)
-	if err != nil {
-		server.writeResult(writer, contextValue.requestID, http.StatusCreated, agentruntime.Session{}, err)
-		return
-	}
-	result, err := server.kernel.CreateSessionFromRevision(request.Context(), contextValue.principalScope, agentruntime.CreateSessionRequest{IdempotencyKey: request.Header.Get("Idempotency-Key"), AgentRevision: body.AgentRevision}, revision)
+	result, err := server.runtime.CreateSession(request.Context(), contextValue.identity, agentruntime.CreateSessionRequest{IdempotencyKey: request.Header.Get("Idempotency-Key"), AgentRevision: body.AgentRevision})
 	server.writeResult(writer, contextValue.requestID, http.StatusCreated, result, err)
 }
 
@@ -233,7 +237,7 @@ func (server *server) sendInput(writer http.ResponseWriter, request *http.Reques
 		}
 		return
 	}
-	result, callErr := server.kernel.SendInput(request.Context(), contextValue.principalScope, agentruntime.SendInputRequest{SessionID: sessionID, IdempotencyKey: request.Header.Get("Idempotency-Key"), Parts: body.Parts})
+	result, callErr := server.runtime.SendInput(request.Context(), contextValue.identity, agentruntime.SendInputRequest{SessionID: sessionID, IdempotencyKey: request.Header.Get("Idempotency-Key"), Parts: body.Parts})
 	server.writeResult(writer, contextValue.requestID, http.StatusAccepted, result, callErr)
 }
 
@@ -244,7 +248,7 @@ func (server *server) inspectSession(writer http.ResponseWriter, request *http.R
 		server.writeInvalid(writer, contextValue.requestID)
 		return
 	}
-	result, err := server.kernel.InspectSession(request.Context(), contextValue.principalScope, sessionID)
+	result, err := server.runtime.InspectSession(request.Context(), contextValue.identity, sessionID)
 	server.writeResult(writer, contextValue.requestID, http.StatusOK, result, err)
 }
 
@@ -256,7 +260,7 @@ func (server *server) inspectTurn(writer http.ResponseWriter, request *http.Requ
 		server.writeInvalid(writer, contextValue.requestID)
 		return
 	}
-	result, err := server.kernel.InspectTurn(request.Context(), contextValue.principalScope, sessionID, turnID)
+	result, err := server.runtime.InspectTurn(request.Context(), contextValue.identity, sessionID, turnID)
 	server.writeResult(writer, contextValue.requestID, http.StatusOK, result, err)
 }
 
@@ -280,7 +284,7 @@ func (server *server) events(writer http.ResponseWriter, request *http.Request) 
 		server.writeInvalid(writer, contextValue.requestID)
 		return
 	}
-	result, err := server.kernel.Events(request.Context(), contextValue.principalScope, sessionID, after, limit)
+	result, err := server.runtime.Events(request.Context(), contextValue.identity, sessionID, after, limit)
 	server.writeResult(writer, contextValue.requestID, http.StatusOK, result, err)
 }
 
@@ -295,11 +299,7 @@ func (server *server) cancelTurn(writer http.ResponseWriter, request *http.Reque
 		}
 		return
 	}
-	if _, err := server.kernel.InspectTurn(request.Context(), contextValue.principalScope, sessionID, turnID); err != nil {
-		server.writeResult(writer, contextValue.requestID, http.StatusOK, agentruntime.Turn{}, err)
-		return
-	}
-	result, err := server.kernel.CancelTurn(request.Context(), contextValue.principalScope, agentruntime.CancelTurnRequest{SessionID: sessionID, TurnID: turnID, IdempotencyKey: request.Header.Get("Idempotency-Key")})
+	result, err := server.runtime.CancelTurn(request.Context(), contextValue.identity, agentruntime.CancelTurnRequest{SessionID: sessionID, TurnID: turnID, IdempotencyKey: request.Header.Get("Idempotency-Key")})
 	server.writeResult(writer, contextValue.requestID, http.StatusOK, result, err)
 }
 
@@ -313,7 +313,7 @@ func (server *server) closeSession(writer http.ResponseWriter, request *http.Req
 		}
 		return
 	}
-	result, callErr := server.kernel.CloseSession(request.Context(), contextValue.principalScope, agentruntime.CloseSessionRequest{SessionID: sessionID, IdempotencyKey: request.Header.Get("Idempotency-Key")})
+	result, callErr := server.runtime.CloseSession(request.Context(), contextValue.identity, agentruntime.CloseSessionRequest{SessionID: sessionID, IdempotencyKey: request.Header.Get("Idempotency-Key")})
 	server.writeResult(writer, contextValue.requestID, http.StatusOK, result, callErr)
 }
 
@@ -410,10 +410,4 @@ func validQuery(request *http.Request) bool {
 		}
 	}
 	return len(query["limit"]) == 1
-}
-
-func scope(kind, value string) kernel.Scope {
-	digest := sha256.Sum256([]byte(kind + "\x00" + value))
-	parsed, _ := kernel.ParseScope(kind + "_" + hex.EncodeToString(digest[:16]))
-	return parsed
 }

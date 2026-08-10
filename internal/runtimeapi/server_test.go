@@ -33,9 +33,11 @@ var _ = Describe("Public runtime HTTP boundary", func() {
 		Expect(err).NotTo(HaveOccurred())
 		service, err = kernel.New(fakeClock, &kernelIDs{}, kernel.NewMemoryRepository(), []string{"balanced"})
 		Expect(err).NotTo(HaveOccurred())
+		runtime, err := runtimeapi.NewKernelRuntime(service)
+		Expect(err).NotTo(HaveOccurred())
 		ids = &requestIDs{}
 		handler, err := runtimeapi.NewHandler(runtimeapi.Config{
-			Kernel: service,
+			Runtime: runtime,
 			Authenticator: staticAuth{identities: map[string]runtimeapi.Identity{
 				"admin-token-000000": {Tenant: "tenant-a", Principal: "admin", Admin: true},
 				"alice-token-000000": {Tenant: "tenant-a", Principal: "alice"},
@@ -175,7 +177,9 @@ var _ = Describe("Public runtime HTTP boundary", func() {
 
 	It("keeps allocator failure inside the safe error contract", func() {
 		source := &failingRequestIDs{}
-		handler, err := runtimeapi.NewHandler(runtimeapi.Config{Kernel: service, Authenticator: staticAuth{identities: map[string]runtimeapi.Identity{"alice-token-000000": {Tenant: "tenant-a", Principal: "alice"}}}, RequestIDs: source})
+		runtime, err := runtimeapi.NewKernelRuntime(service)
+		Expect(err).NotTo(HaveOccurred())
+		handler, err := runtimeapi.NewHandler(runtimeapi.Config{Runtime: runtime, Authenticator: staticAuth{identities: map[string]runtimeapi.Identity{"alice-token-000000": {Tenant: "tenant-a", Principal: "alice"}}}, RequestIDs: source})
 		Expect(err).NotTo(HaveOccurred())
 		failureServer := httptest.NewServer(handler)
 		DeferCleanup(failureServer.Close)
@@ -252,10 +256,175 @@ var _ = Describe("Public runtime HTTP boundary", func() {
 		Expect(view.QueuedTurnCount).To(Equal(uint64(agentruntime.MaxSessionViewQueuedTurns + 5)))
 		Expect(view.QueuedTurnsTruncated).To(BeTrue())
 	})
+
+	It("passes exact authenticated identity and request context to the runtime", func() {
+		runtime := &recordingRuntime{}
+		handler, err := runtimeapi.NewHandler(runtimeapi.Config{
+			Runtime:       runtime,
+			Authenticator: staticAuth{identities: map[string]runtimeapi.Identity{"admin-token-000000": {Tenant: "tenant-a", Principal: "admin", Admin: true}}},
+			RequestIDs:    &requestIDs{},
+		})
+		Expect(err).NotTo(HaveOccurred())
+		marker := struct{ name string }{"request-context"}
+		request := httptest.NewRequest(http.MethodPost, "/v1/admin/agents", strings.NewReader(`{"name":"assistant","model_profile":"balanced","instructions":"safe"}`)).WithContext(context.WithValue(context.Background(), marker, "preserved"))
+		request.Header.Set("Authorization", "Bearer admin-token-000000")
+		request.Header.Set("Content-Type", "application/json")
+		request.Header.Set("Idempotency-Key", "create-agent")
+		request.Header.Set("X-Request-ID", "req_0000000000000001")
+		response := httptest.NewRecorder()
+
+		handler.ServeHTTP(response, request)
+
+		Expect(response.Code).To(Equal(http.StatusCreated))
+		Expect(runtime.createAgentIdentity).To(Equal(runtimeapi.Identity{Tenant: "tenant-a", Principal: "admin", Admin: true}))
+		Expect(runtime.createAgentContext.Value(marker)).To(Equal("preserved"))
+	})
+
+	It("requires an explicit runtime without a memory fallback", func() {
+		_, err := runtimeapi.NewHandler(runtimeapi.Config{
+			Authenticator: staticAuth{identities: map[string]runtimeapi.Identity{"alice-token-000000": {Tenant: "tenant-a", Principal: "alice"}}},
+			RequestIDs:    &requestIDs{},
+		})
+		Expect(err).To(MatchError(ContainSubstring("runtime")))
+		var typedNil *recordingRuntime
+		_, err = runtimeapi.NewHandler(runtimeapi.Config{
+			Runtime:       typedNil,
+			Authenticator: staticAuth{identities: map[string]runtimeapi.Identity{"alice-token-000000": {Tenant: "tenant-a", Principal: "alice"}}},
+			RequestIDs:    &requestIDs{},
+		})
+		Expect(err).To(MatchError(ContainSubstring("runtime")))
+	})
+
+	It("preserves caller cancellation through the runtime and maps its failure", func() {
+		ctx, cancel := context.WithCancel(context.Background())
+		cancelled := make(chan struct{})
+		runtime := &recordingRuntime{
+			onCreateAgent: func(ctx context.Context) {
+				cancel()
+				<-ctx.Done()
+				close(cancelled)
+			},
+			createAgentErr: &agentruntime.Error{Failure: agentruntime.Failure{Code: agentruntime.FailureUnavailable, Message: "runtime unavailable", Retryable: true}},
+		}
+		handler, err := runtimeapi.NewHandler(runtimeapi.Config{
+			Runtime:       runtime,
+			Authenticator: staticAuth{identities: map[string]runtimeapi.Identity{"admin-token-000000": {Tenant: "tenant-a", Principal: "admin", Admin: true}}},
+			RequestIDs:    &requestIDs{},
+		})
+		Expect(err).NotTo(HaveOccurred())
+		request := httptest.NewRequest(http.MethodPost, "/v1/admin/agents", strings.NewReader(`{"name":"assistant","model_profile":"balanced","instructions":"safe"}`)).WithContext(ctx)
+		request.Header.Set("Authorization", "Bearer admin-token-000000")
+		request.Header.Set("Content-Type", "application/json")
+		request.Header.Set("Idempotency-Key", "cancelled-runtime")
+		request.Header.Set("X-Request-ID", "req_0000000000000001")
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, request)
+		Expect(cancelled).To(BeClosed())
+		Expect(response.Code).To(Equal(http.StatusServiceUnavailable))
+	})
+
+	It("denies an admin route before invoking the runtime", func() {
+		runtime := &recordingRuntime{}
+		handler, err := runtimeapi.NewHandler(runtimeapi.Config{
+			Runtime:       runtime,
+			Authenticator: staticAuth{identities: map[string]runtimeapi.Identity{"alice-token-000000": {Tenant: "tenant-a", Principal: "alice"}}},
+			RequestIDs:    &requestIDs{},
+		})
+		Expect(err).NotTo(HaveOccurred())
+		request := httptest.NewRequest(http.MethodPost, "/v1/admin/agents", strings.NewReader(`{"name":"assistant","model_profile":"balanced","instructions":"safe"}`))
+		request.Header.Set("Authorization", "Bearer alice-token-000000")
+		request.Header.Set("Content-Type", "application/json")
+		request.Header.Set("Idempotency-Key", "forbidden")
+		request.Header.Set("X-Request-ID", "req_0000000000000001")
+		response := httptest.NewRecorder()
+
+		handler.ServeHTTP(response, request)
+
+		Expect(response.Code).To(Equal(http.StatusNotFound))
+		Expect(runtime.createAgentCalls).To(BeZero())
+	})
+
+	It("returns durable unavailability without a memory fallback", func() {
+		runtime := &recordingRuntime{createSessionErr: &agentruntime.Error{Failure: agentruntime.Failure{Code: agentruntime.FailureUnavailable, Message: "durable runtime is not configured", Retryable: true}}}
+		handler, err := runtimeapi.NewHandler(runtimeapi.Config{
+			Runtime:       runtime,
+			Authenticator: staticAuth{identities: map[string]runtimeapi.Identity{"alice-token-000000": {Tenant: "tenant-a", Principal: "alice"}}},
+			RequestIDs:    &requestIDs{},
+		})
+		Expect(err).NotTo(HaveOccurred())
+		request := httptest.NewRequest(http.MethodPost, "/v1/sessions", strings.NewReader(`{"agent_revision_id":"arev_1234567890ABCDEF"}`))
+		request.Header.Set("Authorization", "Bearer alice-token-000000")
+		request.Header.Set("Content-Type", "application/json")
+		request.Header.Set("Idempotency-Key", "create-session")
+		request.Header.Set("X-Request-ID", "req_0000000000000001")
+		response := httptest.NewRecorder()
+
+		handler.ServeHTTP(response, request)
+
+		Expect(response.Code).To(Equal(http.StatusServiceUnavailable))
+		Expect(runtime.createSessionCalls).To(Equal(1))
+	})
 })
 
 type staticAuth struct {
 	identities map[string]runtimeapi.Identity
+}
+
+type recordingRuntime struct {
+	createAgentCalls    int
+	createAgentContext  context.Context
+	createAgentIdentity runtimeapi.Identity
+	createAgentErr      error
+	onCreateAgent       func(context.Context)
+	createSessionCalls  int
+	createSessionErr    error
+}
+
+func (runtime *recordingRuntime) CreateAgent(ctx context.Context, identity runtimeapi.Identity, _ agentruntime.CreateAgentRequest) (agentruntime.AgentSpecification, error) {
+	runtime.createAgentCalls++
+	runtime.createAgentContext = ctx
+	runtime.createAgentIdentity = identity
+	if runtime.onCreateAgent != nil {
+		runtime.onCreateAgent(ctx)
+	}
+	return agentruntime.AgentSpecification{}, runtime.createAgentErr
+}
+
+func (runtime *recordingRuntime) ReviseAgent(context.Context, runtimeapi.Identity, agentruntime.ReviseAgentRequest) (agentruntime.AgentSpecification, error) {
+	return agentruntime.AgentSpecification{}, nil
+}
+
+func (runtime *recordingRuntime) GetAgentRevision(context.Context, runtimeapi.Identity, agentruntime.AgentID, agentruntime.AgentRevisionID) (agentruntime.AgentSpecification, error) {
+	return agentruntime.AgentSpecification{}, nil
+}
+
+func (runtime *recordingRuntime) CreateSession(_ context.Context, _ runtimeapi.Identity, _ agentruntime.CreateSessionRequest) (agentruntime.Session, error) {
+	runtime.createSessionCalls++
+	return agentruntime.Session{}, runtime.createSessionErr
+}
+
+func (runtime *recordingRuntime) SendInput(context.Context, runtimeapi.Identity, agentruntime.SendInputRequest) (agentruntime.SendInputResult, error) {
+	return agentruntime.SendInputResult{}, nil
+}
+
+func (runtime *recordingRuntime) InspectSession(context.Context, runtimeapi.Identity, agentruntime.SessionID) (agentruntime.SessionView, error) {
+	return agentruntime.SessionView{}, nil
+}
+
+func (runtime *recordingRuntime) InspectTurn(context.Context, runtimeapi.Identity, agentruntime.SessionID, agentruntime.TurnID) (agentruntime.Turn, error) {
+	return agentruntime.Turn{}, nil
+}
+
+func (runtime *recordingRuntime) Events(context.Context, runtimeapi.Identity, agentruntime.SessionID, agentruntime.Cursor, int) (agentruntime.EventPage, error) {
+	return agentruntime.EventPage{}, nil
+}
+
+func (runtime *recordingRuntime) CancelTurn(context.Context, runtimeapi.Identity, agentruntime.CancelTurnRequest) (agentruntime.Turn, error) {
+	return agentruntime.Turn{}, nil
+}
+
+func (runtime *recordingRuntime) CloseSession(context.Context, runtimeapi.Identity, agentruntime.CloseSessionRequest) (agentruntime.Session, error) {
+	return agentruntime.Session{}, nil
 }
 
 func (auth staticAuth) Authenticate(ctx context.Context, token string) (runtimeapi.Identity, error) {

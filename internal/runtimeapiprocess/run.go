@@ -55,7 +55,11 @@ func Serve(ctx context.Context, config Config, lookup SecretLookup, listener net
 	if err != nil {
 		return err
 	}
-	handler, err := runtimeapi.NewHandler(runtimeapi.Config{Kernel: service, Authenticator: authenticator, RequestIDs: ids, MaxRequestBytes: config.maxRequestBytes})
+	runtime, err := runtimeapi.NewKernelRuntime(service)
+	if err != nil {
+		return err
+	}
+	handler, err := runtimeapi.NewHandler(runtimeapi.Config{Runtime: runtime, Authenticator: authenticator, RequestIDs: ids, MaxRequestBytes: config.maxRequestBytes})
 	if err != nil {
 		return err
 	}
