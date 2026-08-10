@@ -19,6 +19,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"syscall"
@@ -319,14 +320,28 @@ func (process *controlProcess) diagnostics(secrets ...string) string {
 	return redactDiagnostics(process.stdout.String()+process.stderr.String(), redactions...)
 }
 
-// redactionsFromEnvironment fails closed for each value supplied to the child.
-// The harness must never emit a child-owned value merely because a caller omitted
-// a secret argument on an early-exit/readiness diagnostic path.
+func TestRedactionsFromEnvironmentExcludesNonSecretFlags(t *testing.T) {
+	got := redactionsFromEnvironment(map[string]string{
+		"TEST_AUTHORIZATION":                 "authorization-secret",
+		"CONTROL_PROCESS_IGNORE_TERM_HELPER": "1",
+	})
+	if len(got) != 1 || got[0] != "authorization-secret" {
+		t.Fatalf("redactionsFromEnvironment() = %#v", got)
+	}
+	const endpoint = "127.0.0.1:1"
+	if redacted := redactDiagnostics(endpoint, got...); redacted != endpoint {
+		t.Fatalf("redactDiagnostics(endpoint) = %q; want %q", redacted, endpoint)
+	}
+}
+
+// redactionsFromEnvironment retains the exact sensitive values explicitly
+// supplied to the child. Readiness failures use this set without relying on a
+// caller to repeat the secrets, while ordinary test flags remain observable.
 func redactionsFromEnvironment(environment map[string]string) []string {
 	values := make([]string, 0, len(environment))
 	seen := make(map[string]struct{}, len(environment))
-	for _, value := range environment {
-		if value == "" {
+	for name, value := range environment {
+		if value == "" || !isSensitiveEnvironmentName(name) {
 			continue
 		}
 		if _, ok := seen[value]; ok {
@@ -335,7 +350,25 @@ func redactionsFromEnvironment(environment map[string]string) []string {
 		seen[value] = struct{}{}
 		values = append(values, value)
 	}
+	sort.Slice(values, func(i, j int) bool {
+		if len(values[i]) != len(values[j]) {
+			return len(values[i]) > len(values[j])
+		}
+		return values[i] < values[j]
+	})
 	return values
+}
+
+func isSensitiveEnvironmentName(name string) bool {
+	name = strings.ToLower(name)
+	return strings.Contains(name, "dsn") ||
+		strings.Contains(name, "authorization") ||
+		strings.Contains(name, "assertion") ||
+		strings.Contains(name, "secret") ||
+		strings.Contains(name, "token") ||
+		strings.Contains(name, "password") ||
+		strings.Contains(name, "signing_key") ||
+		strings.Contains(name, "private_key")
 }
 
 type controlReady struct {
