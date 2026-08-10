@@ -21,6 +21,18 @@ const (
 	DispatchStateCommandActivity = "runtime.dispatch-state-command.v1"
 	workflowVersionChange        = "runtime.session-workflow.command-dispatch.v1"
 	deterministicRouteErrorType  = "runtime.deterministic_outbox_route"
+	uncertainEffectErrorType     = "runtime.uncertain_external_effect"
+	incompatiblePolicyErrorType  = "runtime.incompatible_persisted_policy"
+)
+
+var (
+	// ErrUncertainExternalEffect stops automatic retry when a future activity
+	// cannot prove whether an irreversible effect happened. It must reconcile
+	// from durable operation state instead of blindly executing again.
+	ErrUncertainExternalEffect = errors.New("runtime external effect is uncertain")
+	// ErrIncompatiblePersistedPolicy stops retry when durable policy state can
+	// no longer be interpreted by the active worker version.
+	ErrIncompatiblePersistedPolicy = errors.New("runtime persisted policy is incompatible")
 )
 
 // CommandKind is the closed private workflow command vocabulary.
@@ -129,10 +141,19 @@ func (activities *Activities) DispatchStateCommand(ctx context.Context, command 
 		return temporal.NewNonRetryableApplicationError("invalid durable state command", deterministicRouteErrorType, err)
 	}
 	if err := activities.dispatcher.Dispatch(ctx, command); err != nil {
-		if errors.Is(err, runtimestate.ErrNotFoundOrDenied) || errors.Is(err, runtimestate.ErrIntegrity) {
+		switch {
+		case errors.Is(err, runtimestate.ErrNotFoundOrDenied), errors.Is(err, runtimestate.ErrIntegrity):
 			return temporal.NewNonRetryableApplicationError("durable outbox route rejected", deterministicRouteErrorType, err)
+		case errors.Is(err, ErrUncertainExternalEffect):
+			return temporal.NewNonRetryableApplicationError("external effect outcome is uncertain", uncertainEffectErrorType, err)
+		case errors.Is(err, ErrIncompatiblePersistedPolicy):
+			return temporal.NewNonRetryableApplicationError("persisted policy is incompatible", incompatiblePolicyErrorType, err)
+		default:
+			// State unavailability remains retryable. Context cancellation also
+			// propagates unchanged so Temporal cancels rather than schedules a
+			// replacement activity.
+			return err
 		}
-		return err
 	}
 	return nil
 }
@@ -181,7 +202,7 @@ func SessionWorkflow(ctx workflow.Context, input WorkflowInput) error {
 				BackoffCoefficient:     2,
 				MaximumInterval:        30 * time.Second,
 				MaximumAttempts:        5,
-				NonRetryableErrorTypes: []string{deterministicRouteErrorType},
+				NonRetryableErrorTypes: []string{deterministicRouteErrorType, uncertainEffectErrorType, incompatiblePolicyErrorType},
 			},
 		})
 		if err := workflow.ExecuteActivity(activityContext, DispatchStateCommandActivity, command).Get(ctx, nil); err != nil {

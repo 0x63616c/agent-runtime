@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/0x63616c/agent-runtime/internal/runtimeorchestration"
+	"github.com/0x63616c/agent-runtime/internal/runtimestate"
 	"go.temporal.io/sdk/activity"
 	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/testsuite"
@@ -79,4 +80,43 @@ func TestSessionWorkflowFinalizesAfterDurableSessionCompletedRoute(t *testing.T)
 	if len(dispatched) != 2 || dispatched[1].Kind != runtimeorchestration.CommandSessionCompleted {
 		t.Fatalf("dispatched = %#v, want durable completion route", dispatched)
 	}
+}
+
+func TestDispatchStateCommandClassifiesRetrySafetyWithoutRepeatingUnknownEffects(t *testing.T) {
+	command := runtimeorchestration.Command{Tenant: "tenant-a", OutboxID: "outbox-1", SessionID: "sess_1234567890ABCDEF", Kind: runtimeorchestration.CommandInputAccepted, Sequence: 1}
+	for _, scenario := range []struct {
+		name          string
+		dispatchError error
+		nonRetryable  string
+	}{
+		{name: "cancellation", dispatchError: context.Canceled},
+		{name: "deterministic durable route", dispatchError: runtimestate.ErrIntegrity, nonRetryable: "runtime.deterministic_outbox_route"},
+		{name: "uncertain external effect", dispatchError: runtimeorchestration.ErrUncertainExternalEffect, nonRetryable: "runtime.uncertain_external_effect"},
+		{name: "incompatible persisted policy", dispatchError: runtimeorchestration.ErrIncompatiblePersistedPolicy, nonRetryable: "runtime.incompatible_persisted_policy"},
+		{name: "backend unavailable", dispatchError: runtimestate.ErrUnavailable},
+	} {
+		t.Run(scenario.name, func(t *testing.T) {
+			activities, err := runtimeorchestration.NewActivities(dispatchErrorDispatcher{err: scenario.dispatchError})
+			if err != nil {
+				t.Fatal(err)
+			}
+			err = activities.DispatchStateCommand(context.Background(), command)
+			var application *temporal.ApplicationError
+			if scenario.nonRetryable == "" {
+				if err != scenario.dispatchError {
+					t.Fatalf("DispatchStateCommand() error = %v, want retryable %v", err, scenario.dispatchError)
+				}
+				return
+			}
+			if !errors.As(err, &application) || application.Type() != scenario.nonRetryable {
+				t.Fatalf("DispatchStateCommand() error = %v, want non-retryable %q", err, scenario.nonRetryable)
+			}
+		})
+	}
+}
+
+type dispatchErrorDispatcher struct{ err error }
+
+func (dispatcher dispatchErrorDispatcher) Dispatch(context.Context, runtimeorchestration.Command) error {
+	return dispatcher.err
 }
