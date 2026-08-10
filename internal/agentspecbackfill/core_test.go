@@ -44,6 +44,9 @@ func TestRequestUsesCanonicalDigestNameAndBoundedImmutableStatus(t *testing.T) {
 	if err := futureCreated.ValidateAt(request.CreatedAt); err == nil {
 		t.Fatal("future-created request was accepted")
 	}
+	if err := request.ValidateAt(request.ExpiresAt); err == nil {
+		t.Fatal("request at exact expiry was accepted")
+	}
 	aliasNonce := request
 	aliasNonce.FenceNonce = request.FenceNonce[:len(request.FenceNonce)-1] + "Z"
 	if _, err := aliasNonce.Canonical(); err == nil {
@@ -118,6 +121,11 @@ func TestVerifyRefusesFrozenSnapshotAndImmutableContentFailures(t *testing.T) {
 	status, err = agentspecbackfill.Verify(context.Background(), expired, reader, passingVerifier{}, time.Date(2026, 8, 9, 0, 1, 0, 0, time.UTC))
 	if err != nil || status.Phase != agentspecbackfill.PhaseRefused || status.Reason != agentspecbackfill.RefusalExpired || reader.calls != 0 {
 		t.Fatalf("expired request I/O = %#v, %v, calls=%d", status, err, reader.calls)
+	}
+	reader = &countingReader{set: set}
+	status, err = agentspecbackfill.Verify(context.Background(), request, reader, passingVerifier{}, request.ExpiresAt)
+	if err != nil || status.Phase != agentspecbackfill.PhaseRefused || status.Reason != agentspecbackfill.RefusalExpired || reader.calls != 0 {
+		t.Fatalf("exact-expiry request I/O = %#v, %v, calls=%d", status, err, reader.calls)
 	}
 	future := request
 	future.CreatedAt = request.CreatedAt.Add(time.Second)

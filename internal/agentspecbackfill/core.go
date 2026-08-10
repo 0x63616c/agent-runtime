@@ -125,7 +125,7 @@ func (request Request) ValidateAt(now time.Time) error {
 	if now.UTC().Before(request.CreatedAt) {
 		return ErrFutureRequest
 	}
-	if now.UTC().After(request.ExpiresAt) {
+	if !now.UTC().Before(request.ExpiresAt) {
 		return ErrExpiredRequest
 	}
 	return nil
@@ -293,7 +293,7 @@ func Verify(ctx context.Context, request Request, reader FrozenLegacyReader, ver
 		status.Phase, status.Reason = PhaseRefused, RefusalNotAdmitted
 		return status, nil
 	}
-	if now.UTC().After(request.ExpiresAt) {
+	if !now.UTC().Before(request.ExpiresAt) {
 		status.Phase, status.Reason = PhaseRefused, RefusalExpired
 		return status, nil
 	}
