@@ -181,7 +181,7 @@ func Decode(wire []byte) (State, error) {
 
 // Validate verifies State is one linear, immutable boot-probe delivery chain with no reusable delivery identity.
 func (state State) Validate() error {
-	if state.Version != stateVersion || !state.Binding.valid() || !validSessionID(state.HostInstanceSessionID) || !state.Current.valid() || len(state.Superseded) > maximumHistory {
+	if state.Version != stateVersion || !state.Binding.valid() || !validSessionID(state.HostInstanceSessionID) || !state.Current.valid() || state.Superseded == nil || len(state.Superseded) > maximumHistory {
 		return errors.Wrap(ErrInvalidState, "validate boot-probe v2 state shape")
 	}
 	seenDeliveryIDs := map[string]struct{}{state.Current.DeliveryID: {}}

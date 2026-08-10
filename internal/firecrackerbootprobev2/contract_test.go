@@ -3,6 +3,7 @@ package firecrackerbootprobev2
 import (
 	"bytes"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
@@ -118,6 +119,25 @@ func TestStateRejectsNonCanonicalNonceAndNonCanonicalOrForkedPersistedState(t *t
 	}
 	if bytes.Equal(wire, []byte{}) {
 		t.Fatal("encoded state must not be empty")
+	}
+}
+
+func TestStateRejectsNilSupersededHistorySoTheEmptyHistoryHasOneCanonicalWire(t *testing.T) {
+	now := time.Date(2026, time.August, 10, 15, 0, 0, 0, time.UTC)
+	state, err := NewState(validBinding(), "host-session-01", validDelivery(now), now)
+	if err != nil {
+		t.Fatalf("NewState() error = %v", err)
+	}
+	state.Superseded = nil
+	if _, err := Encode(state); !errors.Is(err, ErrInvalidState) {
+		t.Fatalf("Encode(nil superseded history) error = %v, want ErrInvalidState", err)
+	}
+	nonCanonical, err := json.Marshal(state)
+	if err != nil {
+		t.Fatalf("json.Marshal(nil superseded history) error = %v", err)
+	}
+	if _, err := Decode(nonCanonical); !errors.Is(err, ErrInvalidState) {
+		t.Fatalf("Decode(null superseded history) error = %v, want ErrInvalidState", err)
 	}
 }
 
