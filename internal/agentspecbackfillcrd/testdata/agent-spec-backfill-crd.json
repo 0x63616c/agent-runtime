@@ -1,0 +1,84 @@
+{
+  "apiVersion": "apiextensions.k8s.io/v1",
+  "kind": "CustomResourceDefinition",
+  "metadata": {
+    "name": "agentspecbackfills.runtime.0x63616c.dev"
+  },
+  "spec": {
+    "group": "runtime.0x63616c.dev",
+    "names": {
+      "kind": "AgentSpecBackfill",
+      "listKind": "AgentSpecBackfillList",
+      "plural": "agentspecbackfills",
+      "singular": "agentspecbackfill"
+    },
+    "scope": "Namespaced",
+    "versions": [
+      {
+        "name": "v1alpha1",
+        "served": true,
+        "storage": true,
+        "schema": {
+          "openAPIV3Schema": {
+            "type": "object",
+            "properties": {
+              "spec": {
+                "type": "object",
+                "properties": {
+                  "blobReadCapabilityDigest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$", "minLength": 71, "maxLength": 71 },
+                  "controllerImageDigest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$", "minLength": 71, "maxLength": 71 },
+                  "createdAt": { "type": "string", "format": "date-time", "maxLength": 35 },
+                  "databaseAuthorityDigest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$", "minLength": 71, "maxLength": 71 },
+                  "fenceNonce": { "type": "string", "pattern": "^[A-Za-z0-9_-]{43}$", "minLength": 43, "maxLength": 43 },
+                  "manifestDigest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$", "minLength": 71, "maxLength": 71 },
+                  "migrationArtifactDigest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$", "minLength": 71, "maxLength": 71 },
+                  "migrationVersion": { "type": "integer", "format": "int32", "minimum": 4, "maximum": 4 },
+                  "requestExpiresAt": { "type": "string", "format": "date-time", "maxLength": 35 },
+                  "snapshotCount": { "type": "integer", "format": "int64", "minimum": 1 },
+                  "snapshotFingerprint": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$", "minLength": 71, "maxLength": 71 },
+                  "stackDigest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$", "minLength": 71, "maxLength": 71 },
+                  "staticReadinessDigest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$", "minLength": 71, "maxLength": 71 }
+                },
+                "required": ["blobReadCapabilityDigest", "controllerImageDigest", "createdAt", "databaseAuthorityDigest", "fenceNonce", "manifestDigest", "migrationArtifactDigest", "migrationVersion", "requestExpiresAt", "snapshotCount", "snapshotFingerprint", "stackDigest", "staticReadinessDigest"],
+                "additionalProperties": false,
+                "x-kubernetes-validations": [
+                  { "rule": "self == oldSelf", "message": "AgentSpecBackfill spec is immutable" },
+                  { "rule": "self.requestExpiresAt \u003e self.createdAt", "message": "request expiry must follow creation" },
+                  { "rule": "self.requestExpiresAt \u003c= self.createdAt + duration('600s')", "message": "request expiry may be at most ten minutes after creation" }
+                ]
+              },
+              "status": {
+                "type": "object",
+                "properties": {
+                  "completedAt": { "type": "string", "format": "date-time", "maxLength": 35 },
+                  "controllerImageDigest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$", "minLength": 71, "maxLength": 71 },
+                  "manifestDigest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$", "minLength": 71, "maxLength": 71 },
+                  "observedGeneration": { "type": "integer", "format": "int64", "minimum": 1 },
+                  "phase": { "type": "string", "enum": ["Pending", "Verifying", "Verified", "Refused"] },
+                  "reason": { "type": "string", "enum": ["snapshot", "content", "expired", "not_admitted"] },
+                  "requestDigest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$", "minLength": 71, "maxLength": 71 },
+                  "requestUID": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]{0,127}$", "minLength": 1, "maxLength": 128 },
+                  "snapshotCount": { "type": "integer", "format": "int64", "minimum": 1 },
+                  "snapshotFingerprint": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$", "minLength": 71, "maxLength": 71 },
+                  "staticReadinessDigest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$", "minLength": 71, "maxLength": 71 },
+                  "verifiedCount": { "type": "integer", "format": "int64", "minimum": 0 }
+                },
+                "required": ["phase", "requestUID", "observedGeneration", "controllerImageDigest", "requestDigest", "snapshotFingerprint", "snapshotCount", "manifestDigest", "staticReadinessDigest", "verifiedCount", "completedAt"],
+                "additionalProperties": false,
+                "x-kubernetes-validations": [
+                  { "rule": "!(has(oldSelf.phase) \u0026\u0026 (oldSelf.phase == 'Verified' || oldSelf.phase == 'Refused')) || self == oldSelf", "message": "terminal AgentSpecBackfill status is immutable" },
+                  { "rule": "self.phase != 'Verified' || (!has(self.reason) \u0026\u0026 self.verifiedCount == self.snapshotCount)", "message": "verified status has no reason and verifies every snapshot" },
+                  { "rule": "self.phase != 'Refused' || has(self.reason)", "message": "refused status has a bounded reason" }
+                ]
+              }
+            },
+            "required": ["spec"],
+            "additionalProperties": false
+          }
+        },
+        "subresources": { "status": {} }
+      }
+    ],
+    "preserveUnknownFields": false
+  }
+}
