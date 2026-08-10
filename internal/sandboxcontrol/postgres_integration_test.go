@@ -55,6 +55,9 @@ func TestPostgresBootProbeV2RefusesRevokedAndStaleLeaseSessions(t *testing.T) {
 	if err != nil || !didCreate || created.Version != 1 {
 		t.Fatalf("CreateBootProbeSession() = %#v,%t,%v", created, didCreate, err)
 	}
+	if _, _, err := ledger.CreateBootProbeSession(ctx, identity, op.Principal, op.ID, "host-instance-competing", initial, now); err == nil {
+		t.Fatal("CreateBootProbeSession accepted two host-instance sessions for one assignment/fence")
+	}
 	successor := initial
 	successor.EnvelopeID = "fc-envelope-02"
 	successor.DeliveryID = "fc-delivery-02"
@@ -78,6 +81,9 @@ func TestPostgresBootProbeV2RefusesRevokedAndStaleLeaseSessions(t *testing.T) {
 	}
 	if _, err := ledger.AuthorizeBootProbeLaunch(ctx, identity, created, now.Add(2*time.Second)); err == nil {
 		t.Fatal("AuthorizeBootProbeLaunch accepted revoked host")
+	}
+	if _, err := ledger.RecordBootProbeLaunchStarted(ctx, identity, created, now.Add(2*time.Second)); err == nil {
+		t.Fatal("RecordBootProbeLaunchStarted accepted revoked stale session")
 	}
 }
 
