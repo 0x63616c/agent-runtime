@@ -413,6 +413,16 @@ func (bundle ArchiveBundle) Canonical() ([]byte, error) {
 	return value.Bytes(), nil
 }
 
+// Digest returns the SHA-256 digest of one canonical immutable archive bundle.
+func (bundle ArchiveBundle) Digest() (string, error) {
+	canonical, err := bundle.Canonical()
+	if err != nil {
+		return "", err
+	}
+	sum := sha256.Sum256(canonical)
+	return "sha256:" + hex.EncodeToString(sum[:]), nil
+}
+
 func writeUint(buffer *bytes.Buffer, value uint64) { writeHead(buffer, 0, value) }
 func writeText(buffer *bytes.Buffer, value string) {
 	writeHead(buffer, 3, uint64(len(value)))

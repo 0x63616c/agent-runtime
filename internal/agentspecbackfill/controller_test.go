@@ -227,6 +227,55 @@ func TestReconcilerCancellationPreventsExistingTerminalArchiveIO(t *testing.T) {
 	}
 }
 
+func TestReconcilerFencesCancellationBetweenVerificationAndTerminalWrite(t *testing.T) {
+	request := validRequest()
+	statuses := &recordingTerminalStatuses{}
+	archives := &recordingArchives{}
+	reconciler, err := agentspecbackfill.NewReconciler(statuses, archives)
+	if err != nil {
+		t.Fatalf("new reconciler: %v", err)
+	}
+	ctx := newCancellationFenceContext(3)
+
+	_, err = reconciler.Reconcile(ctx, request, fixedReader{set: validFrozenSet(request)}, passingVerifier{}, request.ExpiresAt)
+	if !errors.Is(err, context.Canceled) || statuses.creates != 0 || archives.calls != 0 {
+		t.Fatalf("cancelled terminal write = %v, creates=%d archives=%d", err, statuses.creates, archives.calls)
+	}
+}
+
+func TestReconcilerRefusesFutureStoredStatusBeforeArchiveIO(t *testing.T) {
+	request := validRequest()
+	now := request.CreatedAt.Add(time.Second)
+	status := agentbackfillVerifiedStatus(t, request)
+	status.CompletedAt = now.Add(time.Second)
+	statuses := &recordingTerminalStatuses{status: status, found: true}
+	archives := &recordingArchives{}
+	reconciler, err := agentspecbackfill.NewReconciler(statuses, archives)
+	if err != nil {
+		t.Fatalf("new reconciler: %v", err)
+	}
+
+	_, err = reconciler.Reconcile(context.Background(), request, fixedReader{set: validFrozenSet(request)}, passingVerifier{}, now)
+	if err == nil || archives.calls != 0 {
+		t.Fatalf("future stored status = %v, archives=%d", err, archives.calls)
+	}
+}
+
+func TestReconcilerRefusesExistingArchiveWithDifferentCanonicalDigest(t *testing.T) {
+	request := validRequest()
+	statuses := &recordingTerminalStatuses{}
+	archives := &recordingArchives{existingDigest: "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}
+	reconciler, err := agentspecbackfill.NewReconciler(statuses, archives)
+	if err != nil {
+		t.Fatalf("new reconciler: %v", err)
+	}
+
+	_, err = reconciler.Reconcile(context.Background(), request, fixedReader{set: validFrozenSet(request)}, passingVerifier{}, request.CreatedAt.Add(time.Second))
+	if !errors.Is(err, agentspecbackfill.ErrArchiveConflict) || statuses.creates != 1 || archives.calls != 1 {
+		t.Fatalf("archive conflict = %v, creates=%d calls=%d", err, statuses.creates, archives.calls)
+	}
+}
+
 func validFrozenSet(request agentspecbackfill.Request) agentspecbackfill.FrozenLegacySet {
 	return agentspecbackfill.FrozenLegacySet{
 		Snapshot: agentspecbackfill.Snapshot{Fingerprint: request.SnapshotFingerprint, Count: 1},
@@ -267,24 +316,54 @@ func (store *recordingTerminalStatuses) CreateTerminal(_ context.Context, _ agen
 }
 
 type recordingArchives struct {
-	bundles []agentspecbackfill.ArchiveBundle
-	keys    map[string]struct{}
-	calls   int
+	bundles        []agentspecbackfill.ArchiveBundle
+	keys           map[string]string
+	existingDigest string
+	calls          int
 }
 
-func (archives *recordingArchives) PutIfAbsent(_ context.Context, bundle agentspecbackfill.ArchiveBundle) (bool, error) {
+func (archives *recordingArchives) PutIfAbsent(_ context.Context, bundle agentspecbackfill.ArchiveBundle, expectedDigest string) (agentspecbackfill.ArchiveWrite, error) {
 	archives.calls++
 	canonical, err := bundle.Canonical()
 	if err != nil {
-		return false, err
+		return agentspecbackfill.ArchiveWrite{}, err
+	}
+	if archives.existingDigest != "" {
+		return agentspecbackfill.ArchiveWrite{CanonicalDigest: archives.existingDigest}, nil
 	}
 	if archives.keys == nil {
-		archives.keys = make(map[string]struct{})
+		archives.keys = make(map[string]string)
 	}
-	if _, found := archives.keys[string(canonical)]; found {
-		return false, nil
+	if digest, found := archives.keys[string(canonical)]; found {
+		return agentspecbackfill.ArchiveWrite{CanonicalDigest: digest}, nil
 	}
-	archives.keys[string(canonical)] = struct{}{}
+	archives.keys[string(canonical)] = expectedDigest
 	archives.bundles = append(archives.bundles, bundle)
-	return true, nil
+	return agentspecbackfill.ArchiveWrite{Created: true, CanonicalDigest: expectedDigest}, nil
 }
+
+type cancellationFenceContext struct {
+	calls           int
+	cancelOnErrCall int
+	done            chan struct{}
+	cancelled       bool
+}
+
+func newCancellationFenceContext(cancelOnErrCall int) *cancellationFenceContext {
+	return &cancellationFenceContext{cancelOnErrCall: cancelOnErrCall, done: make(chan struct{})}
+}
+
+func (ctx *cancellationFenceContext) Deadline() (time.Time, bool) { return time.Time{}, false }
+func (ctx *cancellationFenceContext) Done() <-chan struct{}       { return ctx.done }
+func (ctx *cancellationFenceContext) Err() error {
+	ctx.calls++
+	if ctx.calls >= ctx.cancelOnErrCall {
+		if !ctx.cancelled {
+			close(ctx.done)
+			ctx.cancelled = true
+		}
+		return context.Canceled
+	}
+	return nil
+}
+func (ctx *cancellationFenceContext) Value(any) any { return nil }
