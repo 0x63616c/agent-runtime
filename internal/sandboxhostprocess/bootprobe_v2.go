@@ -13,15 +13,18 @@ import (
 // v1 pull/receipt protocol: control authorizes a v2 session, the host fsyncs
 // its intent, and only then does control record launch-started.
 func RunBootProbeV2Once(ctx context.Context, client *http.Client, origin, principal, operationID, instanceID, journalPath string) (firecrackerbootprobev2.Snapshot, error) {
-	snapshot, err := sandboxbootprobehostprocess.Prepare(ctx, client, origin, principal, operationID, instanceID)
-	if err != nil {
-		return firecrackerbootprobev2.Snapshot{}, err
-	}
 	journal, err := firecrackerbootprobejournal.Open(journalPath)
 	if err != nil {
 		return firecrackerbootprobev2.Snapshot{}, err
 	}
 	defer journal.Close()
+	if snapshot, ok := journal.LaunchSnapshot(); ok {
+		return sandboxbootprobehostprocess.LaunchStarted(ctx, client, origin, snapshot)
+	}
+	snapshot, err := sandboxbootprobehostprocess.Prepare(ctx, client, origin, principal, operationID, instanceID)
+	if err != nil {
+		return firecrackerbootprobev2.Snapshot{}, err
+	}
 	if err := journal.StageLaunchSnapshot(snapshot); err != nil {
 		return firecrackerbootprobev2.Snapshot{}, err
 	}
