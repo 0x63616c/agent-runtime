@@ -6,6 +6,7 @@ import (
 	"math"
 	"time"
 
+	"github.com/0x63616c/agent-runtime/internal/firecrackerbootprobev2"
 	"github.com/0x63616c/agent-runtime/internal/sandboxhostprotocol"
 	"github.com/cockroachdb/errors"
 	"github.com/jackc/pgx/v5"
@@ -463,6 +464,55 @@ func writePostgresDispatch(ctx context.Context, tx pgx.Tx, operation Operation, 
 }
 
 func fencePostgresHost(ctx context.Context, tx pgx.Tx, hostID string, generation uint64, next State) ([]Operation, error) {
+	// Revocation and quarantine must also durably converge every private v2
+	// host-instance lifecycle to cleanup-pending in the same transaction.
+	sessions, err := tx.Query(ctx, `SELECT host_instance_session_id, session_body FROM runtime.firecracker_boot_probe_sessions WHERE host_id=$1 AND host_generation=$2 FOR UPDATE`, hostID, int64(generation))
+	if err != nil {
+		return nil, errors.Wrap(err, "select v2 boot-probe sessions to fence")
+	}
+	type fencedSession struct {
+		id   string
+		wire []byte
+	}
+	var pending []fencedSession
+	for sessions.Next() {
+		var id string
+		var wire []byte
+		if err := sessions.Scan(&id, &wire); err != nil {
+			sessions.Close()
+			return nil, err
+		}
+		pending = append(pending, fencedSession{id: id, wire: wire})
+	}
+	if err := sessions.Err(); err != nil {
+		sessions.Close()
+		return nil, err
+	}
+	sessions.Close()
+	for _, pendingSession := range pending {
+		session, err := firecrackerbootprobev2.DecodeSession(pendingSession.wire)
+		if err != nil {
+			sessions.Close()
+			return nil, errors.Wrap(err, "decode fenced v2 boot-probe session")
+		}
+		if session.Lifecycle.Phase == firecrackerbootprobev2.LifecycleCleanupConfirmed {
+			continue
+		}
+		clean, err := session.BeginCleanup()
+		if err != nil {
+			sessions.Close()
+			return nil, err
+		}
+		cleanWire, err := firecrackerbootprobev2.EncodeSession(clean)
+		if err != nil {
+			sessions.Close()
+			return nil, err
+		}
+		if _, err := tx.Exec(ctx, `UPDATE runtime.firecracker_boot_probe_sessions SET version=version+1,session_body=$2,updated_at=NOW() WHERE host_instance_session_id=$1`, pendingSession.id, cleanWire); err != nil {
+			sessions.Close()
+			return nil, err
+		}
+	}
 	rows, err := tx.Query(ctx, selectOperationSQLByHost+` FOR UPDATE`, hostID, int64(generation))
 	if err != nil {
 		return nil, errors.Wrap(err, "select sandbox host operations to fence")
