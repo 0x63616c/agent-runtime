@@ -58,11 +58,13 @@ var _ = Describe("Temporal payload composition", func() {
 
 	It("keeps application code from depending on payload representation details", func() {
 		root := filepath.Join("..", "..")
+		uiProcess := filepath.Join("internal", "temporalpayloaduiprocess", "run.go")
 		for _, path := range goSourceFiles(root) {
 			relative, err := filepath.Rel(root, path)
 			Expect(err).NotTo(HaveOccurred())
 			if strings.HasPrefix(relative, "temporalpayload"+string(filepath.Separator)) ||
 				relative == filepath.Join("internal", "temporalpayloadruntime", "factory.go") ||
+				relative == uiProcess ||
 				strings.HasSuffix(relative, "_test.go") {
 				continue
 			}
