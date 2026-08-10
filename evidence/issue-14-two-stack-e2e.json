@@ -30,6 +30,12 @@
     "service_ip_probe": true
   },
   "proof_level": "isolated_kubernetes_integration",
+  "proof_provenance": {
+    "retained_artifact_sha256": "sha256:813dc25e27a1960918d8e3675a67478ddd7aeb5f7252f2d9f968299f032f3546",
+    "retention_revision": "8b9d57a30800e0b9fcaf3f19631ec31e689c6ab0",
+    "source_revision": "6bb0da69befd89adffbf3aefd5068194607cfca9",
+    "source_tree_id": "8a200eefcd7d15a2ed767b1cf8fa21a753bfa588"
+  },
   "stacks": [
     {
       "name": "ci-isolation-a",
