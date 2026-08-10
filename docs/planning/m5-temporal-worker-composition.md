@@ -24,6 +24,22 @@ at-least-once routes as no-ops, and Continue-As-New after a bounded command
 count while retaining only Session ID, the last durable sequence, and the
 small in-chain command count.
 
+`session.created` starts a chain. `input.accepted`, `turn.cancelled`,
+`session.closing`, and `session.completed` are rechecked signals; the final
+completed route ends the private workflow only after its durable outbox record
+is accepted. Other safe outbox events are acknowledged without inventing a
+new effect.
+
+The M5 activity performs only this reversible state-route verification. It
+propagates cancellation, treats invalid or rejected durable routes as
+non-retryable, and permits transient state-backend errors to retry under the
+bounded Temporal policy. It does not call a model, tool, approval service, or
+sandbox, so it cannot honestly classify an unknown external effect or an
+incompatible persisted policy. Those retry cases and the TMP-010 approval/
+sandbox-operation scenarios are M7 work; they must add their own durable
+activity, reconciliation record, and test-environment evidence rather than be
+silently treated as M5 retries.
+
 Required retained evidence:
 
 - `go test ./internal/runtimeorchestration` covers state-derived route,
@@ -35,3 +51,7 @@ Required retained evidence:
 - replay evidence must replay captured Session history using the registered
   private workflow before promotion. A replay test is not a claim that a
   runtime-content object was available to the worker.
+- `deploy/runtimeapi/run-durable-integration.sh` starts disposable PostgreSQL
+  and MinIO, runs the migration/rollback-negative and state-store integration
+  suite, then proves durable API restart plus codec-worker outbox drain/restart
+  against a Temporal development server.

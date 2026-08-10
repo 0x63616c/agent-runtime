@@ -1,11 +1,19 @@
 # Self-hosted deployment contract
 
-Status: the v1 declarative role-composition and configuration-validation slice
-is implemented. A signed, digest-pinned production role image is published to
-GHCR. The public agent API, Temporal workflow implementation, and Firecracker
-host-agent implementation remain future milestones. Do not treat a rendered
-reference Stack or published role image as a completed production rollout;
-live Kubernetes/Temporal/blob evidence is retained separately.
+Status: the v1 declarative role-composition and configuration-validation slice,
+M5 state-backed public API process, and private Session Temporal worker are
+implemented. A signed, digest-pinned production role image is published to
+GHCR. Model/tool/approval execution and Firecracker host-agent production
+operation remain later milestones. Do not treat a rendered reference Stack or
+published role image as a completed production rollout; live
+Kubernetes/Temporal/blob evidence is retained separately.
+
+The checked-in Stack's `runtime serve --role api` deployment remains the
+health-only role-composition fixture. The separately runnable
+`agent-runtime-api` has an explicit durable PostgreSQL/content configuration
+and named disposable-dependency integration evidence, but a production API
+credential/configuration rollout is operator work and is not inferred from the
+health-only Stack role.
 
 Agent Runtime is self-hosted as explicit, separately deployable processes. An
 operator applies a reviewed typed Stack with `stackctl`; no runtime binary,
@@ -118,12 +126,12 @@ Before a production rollout, the platform operator must define and test:
   intentionally contains no raw prompt or event-body columns; the blob
   authority owns content bytes. The runtime v3 forward-only migration follows
   and raises only the bounded immutable Input-reference metadata size limit. A
-  narrow internal first-admission repository
-  seam exists for real PostgreSQL integration tests, but it is not wired to
-  the standalone API, its deterministic in-memory content store is not a blob
-  authorization plane, and its recorded outbox has no publisher or recovery
-  guarantee. The standalone API remains `memory-unsafe`; this foundation does
-  not yet provide tenant RLS or least-privilege database-role enforcement.
+  M5 `agent-runtime-api` accepts an explicit PostgreSQL plus immutable-content
+  configuration and composes the complete public lifecycle through that state
+  authority; `memory-unsafe` remains an explicitly labelled local-only mode.
+  The `orchestration-codec` role publishes only durable outbox routes with
+  lease recovery and no runtime-content credential. This foundation does not
+  yet provide tenant RLS or least-privilege database-role enforcement.
 - Blob bucket/prefix lifecycle, retention, backup/restore, encryption and
   credential rotation.
 - Codec ingress hosts and CORS origins. Routing hosts are Stack Ingress rules;

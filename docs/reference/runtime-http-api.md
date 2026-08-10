@@ -31,9 +31,12 @@ go run ./cmd/agent-runtime-api --config "$PWD/deploy/runtimeapi/api.example.json
 ```
 
 The checked-in example names credential environment sources but contains no
-credential values. Its storage declaration must literally be
-`{"mode":"memory-unsafe"}`. State is lost on process exit; this role is for
-local transport integration until issue #24 supplies PostgreSQL authority.
+credential values. It deliberately uses `{"mode":"memory-unsafe"}`, so state
+is lost on process exit and it is suitable only for local transport work. A
+durable operator configuration instead selects `postgres` and explicitly names
+the PostgreSQL DSN and immutable-content endpoint, bucket, and credential
+environment keys; the integration harness exercises that process path against
+PostgreSQL and MinIO.
 `max_request_bytes` must be between 3 MiB and 16 MiB so every request allowed
 by the canonical content limits remains transport-admissible; the example uses
 4 MiB.

@@ -29,4 +29,6 @@ export AR_RUNTIME_API_MINIO_ENDPOINT="127.0.0.1:${minio_port}"
 export AR_RUNTIME_API_MINIO_ACCESS_KEY=agent-runtime-api
 export AR_RUNTIME_API_MINIO_SECRET_KEY="$minio_password"
 export AR_RUNTIME_API_MINIO_BUCKET=agent-runtime-api-integration
+AR_RUNTIME_POSTGRES_DSN="$AR_RUNTIME_API_POSTGRES_DSN" \
+  go test -race -tags=integration ./internal/runtimepostgres -count=1
 go test -race -tags=integration ./internal/runtimeapiprocess ./internal/runtimeorchestration -run 'Test(DurablePostgresMinIOAPIProcessSurvivesRestart|CodecEnabledWorkerStartsAgainstDurableDependenciesAndRestarts)' -count=1

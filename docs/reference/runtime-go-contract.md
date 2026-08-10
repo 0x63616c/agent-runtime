@@ -56,8 +56,10 @@ allowed for local development). It performs no hidden retries and rejects
 unknown or trailing JSON, oversized responses, unsafe failure envelopes, and
 mismatched request IDs.
 
-The standalone API role uses an explicitly configured `memory-unsafe`
-repository. It proves the public transport and process boundary, not restart
-durability. PostgreSQL/outbox authority, live push streaming, Temporal
-workflow execution, model/tool/approval execution, and Artifact transfer are
-still unimplemented. No M5 requirement is promoted by this partial slice.
+The explicitly labelled `memory-unsafe` configuration remains available for
+local transport work only. The durable configuration composes PostgreSQL state
+with immutable runtime content, and the private `orchestration-codec` role
+drains its state-owned outbox into Session workflows without exposing Temporal
+to callers. Live push streaming, model/tool/approval execution, and Artifact
+transfer remain later milestones. M5 implementation evidence does not by
+itself promote a requirement ledger row or production rollout.

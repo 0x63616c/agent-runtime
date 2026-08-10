@@ -31,6 +31,11 @@ const (
 	CommandInputAccepted CommandKind = "input_accepted"
 	// CommandTurnCancelled represents an already persisted cancellation route.
 	CommandTurnCancelled CommandKind = "turn_cancelled"
+	// CommandSessionClosing reports that durable state stopped accepting Inputs
+	// while work already admitted is allowed to drain.
+	CommandSessionClosing CommandKind = "session_closing"
+	// CommandSessionCompleted finalizes a drained Session workflow chain.
+	CommandSessionCompleted CommandKind = "session_completed"
 )
 
 // Command carries only public runtime IDs and ordered durable metadata; never content or backend handles.
@@ -184,6 +189,9 @@ func SessionWorkflow(ctx workflow.Context, input WorkflowInput) error {
 		}
 		input.NextSequence = command.Sequence
 		input.Dispatched++
+		if command.Kind == CommandSessionCompleted {
+			return nil
+		}
 		if input.Dispatched >= input.ContinueAfter {
 			input.Dispatched = 0
 			return workflow.NewContinueAsNewError(ctx, SessionWorkflow, input)
@@ -192,12 +200,19 @@ func SessionWorkflow(ctx workflow.Context, input WorkflowInput) error {
 }
 
 func validateCommand(command Command) error {
-	if command.Tenant == "" || command.OutboxID == "" || command.SessionID == "" || command.Sequence == 0 || (command.Kind != CommandInputAccepted && command.Kind != CommandTurnCancelled) {
+	if command.Tenant == "" || command.OutboxID == "" || command.SessionID == "" || command.Sequence == 0 || !knownCommandKind(command.Kind) {
 		return errors.New("invalid runtime state command")
 	}
 	return nil
 }
 
 func matchesCommand(event agentruntime.EventKind, command CommandKind) bool {
-	return event == agentruntime.EventInputAccepted && command == CommandInputAccepted || event == agentruntime.EventTurnCancelled && command == CommandTurnCancelled
+	return event == agentruntime.EventInputAccepted && command == CommandInputAccepted ||
+		event == agentruntime.EventTurnCancelled && command == CommandTurnCancelled ||
+		event == agentruntime.EventSessionClosing && command == CommandSessionClosing ||
+		event == agentruntime.EventSessionCompleted && command == CommandSessionCompleted
+}
+
+func knownCommandKind(kind CommandKind) bool {
+	return kind == CommandInputAccepted || kind == CommandTurnCancelled || kind == CommandSessionClosing || kind == CommandSessionCompleted
 }

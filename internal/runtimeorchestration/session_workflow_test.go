@@ -57,3 +57,26 @@ func TestSessionWorkflowRejectsACommandForAnotherSession(t *testing.T) {
 		t.Fatal("workflow error = nil, want command binding failure")
 	}
 }
+
+func TestSessionWorkflowFinalizesAfterDurableSessionCompletedRoute(t *testing.T) {
+	var suite testsuite.WorkflowTestSuite
+	environment := suite.NewTestWorkflowEnvironment()
+	var dispatched []runtimeorchestration.Command
+	environment.RegisterActivityWithOptions(func(_ context.Context, command runtimeorchestration.Command) error {
+		dispatched = append(dispatched, command)
+		return nil
+	}, activity.RegisterOptions{Name: runtimeorchestration.DispatchStateCommandActivity})
+	environment.RegisterDelayedCallback(func() {
+		environment.SignalWorkflow(runtimeorchestration.SessionCommandSignal, runtimeorchestration.Command{Tenant: "tenant-a", OutboxID: "outbox-1", SessionID: "sess_1234567890ABCDEF", Kind: runtimeorchestration.CommandInputAccepted, Sequence: 1})
+	}, 0)
+	environment.RegisterDelayedCallback(func() {
+		environment.SignalWorkflow(runtimeorchestration.SessionCommandSignal, runtimeorchestration.Command{Tenant: "tenant-a", OutboxID: "outbox-2", SessionID: "sess_1234567890ABCDEF", Kind: runtimeorchestration.CommandSessionCompleted, Sequence: 2})
+	}, 0)
+	environment.ExecuteWorkflow(runtimeorchestration.SessionWorkflow, runtimeorchestration.WorkflowInput{SessionID: "sess_1234567890ABCDEF", ContinueAfter: 100})
+	if err := environment.GetWorkflowError(); err != nil {
+		t.Fatalf("workflow error = %v, want terminal completion", err)
+	}
+	if len(dispatched) != 2 || dispatched[1].Kind != runtimeorchestration.CommandSessionCompleted {
+		t.Fatalf("dispatched = %#v, want durable completion route", dispatched)
+	}
+}

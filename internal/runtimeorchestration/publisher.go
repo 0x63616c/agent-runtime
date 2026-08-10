@@ -184,7 +184,7 @@ func (publisher *Publisher) route(ctx context.Context, record runtimestate.Outbo
 	switch record.EventKind {
 	case agentruntime.EventSessionCreated:
 		return publisher.publisher.StartSession(ctx, start)
-	case agentruntime.EventInputAccepted, agentruntime.EventTurnCancelled:
+	case agentruntime.EventInputAccepted, agentruntime.EventTurnCancelled, agentruntime.EventSessionClosing, agentruntime.EventSessionCompleted:
 		return publisher.publisher.SignalSession(ctx, start, Command{Tenant: string(record.Tenant), OutboxID: string(record.OutboxID), SessionID: string(record.SessionID), Kind: commandKind(record.EventKind), Sequence: record.EventSequence})
 	default:
 		return nil
@@ -192,10 +192,16 @@ func (publisher *Publisher) route(ctx context.Context, record runtimestate.Outbo
 }
 
 func commandKind(event agentruntime.EventKind) CommandKind {
-	if event == agentruntime.EventTurnCancelled {
+	switch event {
+	case agentruntime.EventTurnCancelled:
 		return CommandTurnCancelled
+	case agentruntime.EventSessionClosing:
+		return CommandSessionClosing
+	case agentruntime.EventSessionCompleted:
+		return CommandSessionCompleted
+	default:
+		return CommandInputAccepted
 	}
-	return CommandInputAccepted
 }
 
 func findOutbox(state runtimestate.RuntimeState, id runtimestate.OutboxID) (runtimestate.OutboxRecord, bool) {
