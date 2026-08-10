@@ -226,11 +226,16 @@ var _ = Describe("M1 deployment safety boundaries", func() {
 			`"does not claim Linux KVM or Firecracker isolation"`,
 			`tilt_down_status=0`,
 			`if [[ "$tilt_down_status" != 0 ]] && kubectl --context "$context" get "namespace/$namespace" >/dev/null 2>&1; then`,
+			`prepare_evidence_draft`,
+			`refusing destructive teardown because the owned two-Stack evidence draft is invalid`,
+			`finalize_evidence`,
 			`refusing to retain two-Stack evidence before contained teardown is observed`,
 			`mv -- "$evidence_temporary" "$evidence_file"`,
 		} {
 			Expect(twoStackScript).To(ContainSubstring(required))
 		}
+		Expect(strings.Index(twoStackScript, "prepare_evidence_draft\ndown_stack \"$stack_a\"")).To(BeNumerically(">", 0), "evidence draft must be validated before the first destructive teardown")
+		Expect(strings.Index(twoStackScript, "down_stack \"$stack_b\"\ncreated_b=false")).To(BeNumerically("<", strings.LastIndex(twoStackScript, "finalize_evidence")), "final evidence must only be retained after both teardowns")
 		for _, forbidden := range []string{
 			"redact_diagnostics",
 			"tilt-session.raw.json",

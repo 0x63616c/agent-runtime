@@ -257,6 +257,62 @@ down_stack() {
   fi
 }
 
+prepare_evidence_draft() {
+  if [[ -z "$evidence_file" ]]; then
+    return
+  fi
+  if [[ -e "$evidence_file" ]]; then
+    echo "refusing to retain two-Stack evidence over an existing file" >&2
+    return 1
+  fi
+  evidence_temporary="$(mktemp "${evidence_file}.tmp.XXXXXX")"
+  jq -n \
+    --arg utc_time "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+    --arg revision "$(git rev-parse HEAD)" \
+    --arg context "$context" --arg profile "$profile" \
+		--arg cluster_runtime "$cluster_runtime" --arg cluster_image "$cluster_image" --arg registry_image "$registry_image" \
+    --arg kubectl_version "$kubectl_version" --arg tilt_version "$tilt_version" \
+    --arg stack_a "$stack_a" --arg stack_b "$stack_b" \
+    --arg namespace_a "$namespace_a" --arg namespace_b "$namespace_b" \
+    --arg uid_a "$uid_a" --arg uid_b "$uid_b" '
+    {
+      version:1,
+      milestone:"M1 local Stack instance isolation",
+      proof_level:"isolated_kubernetes_integration",
+      utc_time:$utc_time,
+      implementation_revision:$revision,
+      command:{path:"deploy/dev/run-two-stack-smoke.sh",kubernetes_context:$context,profile:$profile,result:"pending"},
+		toolchain:{cluster_runtime:$cluster_runtime,cluster_image:$cluster_image,registry_image:$registry_image,kubectl:$kubectl_version,tilt:$tilt_version},
+      stacks:[{name:$stack_a,namespace:$namespace_a,namespace_uid:$uid_a},{name:$stack_b,namespace:$namespace_b,namespace_uid:$uid_b}],
+      both_stacks_concurrently_ready:true,
+      distinct_namespace_and_workload_identities:true,
+		distinct_private_state:true,
+		network_policy:{declared_egress_consecutive_successes:3,default_deny_consecutive_failures:3,service_ip_probe:true},
+      first_teardown_left_second_unchanged:true,
+      cleanup:{namespaces_absent:false,local_state_absent:false},
+      limitations:["does not claim Linux KVM or Firecracker isolation","does not mutate a production cluster"]
+    }' >"$evidence_temporary"
+  if ! jq -e '.command.result == "pending" and .cleanup.namespaces_absent == false and .cleanup.local_state_absent == false' "$evidence_temporary" >/dev/null; then
+    echo "refusing destructive teardown because the owned two-Stack evidence draft is invalid" >&2
+    return 1
+  fi
+}
+
+finalize_evidence() {
+  if [[ -z "$evidence_file" ]]; then
+    return
+  fi
+  evidence_finalization="$(mktemp "${evidence_file}.final.XXXXXX")"
+  jq '.command.result = "passed" | .cleanup.namespaces_absent = true | .cleanup.local_state_absent = true' "$evidence_temporary" >"$evidence_finalization"
+  if ! jq -e '.command.result == "passed" and .cleanup.namespaces_absent == true and .cleanup.local_state_absent == true' "$evidence_finalization" >/dev/null; then
+    echo "refusing to retain two-Stack evidence before contained teardown is observed" >&2
+    return 1
+  fi
+  mv -- "$evidence_finalization" "$evidence_temporary"
+  mv -- "$evidence_temporary" "$evidence_file"
+  echo "retained bounded two-Stack evidence at $evidence_file"
+}
+
 cleanup() {
   local original_status=$?
   set +e
@@ -375,6 +431,7 @@ b_deployments_before="$(kubectl --context "$context" --namespace "$namespace_b" 
 b_stack_hash_before="$(shasum -a 256 "$(local_file "$stack_b" stack)" | cut -d ' ' -f 1)"
 b_secrets_hash_before="$(shasum -a 256 "$(local_file "$stack_b" secrets)" | cut -d ' ' -f 1)"
 
+prepare_evidence_draft
 down_stack "$stack_a" "$namespace_a"
 created_a=false
 if kubectl --context "$context" get "namespace/$namespace_a" >/dev/null 2>&1; then
@@ -407,42 +464,4 @@ if kubectl --context "$context" get "namespace/$namespace_b" >/dev/null 2>&1; th
   exit 1
 fi
 echo "two local Stack instances remained isolated across first-instance teardown"
-if [[ -n "$evidence_file" ]]; then
-  evidence_temporary="$(mktemp "${evidence_file}.tmp.XXXXXX")"
-  if [[ -e "$evidence_file" ]]; then
-    echo "refusing to retain two-Stack evidence over an existing file" >&2
-    exit 1
-  fi
-  jq -n \
-    --arg utc_time "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-    --arg revision "$(git rev-parse HEAD)" \
-    --arg context "$context" --arg profile "$profile" \
-		--arg cluster_runtime "$cluster_runtime" --arg cluster_image "$cluster_image" --arg registry_image "$registry_image" \
-    --arg kubectl_version "$kubectl_version" --arg tilt_version "$tilt_version" \
-    --arg stack_a "$stack_a" --arg stack_b "$stack_b" \
-    --arg namespace_a "$namespace_a" --arg namespace_b "$namespace_b" \
-    --arg uid_a "$uid_a" --arg uid_b "$uid_b" '
-    {
-      version:1,
-      milestone:"M1 local Stack instance isolation",
-      proof_level:"isolated_kubernetes_integration",
-      utc_time:$utc_time,
-      implementation_revision:$revision,
-      command:{path:"deploy/dev/run-two-stack-smoke.sh",kubernetes_context:$context,profile:$profile,result:"passed"},
-		toolchain:{cluster_runtime:$cluster_runtime,cluster_image:$cluster_image,registry_image:$registry_image,kubectl:$kubectl_version,tilt:$tilt_version},
-      stacks:[{name:$stack_a,namespace:$namespace_a,namespace_uid:$uid_a},{name:$stack_b,namespace:$namespace_b,namespace_uid:$uid_b}],
-      both_stacks_concurrently_ready:true,
-      distinct_namespace_and_workload_identities:true,
-		distinct_private_state:true,
-		network_policy:{declared_egress_consecutive_successes:3,default_deny_consecutive_failures:3,service_ip_probe:true},
-      first_teardown_left_second_unchanged:true,
-      cleanup:{namespaces_absent:true,local_state_absent:true},
-      limitations:["does not claim Linux KVM or Firecracker isolation","does not mutate a production cluster"]
-    }' >"$evidence_temporary"
-  if ! jq -e '.command.result == "passed" and .cleanup.namespaces_absent == true and .cleanup.local_state_absent == true' "$evidence_temporary" >/dev/null; then
-    echo "refusing to retain two-Stack evidence before contained teardown is observed" >&2
-    exit 1
-  fi
-  mv -- "$evidence_temporary" "$evidence_file"
-  echo "retained bounded two-Stack evidence at $evidence_file"
-fi
+finalize_evidence
