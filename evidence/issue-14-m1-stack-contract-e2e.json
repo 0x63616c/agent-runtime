@@ -1,0 +1,19 @@
+{
+  "hosted_ci": {
+    "artifact": "two-stack-isolation-6bb0da69befd89adffbf3aefd5068194607cfca9",
+    "job_url": "https://github.com/0x63616c/agent-runtime/actions/runs/31441677625/job/93627512224",
+    "run_url": "https://github.com/0x63616c/agent-runtime/actions/runs/31441677625"
+  },
+  "implementation_revision": "6bb0da69befd89adffbf3aefd5068194607cfca9",
+  "migration_upgrade_rollback": true,
+  "network_policy_admission": true,
+  "rbac_negative": true,
+  "render_profiles": [
+    "local",
+    "ci",
+    "production"
+  ],
+  "result": "passed",
+  "schema_policy_ownership": true,
+  "version": 1
+}
