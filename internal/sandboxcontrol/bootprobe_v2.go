@@ -25,6 +25,9 @@ func (ledger *PostgresLedger) CreateBootProbeSession(ctx context.Context, identi
 		if err != nil {
 			return err
 		}
+		if op.Kind != "firecracker-boot-probe" || op.CapabilityDigest != host.CapabilityDigest {
+			return ErrHostDenied
+		}
 		if op.State == StateAccepted {
 			if op.Assignment.FencingToken == ^uint64(0) {
 				return ErrStaleFence
@@ -110,6 +113,38 @@ func (ledger *PostgresLedger) RecordBootProbeLaunchStarted(ctx context.Context, 
 		return firecrackerbootprobev2.Snapshot{}, err
 	}
 	return ledger.casBootProbeSession(ctx, identity, expected, next, now)
+}
+
+// RecoverBootProbeLaunchStarted acknowledges a lost host response without
+// permitting a second launch.  The caller may present only the immediately
+// preceding journaled authorization version, and the durable record must
+// already be the matching launch-started successor under currently valid host
+// and assignment authority.
+func (ledger *PostgresLedger) RecoverBootProbeLaunchStarted(ctx context.Context, identity HostIdentity, hostInstanceSessionID string, journalVersion uint64, now time.Time) (firecrackerbootprobev2.Snapshot, error) {
+	if journalVersion == 0 {
+		return firecrackerbootprobev2.Snapshot{}, errors.New("recover PostgreSQL v2 boot-probe launch: journal version required")
+	}
+	var snapshot firecrackerbootprobev2.Snapshot
+	err := ledger.transaction(ctx, "recover PostgreSQL v2 boot-probe launch", func(tx pgx.Tx) error {
+		var version int64
+		var wire []byte
+		if err := tx.QueryRow(ctx, `SELECT version,session_body FROM runtime.firecracker_boot_probe_sessions WHERE host_instance_session_id=$1 FOR UPDATE`, hostInstanceSessionID).Scan(&version, &wire); err != nil {
+			return errors.Wrap(err, "load v2 boot-probe launch recovery")
+		}
+		if uint64(version) != journalVersion+1 {
+			return errors.New("recover PostgreSQL v2 boot-probe launch: stale journal version")
+		}
+		session, err := firecrackerbootprobev2.DecodeSession(wire)
+		if err != nil || session.Lifecycle.Phase != firecrackerbootprobev2.LifecycleLaunchStarted {
+			return errors.New("recover PostgreSQL v2 boot-probe launch: persisted launch is not recoverable")
+		}
+		if err := ledger.validateBootProbeAuthority(ctx, tx, identity, session, now); err != nil {
+			return err
+		}
+		snapshot = firecrackerbootprobev2.Snapshot{Version: uint64(version), Session: session, Wire: append([]byte(nil), wire...)}
+		return nil
+	})
+	return snapshot, err
 }
 
 // LoadBootProbeSession recovers the canonical v2 session for a host instance.

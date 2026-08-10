@@ -55,8 +55,11 @@ func request(ctx context.Context, client *http.Client, target string, body any) 
 	}
 	defer response.Body.Close()
 	reply, err := io.ReadAll(io.LimitReader(response.Body, 65537))
-	if err != nil || response.StatusCode != http.StatusOK {
-		return firecrackerbootprobev2.Snapshot{}, errors.New("v2 boot-probe host request: control refused")
+	if err != nil {
+		return firecrackerbootprobev2.Snapshot{}, errors.New("v2 boot-probe host request: control response unreadable")
+	}
+	if response.StatusCode != http.StatusOK {
+		return firecrackerbootprobev2.Snapshot{}, errors.New("v2 boot-probe host request: control refused with status " + response.Status)
 	}
 	var s firecrackerbootprobev2.Snapshot
 	if json.Unmarshal(reply, &s) != nil || s.Session.Validate() != nil {

@@ -348,18 +348,20 @@ func (ledger *PostgresLedger) RecordAuthenticatedHostResult(ctx context.Context,
 
 // QuarantineHost denies the host and fences all non-terminal assignments.
 func (ledger *PostgresLedger) QuarantineHost(ctx context.Context, identity HostIdentity, reason string, now time.Time) ([]Operation, error) {
-	if !validBounded(reason, 256) {
+	if !validBounded(reason, 256) || !validBounded(identity.HostID, maxHostIDBytes) || identity.Generation == 0 || !validBounded(identity.CertificateDigest, maxDigestBytes) || now.IsZero() {
 		return nil, ErrHostDenied
 	}
 	var fenced []Operation
 	err := ledger.transaction(ctx, "quarantine PostgreSQL sandbox host", func(tx pgx.Tx) error {
-		if _, err := authenticatePostgresHost(ctx, tx, identity, now); err != nil {
-			return err
+		host, err := scanHost(tx.QueryRow(ctx, selectHostGenerationSQL+` FOR UPDATE`, identity.HostID, int64(identity.Generation)))
+		if err != nil || !validQuarantineHostIdentity(host) || host.Generation != identity.Generation || host.CertificateDigest != identity.CertificateDigest || !now.Before(host.ExpiresAt) || (host.Status != HostActive && host.Status != HostQuarantined) {
+			return ErrHostDenied
 		}
-		if _, err := tx.Exec(ctx, `UPDATE runtime.sandbox_host_enrollments SET status='quarantined', quarantine_reason=$3 WHERE host_id=$1 AND generation=$2`, identity.HostID, int64(identity.Generation), reason); err != nil {
+		// A repeat of the same hostile peer is an idempotent fencing request.
+		// Preserve the first forensic reason and never revive its authority.
+		if _, err := tx.Exec(ctx, `UPDATE runtime.sandbox_host_enrollments SET status='quarantined', quarantine_reason=$3 WHERE host_id=$1 AND generation=$2 AND status='active'`, identity.HostID, int64(identity.Generation), reason); err != nil {
 			return errors.Wrap(err, "mark sandbox host quarantined")
 		}
-		var err error
 		fenced, err = fencePostgresHost(ctx, tx, identity.HostID, identity.Generation, StateUncertain, now)
 		return err
 	})
@@ -395,6 +397,14 @@ func (ledger *PostgresLedger) ConfirmHostCleanupAndRequeue(ctx context.Context, 
 		return insertOutbox(ctx, tx, operation, OutboxStateChanged)
 	})
 	return updated, err
+}
+
+// validQuarantineHostIdentity intentionally validates enrollment identity
+// material without requiring HostActive.  A previously quarantined, exact TLS
+// identity may repeat a quarantine request to finish idempotent fencing, but
+// it never becomes authenticated for normal host control.
+func validQuarantineHostIdentity(host HostEnrollment) bool {
+	return validBounded(host.HostID, maxHostIDBytes) && validBounded(host.Tenant, 256) && validBounded(host.Pool, 128) && host.Generation > 0 && host.ProtocolVersion == sandboxhostprotocol.Version && validBounded(host.CertificateDigest, maxDigestBytes) && len(host.SigningPublicKey) == ed25519.PublicKeySize && validBounded(host.CapabilityDigest, maxDigestBytes) && !host.ExpiresAt.IsZero()
 }
 
 func authenticatePostgresHost(ctx context.Context, tx pgx.Tx, identity HostIdentity, now time.Time) (HostEnrollment, error) {
