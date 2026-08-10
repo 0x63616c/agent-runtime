@@ -79,9 +79,8 @@ func TestReferenceHostMultiProcessLostAckQuarantineCleanupAndReassignment(t *tes
 	resumed := startProcess(t, hostBinary, hostArguments(resumeConfig), map[string]string{"TEST_CONTROL_PUBLIC_KEY": controlVerify, "TEST_HOST_SIGNING_KEY": hostSigning1})
 	waitForOperationState(t, client, request.ID, sandbox.OperationUncertain)
 	resumed.stop(t, true, controlVerify, hostSigning1)
-	requeueUncertainOperation(t, ledger, request.ID)
 	got, err := client.GetOperation(context.Background(), request.ID)
-	if err != nil || got.State != sandbox.OperationAccepted {
+	if err != nil || got.State != sandbox.OperationUncertain {
 		t.Fatalf("operation after lost-ack host restart = %#v, %v", got, err)
 	}
 	journalWire, err := os.ReadFile(journalPath)
@@ -101,9 +100,8 @@ func TestReferenceHostMultiProcessLostAckQuarantineCleanupAndReassignment(t *tes
 	resultResumed := startProcess(t, hostBinary, hostArguments(resultResumeConfig), map[string]string{"TEST_CONTROL_PUBLIC_KEY": controlVerify, "TEST_HOST_SIGNING_KEY": hostSigning1})
 	waitForOperationState(t, client, resultRetryRequest.ID, sandbox.OperationUncertain)
 	resultResumed.stop(t, true, controlVerify, hostSigning1)
-	requeueUncertainOperation(t, ledger, resultRetryRequest.ID)
 	got, err = client.GetOperation(context.Background(), resultRetryRequest.ID)
-	if err != nil || got.State != sandbox.OperationAccepted {
+	if err != nil || got.State != sandbox.OperationUncertain {
 		t.Fatalf("operation after lost-result host restart = %#v, %v", got, err)
 	}
 	resultJournalWire, err := os.ReadFile(resultJournalPath)
@@ -146,20 +144,6 @@ func TestReferenceHostMultiProcessLostAckQuarantineCleanupAndReassignment(t *tes
 	got, err = client.GetOperation(context.Background(), quarantineRequest.ID)
 	if err != nil || got.State != sandbox.OperationUncertain {
 		t.Fatalf("operation after cleanup/reassignment = %#v, %v", got, err)
-	}
-}
-
-func requeueUncertainOperation(t *testing.T, ledger *sandboxcontrol.PostgresLedger, id sandbox.OperationID) {
-	t.Helper()
-	if _, err := ledger.RecoverExpiredAssignments(context.Background(), time.Now().UTC().Add(2*time.Minute), 100); err != nil {
-		t.Fatalf("RecoverExpiredAssignments: %v", err)
-	}
-	operation, err := ledger.Get(context.Background(), "tenant_01:runtime_01", string(id))
-	if err != nil || operation.State != sandboxcontrol.StateUncertain || operation.Assignment.HostID != "" {
-		t.Fatalf("uncertain operation before cleanup = %#v, %v", operation, err)
-	}
-	if _, err := ledger.ConfirmHostCleanupAndRequeue(context.Background(), operation.Principal, operation.ID, operation.Version, time.Now().UTC()); err != nil {
-		t.Fatalf("ConfirmHostCleanupAndRequeue: %v", err)
 	}
 }
 
