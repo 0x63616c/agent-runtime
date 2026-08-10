@@ -17,15 +17,18 @@ import (
 
 // Entry is one immutable accepted receipt key and reference execution marker.
 type Entry struct {
-	ReceiptKey         string `json:"receipt_key"`
-	EnvelopeDigest     string `json:"envelope_digest"`
-	ReceiptDigest      string `json:"receipt_digest"`
-	ExecutionCount     uint64 `json:"execution_count"`
-	LeaseEpoch         uint64 `json:"lease_epoch"`
-	FencingToken       uint64 `json:"fencing_token"`
-	ResultWire         []byte `json:"result_wire"`
-	ResultDigest       string `json:"result_digest"`
-	ResultAcknowledged bool   `json:"result_acknowledged"`
+	ReceiptKey          string `json:"receipt_key"`
+	EnvelopeDigest      string `json:"envelope_digest"`
+	ReceiptDigest       string `json:"receipt_digest"`
+	ExecutionCount      uint64 `json:"execution_count"`
+	LeaseEpoch          uint64 `json:"lease_epoch"`
+	FencingToken        uint64 `json:"fencing_token"`
+	StartedWire         []byte `json:"started_wire"`
+	StartedDigest       string `json:"started_digest"`
+	StartedAcknowledged bool   `json:"started_acknowledged"`
+	ResultWire          []byte `json:"result_wire"`
+	ResultDigest        string `json:"result_digest"`
+	ResultAcknowledged  bool   `json:"result_acknowledged"`
 }
 
 // PendingResult is one exact signed result awaiting control acknowledgement.
@@ -80,7 +83,7 @@ func Open(path string, maximum int) (*Journal, error) {
 	}
 	prior := ""
 	for _, entry := range decoded.Entries {
-		if entry.ReceiptKey == "" || entry.ReceiptKey <= prior || entry.EnvelopeDigest == "" || entry.ReceiptDigest == "" || entry.ExecutionCount != 1 || entry.LeaseEpoch == 0 || entry.FencingToken == 0 || !validResultState(entry) {
+		if entry.ReceiptKey == "" || entry.ReceiptKey <= prior || entry.EnvelopeDigest == "" || entry.ReceiptDigest == "" || entry.ExecutionCount != 1 || entry.LeaseEpoch == 0 || entry.FencingToken == 0 || !validExecutionState(entry) || !validResultState(entry) {
 			return nil, errors.New("open sandbox host journal: invalid receipt entry")
 		}
 		journal.entries[entry.ReceiptKey] = entry
@@ -89,18 +92,132 @@ func Open(path string, maximum int) (*Journal, error) {
 	return journal, nil
 }
 
+// StageStarted fsyncs the stable signed started observation before an executor
+// is permitted to cause an external effect.
+func (journal *Journal) StageStarted(envelope sandboxhostprotocol.Envelope, wire []byte) error {
+	if journal == nil || len(wire) == 0 || len(wire) > 1<<20 {
+		return errors.New("stage sandbox host started result: bounded result is required")
+	}
+	key := receiptKey(envelope)
+	journal.mu.Lock()
+	defer journal.mu.Unlock()
+	entry, exists := journal.entries[key]
+	if !exists || entry.ResultDigest != "" {
+		return errors.New("stage sandbox host started result: durable receipt without terminal result is required")
+	}
+	digest := sandboxhostprotocol.Digest(wire)
+	if entry.StartedDigest != "" {
+		if entry.StartedDigest != digest || !bytes.Equal(entry.StartedWire, wire) {
+			return errors.New("stage sandbox host started result: altered execution intent refused")
+		}
+		return nil
+	}
+	entry.StartedWire = append([]byte(nil), wire...)
+	entry.StartedDigest = digest
+	journal.entries[key] = entry
+	if err := journal.persistLocked(); err != nil {
+		entry.StartedWire, entry.StartedDigest = nil, ""
+		journal.entries[key] = entry
+		return err
+	}
+	return nil
+}
+
+// PendingStarts returns stable receipt-key order for started observations that
+// have been fsynced but not acknowledged by control.
+func (journal *Journal) PendingStarts() []PendingResult {
+	if journal == nil {
+		return nil
+	}
+	journal.mu.Lock()
+	defer journal.mu.Unlock()
+	results := make([]PendingResult, 0)
+	for _, entry := range journal.entries {
+		if entry.StartedDigest != "" && !entry.StartedAcknowledged {
+			results = append(results, PendingResult{ReceiptKey: entry.ReceiptKey, Wire: append([]byte(nil), entry.StartedWire...)})
+		}
+	}
+	sort.Slice(results, func(left, right int) bool { return results[left].ReceiptKey < results[right].ReceiptKey })
+	return results
+}
+
+// AcknowledgeStarted records only the exact stable started observation.
+func (journal *Journal) AcknowledgeStarted(receiptKey, startedDigest string) error {
+	if journal == nil || receiptKey == "" || startedDigest == "" {
+		return errors.New("acknowledge sandbox host started result: receipt and result are required")
+	}
+	journal.mu.Lock()
+	defer journal.mu.Unlock()
+	entry, exists := journal.entries[receiptKey]
+	if !exists || entry.StartedDigest != startedDigest {
+		return errors.New("acknowledge sandbox host started result: altered or absent result refused")
+	}
+	if entry.StartedAcknowledged {
+		return nil
+	}
+	entry.StartedAcknowledged = true
+	journal.entries[receiptKey] = entry
+	if err := journal.persistLocked(); err != nil {
+		entry.StartedAcknowledged = false
+		journal.entries[receiptKey] = entry
+		return err
+	}
+	return nil
+}
+
+// ExecutionStarted reports whether the durable receipt has crossed the
+// irreversible executor-intent boundary.
+func (journal *Journal) ExecutionStarted(envelope sandboxhostprotocol.Envelope) bool {
+	if journal == nil {
+		return false
+	}
+	journal.mu.Lock()
+	defer journal.mu.Unlock()
+	entry, exists := journal.entries[receiptKey(envelope)]
+	return exists && entry.StartedDigest != ""
+}
+
+// Entry returns the immutable durable receipt record for one exact envelope key.
+func (journal *Journal) Entry(envelope sandboxhostprotocol.Envelope) (Entry, bool) {
+	if journal == nil {
+		return Entry{}, false
+	}
+	journal.mu.Lock()
+	defer journal.mu.Unlock()
+	entry, exists := journal.entries[receiptKey(envelope)]
+	if !exists {
+		return Entry{}, false
+	}
+	entry.StartedWire = append([]byte(nil), entry.StartedWire...)
+	entry.ResultWire = append([]byte(nil), entry.ResultWire...)
+	return entry, true
+}
+
 // StageResult fsyncs the exact signed result before its first transport
 // attempt. An altered result for the same durable receipt is refused.
 func (journal *Journal) StageResult(envelope sandboxhostprotocol.Envelope, wire []byte) error {
 	if journal == nil || len(wire) == 0 || len(wire) > 1<<20 {
 		return errors.New("stage sandbox host result: bounded result is required")
 	}
-	key := receiptKey(envelope)
+	return journal.stageResult(receiptKey(envelope), wire)
+}
+
+// StageRecoveryResult fsyncs a terminal observation constructed only from a
+// durable started observation. It is deliberately receipt-keyed because a
+// reboot recovery cannot safely reconstruct an expired envelope.
+func (journal *Journal) StageRecoveryResult(receiptKey string, wire []byte) error {
+	if journal == nil || receiptKey == "" || len(wire) == 0 || len(wire) > 1<<20 {
+		return errors.New("stage sandbox host recovery result: durable receipt and bounded result are required")
+	}
+	return journal.stageResult(receiptKey, wire)
+}
+
+func (journal *Journal) stageResult(key string, wire []byte) error {
 	journal.mu.Lock()
 	defer journal.mu.Unlock()
 	entry, exists := journal.entries[key]
-	if !exists {
-		return errors.New("stage sandbox host result: durable receipt is required")
+	if !exists || entry.StartedDigest == "" {
+		return errors.New("stage sandbox host result: durable started receipt is required")
 	}
 	digest := sandboxhostprotocol.Digest(wire)
 	if entry.ResultDigest != "" {
@@ -118,6 +235,24 @@ func (journal *Journal) StageResult(envelope sandboxhostprotocol.Envelope, wire 
 		return err
 	}
 	return nil
+}
+
+// PendingExecutions returns every started receipt without a durable terminal
+// observation. A host restart must turn each into uncertain without execution.
+func (journal *Journal) PendingExecutions() []PendingResult {
+	if journal == nil {
+		return nil
+	}
+	journal.mu.Lock()
+	defer journal.mu.Unlock()
+	results := make([]PendingResult, 0)
+	for _, entry := range journal.entries {
+		if entry.StartedDigest != "" && entry.ResultDigest == "" {
+			results = append(results, PendingResult{ReceiptKey: entry.ReceiptKey, Wire: append([]byte(nil), entry.StartedWire...)})
+		}
+	}
+	sort.Slice(results, func(left, right int) bool { return results[left].ReceiptKey < results[right].ReceiptKey })
+	return results
 }
 
 // PendingResults returns stable receipt-key order and cloned signed bytes.
@@ -178,7 +313,7 @@ func (journal *Journal) Accept(envelope sandboxhostprotocol.Envelope, envelopeDi
 		if prior.EnvelopeDigest == envelopeDigest && prior.LeaseEpoch == envelope.LeaseEpoch && prior.FencingToken == envelope.FencingToken {
 			return prior, true, nil
 		}
-		if envelope.LeaseEpoch <= prior.LeaseEpoch || envelope.FencingToken <= prior.FencingToken || prior.ResultDigest != "" {
+		if envelope.LeaseEpoch <= prior.LeaseEpoch || envelope.FencingToken <= prior.FencingToken || prior.StartedDigest != "" || prior.ResultDigest != "" {
 			return Entry{}, false, errors.New("accept sandbox host receipt: altered delivery refused")
 		}
 		original := prior
@@ -261,6 +396,13 @@ func validResultState(entry Entry) bool {
 		return len(entry.ResultWire) == 0 && !entry.ResultAcknowledged
 	}
 	return len(entry.ResultWire) > 0 && len(entry.ResultWire) <= 1<<20 && sandboxhostprotocol.Digest(entry.ResultWire) == entry.ResultDigest
+}
+
+func validExecutionState(entry Entry) bool {
+	if entry.StartedDigest == "" {
+		return len(entry.StartedWire) == 0 && !entry.StartedAcknowledged && entry.ResultDigest == ""
+	}
+	return len(entry.StartedWire) > 0 && len(entry.StartedWire) <= 1<<20 && sandboxhostprotocol.Digest(entry.StartedWire) == entry.StartedDigest
 }
 
 func receiptKey(envelope sandboxhostprotocol.Envelope) string {
