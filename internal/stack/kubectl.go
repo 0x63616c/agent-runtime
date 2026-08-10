@@ -320,7 +320,7 @@ func (adapter KubectlAdapter) Rollback(ctx context.Context, target OperatorTarge
 		if !exists {
 			previousDatabase = DatabaseResource{}
 		}
-		if err := adapter.runMigrations(ctx, target, current, authority, currentDocument.Namespace, resource, resources, true, &previousDatabase); err != nil {
+		if err := adapter.runMigrations(ctx, target, previous, authority, currentDocument.Namespace, resource, resources, true, &previousDatabase); err != nil {
 			return err
 		}
 	}
