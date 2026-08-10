@@ -102,7 +102,7 @@ type Actor struct {
 }
 
 func (actor Actor) valid() bool {
-	return boundedIdentity(actor.TenantID) && boundedIdentity(actor.PrincipalID)
+	return safeReference(actor.TenantID) && safeReference(actor.PrincipalID)
 }
 
 // Scope carries only an immutable capability description digest and two bounded narrowing controls.
@@ -377,7 +377,7 @@ func validateProposal(proposal Proposal) error {
 }
 
 func validateDecisionCommand(command DecisionCommand) error {
-	if !boundedIdentity(command.IdempotencyKey) || (command.Decision != DecisionApproved && command.Decision != DecisionDenied) {
+	if !safeReference(command.IdempotencyKey) || (command.Decision != DecisionApproved && command.Decision != DecisionDenied) {
 		return errors.New("approval decision command is invalid")
 	}
 	return nil
@@ -395,8 +395,17 @@ func validDigest(value string) bool {
 	return true
 }
 
-func boundedIdentity(value string) bool {
-	return len(value) > 0 && len(value) <= maxIdentityBytes && !strings.ContainsAny(value, "\x00\r\n")
+func safeReference(value string) bool {
+	if len(value) == 0 || len(value) > maxIdentityBytes {
+		return false
+	}
+	for _, character := range value {
+		if (character >= 'a' && character <= 'z') || (character >= 'A' && character <= 'Z') || (character >= '0' && character <= '9') || character == '-' || character == '_' || character == '.' {
+			continue
+		}
+		return false
+	}
+	return true
 }
 
 func validUTC(value time.Time) bool { return !value.IsZero() && value.Location() == time.UTC }

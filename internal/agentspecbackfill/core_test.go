@@ -177,7 +177,7 @@ func TestVerifyRefusesFrozenSnapshotAndImmutableContentFailures(t *testing.T) {
 func TestArchiveIsRequestKeyedAndRetainsCertificateAbsentTerminalResult(t *testing.T) {
 	request := validRequest()
 	status := agentspecbackfill.Status{Phase: agentspecbackfill.PhaseRefused, RequestDigest: mustDigest(t, request), SnapshotFingerprint: request.SnapshotFingerprint, SnapshotCount: request.SnapshotCount, Reason: agentspecbackfill.RefusalContent, CompletedAt: time.Date(2026, 8, 9, 0, 1, 0, 0, time.UTC)}
-	bundle, err := agentspecbackfill.NewArchiveBundle(archiveEvidence(t, request, status, "content"))
+	bundle, err := agentspecbackfill.NewArchiveBundle(archiveEvidence(t, request, status, "refused_content"))
 	if err != nil {
 		t.Fatalf("new archive bundle: %v", err)
 	}
@@ -192,7 +192,7 @@ func TestArchiveIsRequestKeyedAndRetainsCertificateAbsentTerminalResult(t *testi
 	}
 	later := status
 	later.CompletedAt = later.CompletedAt.Add(time.Second)
-	laterBundle, err := agentspecbackfill.NewArchiveBundle(archiveEvidence(t, request, later, "content"))
+	laterBundle, err := agentspecbackfill.NewArchiveBundle(archiveEvidence(t, request, later, "refused_content"))
 	if err != nil {
 		t.Fatalf("new later archive bundle: %v", err)
 	}
@@ -218,6 +218,18 @@ func TestArchiveRejectsEvidenceWhoseDeclaredRequestDigestDoesNotMatchRequest(t *
 	}
 }
 
+func TestArchiveRefusesSecretLikeAuditCodeBeforeCanonicalRetention(t *testing.T) {
+	request := validRequest()
+	status := agentbackfillVerifiedStatus(t, request)
+	evidence := archiveEvidence(t, request, status, "verified")
+	evidence.Audit.Code = "authorization-bearer-topsecret"
+
+	bundle, err := agentspecbackfill.NewArchiveBundle(evidence)
+	if err == nil {
+		t.Fatalf("secret-like audit code was accepted into archive bundle %#v", bundle)
+	}
+}
+
 func validRequest() agentspecbackfill.Request {
 	return agentspecbackfill.Request{StackDigest: "sha256:1111111111111111111111111111111111111111111111111111111111111111", MigrationVersion: 4, MigrationArtifactDigest: "sha256:2222222222222222222222222222222222222222222222222222222222222222", ManifestDigest: "sha256:3333333333333333333333333333333333333333333333333333333333333333", ControllerImageDigest: "sha256:4444444444444444444444444444444444444444444444444444444444444444", SnapshotFingerprint: "sha256:5555555555555555555555555555555555555555555555555555555555555555", SnapshotCount: 1, FenceNonce: "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY", StaticReadinessDigest: "sha256:6666666666666666666666666666666666666666666666666666666666666666", DatabaseAuthorityDigest: "sha256:7777777777777777777777777777777777777777777777777777777777777777", BlobReadCapabilityDigest: "sha256:8888888888888888888888888888888888888888888888888888888888888888", CreatedAt: time.Date(2026, 8, 9, 0, 0, 0, 0, time.UTC), ExpiresAt: time.Date(2026, 8, 9, 0, 10, 0, 0, time.UTC)}
 }
@@ -231,7 +243,7 @@ func mustDigest(t *testing.T, request agentspecbackfill.Request) string {
 	return value
 }
 
-func archiveEvidence(t *testing.T, request agentspecbackfill.Request, status agentspecbackfill.Status, auditCode string) agentspecbackfill.TerminalArchiveEvidence {
+func archiveEvidence(t *testing.T, request agentspecbackfill.Request, status agentspecbackfill.Status, auditCode agentspecbackfill.AuditCode) agentspecbackfill.TerminalArchiveEvidence {
 	t.Helper()
 	return agentspecbackfill.TerminalArchiveEvidence{RequestUID: "1c8e3d7a-2f8b-4eea-b71a-000000000001", RequestDigest: mustDigest(t, request), Request: request, Status: status, Audit: agentspecbackfill.Audit{Code: auditCode}}
 }

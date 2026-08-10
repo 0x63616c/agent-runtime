@@ -346,8 +346,25 @@ func classifyVerificationError(status Status, err error, action string) (Status,
 	return Status{}, errors.Wrap(err, action)
 }
 
-// Audit is bounded redacted terminal evidence.
-type Audit struct{ Code string }
+// AuditCode is one closed redacted terminal-audit classification.
+type AuditCode string
+
+const (
+	// AuditVerified records a verified immutable legacy snapshot.
+	AuditVerified AuditCode = "verified"
+	// AuditRefusedSnapshot records a safe snapshot refusal.
+	AuditRefusedSnapshot AuditCode = "refused_snapshot"
+	// AuditRefusedContent records a safe content/owner refusal.
+	AuditRefusedContent AuditCode = "refused_content"
+	// AuditRefusedExpired records a safe expiry refusal.
+	AuditRefusedExpired AuditCode = "refused_expired"
+	// AuditRefusedNotAdmitted records a safe pre-admission refusal.
+	AuditRefusedNotAdmitted AuditCode = "refused_not_admitted"
+)
+
+// Audit is bounded redacted terminal evidence. Code is validated against the
+// terminal Status, so arbitrary source-provided text is never archived.
+type Audit struct{ Code AuditCode }
 
 // CertificateInput is the safe certificate projection when v4 committed.
 type CertificateInput struct{ Digest string }
@@ -384,7 +401,7 @@ func NewArchiveBundle(evidence TerminalArchiveEvidence) (ArchiveBundle, error) {
 	if err := evidence.Status.ValidateFor(evidence.Request, evidence.Status.CompletedAt); err != nil {
 		return ArchiveBundle{}, errors.Wrap(err, "validate archive status")
 	}
-	if !validAuditCode(evidence.Audit.Code) {
+	if !validAuditCode(evidence.Status, evidence.Audit.Code) {
 		return ArchiveBundle{}, errors.New("invalid archive audit code")
 	}
 	if evidence.Certificate != nil && !validDigest(evidence.Certificate.Digest) {
@@ -409,24 +426,28 @@ func validArchiveRequestUID(value string) bool {
 	return true
 }
 
-func validAuditCode(value string) bool {
-	if len(value) == 0 || len(value) > 64 {
+func validAuditCode(status Status, code AuditCode) bool {
+	switch {
+	case status.Phase == PhaseVerified:
+		return code == AuditVerified
+	case status.Phase == PhaseRefused && status.Reason == RefusalSnapshot:
+		return code == AuditRefusedSnapshot
+	case status.Phase == PhaseRefused && status.Reason == RefusalContent:
+		return code == AuditRefusedContent
+	case status.Phase == PhaseRefused && status.Reason == RefusalExpired:
+		return code == AuditRefusedExpired
+	case status.Phase == PhaseRefused && status.Reason == RefusalNotAdmitted:
+		return code == AuditRefusedNotAdmitted
+	default:
 		return false
 	}
-	for _, character := range value {
-		if (character >= 'a' && character <= 'z') || (character >= '0' && character <= '9') || character == '_' || character == '-' {
-			continue
-		}
-		return false
-	}
-	return true
 }
 
 // CertificatePresent reports whether the terminal request committed v4 certificate evidence.
 func (bundle ArchiveBundle) CertificatePresent() bool { return bundle.certificate != nil }
 
 // AuditCode reports the bounded redacted audit classification retained in this bundle.
-func (bundle ArchiveBundle) AuditCode() string { return bundle.audit.Code }
+func (bundle ArchiveBundle) AuditCode() AuditCode { return bundle.audit.Code }
 
 // Key returns the deterministic archive object key under one declared prefix.
 func (bundle ArchiveBundle) Key(prefix string) string {
@@ -450,7 +471,7 @@ func (bundle ArchiveBundle) Canonical() ([]byte, error) {
 	writeText(&value, bundle.requestUID)
 	writeBytes(&value, request)
 	writeBytes(&value, status)
-	writeText(&value, bundle.audit.Code)
+	writeText(&value, string(bundle.audit.Code))
 	if bundle.certificate == nil {
 		value.WriteByte(0xf6)
 	} else {

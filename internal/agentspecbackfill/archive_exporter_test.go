@@ -39,7 +39,7 @@ func TestTerminalArchiveExporterRetainsLateCRBoundEvidence(t *testing.T) {
 		RequestDigest: mustDigest(t, request),
 		Request:       request,
 		Status:        status,
-		Audit:         agentspecbackfill.Audit{Code: "legacy_spec_verified"},
+		Audit:         agentspecbackfill.Audit{Code: agentspecbackfill.AuditVerified},
 		Certificate: &agentspecbackfill.CertificateInput{
 			Digest: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 		},
@@ -166,5 +166,9 @@ func (archive *recordingConditionalArchive) PutIfAbsent(_ context.Context, key s
 
 func validArchiveEvidence(request agentspecbackfill.Request, status agentspecbackfill.Status) agentspecbackfill.TerminalArchiveEvidence {
 	digest, _ := request.Digest()
-	return agentspecbackfill.TerminalArchiveEvidence{RequestUID: "1c8e3d7a-2f8b-4eea-b71a-000000000001", RequestDigest: digest, Request: request, Status: status, Audit: agentspecbackfill.Audit{Code: "verified"}}
+	code := agentspecbackfill.AuditVerified
+	if status.Phase == agentspecbackfill.PhaseRefused && status.Reason == agentspecbackfill.RefusalContent {
+		code = agentspecbackfill.AuditRefusedContent
+	}
+	return agentspecbackfill.TerminalArchiveEvidence{RequestUID: "1c8e3d7a-2f8b-4eea-b71a-000000000001", RequestDigest: digest, Request: request, Status: status, Audit: agentspecbackfill.Audit{Code: code}}
 }

@@ -30,7 +30,7 @@ func TestProcessExportsTerminalEvidenceFromItsDedicatedSourceAfterRequestExpiry(
 	if _, err := process.RunOnce(context.Background()); err != nil {
 		t.Fatalf("run export process once: %v", err)
 	}
-	if source.calls != 1 || archive.calls != 1 || archive.key != "retained/preflight/agentspecbackfill/v1/1c8e3d7a-2f8b-4eea-b71a-000000000001/sha256-a6c4897e72695f6b4884080058c1ab90b2750c4e814ee6008e04a747abad7fc4.cbor" || !archive.bundle.CertificatePresent() || archive.bundle.AuditCode() != "legacy_spec_verified" {
+	if source.calls != 1 || archive.calls != 1 || archive.key != "retained/preflight/agentspecbackfill/v1/1c8e3d7a-2f8b-4eea-b71a-000000000001/sha256-a6c4897e72695f6b4884080058c1ab90b2750c4e814ee6008e04a747abad7fc4.cbor" || !archive.bundle.CertificatePresent() || archive.bundle.AuditCode() != agentspecbackfill.AuditVerified {
 		t.Fatalf("source calls=%d archive calls=%d key=%q certificate=%t audit=%q", source.calls, archive.calls, archive.key, archive.bundle.CertificatePresent(), archive.bundle.AuditCode())
 	}
 }
@@ -89,7 +89,7 @@ func validTerminalEvidence(t *testing.T) agentspecbackfill.TerminalArchiveEviden
 			SnapshotCount:       request.SnapshotCount,
 			CompletedAt:         request.CreatedAt.Add(time.Second),
 		},
-		Audit: agentspecbackfill.Audit{Code: "legacy_spec_verified"},
+		Audit: agentspecbackfill.Audit{Code: agentspecbackfill.AuditVerified},
 		Certificate: &agentspecbackfill.CertificateInput{
 			Digest: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 		},

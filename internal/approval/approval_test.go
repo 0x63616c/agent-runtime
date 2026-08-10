@@ -159,6 +159,24 @@ func TestApprovalRejectsArbitrarySummaryPayload(t *testing.T) {
 	}
 }
 
+func TestApprovalRefusesSecretLikeIdentityOrIdempotencyBeforeRetention(t *testing.T) {
+	proposal := validProposal(t)
+	proposal.Owner.PrincipalID = "Authorization: Bearer secret"
+	if _, err := approval.New(proposal); err == nil {
+		t.Fatal("secret-like principal identity was accepted")
+	}
+
+	pending := validApproval(t)
+	owner := approval.Actor{TenantID: "tenant-a", PrincipalID: "owner"}
+	decided, err := pending.Decide(owner, approval.DecisionCommand{IdempotencyKey: "Authorization: Bearer secret", Decision: approval.DecisionDenied}, pending.CreatedAt().Add(time.Minute))
+	if err == nil || decided != (approval.Approval{}) {
+		t.Fatalf("secret-like idempotency key recorded a decision: %#v, %v", decided, err)
+	}
+	if pending.Decision() != nil || pending.State() != approval.StatePending {
+		t.Fatalf("rejected idempotency key changed approval state: %#v", pending)
+	}
+}
+
 func validProposal(t *testing.T) approval.Proposal {
 	t.Helper()
 	sessionID, err := approval.ParseSessionID("sess_1234567890ABCDEF")
