@@ -56,11 +56,17 @@ type receiptRequest struct {
 	ReceiptDigest   string `json:"receipt_digest"`
 }
 
-// RunOnce polls, verifies, journals, acknowledges and completes at most one
-// reference operation. It never claims real process or isolation execution.
+// RunOnce polls one reference operation with the explicit unavailable executor.
+// It fails closed to uncertain rather than claiming a fabricated effect.
 func RunOnce(ctx context.Context, config Config, lookup SecretLookup, source clock.Clock) error {
-	if ctx == nil || lookup == nil || source == nil {
-		return errors.New("run sandbox reference host: context, secret lookup and clock are required")
+	return RunOnceWithExecutor(ctx, config, lookup, source, unavailableExecutor{})
+}
+
+// RunOnceWithExecutor polls, verifies, receipts, durably records execution
+// intent, then delegates at most one lease-fenced host effect.
+func RunOnceWithExecutor(ctx context.Context, config Config, lookup SecretLookup, source clock.Clock, executor HostExecutor) error {
+	if ctx == nil || lookup == nil || source == nil || executor == nil {
+		return errors.New("run sandbox reference host: context, secret lookup, clock and executor are required")
 	}
 	hostPrivateEncoded, err := requiredSecret(lookup, config.hostSigningKeyEnvironment)
 	if err != nil {
@@ -83,12 +89,21 @@ func RunOnce(ctx context.Context, config Config, lookup SecretLookup, source clo
 	if err != nil {
 		return err
 	}
-	for _, pending := range journal.PendingResults() {
-		resultResponse, err := do(ctx, client, config.controlURL+resultPath, pending.Wire)
-		if err != nil {
+	for _, pending := range journal.PendingStarts() {
+		if err := sendResult(ctx, client, config.controlURL, pending.Wire); err != nil {
 			return err
 		}
-		if err := requireControlStatus(resultResponse.status, "pending result control endpoint is unavailable", "pending result was not accepted"); err != nil {
+		if err := journal.AcknowledgeStarted(pending.ReceiptKey, sandboxhostprotocol.Digest(pending.Wire)); err != nil {
+			return err
+		}
+	}
+	if err := recoverIncompleteExecutions(ctx, source.Now().UTC(), journal, ed25519.PrivateKey(hostPrivate), func(sendCtx context.Context, wire []byte) error {
+		return sendResult(sendCtx, client, config.controlURL, wire)
+	}); err != nil {
+		return err
+	}
+	for _, pending := range journal.PendingResults() {
+		if err := sendResult(ctx, client, config.controlURL, pending.Wire); err != nil {
 			return err
 		}
 		if err := journal.AcknowledgeResult(pending.ReceiptKey, sandboxhostprotocol.Digest(pending.Wire)); err != nil {
@@ -129,27 +144,31 @@ func RunOnce(ctx context.Context, config Config, lookup SecretLookup, source clo
 	if config.testFaultAfterReceipt {
 		return ErrInjectedReceiptFault
 	}
-	resultWire, err := sandboxhostprotocol.SignResult(sandboxhostprotocol.Result{ProtocolVersion: sandboxhostprotocol.Version, ResultID: "result_" + envelope.DeliveryID, HostID: config.hostID, HostGeneration: config.hostGeneration, AssignmentID: envelope.AssignmentID, LeaseEpoch: envelope.LeaseEpoch, FencingToken: envelope.FencingToken, Principal: envelope.Principal, OperationID: envelope.OperationID, EffectiveSpecDigest: envelope.EffectiveSpecDigest, CapabilityDigest: envelope.CapabilityDigest, State: "succeeded", ObservedAt: source.Now().UTC()}, ed25519.PrivateKey(hostPrivate))
-	if err != nil {
-		return err
-	}
-	if err := journal.StageResult(envelope, resultWire); err != nil {
-		return err
-	}
-	resultResponse, err := do(ctx, client, config.controlURL+resultPath, resultWire)
-	if err != nil {
-		return err
-	}
-	if err := requireControlStatus(resultResponse.status, "result control endpoint is unavailable", "result was not accepted"); err != nil {
-		return err
-	}
-	if config.testFaultAfterResultSend {
-		return ErrInjectedResultAcknowledgementFault
-	}
-	if err := journal.AcknowledgeResult(entry.ReceiptKey, sandboxhostprotocol.Digest(resultWire)); err != nil {
+	if err := executeEnvelopeWithAfterTerminalSend(ctx, envelope, source.Now().UTC(), journal, ed25519.PrivateKey(hostPrivate), executor, func(sendCtx context.Context, wire []byte) error {
+		return sendResult(sendCtx, client, config.controlURL, wire)
+	}, context.WithDeadline, func() error {
+		if config.testFaultAfterResultSend {
+			return ErrInjectedResultAcknowledgementFault
+		}
+		return nil
+	}); err != nil {
 		return err
 	}
 	return nil
+}
+
+type unavailableExecutor struct{}
+
+func (unavailableExecutor) Execute(context.Context, sandboxhostprotocol.Envelope) error {
+	return errors.New("sandbox reference host executor is unavailable")
+}
+
+func sendResult(ctx context.Context, client *http.Client, controlURL string, wire []byte) error {
+	resultResponse, err := do(ctx, client, controlURL+resultPath, wire)
+	if err != nil {
+		return err
+	}
+	return requireControlStatus(resultResponse.status, "result control endpoint is unavailable", "result was not accepted")
 }
 
 type response struct {

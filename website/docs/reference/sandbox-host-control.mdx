@@ -21,8 +21,8 @@ Implemented M3 behavior includes:
   `AtomicTrust` instance and is not restart-persistent without authenticated
   persisted trust history;
 - persisted exact-envelope replay across control or host restart;
-- a journal-before-effect reference host with lost receipt and lost result
-  acknowledgement recovery;
+- a journal-before-effect reference host with exact lost-ack replay and
+  fail-closed `uncertain` recovery after durable `started` intent;
 - a cancellable host daemon with an explicit poll interval, healthy verified
   no-work observation, and bounded transient control retry;
 - host-signed results and ordered stdout/stderr integrity headers;

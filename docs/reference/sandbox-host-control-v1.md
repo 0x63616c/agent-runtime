@@ -99,11 +99,13 @@ newer lease or assignment.
 ## Recovery and reference-host limits
 
 Pull replays the exact persisted envelope while its assignment remains current
-and non-terminal, including after a receipt. The reference host fsyncs its
-receipt journal before its single simulated effect. After process restart, the
-same envelope returns the same receipt and execution count; it can therefore
-recover both a lost receipt acknowledgement and a lost result acknowledgement
-without executing twice. This is protocol/idempotency evidence, not a promise
+and non-terminal, including after a receipt. Before an injected host executor
+can cause an effect, the reference host fsyncs a stable signed `started`
+observation. After restart, a receipt with durable `started` but no durable
+terminal observation is never executed again: the host posts a signed
+`uncertain` result so control's fenced cleanup/requeue path remains the sole
+authority. Lost receipt, `started`, and terminal-result acknowledgements replay
+their exact durable wires. This is protocol/idempotency evidence, not a promise
 that arbitrary external effects are exactly once.
 
 `cmd/sandbox-host` is a separately runnable, long-lived reference role. It
@@ -115,3 +117,5 @@ than spinning. It proves mTLS, signature refusal, journal-before-effect
 ordering, restart, receipt, and result behavior. It deliberately performs no
 guest process or VM work and provides no deployment, isolation, cgroup,
 network, image, mount, output-storage, Jailer, KVM, or Firecracker evidence.
+Its default reference executor is deliberately unavailable and therefore
+records `uncertain`, never a fabricated successful effect.

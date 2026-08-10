@@ -107,8 +107,8 @@ it never permits an unspecified generation or certificate digest.
 
 | Failure | Durable response |
 | --- | --- |
-| Control or host process exits before receipt | The current envelope is replayed byte-for-byte; the host journal returns its stable receipt and does not repeat the effect. |
-| Host exits after receipt but before result | Pull still replays the current envelope; the journal skips the effect and the host resends receipt and signed result. |
+| Control or host process exits before receipt | The current envelope is replayed byte-for-byte; the host journal returns its stable receipt and does not repeat an effect once durable `started` intent exists. |
+| Host exits after durable `started` but before a terminal result | The host replays any unacknowledged `started` wire, fsyncs and posts signed `uncertain`, and never invokes the executor again. Control's existing cleanup/requeue path remains authoritative. |
 | Lease is renewed | Epoch and fence advance together; older outputs/results are stale. |
 | Host signs with the wrong key, changes a duplicate, skips output sequence, or sends an impossible binding | Quarantine the enrolled generation, increment fences, clear assignments, and mark affected Operations `uncertain`. |
 | Host disappears or lease expires | Fence and expose uncertainty; do not guess that guest resources are gone. |

@@ -56,6 +56,19 @@ func Run(ctx context.Context, config Config, lookup SecretLookup, source clock.C
 	}, observe)
 }
 
+// RunWithExecutor repeatedly polls with one explicit host-effect implementation.
+func RunWithExecutor(ctx context.Context, config Config, lookup SecretLookup, source clock.Clock, interval time.Duration, wait Wait, observe Observer, executor HostExecutor) error {
+	if executor == nil {
+		return errors.New("run sandbox reference host: executor is required")
+	}
+	if ctx == nil || lookup == nil || source == nil || wait == nil || observe == nil || interval <= 0 || interval > maximumPollInterval {
+		return errors.New("run sandbox reference host: explicit finite context, dependencies and poll interval are required")
+	}
+	return loop(ctx, source, interval, wait, func(ctx context.Context) error {
+		return RunOnceWithExecutor(ctx, config, lookup, source, executor)
+	}, observe)
+}
+
 func loop(ctx context.Context, source clock.Clock, interval time.Duration, wait Wait, poll func(context.Context) error, observe Observer) error {
 	if ctx == nil || source == nil || wait == nil || poll == nil || observe == nil || interval <= 0 || interval > maximumPollInterval {
 		return errors.New("run sandbox reference host loop: explicit finite authority is required")
