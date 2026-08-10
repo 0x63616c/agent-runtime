@@ -96,6 +96,34 @@ func TestMemoryHostControlLostAckRestartFenceAndQuarantine(t *testing.T) {
 	}
 }
 
+func TestPullHostAssignmentBindsTheEnrolledObservationKey(t *testing.T) {
+	now := time.Date(2026, time.August, 10, 12, 0, 0, 0, time.UTC)
+	ledger := NewMemoryLedger()
+	publicKey, _, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	host := HostEnrollment{HostID: "host_observation", Tenant: "tenant_01", Pool: "pool_01", Generation: 1, ProtocolVersion: sandboxhostprotocol.Version, CertificateDigest: digest("1"), SigningPublicKey: publicKey, CapabilityDigest: digest("2"), Status: HostActive, ExpiresAt: now.Add(time.Hour)}
+	if err := ledger.ProvisionHost(context.Background(), host, AttestationInput{Profile: AttestationProfileLocalMetadata}, nil); err != nil {
+		t.Fatal(err)
+	}
+	operation := Operation{Principal: "tenant_01:subject_01", Tenant: host.Tenant, ID: "op_observation", Kind: "close-sandbox", TargetKind: "sandbox", TargetID: "sbx_observation", InputDigest: digest("3"), CanonicalDigest: digest("4"), EffectiveSpecDigest: digest("5"), CapabilityDigest: host.CapabilityDigest, DispatchBody: `{"version":"sandbox.control/v1"}`, AcceptedAt: now, RetentionExpiresAt: now.Add(time.Hour), CleanupRequired: true}
+	if _, _, err := ledger.Accept(context.Background(), operation); err != nil {
+		t.Fatal(err)
+	}
+	var delivered sandboxhostprotocol.Envelope
+	_, err = ledger.PullHostAssignment(context.Background(), HostIdentity{HostID: host.HostID, Generation: host.Generation, CertificateDigest: host.CertificateDigest}, now, now.Add(time.Minute), DeliverySeed{AssignmentID: "assignment_observation", EnvelopeID: "envelope_observation", DeliveryID: "delivery_observation", Nonce: "nonce_observation"}, func(envelope sandboxhostprotocol.Envelope) ([]byte, error) {
+		delivered = envelope
+		return []byte("signed"), nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := delivered.HostObservationKeyDigest, sandboxhostprotocol.Digest(publicKey); got != want {
+		t.Fatalf("HostObservationKeyDigest = %q, want %q", got, want)
+	}
+}
+
 func TestAttestationVerifierRecordsFailureAndRefusesFailedHost(t *testing.T) {
 	t.Parallel()
 

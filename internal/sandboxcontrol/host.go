@@ -234,7 +234,7 @@ func (ledger *MemoryLedger) PullHostAssignment(ctx context.Context, identity Hos
 			return HostDispatch{}, errors.New("pull sandbox host assignment: fence exhausted")
 		}
 		operation.Assignment = Assignment{HostID: host.HostID, HostGeneration: host.Generation, AssignmentID: seed.AssignmentID, LeaseEpoch: 1, FencingToken: operation.Assignment.FencingToken + 1, LeaseExpiresAt: leaseExpiresAt.UTC()}
-		envelope := envelopeFor(operation, now, leaseExpiresAt, seed)
+		envelope := envelopeFor(operation, host.SigningPublicKey, now, leaseExpiresAt, seed)
 		wire, err := signer(envelope)
 		if err != nil || len(wire) == 0 || len(wire) > 1<<20 {
 			return HostDispatch{}, errors.New("pull sandbox host assignment: sign bounded envelope")
@@ -284,7 +284,8 @@ func (ledger *MemoryLedger) RenewHostAssignment(ctx context.Context, identity Ho
 	}
 	ledger.mu.Lock()
 	defer ledger.mu.Unlock()
-	if _, err := ledger.authenticateHostLocked(identity, now); err != nil {
+	host, err := ledger.authenticateHostLocked(identity, now)
+	if err != nil {
 		return HostDispatch{}, err
 	}
 	key, operation, _, ok := ledger.assignmentLocked(identity, assignmentID, fence)
@@ -295,7 +296,7 @@ func (ledger *MemoryLedger) RenewHostAssignment(ctx context.Context, identity Ho
 	operation.Assignment.LeaseEpoch++
 	operation.Assignment.LeaseExpiresAt = leaseExpiresAt.UTC()
 	seed.AssignmentID = assignmentID
-	envelope := envelopeFor(operation, now, leaseExpiresAt, seed)
+	envelope := envelopeFor(operation, host.SigningPublicKey, now, leaseExpiresAt, seed)
 	wire, err := signer(envelope)
 	if err != nil || len(wire) == 0 || len(wire) > 1<<20 {
 		return HostDispatch{}, errors.New("renew sandbox host assignment: sign bounded envelope")
@@ -479,13 +480,13 @@ func (ledger *MemoryLedger) fenceHostLocked(hostID string, generation uint64, ne
 	return fenced
 }
 
-func envelopeFor(operation Operation, issuedAt, expiresAt time.Time, seed DeliverySeed) sandboxhostprotocol.Envelope {
+func envelopeFor(operation Operation, observationKey ed25519.PublicKey, issuedAt, expiresAt time.Time, seed DeliverySeed) sandboxhostprotocol.Envelope {
 	sandboxID := ""
 	if operation.TargetKind == "sandbox" {
 		sandboxID = operation.TargetID
 	}
 	payload := []byte(operation.DispatchBody)
-	return sandboxhostprotocol.Envelope{ProtocolVersion: sandboxhostprotocol.Version, EnvelopeID: seed.EnvelopeID, DeliveryID: seed.DeliveryID, Nonce: seed.Nonce, IssuedAt: issuedAt.UTC(), ExpiresAt: expiresAt.UTC(), HostID: operation.Assignment.HostID, HostGeneration: operation.Assignment.HostGeneration, AssignmentID: operation.Assignment.AssignmentID, LeaseEpoch: operation.Assignment.LeaseEpoch, FencingToken: operation.Assignment.FencingToken, Tenant: operation.Tenant, Principal: operation.Principal, SandboxID: sandboxID, OperationID: operation.ID, OperationKind: operation.Kind, EffectiveSpecDigest: operation.EffectiveSpecDigest, CapabilityDigest: operation.CapabilityDigest, CanonicalRequestDigest: operation.CanonicalDigest, SequenceContract: "host-proposed/control-owned-v1", PayloadDigest: sandboxhostprotocol.Digest(payload), Payload: payload}
+	return sandboxhostprotocol.Envelope{ProtocolVersion: sandboxhostprotocol.Version, EnvelopeID: seed.EnvelopeID, DeliveryID: seed.DeliveryID, Nonce: seed.Nonce, IssuedAt: issuedAt.UTC(), ExpiresAt: expiresAt.UTC(), HostID: operation.Assignment.HostID, HostGeneration: operation.Assignment.HostGeneration, HostObservationKeyDigest: sandboxhostprotocol.Digest(observationKey), AssignmentID: operation.Assignment.AssignmentID, LeaseEpoch: operation.Assignment.LeaseEpoch, FencingToken: operation.Assignment.FencingToken, Tenant: operation.Tenant, Principal: operation.Principal, SandboxID: sandboxID, OperationID: operation.ID, OperationKind: operation.Kind, EffectiveSpecDigest: operation.EffectiveSpecDigest, CapabilityDigest: operation.CapabilityDigest, CanonicalRequestDigest: operation.CanonicalDigest, SequenceContract: "host-proposed/control-owned-v1", PayloadDigest: sandboxhostprotocol.Digest(payload), Payload: payload}
 }
 
 func dispatchFrom(operation Operation, fields hostAssignmentFields) HostDispatch {

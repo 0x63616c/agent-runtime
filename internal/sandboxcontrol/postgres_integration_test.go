@@ -5,6 +5,7 @@ package sandboxcontrol
 import (
 	"context"
 	"crypto/ed25519"
+	"crypto/rand"
 	"errors"
 	"os"
 	"sync"
@@ -12,9 +13,61 @@ import (
 	"testing"
 	"time"
 
+	"github.com/0x63616c/agent-runtime/internal/firecrackerlaunchgrant"
 	"github.com/0x63616c/agent-runtime/internal/sandboxhostprotocol"
+	"github.com/0x63616c/agent-runtime/internal/sandboxm4bridge"
+	"github.com/0x63616c/agent-runtime/sandbox"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
+
+func TestPostgresHostDispatchMintsAnM4CapabilityFromTheEnrolledFence(t *testing.T) {
+	dsn := os.Getenv("AR_SANDBOXCONTROL_POSTGRES_DSN")
+	if dsn == "" {
+		t.Fatal("AR_SANDBOXCONTROL_POSTGRES_DSN is required for the integration suite")
+	}
+	ctx := context.Background()
+	pool := openIntegrationPool(t, ctx, dsn)
+	t.Cleanup(pool.Close)
+	if _, err := pool.Exec(ctx, `TRUNCATE runtime.sandbox_host_outputs, runtime.sandbox_host_dispatches, runtime.sandbox_host_enrollments, runtime.sandbox_operation_outbox, runtime.sandbox_operations RESTART IDENTITY`); err != nil {
+		t.Fatal(err)
+	}
+	ledger, err := NewPostgresLedger(pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, time.August, 10, 12, 0, 0, 0, time.UTC)
+	controlPublic, controlPrivate, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hostPublic, hostPrivate, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	host := HostEnrollment{HostID: "host_pg_m4", Tenant: "tenant-pg", Pool: "pool-pg", Generation: 3, ProtocolVersion: sandboxhostprotocol.Version, CertificateDigest: digest("1"), SigningPublicKey: hostPublic, CapabilityDigest: digest("2"), Status: HostActive, ExpiresAt: now.Add(time.Hour)}
+	if err := ledger.ProvisionHost(ctx, host, AttestationInput{Profile: AttestationProfileLocalMetadata}, nil); err != nil {
+		t.Fatal(err)
+	}
+	operation := Operation{Principal: "tenant-pg:subject-pg", Tenant: host.Tenant, ID: "op_pg_m4", Kind: firecrackerlaunchgrant.OperatorBootProbeOperation, TargetKind: "sandbox", TargetID: "sbx_pg_m4", InputDigest: digest("3"), CanonicalDigest: digest("4"), EffectiveSpecDigest: digest("5"), CapabilityDigest: host.CapabilityDigest, DispatchBody: `{"version":"sandbox.control/v1"}`, AcceptedAt: now, RetentionExpiresAt: now.Add(time.Hour), CleanupRequired: true}
+	if _, _, err := ledger.Accept(ctx, operation); err != nil {
+		t.Fatal(err)
+	}
+	trust := sandboxhostprotocol.TrustBundle{Version: 1, RevocationEpoch: 9, Current: sandboxhostprotocol.SigningKey{ID: "control_pg", Version: 3, PublicKey: controlPublic, NotBefore: now.Add(-time.Hour), NotAfter: now.Add(time.Hour)}}
+	dispatch, err := ledger.PullHostAssignment(ctx, HostIdentity{HostID: host.HostID, Generation: host.Generation, CertificateDigest: host.CertificateDigest}, now, now.Add(2*time.Minute), DeliverySeed{AssignmentID: "assignment_pg_m4", EnvelopeID: "envelope_pg_m4", DeliveryID: "delivery_pg_m4", Nonce: "MDEyMzQ1Njc4OWFiY2RlZg"}, func(envelope sandboxhostprotocol.Envelope) ([]byte, error) {
+		return sandboxhostprotocol.SignEnvelopeWithTrust(envelope, trust, controlPrivate)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	capability, err := sandboxm4bridge.NewBootProbeCapability(dispatch.Envelope, host.HostID, host.Generation, trust, hostPrivate, now.Add(time.Second), firecrackerlaunchgrant.TrustedM4Identity{VMID: "sandbox-001", FixtureVersion: "fixture-v1", PlanDigest: sandbox.Digest(digest("6")), FixtureDigest: sandbox.Digest(digest("7")), StageDigest: sandbox.Digest(digest("8")), AuthorityDigest: sandbox.Digest(digest("9"))})
+	if err != nil {
+		t.Fatalf("NewBootProbeCapability(PostgreSQL dispatch) error = %v", err)
+	}
+	grant := capability.Grant()
+	if grant.Envelope.AssignmentID != dispatch.Operation.Assignment.AssignmentID || grant.Envelope.FencingToken != dispatch.Operation.Assignment.FencingToken || grant.Envelope.Tenant != operation.Tenant {
+		t.Fatalf("M4 grant detached from PostgreSQL assignment: %#v", grant.Envelope)
+	}
+}
 
 func TestPostgresLedgerSurvivesRestartAndReconcilesExpiredAuthority(t *testing.T) {
 	dsn := os.Getenv("AR_SANDBOXCONTROL_POSTGRES_DSN")
@@ -177,9 +230,17 @@ func TestPostgresHostControlPersistsLostAckAndQuarantineAcrossRestart(t *testing
 		t.Fatal(err)
 	}
 	identity := HostIdentity{HostID: host.HostID, Generation: host.Generation, CertificateDigest: host.CertificateDigest}
-	first, err := ledger.PullHostAssignment(ctx, identity, now, now.Add(time.Minute), DeliverySeed{AssignmentID: "assignment_pg", EnvelopeID: "envelope_pg_1", DeliveryID: "delivery_pg_1", Nonce: "nonce_pg_1"}, testEnvelopeSigner)
+	var delivered sandboxhostprotocol.Envelope
+	signer := func(envelope sandboxhostprotocol.Envelope) ([]byte, error) {
+		delivered = envelope
+		return testEnvelopeSigner(envelope)
+	}
+	first, err := ledger.PullHostAssignment(ctx, identity, now, now.Add(time.Minute), DeliverySeed{AssignmentID: "assignment_pg", EnvelopeID: "envelope_pg_1", DeliveryID: "delivery_pg_1", Nonce: "nonce_pg_1"}, signer)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if got, want := delivered.HostObservationKeyDigest, sandboxhostprotocol.Digest(host.SigningPublicKey); got != want {
+		t.Fatalf("PostgreSQL dispatch HostObservationKeyDigest = %q, want %q", got, want)
 	}
 	pool.Close()
 
