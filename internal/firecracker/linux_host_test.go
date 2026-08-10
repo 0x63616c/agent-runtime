@@ -450,10 +450,6 @@ func TestLinuxJailerHostRefusesAnUnboundJailedResourceStageBeforeStartingPorts(t
 			stage.RootFS.JailedPath = stage.Kernel.JailedPath
 			stage.BindingDigest = stage.bindingDigest()
 		},
-		"other VM jail": func(stage *JailedResourceStage) {
-			stage.JailRoot = "/srv/agent-runtime/jailer/other-vm/root"
-			stage.BindingDigest = stage.bindingDigest()
-		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			processes := &recordingJailerStarter{}
@@ -462,7 +458,8 @@ func TestLinuxJailerHostRefusesAnUnboundJailedResourceStageBeforeStartingPorts(t
 			host := newLinuxJailerHost(plan, fixtures, processes, http, guest)
 			stage := validBoundJailedResourceStage(plan, fixtures, host.RootFSCopyPath)
 			mutate(&stage)
-			host.Resources = &recordingResourceStager{stage: stage}
+			stager := &recordingResourceStager{stage: stage}
+			host.Resources = stager
 
 			if err := host.Preflight(context.Background(), plan, fixtures); err != nil {
 				t.Fatalf("Preflight() error = %v", err)
@@ -473,7 +470,84 @@ func TestLinuxJailerHostRefusesAnUnboundJailedResourceStageBeforeStartingPorts(t
 			if len(processes.starts) != 0 || len(http.calls) != 0 || len(guest.steps) != 0 {
 				t.Fatalf("ports were used after an unbound resource stage: starts=%v calls=%v guest=%v", processes.starts, http.calls, guest.steps)
 			}
+			if got := stager.discarded; !reflect.DeepEqual(got, []JailedResourceStage{stage}) {
+				t.Fatalf("discarded stages = %#v, want exact invalid stage %#v", got, stage)
+			}
+			proof, err := host.Cleanup(context.Background())
+			if err != nil || !proof.Proved || !sameStrings(proof.Removed, []string{filepath.Dir(stage.JailRoot)}) {
+				t.Fatalf("Cleanup() = (%#v, %v), want exact staged namespace cleanup proof", proof, err)
+			}
 		})
+	}
+}
+
+func TestLinuxJailerHostDoesNotProveCleanupWhenInvalidStagedNamespaceDiscardFailsOrIsAmbiguous(t *testing.T) {
+	plan := mustCompile(t, validProfile())
+	fixtures := verifiedPlanFixtures(plan)
+	for name, mutate := range map[string]func(*recordingResourceStager){
+		"discard fails": func(stager *recordingResourceStager) {
+			stager.discardErr = errors.New("remove jailed namespace")
+		},
+		"discard proof is ambiguous": func(stager *recordingResourceStager) {
+			stager.discardProof = CleanupProof{Proved: true, Removed: []string{"/other/vm"}}
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			processes := &recordingJailerStarter{}
+			http := &recordingFirecrackerHTTP{}
+			guest := &recordingGuestChannel{}
+			host := newLinuxJailerHost(plan, fixtures, processes, http, guest)
+			stage := validBoundJailedResourceStage(plan, fixtures, host.RootFSCopyPath)
+			stage.BindingDigest = "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+			stager := &recordingResourceStager{stage: stage}
+			mutate(stager)
+			host.Resources = stager
+
+			if err := host.Preflight(context.Background(), plan, fixtures); err != nil {
+				t.Fatalf("Preflight() error = %v", err)
+			}
+			if _, err := host.Prepare(context.Background(), plan, fixtures); !errors.Is(err, ErrSmokeUnavailable) {
+				t.Fatalf("Prepare() error = %v, want invalid-stage refusal with failed cleanup", err)
+			}
+			if got := stager.discarded; !reflect.DeepEqual(got, []JailedResourceStage{stage}) {
+				t.Fatalf("discarded stages = %#v, want exact invalid stage %#v", got, stage)
+			}
+			proof, err := host.Cleanup(context.Background())
+			if err == nil || proof.Proved {
+				t.Fatalf("Cleanup() = (%#v, %v), want unproved failed staged cleanup", proof, err)
+			}
+			if len(processes.starts) != 0 || len(http.calls) != 0 || len(guest.steps) != 0 {
+				t.Fatalf("ports were used after an invalid staged cleanup: starts=%v calls=%v guest=%v", processes.starts, http.calls, guest.steps)
+			}
+		})
+	}
+}
+
+func TestLinuxJailerHostDoesNotAcceptAnInvalidStageDiscardProofForAnotherVM(t *testing.T) {
+	plan := mustCompile(t, validProfile())
+	fixtures := verifiedPlanFixtures(plan)
+	processes := &recordingJailerStarter{}
+	http := &recordingFirecrackerHTTP{}
+	guest := &recordingGuestChannel{}
+	host := newLinuxJailerHost(plan, fixtures, processes, http, guest)
+	stage := validBoundJailedResourceStage(plan, fixtures, host.RootFSCopyPath)
+	stage.JailRoot = "/srv/agent-runtime/jailer/other-vm/root"
+	stage.BindingDigest = stage.bindingDigest()
+	stager := &recordingResourceStager{stage: stage}
+	host.Resources = stager
+
+	if err := host.Preflight(context.Background(), plan, fixtures); err != nil {
+		t.Fatalf("Preflight() error = %v", err)
+	}
+	if _, err := host.Prepare(context.Background(), plan, fixtures); !errors.Is(err, ErrSmokeUnavailable) {
+		t.Fatalf("Prepare() error = %v, want other-VM stage refusal", err)
+	}
+	if got := stager.discarded; !reflect.DeepEqual(got, []JailedResourceStage{stage}) {
+		t.Fatalf("discarded stages = %#v, want exact invalid stage %#v", got, stage)
+	}
+	proof, err := host.Cleanup(context.Background())
+	if err == nil || proof.Proved {
+		t.Fatalf("Cleanup() = (%#v, %v), want unproved other-VM discard", proof, err)
 	}
 }
 
@@ -588,11 +662,25 @@ func (channel *recordingGuestChannel) AwaitSerial(_ context.Context, marker stri
 }
 
 type recordingResourceStager struct {
-	stage JailedResourceStage
+	stage        JailedResourceStage
+	discarded    []JailedResourceStage
+	discardProof CleanupProof
+	discardErr   error
 }
 
 func (stager *recordingResourceStager) Stage(context.Context, Plan, FixtureSet, string) (JailedResourceStage, error) {
 	return stager.stage, nil
+}
+
+func (stager *recordingResourceStager) Discard(_ context.Context, _ Plan, stage JailedResourceStage) (CleanupProof, error) {
+	stager.discarded = append(stager.discarded, stage)
+	if stager.discardErr != nil {
+		return CleanupProof{Reason: "discard failed"}, stager.discardErr
+	}
+	if stager.discardProof.Proved || stager.discardProof.Reason != "" || len(stager.discardProof.Removed) != 0 {
+		return stager.discardProof, nil
+	}
+	return CleanupProof{Proved: true, Removed: []string{filepath.Dir(stage.JailRoot)}}, nil
 }
 
 func newLinuxJailerHost(plan Plan, fixtures FixtureSet, processes JailerStarter, http FirecrackerHTTPPort, guest GuestControlChannel) *LinuxJailerHost {

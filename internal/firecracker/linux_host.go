@@ -193,7 +193,7 @@ func (host *LinuxJailerHost) Prepare(ctx context.Context, plan Plan, fixtures Fi
 		return LaunchRequest{}, fmt.Errorf("stage jailed resources: %w", err)
 	}
 	if !validJailedResourceStage(stage, boundPlan, boundFixtures, rootFSCopyPath) {
-		return LaunchRequest{}, fmt.Errorf("%w: exact fixture-bound jailed kernel, root drive, API socket, and vsock paths are required", ErrSmokeUnavailable)
+		return LaunchRequest{}, host.discardStagedResources(stager, boundPlan, stage, fmt.Errorf("%w: exact fixture-bound jailed kernel, root drive, API socket, and vsock paths are required", ErrSmokeUnavailable))
 	}
 	if err := contextError(ctx); err != nil {
 		return LaunchRequest{}, host.discardStagedResources(stager, boundPlan, stage, err)
@@ -467,7 +467,7 @@ func (host *LinuxJailerHost) discardStagedResources(stager JailerResourceStager,
 		cleanupContext, cancel := context.WithTimeout(context.Background(), maximumCleanupTimeout)
 		proof, cleanupErr = discarder.Discard(cleanupContext, plan, stage)
 		cancel()
-		if cleanupErr == nil && (!proof.Proved || len(proof.Removed) != 1 || proof.Removed[0] != filepath.Dir(stage.JailRoot)) {
+		if cleanupErr == nil && (!proof.Proved || len(proof.Removed) != 1 || proof.Removed[0] != filepath.Dir(expectedJailRoot(plan))) {
 			cleanupErr = fmt.Errorf("%w: staged Jailer namespace discard did not prove the exact VM namespace", ErrSmokeUnavailable)
 		}
 	}
