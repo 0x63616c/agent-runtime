@@ -168,7 +168,7 @@ func (ledger *PostgresLedger) PullHostAssignment(ctx context.Context, identity H
 			return errors.New("pull PostgreSQL sandbox host assignment: fence exhausted")
 		}
 		operation.Assignment = Assignment{HostID: host.HostID, HostGeneration: host.Generation, AssignmentID: seed.AssignmentID, LeaseEpoch: 1, FencingToken: operation.Assignment.FencingToken + 1, LeaseExpiresAt: leaseExpiresAt.UTC()}
-		wire, err := signer(envelopeFor(operation, host.SigningPublicKey, now, leaseExpiresAt, seed))
+		wire, err := signer(envelopeFor(operation, now, leaseExpiresAt, seed))
 		if err != nil || len(wire) == 0 || len(wire) > 1<<20 {
 			return errors.New("pull PostgreSQL sandbox host assignment: sign bounded envelope")
 		}
@@ -221,8 +221,7 @@ func (ledger *PostgresLedger) RenewHostAssignment(ctx context.Context, identity 
 	}
 	var dispatch HostDispatch
 	err := ledger.transaction(ctx, "renew PostgreSQL sandbox host assignment", func(tx pgx.Tx) error {
-		host, err := authenticatePostgresHost(ctx, tx, identity, now)
-		if err != nil {
+		if _, err := authenticatePostgresHost(ctx, tx, identity, now); err != nil {
 			return err
 		}
 		operation, _, err := postgresAssignment(ctx, tx, identity, assignmentID)
@@ -234,7 +233,7 @@ func (ledger *PostgresLedger) RenewHostAssignment(ctx context.Context, identity 
 		operation.Assignment.LeaseExpiresAt = leaseExpiresAt.UTC()
 		operation.Version++
 		seed.AssignmentID = assignmentID
-		wire, err := signer(envelopeFor(operation, host.SigningPublicKey, now, leaseExpiresAt, seed))
+		wire, err := signer(envelopeFor(operation, now, leaseExpiresAt, seed))
 		if err != nil || len(wire) == 0 || len(wire) > 1<<20 {
 			return errors.New("renew PostgreSQL sandbox host assignment: sign bounded envelope")
 		}
