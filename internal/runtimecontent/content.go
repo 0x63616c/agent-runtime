@@ -17,13 +17,15 @@ import (
 const (
 	// AgentSpecificationMediaTypeV1 identifies the canonical Agent specification envelope.
 	AgentSpecificationMediaTypeV1 = "application/vnd.agent-runtime.agent-specification+cbor;version=1"
-	maximumSpecificationBytes     = 1 << 20
-	maximumInstructionsBytes      = 256 * 1024
-	maximumToolDescriptionBytes   = 4096
-	maximumNameBytes              = 128
-	maximumTools                  = 64
-	maximumTenantIDBytes          = 128
-	maximumContentRootBytes       = 128
+	// AgentSpecificationBodyMediaTypeV1 identifies an identity-free canonical Agent specification body.
+	AgentSpecificationBodyMediaTypeV1 = "application/vnd.agent-runtime.agent-specification-body+cbor;version=1"
+	maximumSpecificationBytes         = 1 << 20
+	maximumInstructionsBytes          = 256 * 1024
+	maximumToolDescriptionBytes       = 4096
+	maximumNameBytes                  = 128
+	maximumTools                      = 64
+	maximumTenantIDBytes              = 128
+	maximumContentRootBytes           = 128
 )
 
 var (
@@ -53,6 +55,46 @@ type Reference struct {
 	SizeBytes int64
 }
 
+// AgentSpecificationBody is the immutable behavior content before a runtime state authority allocates an Agent revision identity.
+type AgentSpecificationBody struct {
+	Name         string
+	ModelProfile string
+	Instructions string
+	Tools        []agentruntime.ToolDefinition
+}
+
+// Clone returns an independent Agent specification body.
+func (body AgentSpecificationBody) Clone() AgentSpecificationBody {
+	clone := body
+	clone.Tools = append([]agentruntime.ToolDefinition(nil), body.Tools...)
+	return clone
+}
+
+// AgentSpecificationBodyCommitment is the bounded metadata a state command may persist after validating a staged body handoff.
+type AgentSpecificationBodyCommitment struct {
+	Tenant       TenantID
+	Reference    Reference
+	Name         string
+	ModelProfile string
+}
+
+// ContentHandoff is an opaque, in-process proof that Store wrote and read back one tenant-bound immutable body.
+//
+// It is not a persistent record or a public capability. A state composition
+// validates it through the issuing Store before accepting its metadata.
+type ContentHandoff struct {
+	issuer       *Store
+	tenant       TenantID
+	reference    Reference
+	name         string
+	modelProfile string
+}
+
+// ContentHandoffValidator validates opaque staged-content commitments before a runtime state command persists their metadata.
+type ContentHandoffValidator interface {
+	ValidateAgentSpecificationBodyHandoff(ContentHandoff) (AgentSpecificationBodyCommitment, error)
+}
+
 // ImmutableObjectStore conditionally stores and bounded-reads runtime-owned immutable bytes.
 // A false created result requires Store to verify the existing object before success.
 type ImmutableObjectStore interface {
@@ -74,10 +116,33 @@ type AgentSpecificationRepository interface {
 	AuthorizeAgentSpecificationRead(context.Context, TenantID, agentruntime.AgentID, agentruntime.AgentRevisionID) (AgentSpecificationRecord, error)
 }
 
+// AgentSpecificationBodyRecord is the exact durable metadata required to authorize one identity-free Agent specification body read.
+type AgentSpecificationBodyRecord struct {
+	Tenant       TenantID
+	AgentID      agentruntime.AgentID
+	RevisionID   agentruntime.AgentRevisionID
+	Revision     uint64
+	Name         string
+	ModelProfile string
+	Reference    Reference
+	CreatedAt    time.Time
+}
+
+// AgentSpecificationBodyRepository authorizes one exact metadata-bound Agent specification body read.
+type AgentSpecificationBodyRepository interface {
+	AuthorizeAgentSpecificationBodyRead(context.Context, TenantID, agentruntime.AgentID, agentruntime.AgentRevisionID) (AgentSpecificationBodyRecord, error)
+}
+
 // AgentSpecificationReader reads Agent specification content only after repository authorization.
 type AgentSpecificationReader struct {
 	store      *Store
 	repository AgentSpecificationRepository
+}
+
+// AgentSpecificationBodyReader synthesizes an Agent specification from authorized revision metadata and identity-free immutable content.
+type AgentSpecificationBodyReader struct {
+	store      *Store
+	repository AgentSpecificationBodyRepository
 }
 
 // agentSpecificationLocator is a package-private capability created only after repository authorization.
@@ -87,6 +152,10 @@ type agentSpecificationLocator struct {
 	revisionID agentruntime.AgentRevisionID
 	revision   uint64
 	reference  Reference
+}
+
+type agentSpecificationBodyLocator struct {
+	record AgentSpecificationBodyRecord
 }
 
 // Store owns one explicit runtime content namespace.
@@ -109,6 +178,14 @@ func NewAgentSpecificationReader(store *Store, repository AgentSpecificationRepo
 		return nil, errors.New("Agent specification reader requires content store and repository authority")
 	}
 	return &AgentSpecificationReader{store: store, repository: repository}, nil
+}
+
+// NewAgentSpecificationBodyReader constructs the metadata-bound Agent specification body read boundary.
+func NewAgentSpecificationBodyReader(store *Store, repository AgentSpecificationBodyRepository) (*AgentSpecificationBodyReader, error) {
+	if store == nil || repository == nil {
+		return nil, errors.New("Agent specification body reader requires content store and repository authority")
+	}
+	return &AgentSpecificationBodyReader{store: store, repository: repository}, nil
 }
 
 // ReadAgentSpecification authorizes and reads one exact tenant-owned Agent revision.
@@ -137,6 +214,33 @@ func (reader *AgentSpecificationReader) ReadAgentSpecification(ctx context.Conte
 	}
 	locator := agentSpecificationLocator{tenant: record.Tenant, agentID: record.AgentID, revisionID: record.RevisionID, revision: record.Revision, reference: record.Reference}
 	return reader.store.getAgentSpecification(ctx, locator)
+}
+
+// ReadAgentSpecification authorizes identity-free content and synthesizes one exact immutable Agent revision.
+func (reader *AgentSpecificationBodyReader) ReadAgentSpecification(ctx context.Context, tenant TenantID, agentID agentruntime.AgentID, revisionID agentruntime.AgentRevisionID) (agentruntime.AgentSpecification, error) {
+	if !validTenantID(tenant) {
+		return agentruntime.AgentSpecification{}, ErrNotFoundOrDenied
+	}
+	if _, err := agentruntime.ParseAgentID(agentID.String()); err != nil {
+		return agentruntime.AgentSpecification{}, ErrNotFoundOrDenied
+	}
+	if _, err := agentruntime.ParseAgentRevisionID(revisionID.String()); err != nil {
+		return agentruntime.AgentSpecification{}, ErrNotFoundOrDenied
+	}
+	if err := ctx.Err(); err != nil {
+		return agentruntime.AgentSpecification{}, errors.Wrap(err, "authorize Agent specification body read")
+	}
+	record, err := reader.repository.AuthorizeAgentSpecificationBodyRead(ctx, tenant, agentID, revisionID)
+	if err != nil {
+		return agentruntime.AgentSpecification{}, classifyObjectError("authorize Agent specification body read", err, ErrNotFoundOrDenied)
+	}
+	if err := ctx.Err(); err != nil {
+		return agentruntime.AgentSpecification{}, errors.Wrap(err, "authorize Agent specification body read")
+	}
+	if record.Tenant != tenant || record.AgentID != agentID || record.RevisionID != revisionID || !validAgentRevision(record.AgentID, record.RevisionID, record.Revision) || !validName(record.Name) || !validName(record.ModelProfile) || !validAgentSpecificationBodyReference(record.Reference) || record.CreatedAt.IsZero() || record.CreatedAt.Location() != time.UTC {
+		return agentruntime.AgentSpecification{}, ErrNotFoundOrDenied
+	}
+	return reader.store.getAgentSpecificationBody(ctx, agentSpecificationBodyLocator{record: record})
 }
 
 // PutAgentSpecification canonically encodes and conditionally stores one immutable specification.
@@ -175,6 +279,33 @@ func (store *Store) PutAgentSpecification(ctx context.Context, tenant TenantID, 
 	return reference, nil
 }
 
+// StageAgentSpecificationBody conditionally writes and reads back an identity-free Agent specification body before state admission.
+func (store *Store) StageAgentSpecificationBody(ctx context.Context, tenant TenantID, body AgentSpecificationBody) (ContentHandoff, error) {
+	if !validTenantID(tenant) {
+		return ContentHandoff{}, errors.New("stage Agent specification body: invalid runtime content owner")
+	}
+	if err := ctx.Err(); err != nil {
+		return ContentHandoff{}, errors.Wrap(err, "stage Agent specification body")
+	}
+	encoded, err := encodeAgentSpecificationBody(body)
+	if err != nil {
+		return ContentHandoff{}, err
+	}
+	reference := referenceForMediaType(encoded, AgentSpecificationBodyMediaTypeV1)
+	if err := store.putVerified(ctx, tenant, reference, encoded, "stage Agent specification body"); err != nil {
+		return ContentHandoff{}, err
+	}
+	return ContentHandoff{issuer: store, tenant: tenant, reference: reference, name: body.Name, modelProfile: body.ModelProfile}, nil
+}
+
+// ValidateAgentSpecificationBodyHandoff returns metadata only when this Store issued an intact tenant-bound body handoff.
+func (store *Store) ValidateAgentSpecificationBodyHandoff(handoff ContentHandoff) (AgentSpecificationBodyCommitment, error) {
+	if store == nil || handoff.issuer != store || !validTenantID(handoff.tenant) || !validAgentSpecificationBodyReference(handoff.reference) || !validName(handoff.name) || !validName(handoff.modelProfile) {
+		return AgentSpecificationBodyCommitment{}, ErrNotFoundOrDenied
+	}
+	return AgentSpecificationBodyCommitment{Tenant: handoff.tenant, Reference: handoff.reference, Name: handoff.name, ModelProfile: handoff.modelProfile}, nil
+}
+
 func (store *Store) getAgentSpecification(ctx context.Context, locator agentSpecificationLocator) (agentruntime.AgentSpecification, error) {
 	if !validLocator(locator) {
 		return agentruntime.AgentSpecification{}, ErrNotFoundOrDenied
@@ -202,13 +333,66 @@ func (store *Store) getAgentSpecification(ctx context.Context, locator agentSpec
 	return specification, nil
 }
 
+func (store *Store) getAgentSpecificationBody(ctx context.Context, locator agentSpecificationBodyLocator) (agentruntime.AgentSpecification, error) {
+	record := locator.record
+	if !validTenantID(record.Tenant) || !validAgentRevision(record.AgentID, record.RevisionID, record.Revision) || !validName(record.Name) || !validName(record.ModelProfile) || !validAgentSpecificationBodyReference(record.Reference) || record.CreatedAt.IsZero() || record.CreatedAt.Location() != time.UTC {
+		return agentruntime.AgentSpecification{}, ErrNotFoundOrDenied
+	}
+	if err := ctx.Err(); err != nil {
+		return agentruntime.AgentSpecification{}, errors.Wrap(err, "read Agent specification body")
+	}
+	raw, err := store.objects.Get(ctx, store.key(record.Tenant, record.Reference.Digest), int(record.Reference.SizeBytes))
+	if err != nil {
+		return agentruntime.AgentSpecification{}, classifyObjectError("read immutable Agent specification body", err, ErrNotFoundOrDenied)
+	}
+	if err := ctx.Err(); err != nil {
+		return agentruntime.AgentSpecification{}, errors.Wrap(err, "read Agent specification body")
+	}
+	if int64(len(raw)) != record.Reference.SizeBytes || referenceForMediaType(raw, AgentSpecificationBodyMediaTypeV1).Digest != record.Reference.Digest {
+		return agentruntime.AgentSpecification{}, ErrIntegrity
+	}
+	body, err := decodeAgentSpecificationBody(raw)
+	if err != nil {
+		return agentruntime.AgentSpecification{}, errors.Wrap(ErrIntegrity, "decode immutable Agent specification body")
+	}
+	if body.Name != record.Name || body.ModelProfile != record.ModelProfile {
+		return agentruntime.AgentSpecification{}, ErrNotFoundOrDenied
+	}
+	return agentruntime.AgentSpecification{ID: record.AgentID, RevisionID: record.RevisionID, Revision: record.Revision, Name: record.Name, ModelProfile: record.ModelProfile, Instructions: body.Instructions, Tools: append([]agentruntime.ToolDefinition(nil), body.Tools...), CreatedAt: record.CreatedAt.UTC()}, nil
+}
+
 func (store *Store) key(tenant TenantID, digest string) string {
 	return string(tenant) + "/" + store.contentRoot + "/v1/sha256/" + strings.TrimPrefix(digest, "sha256:")
 }
 
 func referenceFor(encoded []byte) Reference {
+	return referenceForMediaType(encoded, AgentSpecificationMediaTypeV1)
+}
+
+func referenceForMediaType(encoded []byte, mediaType string) Reference {
 	sum := sha256.Sum256(encoded)
-	return Reference{Digest: "sha256:" + hex.EncodeToString(sum[:]), MediaType: AgentSpecificationMediaTypeV1, SizeBytes: int64(len(encoded))}
+	return Reference{Digest: "sha256:" + hex.EncodeToString(sum[:]), MediaType: mediaType, SizeBytes: int64(len(encoded))}
+}
+
+func (store *Store) putVerified(ctx context.Context, tenant TenantID, reference Reference, encoded []byte, action string) error {
+	_, err := store.objects.PutIfAbsent(ctx, store.key(tenant, reference.Digest), encoded)
+	if err != nil {
+		return classifyObjectError("store immutable "+action, err, ErrUnavailable)
+	}
+	if err := ctx.Err(); err != nil {
+		return errors.Wrap(err, action)
+	}
+	existing, err := store.objects.Get(ctx, store.key(tenant, reference.Digest), int(reference.SizeBytes))
+	if err != nil {
+		return classifyObjectError("verify immutable "+action, err, ErrUnavailable)
+	}
+	if err := ctx.Err(); err != nil {
+		return errors.Wrap(err, action)
+	}
+	if int64(len(existing)) != reference.SizeBytes || referenceForMediaType(existing, reference.MediaType).Digest != reference.Digest || !bytes.Equal(existing, encoded) {
+		return errors.Wrap(ErrIntegrity, "verify immutable "+action)
+	}
+	return nil
 }
 
 func validLocator(locator agentSpecificationLocator) bool {
@@ -259,6 +443,10 @@ func validReference(reference Reference) bool {
 	return reference.MediaType == AgentSpecificationMediaTypeV1 && reference.SizeBytes > 0 && reference.SizeBytes <= maximumSpecificationBytes && validDigest(reference.Digest)
 }
 
+func validAgentSpecificationBodyReference(reference Reference) bool {
+	return reference.MediaType == AgentSpecificationBodyMediaTypeV1 && reference.SizeBytes > 0 && reference.SizeBytes <= maximumSpecificationBytes && validDigest(reference.Digest)
+}
+
 func validDigest(value string) bool {
 	return len(value) == 71 && strings.HasPrefix(value, "sha256:") && strings.Trim(value[7:], "0123456789abcdef") == ""
 }
@@ -300,6 +488,83 @@ func encode(specification agentruntime.AgentSpecification) ([]byte, error) {
 		return nil, errors.New("canonical Agent specification exceeds bound")
 	}
 	return encoded.Bytes(), nil
+}
+
+func encodeAgentSpecificationBody(body AgentSpecificationBody) ([]byte, error) {
+	if err := validateAgentSpecificationBody(body); err != nil {
+		return nil, err
+	}
+	var encoded bytes.Buffer
+	head(&encoded, 4, 5)
+	uintv(&encoded, 1)
+	text(&encoded, body.Name)
+	text(&encoded, body.ModelProfile)
+	text(&encoded, body.Instructions)
+	head(&encoded, 4, uint64(len(body.Tools)))
+	for _, tool := range body.Tools {
+		head(&encoded, 4, 2)
+		text(&encoded, tool.Name)
+		text(&encoded, tool.Description)
+	}
+	if encoded.Len() > maximumSpecificationBytes {
+		return nil, errors.New("canonical Agent specification body exceeds bound")
+	}
+	return encoded.Bytes(), nil
+}
+
+func decodeAgentSpecificationBody(raw []byte) (AgentSpecificationBody, error) {
+	if len(raw) == 0 || len(raw) > maximumSpecificationBytes {
+		return AgentSpecificationBody{}, errors.New("invalid Agent specification body")
+	}
+	decoder := decoder{raw: raw}
+	major, count, err := decoder.head()
+	if err != nil || major != 4 || count != 5 {
+		return AgentSpecificationBody{}, errors.New("invalid Agent specification body envelope")
+	}
+	if version, err := decoder.uint(); err != nil || version != 1 {
+		return AgentSpecificationBody{}, errors.New("unsupported Agent specification body version")
+	}
+	name, err := decoder.text()
+	if err != nil {
+		return AgentSpecificationBody{}, errors.New("invalid Agent specification body")
+	}
+	modelProfile, err := decoder.text()
+	if err != nil {
+		return AgentSpecificationBody{}, errors.New("invalid Agent specification body")
+	}
+	instructions, err := decoder.text()
+	if err != nil {
+		return AgentSpecificationBody{}, errors.New("invalid Agent specification body")
+	}
+	major, count, err = decoder.head()
+	if err != nil || major != 4 || count > maximumTools {
+		return AgentSpecificationBody{}, errors.New("invalid Agent specification body tools")
+	}
+	tools := make([]agentruntime.ToolDefinition, 0, count)
+	for index := uint64(0); index < count; index++ {
+		major, fields, err := decoder.head()
+		if err != nil || major != 4 || fields != 2 {
+			return AgentSpecificationBody{}, errors.New("invalid Agent specification body tool")
+		}
+		toolName, err := decoder.text()
+		if err != nil {
+			return AgentSpecificationBody{}, errors.New("invalid Agent specification body tool")
+		}
+		description, err := decoder.text()
+		if err != nil {
+			return AgentSpecificationBody{}, errors.New("invalid Agent specification body tool")
+		}
+		tools = append(tools, agentruntime.ToolDefinition{Name: toolName, Description: description})
+	}
+	if decoder.at != len(raw) {
+		return AgentSpecificationBody{}, errors.New("invalid Agent specification body")
+	}
+	body := AgentSpecificationBody{Name: name, ModelProfile: modelProfile, Instructions: instructions, Tools: tools}
+	canonical, err := encodeAgentSpecificationBody(body)
+	if err != nil || !bytes.Equal(canonical, raw) {
+		return AgentSpecificationBody{}, errors.New("noncanonical Agent specification body")
+	}
+	return body, nil
 }
 
 func decode(raw []byte) (agentruntime.AgentSpecification, error) {
@@ -393,6 +658,23 @@ func validate(specification agentruntime.AgentSpecification) error {
 		}
 		if _, found := seenTools[tool.Name]; found {
 			return errors.New("invalid Agent specification")
+		}
+		seenTools[tool.Name] = struct{}{}
+	}
+	return nil
+}
+
+func validateAgentSpecificationBody(body AgentSpecificationBody) error {
+	if !validName(body.Name) || !validName(body.ModelProfile) || !validText(body.Instructions, maximumInstructionsBytes) || len(body.Tools) > maximumTools {
+		return errors.New("invalid Agent specification body")
+	}
+	seenTools := make(map[string]struct{}, len(body.Tools))
+	for _, tool := range body.Tools {
+		if !validName(tool.Name) || !validText(tool.Description, maximumToolDescriptionBytes) {
+			return errors.New("invalid Agent specification body")
+		}
+		if _, found := seenTools[tool.Name]; found {
+			return errors.New("invalid Agent specification body")
 		}
 		seenTools[tool.Name] = struct{}{}
 	}
