@@ -250,7 +250,7 @@ jobs:
             (( registry_host_port <= 65535 ))
             [[ "$registry_host_port" == "$registry_port" ]]
             registry_host="localhost:$registry_host_port"
-            registry_host_from_cluster="k3d-$registry:5000"
+            registry_host_from_cluster="k3d-$registry:$registry_port"
             write_ownership_record
           else
             write_ownership_record

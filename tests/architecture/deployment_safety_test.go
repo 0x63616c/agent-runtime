@@ -151,7 +151,7 @@ var _ = Describe("M1 deployment safety boundaries", func() {
 			"k3d registry create \"$registry\"",
 			"registry:2.8.3@sha256:a3d8aaa63ed8681a604f1dea0aa03f100d5895b6a58ace528858a7b332415373",
 			`registry_host="localhost:$registry_host_port"`,
-			`registry_host_from_cluster="k3d-$registry:5000"`,
+			`registry_host_from_cluster="k3d-$registry:$registry_port"`,
 			`--arg port "$registry_port/tcp"`,
 			"--registry-use \"$registry_host_from_cluster\"",
 			`api_endpoint="$(kubectl config view --raw --minify`,

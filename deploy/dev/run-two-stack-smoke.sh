@@ -48,7 +48,8 @@ if [[ "$profile" == "ci" ]]; then
     exit 1
   fi
   ci_identity="${ci_context#"$ci_context_prefix"}"
-  if [[ -z "$ci_identity" || ! "$ci_registry_host" =~ ^localhost:[1-9][0-9]{0,4}$ || "$ci_registry_host_from_cluster" != "k3d-ar-reg-${ci_identity}.localhost:5000" ]]; then
+  ci_registry_port="${ci_registry_host#localhost:}"
+  if [[ -z "$ci_identity" || ! "$ci_registry_host" =~ ^localhost:[1-9][0-9]{0,4}$ || "$ci_registry_host_from_cluster" != "k3d-ar-reg-${ci_identity}.localhost:${ci_registry_port}" ]]; then
     echo "CI two-Stack smoke requires generated registry identities" >&2
     exit 1
   fi
