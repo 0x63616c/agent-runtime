@@ -9,18 +9,19 @@ import (
 
 func TestLinuxJailerHostOrdersTheNoNICRESTLaunchAndGuestControlPorts(t *testing.T) {
 	plan := mustCompile(t, validProfile())
+	fixtures := verifiedPlanFixtures(plan)
 	processes := &recordingJailerStarter{}
 	http := &recordingFirecrackerHTTP{}
 	guest := &recordingGuestChannel{}
+	stage := validBoundJailedResourceStage(plan, fixtures, "/run/agent-runtime/sandbox-001/rootfs.ext4")
 	host := LinuxJailerHost{
 		PreflightState: validKVMPreflight(),
 		RootFSCopyPath: "/run/agent-runtime/sandbox-001/rootfs.ext4",
-		Resources:      &recordingResourceStager{stage: defaultJailedResourceStage},
+		Resources:      &recordingResourceStager{stage: stage},
 		Jailer:         processes,
 		HTTP:           http,
 		Guest:          guest,
 	}
-	fixtures := verifiedPlanFixtures(plan)
 
 	if err := host.Preflight(context.Background(), plan, fixtures); err != nil {
 		t.Fatalf("Preflight() error = %v", err)
@@ -45,22 +46,22 @@ func TestLinuxJailerHostOrdersTheNoNICRESTLaunchAndGuestControlPorts(t *testing.
 	if !cleanup.Proved {
 		t.Fatalf("Cleanup() = %#v, want proof", cleanup)
 	}
-	if got, want := processes.starts, []processStart{{Request: JailerStartRequest{Path: plan.Jailer().Path, Arguments: plan.JailerArguments(), Resources: plan.Resources(), Stage: defaultJailedResourceStage}}}; !reflect.DeepEqual(got, want) {
+	if got, want := processes.starts, []processStart{{Request: JailerStartRequest{Path: plan.Jailer().Path, Arguments: plan.JailerArguments(), Resources: plan.Resources(), Stage: stage}}}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("Jailer starts = %#v, want %#v", got, want)
 	}
 	if got, want := http.calls, []firecrackerRESTCall{
 		{Path: "/machine-config", Body: firecrackerMachineConfig{VCPUCount: 1, MemoryMiB: 256}},
-		{Path: "/boot-source", Body: firecrackerBootSource{KernelImagePath: defaultJailedResourceStage.KernelImagePath, BootArgs: "console=ttyS0 reboot=k panic=1 init=/sbin/init -- sandbox-001 fixture-v1"}},
-		{Path: "/drives/rootfs", Body: firecrackerRootDrive{DriveID: "rootfs", PathOnHost: defaultJailedResourceStage.RootDrivePath, RootDevice: true, ReadOnly: false}},
-		{Path: "/vsock", Body: firecrackerVSock{GuestCID: defaultGuestCID, UDSPath: defaultJailedResourceStage.VSockUDSPath}},
+		{Path: "/boot-source", Body: firecrackerBootSource{KernelImagePath: stage.Kernel.JailedPath, BootArgs: "console=ttyS0 reboot=k panic=1 init=/sbin/init -- sandbox-001 fixture-v1"}},
+		{Path: "/drives/rootfs", Body: firecrackerRootDrive{DriveID: "rootfs", PathOnHost: stage.RootFS.JailedPath, RootDevice: true, ReadOnly: false}},
+		{Path: "/vsock", Body: firecrackerVSock{GuestCID: defaultGuestCID, UDSPath: stage.VSockUDSPath}},
 		{Path: "/actions", Body: firecrackerAction{ActionType: "InstanceStart"}},
 	}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("REST calls = %#v, want %#v", got, want)
 	}
-	if got, want := http.binds, []string{defaultJailedResourceStage.APISocketPath}; !reflect.DeepEqual(got, want) {
+	if got, want := http.binds, []string{stage.APISocketPath}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("HTTP binds = %v, want %v", got, want)
 	}
-	if got, want := guest.steps, []string{"bind:" + defaultJailedResourceStage.VSockUDSPath, "marker:" + request.SerialMarker, "ping:" + request.Boot.VMID, "close"}; !reflect.DeepEqual(got, want) {
+	if got, want := guest.steps, []string{"bind:" + stage.VSockUDSPath, "marker:" + request.SerialMarker, "ping:" + request.Boot.VMID, "close"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("guest steps = %v, want %v", got, want)
 	}
 	if got, want := processes.process.steps, []string{"terminate", "wait", "cleanup"}; !reflect.DeepEqual(got, want) {
@@ -82,7 +83,7 @@ func TestLinuxJailerHostRefusesBeforeAnyPortWhenPreflightOrFixturesAreIncomplete
 			processes := &recordingJailerStarter{}
 			http := &recordingFirecrackerHTTP{}
 			guest := &recordingGuestChannel{}
-			host := LinuxJailerHost{PreflightState: test.preflight, RootFSCopyPath: "/run/agent-runtime/sandbox-001/rootfs.ext4", Resources: &recordingResourceStager{stage: defaultJailedResourceStage}, Jailer: processes, HTTP: http, Guest: guest}
+			host := LinuxJailerHost{PreflightState: test.preflight, RootFSCopyPath: "/run/agent-runtime/sandbox-001/rootfs.ext4", Resources: &recordingResourceStager{}, Jailer: processes, HTTP: http, Guest: guest}
 
 			if err := host.Preflight(context.Background(), plan, test.fixtures); !errors.Is(err, ErrSmokeUnavailable) {
 				t.Fatalf("Preflight() error = %v, want fail-closed refusal", err)
@@ -96,17 +97,17 @@ func TestLinuxJailerHostRefusesBeforeAnyPortWhenPreflightOrFixturesAreIncomplete
 
 func TestLinuxJailerHostStopsRESTConfigurationBeforeInstanceStartOnFailure(t *testing.T) {
 	plan := mustCompile(t, validProfile())
+	fixtures := verifiedPlanFixtures(plan)
 	processes := &recordingJailerStarter{}
 	http := &recordingFirecrackerHTTP{failPath: "/boot-source"}
 	host := LinuxJailerHost{
 		PreflightState: validKVMPreflight(),
 		RootFSCopyPath: "/run/agent-runtime/sandbox-001/rootfs.ext4",
-		Resources:      &recordingResourceStager{stage: defaultJailedResourceStage},
+		Resources:      &recordingResourceStager{stage: validBoundJailedResourceStage(plan, fixtures, "/run/agent-runtime/sandbox-001/rootfs.ext4")},
 		Jailer:         processes,
 		HTTP:           http,
 		Guest:          &recordingGuestChannel{},
 	}
-	fixtures := verifiedPlanFixtures(plan)
 	if err := host.Preflight(context.Background(), plan, fixtures); err != nil {
 		t.Fatalf("Preflight() error = %v", err)
 	}
@@ -131,16 +132,16 @@ func TestLinuxJailerHostStopsRESTConfigurationBeforeInstanceStartOnFailure(t *te
 
 func TestLinuxJailerHostRetainsAProcessForCleanupWhenStartReturnsBothProcessAndError(t *testing.T) {
 	plan := mustCompile(t, validProfile())
+	fixtures := verifiedPlanFixtures(plan)
 	processes := &recordingJailerStarter{startErr: errors.New("Jailer reported startup failure")}
 	host := LinuxJailerHost{
 		PreflightState: validKVMPreflight(),
 		RootFSCopyPath: "/run/agent-runtime/sandbox-001/rootfs.ext4",
-		Resources:      &recordingResourceStager{stage: defaultJailedResourceStage},
+		Resources:      &recordingResourceStager{stage: validBoundJailedResourceStage(plan, fixtures, "/run/agent-runtime/sandbox-001/rootfs.ext4")},
 		Jailer:         processes,
 		HTTP:           &recordingFirecrackerHTTP{},
 		Guest:          &recordingGuestChannel{},
 	}
-	fixtures := verifiedPlanFixtures(plan)
 	if err := host.Preflight(context.Background(), plan, fixtures); err != nil {
 		t.Fatalf("Preflight() error = %v", err)
 	}
@@ -162,8 +163,8 @@ func TestLinuxJailerHostRetainsAProcessForCleanupWhenStartReturnsBothProcessAndE
 func TestLinuxJailerHostRefusesAMutatedPreparedRequestBeforeStartingJailer(t *testing.T) {
 	plan := mustCompile(t, validProfile())
 	processes := &recordingJailerStarter{}
-	host := newLinuxJailerHost(processes, &recordingFirecrackerHTTP{}, &recordingGuestChannel{})
 	fixtures := verifiedPlanFixtures(plan)
+	host := newLinuxJailerHost(plan, fixtures, processes, &recordingFirecrackerHTTP{}, &recordingGuestChannel{})
 	if err := host.Preflight(context.Background(), plan, fixtures); err != nil {
 		t.Fatalf("Preflight() error = %v", err)
 	}
@@ -187,8 +188,8 @@ func TestLinuxJailerHostCancelsAfterStartAndCleansBeforeReturning(t *testing.T) 
 	defer cancel()
 	processes := &recordingJailerStarter{onStart: cancel}
 	http := &recordingFirecrackerHTTP{}
-	host := newLinuxJailerHost(processes, http, &recordingGuestChannel{})
 	fixtures := verifiedPlanFixtures(plan)
+	host := newLinuxJailerHost(plan, fixtures, processes, http, &recordingGuestChannel{})
 	if err := host.Preflight(ctx, plan, fixtures); err != nil {
 		t.Fatalf("Preflight() error = %v", err)
 	}
@@ -221,8 +222,8 @@ func TestLinuxJailerHostFencesCancellationAfterEachRESTCallAndCleans(t *testing.
 			cancel()
 		}
 	}}
-	host := newLinuxJailerHost(processes, http, &recordingGuestChannel{})
 	fixtures := verifiedPlanFixtures(plan)
+	host := newLinuxJailerHost(plan, fixtures, processes, http, &recordingGuestChannel{})
 	if err := host.Preflight(ctx, plan, fixtures); err != nil {
 		t.Fatalf("Preflight() error = %v", err)
 	}
@@ -245,8 +246,8 @@ func TestLinuxJailerHostFencesCancellationAfterEachRESTCallAndCleans(t *testing.
 func TestLinuxJailerHostCleanupIsIdempotentAfterItClearsTheProcess(t *testing.T) {
 	plan := mustCompile(t, validProfile())
 	processes := &recordingJailerStarter{}
-	host := newLinuxJailerHost(processes, &recordingFirecrackerHTTP{}, &recordingGuestChannel{})
 	fixtures := verifiedPlanFixtures(plan)
+	host := newLinuxJailerHost(plan, fixtures, processes, &recordingFirecrackerHTTP{}, &recordingGuestChannel{})
 	if err := host.Preflight(context.Background(), plan, fixtures); err != nil {
 		t.Fatalf("Preflight() error = %v", err)
 	}
@@ -272,15 +273,13 @@ func TestLinuxJailerHostBindsPlanResourcesAndJailedPathsToEveryPort(t *testing.T
 	processes := &recordingJailerStarter{}
 	http := &recordingFirecrackerHTTP{}
 	guest := &recordingGuestChannel{}
-	stage := &recordingResourceStager{stage: JailedResourceStage{
-		KernelImagePath: "/kernel/vmlinux",
-		RootDrivePath:   "/drives/rootfs.ext4",
-		APISocketPath:   "/run/firecracker.socket",
-		VSockUDSPath:    "/run/guest-control.vsock",
-	}}
-	host := newLinuxJailerHost(processes, http, guest)
-	host.Resources = stage
 	fixtures := verifiedPlanFixtures(plan)
+	bound := validBoundJailedResourceStage(plan, fixtures, "/run/agent-runtime/sandbox-001/rootfs.ext4")
+	bound.VSockUDSPath = "/run/guest-control.vsock"
+	bound.BindingDigest = bound.bindingDigest()
+	stage := &recordingResourceStager{stage: bound}
+	host := newLinuxJailerHost(plan, fixtures, processes, http, guest)
+	host.Resources = stage
 	if err := host.Preflight(context.Background(), plan, fixtures); err != nil {
 		t.Fatalf("Preflight() error = %v", err)
 	}
@@ -295,11 +294,11 @@ func TestLinuxJailerHostBindsPlanResourcesAndJailedPathsToEveryPort(t *testing.T
 	if got := processes.starts[0].Request; !reflect.DeepEqual(got, wantStart) {
 		t.Fatalf("Jailer start request = %#v, want %#v", got, wantStart)
 	}
-	wantBoot := firecrackerBootSource{KernelImagePath: stage.stage.KernelImagePath, BootArgs: "console=ttyS0 reboot=k panic=1 init=/sbin/init -- sandbox-001 fixture-v1"}
+	wantBoot := firecrackerBootSource{KernelImagePath: stage.stage.Kernel.JailedPath, BootArgs: "console=ttyS0 reboot=k panic=1 init=/sbin/init -- sandbox-001 fixture-v1"}
 	if got := http.calls[1].Body; !reflect.DeepEqual(got, wantBoot) {
 		t.Fatalf("boot source = %#v, want %#v", got, wantBoot)
 	}
-	wantDrive := firecrackerRootDrive{DriveID: "rootfs", PathOnHost: stage.stage.RootDrivePath, RootDevice: true, ReadOnly: false}
+	wantDrive := firecrackerRootDrive{DriveID: "rootfs", PathOnHost: stage.stage.RootFS.JailedPath, RootDevice: true, ReadOnly: false}
 	if got := http.calls[2].Body; !reflect.DeepEqual(got, wantDrive) {
 		t.Fatalf("root drive = %#v, want %#v", got, wantDrive)
 	}
@@ -310,6 +309,65 @@ func TestLinuxJailerHostBindsPlanResourcesAndJailedPathsToEveryPort(t *testing.T
 	if got, want := guest.steps[0], "bind:"+stage.stage.VSockUDSPath; got != want {
 		t.Fatalf("guest bind = %q, want %q", got, want)
 	}
+}
+
+func TestLinuxJailerHostRefusesAnUnboundJailedResourceStageBeforeStartingPorts(t *testing.T) {
+	plan := mustCompile(t, validProfile())
+	fixtures := verifiedPlanFixtures(plan)
+	for name, mutate := range map[string]func(*JailedResourceStage){
+		"altered binding digest": func(stage *JailedResourceStage) {
+			stage.BindingDigest = "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+		},
+		"substituted kernel": func(stage *JailedResourceStage) {
+			stage.Kernel.Source = plan.Firecracker()
+			stage.BindingDigest = stage.bindingDigest()
+		},
+		"duplicate destination": func(stage *JailedResourceStage) {
+			stage.RootFS.JailedPath = stage.Kernel.JailedPath
+			stage.BindingDigest = stage.bindingDigest()
+		},
+		"other VM jail": func(stage *JailedResourceStage) {
+			stage.JailRoot = "/srv/agent-runtime/jailer/other-vm/root"
+			stage.BindingDigest = stage.bindingDigest()
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			processes := &recordingJailerStarter{}
+			http := &recordingFirecrackerHTTP{}
+			guest := &recordingGuestChannel{}
+			host := newLinuxJailerHost(plan, fixtures, processes, http, guest)
+			stage := validBoundJailedResourceStage(plan, fixtures, host.RootFSCopyPath)
+			mutate(&stage)
+			host.Resources = &recordingResourceStager{stage: stage}
+
+			if err := host.Preflight(context.Background(), plan, fixtures); err != nil {
+				t.Fatalf("Preflight() error = %v", err)
+			}
+			if _, err := host.Prepare(context.Background(), plan, fixtures); !errors.Is(err, ErrSmokeUnavailable) {
+				t.Fatalf("Prepare() error = %v, want bound-stage refusal", err)
+			}
+			if len(processes.starts) != 0 || len(http.calls) != 0 || len(guest.steps) != 0 {
+				t.Fatalf("ports were used after an unbound resource stage: starts=%v calls=%v guest=%v", processes.starts, http.calls, guest.steps)
+			}
+		})
+	}
+}
+
+func validBoundJailedResourceStage(plan Plan, fixtures FixtureSet, rootFSCopyPath string) JailedResourceStage {
+	stage := JailedResourceStage{
+		FixtureVersion: fixtures.FixtureVersion(),
+		JailRoot:       expectedJailRoot(plan),
+		Jailer:         plan.Jailer(),
+		Firecracker:    JailedFixtureBinding{Source: plan.Firecracker(), JailedPath: "/firecracker"},
+		Kernel:         JailedFixtureBinding{Source: plan.Kernel(), JailedPath: "/kernel/vmlinux"},
+		RootFS:         JailedFixtureBinding{Source: PinnedArtifact{Path: rootFSCopyPath, Digest: plan.RootFS().Digest}, JailedPath: "/drives/rootfs.ext4"},
+		GuestAgent:     plan.GuestAgent(),
+		GuestInitPath:  "/sbin/init",
+		APISocketPath:  "/run/firecracker.socket",
+		VSockUDSPath:   "/run/firecracker.vsock",
+	}
+	stage.BindingDigest = stage.bindingDigest()
+	return stage
 }
 
 type processStart struct {
@@ -402,14 +460,14 @@ func (stager *recordingResourceStager) Stage(context.Context, Plan, FixtureSet, 
 	return stager.stage, nil
 }
 
-func newLinuxJailerHost(processes JailerStarter, http FirecrackerHTTPPort, guest GuestChannel) *LinuxJailerHost {
+func newLinuxJailerHost(plan Plan, fixtures FixtureSet, processes JailerStarter, http FirecrackerHTTPPort, guest GuestChannel) *LinuxJailerHost {
 	return &LinuxJailerHost{
 		PreflightState: validKVMPreflight(),
 		RootFSCopyPath: "/run/agent-runtime/sandbox-001/rootfs.ext4",
 		Jailer:         processes,
 		HTTP:           http,
 		Guest:          guest,
-		Resources:      &recordingResourceStager{stage: defaultJailedResourceStage},
+		Resources:      &recordingResourceStager{stage: validBoundJailedResourceStage(plan, fixtures, "/run/agent-runtime/sandbox-001/rootfs.ext4")},
 	}
 }
 func (channel *recordingGuestChannel) Ping(_ context.Context, vmID string) error {

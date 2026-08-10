@@ -85,9 +85,14 @@ authorize a fixture fetch or launch.
 runner. It accepts injected Jailer-process, private Firecracker REST, and guest
 serial/vsock ports only after a Linux/amd64 KVM preflight and verified fixtures.
 Its prepared request is deep-copied and must retain the exact plan Jailer argv.
-A required resource stage maps verified kernel/rootfs/API/vsock inputs to exact
-jailed paths and passes the complete `ResourceEnforcement` into Jailer start;
-the REST boot/root-drive/vsock requests and guest bind use those mapped paths.
+A required resource stage carries a SHA-256 binding over the VM, fixture
+version, Jailer/Firecracker/kernel/guest-agent identities, the digest-bound
+private rootfs copy, and every jailed destination. The host refuses a
+substituted source, stale binding, duplicate destination, or any root that is
+not the exact per-VM Jailer namespace before it starts a port. Jailer start
+receives that complete stage record and the REST boot/root-drive/vsock requests
+and guest bind use its mapped paths. This validates the record contract; it does
+not verify an on-disk copy or establish a real Jailer mapping.
 Its fixed REST order configures machine limits, the closed boot source, writable
 root drive, vsock, then `InstanceStart`; it declares no guest NIC. Every process,
 REST, and guest-port call is context-fenced before and after I/O. A cancellation

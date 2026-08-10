@@ -2,20 +2,17 @@ package firecracker
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"sync"
+
+	"github.com/0x63616c/agent-runtime/sandbox"
 )
 
 const defaultGuestCID = 3
-
-var defaultJailedResourceStage = JailedResourceStage{
-	KernelImagePath: "/kernel/vmlinux",
-	RootDrivePath:   "/drives/rootfs.ext4",
-	APISocketPath:   "/run/firecracker.socket",
-	VSockUDSPath:    "/run/firecracker.vsock",
-}
 
 // JailerStartRequest is the complete Jailer invocation with its mandatory resource enforcement and jailed paths.
 type JailerStartRequest struct {
@@ -25,12 +22,25 @@ type JailerStartRequest struct {
 	Stage     JailedResourceStage
 }
 
-// JailedResourceStage maps verified host fixtures to the paths visible inside one Jailer chroot.
+// JailedFixtureBinding maps one verified source identity to its path inside one Jailer chroot.
+type JailedFixtureBinding struct {
+	Source     PinnedArtifact
+	JailedPath string
+}
+
+// JailedResourceStage records the complete, digest-bound mapping from verified sources to one Jailer chroot.
 type JailedResourceStage struct {
-	KernelImagePath string
-	RootDrivePath   string
-	APISocketPath   string
-	VSockUDSPath    string
+	FixtureVersion string
+	JailRoot       string
+	Jailer         PinnedArtifact
+	Firecracker    JailedFixtureBinding
+	Kernel         JailedFixtureBinding
+	RootFS         JailedFixtureBinding
+	GuestAgent     PinnedArtifact
+	GuestInitPath  string
+	APISocketPath  string
+	VSockUDSPath   string
+	BindingDigest  sandbox.Digest
 }
 
 // JailerResourceStager creates one per-VM jailed resource mapping before the Jailer process starts.
@@ -160,8 +170,8 @@ func (host *LinuxJailerHost) Prepare(ctx context.Context, plan Plan, fixtures Fi
 	if err := contextError(ctx); err != nil {
 		return LaunchRequest{}, err
 	}
-	if !validJailedResourceStage(stage, plan) {
-		return LaunchRequest{}, fmt.Errorf("%w: exact jailed kernel, root drive, API socket, and vsock paths are required", ErrSmokeUnavailable)
+	if !validJailedResourceStage(stage, plan, fixtures, rootFSCopyPath) {
+		return LaunchRequest{}, fmt.Errorf("%w: exact fixture-bound jailed kernel, root drive, API socket, and vsock paths are required", ErrSmokeUnavailable)
 	}
 	request, err := NewLaunchRequest(plan, rootFSCopyPath, BootInput{VMID: plan.VMID(), FixtureVersion: fixtures.FixtureVersion()})
 	if err != nil {
@@ -188,7 +198,7 @@ func (host *LinuxJailerHost) Launch(ctx context.Context, request LaunchRequest) 
 		return fmt.Errorf("%w: Linux Jailer host is required", ErrSmokeUnavailable)
 	}
 	host.mu.Lock()
-	if !host.preflight || !host.prepared || host.launching || host.launched || host.process != nil || host.cleaned || !sameLaunchRequest(request, host.request) || !validLinuxLaunchRequest(request) || request.JailerPath != host.plan.Jailer().Path || !sameStrings(request.JailerArguments, host.plan.JailerArguments()) {
+	if !host.preflight || !host.prepared || host.launching || host.launched || host.process != nil || host.cleaned || !sameLaunchRequest(request, host.request) || !validLinuxLaunchRequest(request) || request.JailerPath != host.plan.Jailer().Path || request.JailerPath != host.stage.Jailer.Path || !sameStrings(request.JailerArguments, host.plan.JailerArguments()) || jailerArgumentValue(request.JailerArguments, "--exec-file") != host.stage.Firecracker.Source.Path {
 		host.mu.Unlock()
 		return fmt.Errorf("%w: preflight-bound immutable launch request is required", ErrSmokeUnavailable)
 	}
@@ -224,8 +234,8 @@ func (host *LinuxJailerHost) Launch(ctx context.Context, request LaunchRequest) 
 		body any
 	}{
 		{path: "/machine-config", body: firecrackerMachineConfig{VCPUCount: plan.Machine().VCPUCount, MemoryMiB: plan.Machine().MemoryMiB, SMT: false}},
-		{path: "/boot-source", body: firecrackerBootSource{KernelImagePath: stage.KernelImagePath, BootArgs: strings.Join(request.KernelArguments, " ")}},
-		{path: "/drives/rootfs", body: firecrackerRootDrive{DriveID: "rootfs", PathOnHost: stage.RootDrivePath, RootDevice: true, ReadOnly: false}},
+		{path: "/boot-source", body: firecrackerBootSource{KernelImagePath: stage.Kernel.JailedPath, BootArgs: strings.Join(request.KernelArguments, " ")}},
+		{path: "/drives/rootfs", body: firecrackerRootDrive{DriveID: "rootfs", PathOnHost: stage.RootFS.JailedPath, RootDevice: true, ReadOnly: false}},
 		{path: "/vsock", body: firecrackerVSock{GuestCID: defaultGuestCID, UDSPath: stage.VSockUDSPath}},
 		{path: "/actions", body: firecrackerAction{ActionType: "InstanceStart"}},
 	} {
@@ -381,13 +391,79 @@ func (host *LinuxJailerHost) storeCleanup(proof CleanupProof, err error) {
 	host.mu.Unlock()
 }
 
-func validJailedResourceStage(stage JailedResourceStage, plan Plan) bool {
-	return safeAbsolutePath(stage.KernelImagePath) && safeAbsolutePath(stage.RootDrivePath) && safeAbsolutePath(stage.APISocketPath) && safeAbsolutePath(stage.VSockUDSPath) && stage.KernelImagePath != stage.RootDrivePath && stage.APISocketPath == jailedAPISocketPath(plan.JailerArguments()) && stage.VSockUDSPath != stage.APISocketPath
+func (stage JailedResourceStage) bindingDigest() sandbox.Digest {
+	identity := struct {
+		FixtureVersion string
+		JailRoot       string
+		Jailer         PinnedArtifact
+		Firecracker    JailedFixtureBinding
+		Kernel         JailedFixtureBinding
+		RootFS         JailedFixtureBinding
+		GuestAgent     PinnedArtifact
+		GuestInitPath  string
+		APISocketPath  string
+		VSockUDSPath   string
+	}{
+		FixtureVersion: stage.FixtureVersion,
+		JailRoot:       stage.JailRoot,
+		Jailer:         stage.Jailer,
+		Firecracker:    stage.Firecracker,
+		Kernel:         stage.Kernel,
+		RootFS:         stage.RootFS,
+		GuestAgent:     stage.GuestAgent,
+		GuestInitPath:  stage.GuestInitPath,
+		APISocketPath:  stage.APISocketPath,
+		VSockUDSPath:   stage.VSockUDSPath,
+	}
+	encoded, err := json.Marshal(identity)
+	if err != nil {
+		return ""
+	}
+	return digest(encoded)
+}
+
+func validJailedResourceStage(stage JailedResourceStage, plan Plan, fixtures FixtureSet, rootFSCopyPath string) bool {
+	if stage.FixtureVersion != fixtures.FixtureVersion() || stage.JailRoot != expectedJailRoot(plan) || stage.Jailer != plan.Jailer() || stage.Firecracker.Source != plan.Firecracker() || stage.Kernel.Source != plan.Kernel() || stage.RootFS.Source != (PinnedArtifact{Path: rootFSCopyPath, Digest: plan.RootFS().Digest}) || stage.GuestAgent != plan.GuestAgent() || stage.GuestInitPath != "/sbin/init" || stage.APISocketPath != jailedAPISocketPath(plan.JailerArguments()) || stage.BindingDigest != stage.bindingDigest() {
+		return false
+	}
+	paths := []string{stage.Firecracker.JailedPath, stage.Kernel.JailedPath, stage.RootFS.JailedPath, stage.APISocketPath, stage.VSockUDSPath}
+	for left, candidate := range paths {
+		if !safeAbsolutePath(candidate) || !jailDestinationContained(stage.JailRoot, candidate) {
+			return false
+		}
+		for right := 0; right < left; right++ {
+			if candidate == paths[right] {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+func expectedJailRoot(plan Plan) string {
+	base := jailerArgumentValue(plan.JailerArguments(), "--chroot-base-dir")
+	if !safeAbsolutePath(base) {
+		return ""
+	}
+	return filepath.Join(base, plan.VMID(), "root")
+}
+
+func jailDestinationContained(root, jailedPath string) bool {
+	if !safeAbsolutePath(root) || !safeAbsolutePath(jailedPath) {
+		return false
+	}
+	destination := filepath.Join(root, strings.TrimPrefix(jailedPath, "/"))
+	relative, err := filepath.Rel(root, destination)
+	return err == nil && relative != "." && relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator))
 }
 
 func jailedAPISocketPath(arguments []string) string {
+	return jailerArgumentValue(arguments, "--api-sock")
+}
+
+func jailerArgumentValue(arguments []string, name string) string {
 	for index := range arguments {
-		if arguments[index] == "--api-sock" && index+1 < len(arguments) {
+		if arguments[index] == name && index+1 < len(arguments) {
 			return arguments[index+1]
 		}
 	}
