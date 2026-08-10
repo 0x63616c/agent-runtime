@@ -5,6 +5,12 @@ import (
 	"testing"
 )
 
+func TestNewMinIOImmutableClientRequiresAClient(t *testing.T) {
+	if _, err := NewMinIOImmutableClient(nil); err == nil {
+		t.Fatal("NewMinIOImmutableClient(nil) error = nil")
+	}
+}
+
 func TestS3ObjectsConditionallyCreatesAndBoundsReads(t *testing.T) {
 	client := &recordingS3Client{values: map[string][]byte{}}
 	objects, err := NewS3ImmutableObjects(client, "runtime-content")
