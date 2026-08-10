@@ -13,6 +13,8 @@
         "cmd/agent-runtime-api/main.go",
         "cmd/generate-runtime-openapi/main.go",
         "cmd/sandbox-control/main.go",
+		"internal/runtimeapi/observation.go",
+		"internal/runtimeapiprocess/observability.go",
         "deploy/runtimeapi/api.example.json",
 		"deploy/production/migrations/runtime-v2.down.sql",
 		"deploy/production/migrations/runtime-v2.up.sql",

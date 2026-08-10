@@ -12,6 +12,7 @@ import (
 	"reflect"
 	"strconv"
 	"strings"
+	"time"
 
 	agentruntime "github.com/0x63616c/agent-runtime/sdk/go"
 	"github.com/cockroachdb/errors"
@@ -37,12 +38,17 @@ type Config struct {
 	Authenticator   Authenticator
 	RequestIDs      agentruntime.RequestIDSource
 	MaxRequestBytes int64
+	Observability   Observability
 }
 
 // NewHandler constructs the versioned public HTTP API without starting a listener.
 func NewHandler(config Config) (http.Handler, error) {
 	if runtimeMissing(config.Runtime) || config.Authenticator == nil || config.RequestIDs == nil {
 		return nil, errors.New("create runtime API: runtime, authenticator, and request ID source are required")
+	}
+	observability, err := newRequestObservability(config.Observability)
+	if err != nil {
+		return nil, err
 	}
 	limit := config.MaxRequestBytes
 	if limit == 0 {
@@ -58,7 +64,7 @@ func NewHandler(config Config) (http.Handler, error) {
 	if _, err := agentruntime.ParseRequestID(emergencyRequestID.String()); err != nil {
 		return nil, errors.New("create runtime API: request ID source returned an invalid ID")
 	}
-	server := &server{runtime: config.Runtime, authenticator: config.Authenticator, requestIDs: config.RequestIDs, emergencyRequestID: emergencyRequestID, maxRequestBytes: limit}
+	server := &server{runtime: config.Runtime, authenticator: config.Authenticator, requestIDs: config.RequestIDs, emergencyRequestID: emergencyRequestID, maxRequestBytes: limit, observability: observability}
 	mux := http.NewServeMux()
 	mux.HandleFunc(openAPIMethodCreateAgent+" "+openAPIPathCreateAgent, server.createAgent)
 	mux.HandleFunc(openAPIMethodReviseAgent+" "+openAPIPathReviseAgent, server.reviseAgent)
@@ -76,10 +82,14 @@ func NewHandler(config Config) (http.Handler, error) {
 }
 
 func runtimeMissing(runtime Runtime) bool {
-	if runtime == nil {
+	return dependencyMissing(runtime)
+}
+
+func dependencyMissing(dependency any) bool {
+	if dependency == nil {
 		return true
 	}
-	value := reflect.ValueOf(runtime)
+	value := reflect.ValueOf(dependency)
 	switch value.Kind() {
 	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
 		return value.IsNil()
@@ -99,6 +109,7 @@ type server struct {
 	requestIDs         agentruntime.RequestIDSource
 	emergencyRequestID agentruntime.RequestID
 	maxRequestBytes    int64
+	observability      requestObservability
 	next               http.Handler
 }
 
@@ -108,11 +119,22 @@ type requestContext struct {
 }
 
 func (server *server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
+	observedWriter := &responseStatusWriter{ResponseWriter: writer}
+	operation := canonicalOperation(request.Method, request.URL.Path)
+	var requestID agentruntime.RequestID
+	var identity *Identity
+	var started time.Time
+	if server.observability.enabled() {
+		started = server.observability.clock.Now().UTC()
+		defer func() {
+			server.observability.complete(request, operation, requestID, identity, observedWriter.statusCode(), started)
+		}()
+	}
+	writer = observedWriter
 	writer.Header().Set("Cache-Control", "no-store")
 	writer.Header().Set("Content-Type", "application/json")
 	writer.Header().Set("X-Content-Type-Options", "nosniff")
 	requestIDValues := request.Header.Values("X-Request-ID")
-	var requestID agentruntime.RequestID
 	var err error
 	if len(requestIDValues) == 1 {
 		requestID, err = agentruntime.ParseRequestID(requestIDValues[0])
@@ -141,12 +163,13 @@ func (server *server) ServeHTTP(writer http.ResponseWriter, request *http.Reques
 		credential = strings.TrimPrefix(authorization[0], "Bearer ")
 	}
 	request.Header.Del("Authorization")
-	identity, authErr := server.authenticator.Authenticate(request.Context(), credential)
-	if authErr != nil || !validBearerCredential(credential) || !validIdentity(identity) {
+	authenticated, authErr := server.authenticator.Authenticate(request.Context(), credential)
+	if authErr != nil || !validBearerCredential(credential) || !validIdentity(authenticated) {
 		server.writeFailure(writer, requestID, http.StatusUnauthorized, agentruntime.Failure{Code: agentruntime.FailureNotFound, Message: "resource not found"})
 		return
 	}
-	contextValue := requestContext{requestID: requestID, identity: identity}
+	identity = &authenticated
+	contextValue := requestContext{requestID: requestID, identity: authenticated}
 	if !validQuery(request) {
 		server.writeInvalid(writer, requestID)
 		return

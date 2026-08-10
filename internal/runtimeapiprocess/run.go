@@ -6,8 +6,10 @@ import (
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/json"
+	"log/slog"
 	"net"
 	"net/http"
+	"os"
 	"time"
 
 	"github.com/0x63616c/agent-runtime/internal/runtime/kernel"
@@ -38,6 +40,10 @@ func Serve(ctx context.Context, config Config, lookup SecretLookup, listener net
 	if ctx == nil || lookup == nil || listener == nil {
 		return errors.New("serve runtime API process: context, secret lookup, and listener are required")
 	}
+	observability, err := requestObservability(config, lookup, slog.New(slog.NewJSONHandler(os.Stdout, nil)))
+	if err != nil {
+		return err
+	}
 	authenticator := &digestAuthenticator{identities: make(map[[32]byte]runtimeapi.Identity, len(config.principals))}
 	for _, configured := range config.principals {
 		token, found := lookup(configured.environment)
@@ -59,7 +65,7 @@ func Serve(ctx context.Context, config Config, lookup SecretLookup, listener net
 	if err != nil {
 		return err
 	}
-	handler, err := runtimeapi.NewHandler(runtimeapi.Config{Runtime: runtime, Authenticator: authenticator, RequestIDs: ids, MaxRequestBytes: config.maxRequestBytes})
+	handler, err := runtimeapi.NewHandler(runtimeapi.Config{Runtime: runtime, Authenticator: authenticator, RequestIDs: ids, MaxRequestBytes: config.maxRequestBytes, Observability: observability})
 	if err != nil {
 		return err
 	}

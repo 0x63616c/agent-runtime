@@ -42,6 +42,18 @@ func TestConfigurationIsStrictAndRequiresExplicitUnsafeMemoryStorage(t *testing.
 	if _, err := runtimeapiprocess.Parse(strings.NewReader(wildcard)); err == nil {
 		t.Fatal("Parse(wildcard plain HTTP bind) error = nil")
 	}
+	observed := strings.Replace(validConfig, `"principals": [`, `"observability":{"identity_correlation_key_environment":"OBSERVABILITY_CORRELATION_KEY"}, "principals": [`, 1)
+	if _, err := runtimeapiprocess.Parse(strings.NewReader(observed)); err != nil {
+		t.Fatalf("Parse(observability): %v", err)
+	}
+	emptyObserved := strings.Replace(validConfig, `"principals": [`, `"observability":{}, "principals": [`, 1)
+	if _, err := runtimeapiprocess.Parse(strings.NewReader(emptyObserved)); err == nil {
+		t.Fatal("Parse(empty observability) error = nil")
+	}
+	nullObserved := strings.Replace(validConfig, `"principals": [`, `"observability":null, "principals": [`, 1)
+	if _, err := runtimeapiprocess.Parse(strings.NewReader(nullObserved)); err == nil {
+		t.Fatal("Parse(null observability) error = nil")
+	}
 }
 
 func TestRunnableRoleServesPublicSDKWithoutInternalTypes(t *testing.T) {

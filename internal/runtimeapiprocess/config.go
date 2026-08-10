@@ -2,6 +2,7 @@
 package runtimeapiprocess
 
 import (
+	"bytes"
 	"encoding/json"
 	"io"
 	"net"
@@ -15,10 +16,11 @@ var environmentName = regexp.MustCompile(`^[A-Z_][A-Z0-9_]{0,127}$`)
 
 // Config is a validated immutable runtime API process declaration.
 type Config struct {
-	listenAddress   string
-	modelProfiles   []string
-	maxRequestBytes int64
-	principals      []principal
+	listenAddress               string
+	modelProfiles               []string
+	maxRequestBytes             int64
+	principals                  []principal
+	observabilityKeyEnvironment string
 }
 
 type document struct {
@@ -27,11 +29,16 @@ type document struct {
 	Storage         storageDocument     `json:"storage"`
 	ModelProfiles   []string            `json:"model_profiles"`
 	MaxRequestBytes int64               `json:"max_request_bytes"`
+	Observability   json.RawMessage     `json:"observability,omitempty"`
 	Principals      []principalDocument `json:"principals"`
 }
 
 type storageDocument struct {
 	Mode string `json:"mode"`
+}
+
+type observabilityDocument struct {
+	IdentityCorrelationKeyEnvironment string `json:"identity_correlation_key_environment"`
 }
 
 type principalDocument struct {
@@ -90,5 +97,33 @@ func Parse(input io.Reader) (Config, error) {
 		seen[key] = struct{}{}
 		principals[index] = principal{identity: runtimeapi.Identity{Tenant: configured.Tenant, Principal: configured.Principal, Admin: configured.Admin}, environment: configured.BearerTokenEnvironment}
 	}
-	return Config{listenAddress: decoded.ListenAddress, modelProfiles: append([]string(nil), decoded.ModelProfiles...), maxRequestBytes: decoded.MaxRequestBytes, principals: principals}, nil
+	observabilityKeyEnvironment := ""
+	if decoded.Observability != nil {
+		if bytes.Equal(bytes.TrimSpace(decoded.Observability), []byte("null")) {
+			return Config{}, errors.New("validate runtime API configuration: observability must be an object")
+		}
+		observability, err := parseObservability(decoded.Observability)
+		if err != nil {
+			return Config{}, errors.Wrap(err, "validate runtime API configuration: observability")
+		}
+		if !environmentName.MatchString(observability.IdentityCorrelationKeyEnvironment) {
+			return Config{}, errors.New("validate runtime API configuration: observability identity correlation key environment is invalid")
+		}
+		observabilityKeyEnvironment = observability.IdentityCorrelationKeyEnvironment
+	}
+	return Config{listenAddress: decoded.ListenAddress, modelProfiles: append([]string(nil), decoded.ModelProfiles...), maxRequestBytes: decoded.MaxRequestBytes, principals: principals, observabilityKeyEnvironment: observabilityKeyEnvironment}, nil
+}
+
+func parseObservability(value json.RawMessage) (observabilityDocument, error) {
+	decoder := json.NewDecoder(bytes.NewReader(value))
+	decoder.DisallowUnknownFields()
+	var decoded observabilityDocument
+	if err := decoder.Decode(&decoded); err != nil {
+		return observabilityDocument{}, err
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); err != io.EOF {
+		return observabilityDocument{}, errors.New("must contain exactly one object")
+	}
+	return decoded, nil
 }
