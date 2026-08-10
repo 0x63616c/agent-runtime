@@ -17,3 +17,10 @@ declares its inputs, artifact kind, public status, and renderer version.
 When a source category does not exist yet—such as the public OpenAPI contract,
 Go SDK, deployment catalog, or runnable examples—the public site says so. Add
 the real path to the manifest only in the same slice that implements it.
+
+The current public OpenAPI contract has a generated HTTP operation index. It
+parses only the declared path, method, operation ID, and successful response
+status; curated reference prose owns semantic and implementation-status
+explanation. The Go SDK, deployment catalog, and runnable examples do not yet
+have generated reference outputs, so the site must continue to label them
+according to their implemented state.

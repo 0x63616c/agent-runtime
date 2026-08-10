@@ -127,4 +127,27 @@ var _ = Describe("public documentation foundation", func() {
 		Expect(inventory).To(ContainSubstring("`website/docs/reference/sandbox-host-control.mdx`"))
 		Expect(page).To(ContainSubstring("host topology out of its public Go and HTTP contracts"))
 	})
+
+	It("publishes generated OpenAPI operations from the declared contract", func() {
+		sidebar := read("website/sidebars.ts")
+		manifestContents := read("skills/refresh-agent-runtime-docs/source-manifest.json")
+		page := read("website/docs/reference/generated/http-operations.mdx")
+		var manifest struct {
+			Generated []struct {
+				Output string   `json:"output"`
+				Inputs []string `json:"inputs"`
+				Kind   string   `json:"artifactKind"`
+			} `json:"generated"`
+		}
+
+		Expect(json.Unmarshal([]byte(manifestContents), &manifest)).To(Succeed())
+		Expect(sidebar).To(ContainSubstring("'reference/generated/http-operations'"))
+		Expect(manifest.Generated).To(ContainElement(And(
+			HaveField("Output", "website/docs/reference/generated/http-operations.mdx"),
+			HaveField("Inputs", []string{"api/openapi/openapi.yaml"}),
+			HaveField("Kind", "openapi-operation-index"),
+		)))
+		Expect(page).To(ContainSubstring("# HTTP operation index"))
+		Expect(page).To(ContainSubstring("`createSession`"))
+	})
 })

@@ -41,6 +41,7 @@
         "sdk/go/openapi_routes_gen.go",
         "sdk/go/types.go",
         "skills/refresh-agent-runtime-docs/SKILL.md",
+        "skills/refresh-agent-runtime-docs/references/regeneration.md",
         "website/docs/build-and-run/local-foundation.mdx",
         "website/docs/build-and-run/local-stack.mdx",
         "website/docs/concepts/runtime-language.mdx",
@@ -62,6 +63,14 @@
       ],
       "artifactKind": "source-inventory",
       "publicStatus": "M0 and M2 complete; M1/M3/M5 implementation active"
+    },
+    {
+      "output": "website/docs/reference/generated/http-operations.mdx",
+      "inputs": [
+        "api/openapi/openapi.yaml"
+      ],
+      "artifactKind": "openapi-operation-index",
+      "publicStatus": "Current public contract; runtime transport remains development evidence"
     }
   ],
   "curated": [

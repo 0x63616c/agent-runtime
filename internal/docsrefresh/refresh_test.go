@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 
 	"github.com/0x63616c/agent-runtime/internal/docsrefresh"
 	. "github.com/onsi/ginkgo/v2"
@@ -56,6 +57,54 @@ var _ = Describe("refreshing public documentation", func() {
 		Expect(err).NotTo(HaveOccurred())
 		Expect(second.Changed).To(BeEmpty())
 		Expect(files.atomicWrites).To(HaveLen(1))
+	})
+
+	It("renders a sorted HTTP operation index from the declared OpenAPI contract", func() {
+		manifest.Generated[0] = docsrefresh.Artifact{
+			Output:       "website/docs/reference/generated/http-operations.mdx",
+			Inputs:       []string{"api/openapi/openapi.yaml"},
+			Kind:         "openapi-operation-index",
+			PublicStatus: "current public contract; runtime transport remains development evidence",
+		}
+		files.content["api/openapi/openapi.yaml"] = []byte(`{
+  "openapi": "3.1.0",
+  "info": {"title": "Agent Runtime API", "version": "v1"},
+  "paths": {
+    "/v1/sessions/{session_id}": {"get": {"operationId": "inspectSession", "responses": {"200": {}}}},
+    "/v1/sessions": {"post": {"operationId": "createSession", "responses": {"201": {}}}}
+  }
+}`)
+
+		result, err := docsrefresh.Refresh(context.Background(), ".", manifest, files, changes, docsrefresh.Options{})
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(result.Changed).To(Equal([]string{"website/docs/reference/generated/http-operations.mdx"}))
+		output := string(files.content[manifest.Generated[0].Output])
+		Expect(output).To(ContainSubstring("# HTTP operation index"))
+		Expect(output).To(ContainSubstring("`v1`"))
+		Expect(output).To(ContainSubstring("| `POST` | `/v1/sessions` | `createSession` | `201` |"))
+		Expect(output).To(ContainSubstring("| `GET` | `/v1/sessions/{session_id}` | `inspectSession` | `200` |"))
+		Expect(output).To(HavePrefix("---\ntitle: HTTP operation index\n"))
+		Expect(strings.Index(output, "`POST` | `/v1/sessions`")).To(BeNumerically("<", strings.Index(output, "`GET` | `/v1/sessions/{session_id}`")))
+	})
+
+	It("refuses an OpenAPI operation without a successful response before writing", func() {
+		manifest.Generated[0] = docsrefresh.Artifact{
+			Output:       "website/docs/reference/generated/http-operations.mdx",
+			Inputs:       []string{"api/openapi/openapi.yaml"},
+			Kind:         "openapi-operation-index",
+			PublicStatus: "current public contract; runtime transport remains development evidence",
+		}
+		files.content["api/openapi/openapi.yaml"] = []byte(`{
+  "openapi": "3.1.0",
+  "info": {"title": "Agent Runtime API", "version": "v1"},
+  "paths": {"/v1/sessions": {"post": {"operationId": "createSession", "responses": {"400": {}}}}}
+}`)
+
+		_, err := docsrefresh.Refresh(context.Background(), ".", manifest, files, changes, docsrefresh.Options{})
+
+		Expect(err).To(MatchError(ContainSubstring("has no successful response")))
+		Expect(files.atomicWrites).To(BeEmpty())
 	})
 
 	It("rejects input and output paths that escape the repository", func() {

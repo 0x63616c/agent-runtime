@@ -9,6 +9,11 @@ description: The implemented versioned public API, Go SDK transport, and local s
 is the canonical `/v1` transport contract. The generated Go SDK and server
 route constants are checked against its ten operations.
 
+The generated [HTTP operation index](./generated/http-operations.mdx) lists
+the declared route, method, operation ID, and successful response statuses
+directly from that contract. It is an index, not a claim that the standalone
+development role provides production durability.
+
 The API creates and reads immutable Agent revisions, creates and inspects
 Sessions, idempotently submits Input, observes Turns and cursor-addressed
 Product events, explicitly cancels a Turn, and drain-closes a Session. Agent

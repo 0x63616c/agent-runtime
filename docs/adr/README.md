@@ -17,3 +17,4 @@ implementation authority unless an accepted ADR explicitly promotes them.
 | [0008](0008-approval-persistence.md) | Approval persistence and authority |
 | [0009](0009-payload-compatibility.md) | Temporal payload compatibility |
 | [0010](0010-documentation-deployment.md) | Documentation generation and deployment |
+| [0011](0011-runtime-state-authority-and-content-boundary.md) | Runtime state authority and immutable content boundary |
