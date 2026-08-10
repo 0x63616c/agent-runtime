@@ -70,10 +70,10 @@ func TestLinuxJailerHostOrdersTheNoNICRESTLaunchAndGuestControlPorts(t *testing.
 	}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("REST calls = %#v, want %#v", got, want)
 	}
-	if got, want := http.binds, []string{hostJailedPath(stage.JailRoot, stage.APISocketPath)}; !reflect.DeepEqual(got, want) {
+	if got, want := http.binds, []string{stage.APISocketPath}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("HTTP binds = %v, want %v", got, want)
 	}
-	if got, want := guest.steps, []string{"bind:" + hostJailedPath(stage.JailRoot, stage.VSockUDSPath), "marker:" + request.SerialMarker, "ping:" + request.Boot.VMID, "close"}; !reflect.DeepEqual(got, want) {
+	if got, want := guest.steps, []string{"bind:" + stage.VSockUDSPath, "marker:" + request.SerialMarker, "ping:" + request.Boot.VMID, "close"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("guest steps = %v, want %v", got, want)
 	}
 	if got, want := processes.process.steps, []string{"terminate", "wait", "cleanup"}; !reflect.DeepEqual(got, want) {
@@ -370,7 +370,7 @@ func TestLinuxJailerHostBindsPlanResourcesAndJailedPathsToEveryPort(t *testing.T
 	if got := http.calls[3].Body; !reflect.DeepEqual(got, wantVSock) {
 		t.Fatalf("vsock = %#v, want %#v", got, wantVSock)
 	}
-	if got, want := guest.steps[0], "bind:"+hostJailedPath(stage.stage.JailRoot, stage.stage.VSockUDSPath); got != want {
+	if got, want := guest.steps[0], "bind:"+stage.stage.VSockUDSPath; got != want {
 		t.Fatalf("guest bind = %q, want %q", got, want)
 	}
 }

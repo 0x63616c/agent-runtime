@@ -134,32 +134,6 @@ func (stager LinuxJailerResourceStager) Stage(ctx context.Context, plan Plan, fi
 	return stage, nil
 }
 
-// Discard removes only the fresh per-VM namespace returned by Stage before a Jailer process owns it.
-func (stager LinuxJailerResourceStager) Discard(ctx context.Context, plan Plan, stage JailedResourceStage) (CleanupProof, error) {
-	if err := contextError(ctx); err != nil {
-		return CleanupProof{Reason: "staged namespace cleanup context is unavailable"}, err
-	}
-	vmDirectory := filepath.Dir(stage.JailRoot)
-	if !validCompiledPlan(plan) || stage.BindingDigest != stage.bindingDigest() || stage.JailRoot != expectedJailRoot(plan) || stage.OwnerUID != plan.UID() || stage.OwnerGID != plan.GID() || stage.Jailer != plan.Jailer() || stage.Firecracker.Source != plan.Firecracker() || stage.Firecracker.JailedPath != "/"+filepath.Base(plan.Firecracker().Path) || filepath.Base(stage.JailRoot) != "root" || !validVMID(filepath.Base(vmDirectory)) || !safeAbsolutePath(vmDirectory) {
-		return CleanupProof{Reason: "staged namespace is not exact"}, fmt.Errorf("%w: exact staged Jailer namespace is required", ErrSmokeUnavailable)
-	}
-	trustDirectory := stager.trustDirectory
-	if trustDirectory == nil {
-		trustDirectory = trustedJailerDirectory
-	}
-	if err := trustDirectory(stage.JailRoot); err != nil {
-		return CleanupProof{Reason: "staged namespace is not trusted"}, fmt.Errorf("%w: trusted staged Jailer namespace: %v", ErrSmokeUnavailable, err)
-	}
-	removeNamespace := stager.removeNamespace
-	if removeNamespace == nil {
-		removeNamespace = removeFreshJailerNamespace
-	}
-	if err := removeNamespace(vmDirectory, "", false); err != nil {
-		return CleanupProof{Reason: "staged Jailer namespace cleanup did not complete"}, fmt.Errorf("remove staged Jailer namespace: %w", err)
-	}
-	return CleanupProof{Proved: true, Removed: []string{vmDirectory}}, nil
-}
-
 func removeFreshJailerNamespace(vmDirectory, executableDirectory string, createdExecutableDirectory bool) error {
 	removeVMErr := os.RemoveAll(vmDirectory)
 	var removeExecutableErr error

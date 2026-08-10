@@ -48,11 +48,6 @@ type JailerResourceStager interface {
 	Stage(context.Context, Plan, FixtureSet, string) (JailedResourceStage, error)
 }
 
-// JailerResourceDiscarder removes the exact fresh namespace returned by Stage when no Jailer process has taken ownership.
-type JailerResourceDiscarder interface {
-	Discard(context.Context, Plan, JailedResourceStage) (CleanupProof, error)
-}
-
 // JailerStarter starts the Jailer only after the host has validated every launch prerequisite.
 type JailerStarter interface {
 	Start(context.Context, JailerStartRequest) (JailerProcess, error)
@@ -89,27 +84,22 @@ type LinuxJailerHost struct {
 	HTTP           FirecrackerHTTPPort
 	Guest          GuestChannel
 
-	mu             sync.Mutex
-	preflight      bool
-	preparing      bool
-	prepared       bool
-	launching      bool
-	launched       bool
-	cleaning       bool
-	cleaned        bool
-	process        JailerProcess
-	configured     bool
-	configuredPlan Plan
-	plan           Plan
-	fixtures       FixtureSet
-	authority      JailerExecutionAuthority
-	request        LaunchRequest
-	stage          JailedResourceStage
-	launchDone     chan struct{}
-	prepareDone    chan struct{}
-	cleanupDone    chan struct{}
-	cleanupProof   CleanupProof
-	cleanupErr     error
+	mu           sync.Mutex
+	preflight    bool
+	prepared     bool
+	launching    bool
+	launched     bool
+	cleaning     bool
+	cleaned      bool
+	process      JailerProcess
+	plan         Plan
+	authority    JailerExecutionAuthority
+	request      LaunchRequest
+	stage        JailedResourceStage
+	launchDone   chan struct{}
+	cleanupDone  chan struct{}
+	cleanupProof CleanupProof
+	cleanupErr   error
 }
 
 type firecrackerMachineConfig struct {
@@ -144,7 +134,7 @@ func (host *LinuxJailerHost) Preflight(ctx context.Context, plan Plan, fixtures 
 	if err := contextError(ctx); err != nil {
 		return err
 	}
-	if host == nil || host.Resources == nil || host.Jailer == nil || host.HTTP == nil || host.Guest == nil || !safeAbsolutePath(host.RootFSCopyPath) || !validCompiledPlan(plan) || !validJailerExecutionAuthority(host.Authority, plan) || !fixturesMatchPlan(fixtures, plan) || (host.configured && !sameConfiguredLinuxJailerPlan(host.configuredPlan, plan)) {
+	if host == nil || host.Resources == nil || host.Jailer == nil || host.HTTP == nil || host.Guest == nil || !safeAbsolutePath(host.RootFSCopyPath) || !validCompiledPlan(plan) || !validJailerExecutionAuthority(host.Authority, plan) || !fixturesMatchPlan(fixtures, plan) {
 		return fmt.Errorf("%w: Linux Jailer ports, resource stage, private rootfs copy, compiled plan, and verified fixtures are required", ErrSmokeUnavailable)
 	}
 	if err := host.PreflightState.Validate(); err != nil {
@@ -157,8 +147,6 @@ func (host *LinuxJailerHost) Preflight(ctx context.Context, plan Plan, fixtures 
 	}
 	host.preflight = true
 	host.authority = cloneJailerExecutionAuthority(host.Authority)
-	host.plan = cloneLinuxJailerPlan(plan)
-	host.fixtures = cloneLinuxJailerFixtureSet(fixtures)
 	return nil
 }
 
@@ -171,39 +159,34 @@ func (host *LinuxJailerHost) Prepare(ctx context.Context, plan Plan, fixtures Fi
 		return LaunchRequest{}, fmt.Errorf("%w: compiled plan and verified fixtures are required", ErrSmokeUnavailable)
 	}
 	host.mu.Lock()
-	if !host.preflight || host.preparing || host.prepared || host.launching || host.launched || host.process != nil || host.cleaned || !sameConfiguredLinuxJailerPlan(host.plan, plan) || !sameLinuxJailerFixtureSet(host.fixtures, fixtures) {
+	if !host.preflight || host.prepared || host.launching || host.launched || host.process != nil || host.cleaned {
 		host.mu.Unlock()
-		return LaunchRequest{}, fmt.Errorf("%w: successful preflight bound to the exact compiled plan and verified fixtures is required", ErrSmokeUnavailable)
+		return LaunchRequest{}, fmt.Errorf("%w: successful single-use preflight is required", ErrSmokeUnavailable)
 	}
 	stager := host.Resources
 	rootFSCopyPath := host.RootFSCopyPath
-	boundPlan := cloneLinuxJailerPlan(host.plan)
-	boundFixtures := cloneLinuxJailerFixtureSet(host.fixtures)
-	host.preparing = true
-	host.prepareDone = make(chan struct{})
 	host.mu.Unlock()
-	defer host.finishPrepare()
-	stage, err := stager.Stage(ctx, boundPlan, boundFixtures, rootFSCopyPath)
+	stage, err := stager.Stage(ctx, plan, fixtures, rootFSCopyPath)
 	if err != nil {
 		return LaunchRequest{}, fmt.Errorf("stage jailed resources: %w", err)
 	}
-	if !validJailedResourceStage(stage, boundPlan, boundFixtures, rootFSCopyPath) {
+	if err := contextError(ctx); err != nil {
+		return LaunchRequest{}, err
+	}
+	if !validJailedResourceStage(stage, plan, fixtures, rootFSCopyPath) {
 		return LaunchRequest{}, fmt.Errorf("%w: exact fixture-bound jailed kernel, root drive, API socket, and vsock paths are required", ErrSmokeUnavailable)
 	}
-	if err := contextError(ctx); err != nil {
-		return LaunchRequest{}, host.discardStagedResources(stager, boundPlan, stage, err)
-	}
-	request, err := NewLaunchRequest(boundPlan, rootFSCopyPath, BootInput{VMID: boundPlan.VMID(), FixtureVersion: boundFixtures.FixtureVersion()})
+	request, err := NewLaunchRequest(plan, rootFSCopyPath, BootInput{VMID: plan.VMID(), FixtureVersion: fixtures.FixtureVersion()})
 	if err != nil {
 		return LaunchRequest{}, err
 	}
 	host.mu.Lock()
 	defer host.mu.Unlock()
-	if !host.preflight || !host.preparing || host.prepared || host.launching || host.launched || host.process != nil || host.cleaned {
+	if !host.preflight || host.prepared || host.launching || host.launched || host.process != nil || host.cleaned {
 		return LaunchRequest{}, fmt.Errorf("%w: Linux Jailer host changed during preparation", ErrSmokeUnavailable)
 	}
 	host.request = cloneLaunchRequest(request)
-	host.plan = boundPlan
+	host.plan = plan
 	host.stage = stage
 	host.prepared = true
 	return cloneLaunchRequest(request), nil
@@ -246,14 +229,10 @@ func (host *LinuxJailerHost) Launch(ctx context.Context, request LaunchRequest) 
 	if startErr != nil || process == nil {
 		return host.failLaunch(fmt.Errorf("start Jailer: %w", errors.Join(startErr, missingJailerProcess(process))))
 	}
-	if err := callWithContextFence(ctx, "bind Firecracker API socket", func(callCtx context.Context) error {
-		return http.Bind(callCtx, hostJailedPath(stage.JailRoot, stage.APISocketPath))
-	}); err != nil {
+	if err := callWithContextFence(ctx, "bind Firecracker API socket", func(callCtx context.Context) error { return http.Bind(callCtx, stage.APISocketPath) }); err != nil {
 		return host.failLaunch(err)
 	}
-	if err := callWithContextFence(ctx, "bind guest vsock", func(callCtx context.Context) error {
-		return guest.Bind(callCtx, hostJailedPath(stage.JailRoot, stage.VSockUDSPath))
-	}); err != nil {
+	if err := callWithContextFence(ctx, "bind guest vsock", func(callCtx context.Context) error { return guest.Bind(callCtx, stage.VSockUDSPath) }); err != nil {
 		return host.failLaunch(err)
 	}
 	for _, call := range []struct {
@@ -343,16 +322,6 @@ func (host *LinuxJailerHost) Cleanup(ctx context.Context) (CleanupProof, error) 
 				continue
 			}
 		}
-		if host.preparing {
-			done := host.prepareDone
-			host.mu.Unlock()
-			select {
-			case <-ctx.Done():
-				return CleanupProof{Reason: "cleanup waited for preparation cancellation"}, ctx.Err()
-			case <-done:
-				continue
-			}
-		}
 		process, guest := host.process, host.Guest
 		host.process = nil
 		host.cleaning = true
@@ -426,44 +395,6 @@ func (host *LinuxJailerHost) storeCleanup(proof CleanupProof, err error) {
 	host.cleaned = true
 	close(host.cleanupDone)
 	host.mu.Unlock()
-}
-
-func (host *LinuxJailerHost) finishPrepare() {
-	host.mu.Lock()
-	defer host.mu.Unlock()
-	if !host.preparing {
-		return
-	}
-	host.preparing = false
-	close(host.prepareDone)
-}
-
-func (host *LinuxJailerHost) discardStagedResources(stager JailerResourceStager, plan Plan, stage JailedResourceStage, cause error) error {
-	proof := CleanupProof{Reason: "staged Jailer namespace cleanup did not complete"}
-	discarder, ok := stager.(JailerResourceDiscarder)
-	var cleanupErr error
-	if !ok {
-		cleanupErr = fmt.Errorf("%w: staged Jailer namespace has no discard authority", ErrSmokeUnavailable)
-	} else {
-		cleanupContext, cancel := context.WithTimeout(context.Background(), maximumCleanupTimeout)
-		proof, cleanupErr = discarder.Discard(cleanupContext, plan, stage)
-		cancel()
-		if cleanupErr == nil && (!proof.Proved || len(proof.Removed) != 1 || proof.Removed[0] != filepath.Dir(stage.JailRoot)) {
-			cleanupErr = fmt.Errorf("%w: staged Jailer namespace discard did not prove the exact VM namespace", ErrSmokeUnavailable)
-		}
-	}
-	if cleanupErr != nil {
-		proof.Proved = false
-		if proof.Reason == "" {
-			proof.Reason = "staged Jailer namespace cleanup did not complete"
-		}
-	}
-	host.mu.Lock()
-	host.cleaning = true
-	host.cleanupDone = make(chan struct{})
-	host.mu.Unlock()
-	host.storeCleanup(proof, cleanupErr)
-	return errors.Join(cause, cleanupErr)
 }
 
 func (stage JailedResourceStage) bindingDigest() sandbox.Digest {
@@ -568,38 +499,6 @@ func cloneJailerExecutionAuthority(authority JailerExecutionAuthority) JailerExe
 	authority.arguments = append([]string(nil), authority.arguments...)
 	authority.external = append([]ExternalJailerLimitOwner(nil), authority.external...)
 	return authority
-}
-
-func cloneLinuxJailerPlan(plan Plan) Plan {
-	plan.jailerArguments = append([]string(nil), plan.jailerArguments...)
-	plan.network.Allowlist = append([]string(nil), plan.network.Allowlist...)
-	plan.capabilities = plan.Capabilities()
-	return plan
-}
-
-func sameConfiguredLinuxJailerPlan(left, right Plan) bool {
-	return left.vmID == right.vmID && left.uid == right.uid && left.gid == right.gid && sameStrings(left.jailerArguments, right.jailerArguments) && left.machine == right.machine && left.resources == right.resources && left.network.Mode == right.network.Mode && sameStrings(left.network.Allowlist, right.network.Allowlist) && left.firecracker == right.firecracker && left.jailer == right.jailer && left.kernel == right.kernel && left.rootFS == right.rootFS && left.guestAgent == right.guestAgent && left.compiled == right.compiled
-}
-
-func cloneLinuxJailerFixtureSet(fixtures FixtureSet) FixtureSet {
-	artifacts := fixtures.artifacts
-	fixtures.artifacts = make(map[FixtureName]PinnedArtifact, len(fixtures.artifacts))
-	for name, artifact := range artifacts {
-		fixtures.artifacts[name] = artifact
-	}
-	return fixtures
-}
-
-func sameLinuxJailerFixtureSet(left, right FixtureSet) bool {
-	if left.directory != right.directory || left.fixtureVersion != right.fixtureVersion || left.verified != right.verified || len(left.artifacts) != len(right.artifacts) {
-		return false
-	}
-	for name, artifact := range left.artifacts {
-		if rightArtifact, ok := right.artifacts[name]; !ok || rightArtifact != artifact {
-			return false
-		}
-	}
-	return true
 }
 
 func callWithContextFence(ctx context.Context, action string, call func(context.Context) error) error {

@@ -268,52 +268,6 @@ func TestLinuxJailerResourceStagerReturnsAnUnreconciledNamespaceCleanupFailure(t
 	}
 }
 
-func TestLinuxJailerResourceStagerDiscardRefusesASelfDigestedStageOutsideTheExactPlanRoot(t *testing.T) {
-	plan, fixtures, rootFSCopyPath, _ := stagedResourceInputs(t)
-	stage := validBoundJailedResourceStage(plan, fixtures, rootFSCopyPath)
-	stage.JailRoot = filepath.Join(t.TempDir(), "other-vm", "root")
-	stage.BindingDigest = stage.bindingDigest()
-	var removed []string
-	stager := LinuxJailerResourceStager{
-		trustDirectory: func(string) error { return nil },
-		removeNamespace: func(vmDirectory, _ string, _ bool) error {
-			removed = append(removed, vmDirectory)
-			return nil
-		},
-	}
-
-	if _, err := stager.Discard(context.Background(), plan, stage); !errors.Is(err, ErrSmokeUnavailable) {
-		t.Fatalf("Discard() error = %v, want exact-plan-root refusal", err)
-	}
-	if len(removed) != 0 {
-		t.Fatalf("discard removals = %v, want no forged namespace removal", removed)
-	}
-}
-
-func TestLinuxJailerResourceStagerDiscardRemovesOnlyTheExactPlanVMNamespace(t *testing.T) {
-	plan, fixtures, rootFSCopyPath, _ := stagedResourceInputs(t)
-	stage := validBoundJailedResourceStage(plan, fixtures, rootFSCopyPath)
-	var removed []string
-	stager := LinuxJailerResourceStager{
-		trustDirectory: func(string) error { return nil },
-		removeNamespace: func(vmDirectory, executableDirectory string, createdExecutableDirectory bool) error {
-			if executableDirectory != "" || createdExecutableDirectory {
-				t.Fatalf("discard removal = (%q, %t), want VM namespace only", executableDirectory, createdExecutableDirectory)
-			}
-			removed = append(removed, vmDirectory)
-			return nil
-		},
-	}
-
-	proof, err := stager.Discard(context.Background(), plan, stage)
-	if err != nil || !proof.Proved || !sameStrings(proof.Removed, []string{filepath.Dir(stage.JailRoot)}) {
-		t.Fatalf("Discard() = (%#v, %v), want exact VM namespace proof", proof, err)
-	}
-	if got, want := removed, []string{filepath.Dir(stage.JailRoot)}; !sameStrings(got, want) {
-		t.Fatalf("discard removals = %v, want %v", got, want)
-	}
-}
-
 func stagedResourceInputs(t *testing.T) (Plan, FixtureSet, string, map[FixtureName]string) {
 	t.Helper()
 	root := t.TempDir()
