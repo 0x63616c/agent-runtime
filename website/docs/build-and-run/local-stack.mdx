@@ -27,6 +27,12 @@ after the first teardown, retain bounded evidence/diagnostics, and delete the
 cluster. It is Kubernetes-in-container lifecycle and NetworkPolicy evidence,
 not Linux/KVM or Firecracker evidence.
 
+Each CI attempt owns a generated k3d cluster and registry name derived from
+the run and attempt IDs. It uses a private kubeconfig and OS-selected loopback
+ports, then passes the discovered registry addresses to Tilt. The workflow
+will not reuse or delete a pre-existing resource; cleanup requires the
+successful-create record and matching immutable Docker container IDs.
+
 ## Start
 
 ```text

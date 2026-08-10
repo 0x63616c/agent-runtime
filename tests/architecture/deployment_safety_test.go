@@ -130,23 +130,31 @@ var _ = Describe("M1 deployment safety boundaries", func() {
 			"fetch-depth: 0",
 			"k3d cluster list -o json",
 			"k3d registry list -o json",
-			"refusing to reuse pre-existing k3d cluster agent-runtime-isolated",
-			"refusing to reuse pre-existing k3d registry agent-runtime-registry.localhost",
+			`run_identity="${GITHUB_RUN_ID:?}-${GITHUB_RUN_ATTEMPT:?}"`,
+			`cluster="ar-ci-$run_identity"`,
+			`registry="ar-reg-$run_identity.localhost"`,
+			`context="k3d-$cluster"`,
+			`kubeconfig="$RUNNER_TEMP/$cluster.kubeconfig"`,
+			"refusing to reuse pre-existing generated k3d cluster",
+			"refusing to reuse pre-existing generated k3d registry",
 			"cluster_create_succeeded=false",
 			"registry_create_succeeded=false",
 			"k3d-ownership.json",
 			"k3d cluster create \"$cluster\"",
-			"--api-port 127.0.0.1:6447",
+			`api_port="$(python3 - "$run_identity"`,
+			`--api-port "127.0.0.1:$api_port"`,
 			"--kubeconfig-update-default=false",
 			"--kubeconfig-switch-context=false",
-			"k3d kubeconfig get \"$cluster\" > \"$KUBECONFIG\"",
-			"refusing to reuse occupied loopback API port 6447",
-			"refusing to reuse occupied loopback registry port 5111",
+			"k3d kubeconfig get \"$cluster\" > \"$kubeconfig\"",
+			"--port 127.0.0.1:0",
 			"k3d registry create \"$registry\"",
 			"registry:2.8.3@sha256:a3d8aaa63ed8681a604f1dea0aa03f100d5895b6a58ace528858a7b332415373",
-			"--registry-use k3d-agent-runtime-registry.localhost:5111",
+			`registry_host="localhost:$registry_host_port"`,
+			`registry_host_from_cluster="k3d-$registry:5000"`,
+			`--arg port "5000/tcp"`,
+			"--registry-use \"$registry_host_from_cluster\"",
 			`api_endpoint="$(kubectl config view --raw --minify`,
-			`[[ "$api_endpoint" == https://127.0.0.1:6447 ]]`,
+			`[[ "$api_endpoint" == "https://127.0.0.1:$api_port" ]]`,
 			`[[ "$api_port" =~ ^[1-9][0-9]{0,4}$ ]]`,
 			"rancher/k3s:v1.33.9-k3s1@sha256:f17e43023cce2b9c613e198f26e73637bf734b5156d37c9f44819d97bac4d655",
 			"Preload and prove the local-path helper image",
@@ -164,7 +172,10 @@ var _ = Describe("M1 deployment safety boundaries", func() {
 			"wait --for=jsonpath='{.status.phase}'=Running pod/local-path-helper-consumer --timeout=120s",
 			`docker exec "k3d-${cluster}-server-0" crictl images -o json`,
 			"preflight_namespace_absent:true",
-			"AGENT_RUNTIME_DEV_CONTEXT: k3d-agent-runtime-isolated",
+			"AGENT_RUNTIME_DEV_CONTEXT: ${{ env.AGENT_RUNTIME_CI_CONTEXT }}",
+			"AGENT_RUNTIME_CI_CONTEXT: ${{ env.AGENT_RUNTIME_CI_CONTEXT }}",
+			"AGENT_RUNTIME_CI_REGISTRY_HOST: ${{ env.AGENT_RUNTIME_CI_REGISTRY_HOST }}",
+			"AGENT_RUNTIME_CI_REGISTRY_HOST_FROM_CLUSTER: ${{ env.AGENT_RUNTIME_CI_REGISTRY_HOST_FROM_CLUSTER }}",
 			"just two-stack-smoke",
 			"if: always()",
 			"k3d cluster delete \"$cluster\"",
@@ -183,8 +194,10 @@ var _ = Describe("M1 deployment safety boundaries", func() {
 		} {
 			Expect(workflow).NotTo(ContainSubstring(forbidden))
 		}
-		Expect(read("Tiltfile")).To(ContainSubstring("k3d-agent-runtime-isolated"))
-		Expect(read("Tiltfile")).To(ContainSubstring("host_from_cluster='k3d-agent-runtime-registry.localhost:5111'"))
+		Expect(read("Tiltfile")).To(ContainSubstring("config.define_string('ci-context'"))
+		Expect(read("Tiltfile")).To(ContainSubstring("config.define_string('ci-registry-host'"))
+		Expect(read("Tiltfile")).To(ContainSubstring("config.define_string('ci-registry-host-from-cluster'"))
+		Expect(read("Tiltfile")).To(ContainSubstring("default_registry(ci_registry_host, host_from_cluster=ci_registry_host_from_cluster)"))
 		Expect(read("Tiltfile")).To(ContainSubstring("ci_settings(readiness_timeout=ci_readiness_timeout)"))
 		Expect(read("Tiltfile")).To(ContainSubstring("ci_readiness_timeout = '12m' if profile == 'ci' else '10m'"))
 		Expect(read("Justfile")).To(ContainSubstring(`two-stack-smoke profile="local"`))
@@ -203,7 +216,8 @@ var _ = Describe("M1 deployment safety boundaries", func() {
 			`tilt alpha tiltfile-result`,
 			`refuse to adopt pre-existing local Stack state`,
 			`remove_local_state "$stack"`,
-			`.DefaultRegistry.host == "localhost:5111"`,
+			`.DefaultRegistry.host == $registry_host`,
+			`.DefaultRegistry.hostFromContainerRuntime == $registry_host_from_cluster`,
 			`.CISettings.readinessTimeout == "12m0s"`,
 			`contains("docker.io/agent-runtime-dev")`,
 			`both_stacks_concurrently_ready:true`,

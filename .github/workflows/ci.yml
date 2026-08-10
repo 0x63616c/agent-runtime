@@ -133,8 +133,36 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          cluster=agent-runtime-isolated
-          registry=agent-runtime-registry.localhost
+          run_identity="${GITHUB_RUN_ID:?}-${GITHUB_RUN_ATTEMPT:?}"
+          [[ "$run_identity" =~ ^[1-9][0-9]*-[1-9][0-9]*$ ]]
+          # k3d limits cluster names to 32 characters; preserve room for the
+          # generated GitHub run/attempt identity rather than truncating it.
+          cluster="ar-ci-$run_identity"
+          registry="ar-reg-$run_identity.localhost"
+          context="k3d-$cluster"
+          kubeconfig="$RUNNER_TEMP/$cluster.kubeconfig"
+          api_port="$(python3 - "$run_identity" <<'PY'
+          import hashlib
+          import socket
+          import sys
+
+          start = 20000 + int.from_bytes(hashlib.sha256(sys.argv[1].encode()).digest()[:2], "big") % 20000
+          for offset in range(20000):
+              candidate = 20000 + (start - 20000 + offset) % 20000
+              probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+              try:
+                  probe.bind(("127.0.0.1", candidate))
+              except OSError:
+                  continue
+              finally:
+                  probe.close()
+              print(candidate)
+              break
+          else:
+              raise SystemExit("no free generated loopback API port")
+          PY
+          )"
+          [[ "$api_port" =~ ^[1-9][0-9]{0,4}$ ]]
           registry_container="k3d-$registry"
           cluster_server_container="k3d-${cluster}-server-0"
           ownership_record="$RUNNER_TEMP/k3d-ownership.json"
@@ -143,21 +171,21 @@ jobs:
           registry_container_id=""
           cluster_server_container_id=""
           test ! -e "$ownership_record"
-          test ! -e "$RUNNER_TEMP/agent-runtime-isolated.kubeconfig"
+          test ! -e "$kubeconfig"
           if k3d cluster list -o json | jq -e --arg name "$cluster" 'any(.[]; .name == $name)' >/dev/null; then
-            echo "refusing to reuse pre-existing k3d cluster agent-runtime-isolated" >&2
+            echo "refusing to reuse pre-existing generated k3d cluster $cluster" >&2
             exit 1
           fi
           if k3d registry list -o json | jq -e --arg name "$registry" 'any(.[]; .name == $name)' >/dev/null; then
-            echo "refusing to reuse pre-existing k3d registry agent-runtime-registry.localhost" >&2
+            echo "refusing to reuse pre-existing generated k3d registry $registry" >&2
             exit 1
           fi
           write_ownership_record() {
-            jq -n --arg cluster "$cluster" --arg registry "$registry" \
+            jq -n --arg run_identity "$run_identity" --arg cluster "$cluster" --arg registry "$registry" --arg context "$context" --arg kubeconfig "$kubeconfig" \
               --arg registry_container "$registry_container" --arg registry_container_id "$registry_container_id" \
               --arg cluster_server_container "$cluster_server_container" --arg cluster_server_container_id "$cluster_server_container_id" \
               --argjson cluster_create_succeeded "$cluster_create_succeeded" --argjson registry_create_succeeded "$registry_create_succeeded" \
-              '{version:1,cluster:$cluster,registry:$registry,registry_container:$registry_container,registry_container_id:$registry_container_id,cluster_server_container:$cluster_server_container,cluster_server_container_id:$cluster_server_container_id,cluster_create_succeeded:$cluster_create_succeeded,registry_create_succeeded:$registry_create_succeeded}' \
+              '{version:2,run_identity:$run_identity,cluster:$cluster,registry:$registry,context:$context,kubeconfig:$kubeconfig,registry_container:$registry_container,registry_container_id:$registry_container_id,cluster_server_container:$cluster_server_container,cluster_server_container_id:$cluster_server_container_id,cluster_create_succeeded:$cluster_create_succeeded,registry_create_succeeded:$registry_create_succeeded}' \
               > "$ownership_record"
           }
           container_identity_matches() {
@@ -187,22 +215,18 @@ jobs:
             exit "$status"
           }
           trap cleanup_owned_resources EXIT
-          if (exec 3<>/dev/tcp/127.0.0.1/6447) 2>/dev/null; then
-            echo "refusing to reuse occupied loopback API port 6447" >&2
-            exit 1
-          fi
-          if (exec 3<>/dev/tcp/127.0.0.1/5111) 2>/dev/null; then
-            echo "refusing to reuse occupied loopback registry port 5111" >&2
-            exit 1
-          fi
-          export KUBECONFIG="$RUNNER_TEMP/agent-runtime-isolated.kubeconfig"
+          export KUBECONFIG="$kubeconfig"
           write_ownership_record
           if k3d registry create "$registry" \
             --image registry:2.8.3@sha256:a3d8aaa63ed8681a604f1dea0aa03f100d5895b6a58ace528858a7b332415373 \
-            --port 127.0.0.1:5111 --enforce-port-match; then
+            --port 127.0.0.1:0; then
             registry_create_succeeded=true
             registry_container_id="$(docker container inspect --format '{{.Id}}' "$registry_container")"
             [[ "$registry_container_id" =~ ^[a-f0-9]{64}$ ]]
+            registry_host_port="$(docker container inspect "$registry_container" | jq -er --arg port "5000/tcp" '.[0].NetworkSettings.Ports[$port] | if type == "array" and length == 1 and .[0].HostIp == "127.0.0.1" and (.[0].HostPort | test("^[1-9][0-9]{0,4}$")) then .[0].HostPort else error("expected one loopback registry port mapping") end')"
+            (( registry_host_port <= 65535 ))
+            registry_host="localhost:$registry_host_port"
+            registry_host_from_cluster="k3d-$registry:5000"
             write_ownership_record
           else
             write_ownership_record
@@ -212,8 +236,8 @@ jobs:
           write_ownership_record
           if k3d cluster create "$cluster" \
             --image rancher/k3s:v1.33.9-k3s1@sha256:f17e43023cce2b9c613e198f26e73637bf734b5156d37c9f44819d97bac4d655 \
-            --api-port 127.0.0.1:6447 \
-            --registry-use k3d-agent-runtime-registry.localhost:5111 \
+            --api-port "127.0.0.1:$api_port" \
+            --registry-use "$registry_host_from_cluster" \
             --kubeconfig-update-default=false \
             --kubeconfig-switch-context=false \
             --k3s-arg '--disable=traefik@server:0' \
@@ -228,23 +252,30 @@ jobs:
             echo "failed k3d cluster creation is retained for diagnosis without deletion" >&2
             exit 1
           fi
-          k3d kubeconfig get "$cluster" > "$KUBECONFIG"
+          k3d kubeconfig get "$cluster" > "$kubeconfig"
           api_endpoint="$(kubectl config view --raw --minify -o jsonpath='{.clusters[0].cluster.server}')"
           api_port="${api_endpoint##*:}"
-          [[ "$api_endpoint" == https://127.0.0.1:6447 ]]
+          [[ "$api_endpoint" == "https://127.0.0.1:$api_port" ]]
           [[ "$api_port" =~ ^[1-9][0-9]{0,4}$ ]]
           (( api_port <= 65535 ))
-          kubectl --context k3d-agent-runtime-isolated wait --for=condition=Ready node --all --timeout=5m
-          echo "KUBECONFIG=$KUBECONFIG" >> "$GITHUB_ENV"
+          kubectl --context "$context" wait --for=condition=Ready node --all --timeout=5m
+          {
+            echo "KUBECONFIG=$kubeconfig"
+            echo "AGENT_RUNTIME_CI_RUN_IDENTITY=$run_identity"
+            echo "AGENT_RUNTIME_CI_CLUSTER=$cluster"
+            echo "AGENT_RUNTIME_CI_CONTEXT=$context"
+            echo "AGENT_RUNTIME_CI_REGISTRY_HOST=$registry_host"
+            echo "AGENT_RUNTIME_CI_REGISTRY_HOST_FROM_CLUSTER=$registry_host_from_cluster"
+          } >> "$GITHUB_ENV"
           trap - EXIT
       - name: Preload and prove the local-path helper image
         shell: bash
         run: |
           set -euo pipefail
-          cluster=agent-runtime-isolated
-          context=k3d-agent-runtime-isolated
+          cluster="${AGENT_RUNTIME_CI_CLUSTER:?}"
+          context="${AGENT_RUNTIME_CI_CONTEXT:?}"
           provisioner_namespace=kube-system
-          preflight_namespace=agent-runtime-local-path-preflight
+          preflight_namespace="agent-runtime-local-path-preflight-${AGENT_RUNTIME_CI_RUN_IDENTITY:?}"
           helper_image=rancher/mirrored-library-busybox:1.37.0
           helper_digest_ref=rancher/mirrored-library-busybox@sha256:101b4afd76732482eff9b95cae5f94bcf295e521fbec4e01b69c5421f3f3f3e5
           helper_record="$RUNNER_TEMP/local-path-helper-evidence.json"
@@ -366,18 +397,21 @@ jobs:
             '{version:1,configured_image:$configured_image,immutable_digest_ref:$immutable_digest_ref,node_architecture:$node_architecture,platform_manifest_digest:$platform_manifest_digest,pull_policy:$pull_policy,multi_architecture_index:true,host_pull:{count:2,bound_seconds:120},k3d_platform_import:true,k3s_runtime_digest_pull:true,k3s_runtime_image_present:true,provisioner_ready:true,helper_pvc_bound:true,cleanup:{preflight_namespace_absent:true}}' > "$helper_record"
       - name: Prove two isolated full Stack instances
         env:
-          AGENT_RUNTIME_DEV_CONTEXT: k3d-agent-runtime-isolated
+          AGENT_RUNTIME_DEV_CONTEXT: ${{ env.AGENT_RUNTIME_CI_CONTEXT }}
           AGENT_RUNTIME_DEV_PROFILE: ci
           AGENT_RUNTIME_DEV_STACK_A: ci-isolation-a
           AGENT_RUNTIME_DEV_STACK_B: ci-isolation-b
           AGENT_RUNTIME_TWO_STACK_EVIDENCE: ${{ runner.temp }}/two-stack-evidence.json
           AGENT_RUNTIME_TWO_STACK_DIAGNOSTICS: ${{ runner.temp }}/two-stack-diagnostics
+          AGENT_RUNTIME_CI_CONTEXT: ${{ env.AGENT_RUNTIME_CI_CONTEXT }}
+          AGENT_RUNTIME_CI_REGISTRY_HOST: ${{ env.AGENT_RUNTIME_CI_REGISTRY_HOST }}
+          AGENT_RUNTIME_CI_REGISTRY_HOST_FROM_CLUSTER: ${{ env.AGENT_RUNTIME_CI_REGISTRY_HOST_FROM_CLUSTER }}
           AGENT_RUNTIME_CLUSTER_RUNTIME: k3d-v5.9.0
           AGENT_RUNTIME_CLUSTER_IMAGE: rancher/k3s:v1.33.9-k3s1@sha256:f17e43023cce2b9c613e198f26e73637bf734b5156d37c9f44819d97bac4d655
           AGENT_RUNTIME_REGISTRY_IMAGE: registry:2.8.3@sha256:a3d8aaa63ed8681a604f1dea0aa03f100d5895b6a58ace528858a7b332415373
           AGENT_RUNTIME_KUBECTL_VERSION: v1.33.9
           AGENT_RUNTIME_TILT_VERSION: v0.37.6
-        run: just two-stack-smoke ci k3d-agent-runtime-isolated "$RUNNER_TEMP/two-stack-evidence.json"
+        run: just two-stack-smoke ci "$AGENT_RUNTIME_CI_CONTEXT" "$RUNNER_TEMP/two-stack-evidence.json"
       - name: Upload two-Stack evidence and allowlisted diagnostics
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -397,8 +431,9 @@ jobs:
           set -euo pipefail
           ownership_record="$RUNNER_TEMP/k3d-ownership.json"
           [[ -f "$ownership_record" ]] || exit 0
-          cluster="$(jq -er '.cluster | select(. == "agent-runtime-isolated")' "$ownership_record")"
-          registry="$(jq -er '.registry | select(. == "agent-runtime-registry.localhost")' "$ownership_record")"
+          run_identity="$(jq -er '.run_identity | select(test("^[1-9][0-9]*-[1-9][0-9]*$"))' "$ownership_record")"
+          cluster="$(jq -er --arg run_identity "$run_identity" '.cluster | select(. == "ar-ci-" + $run_identity)' "$ownership_record")"
+          registry="$(jq -er --arg run_identity "$run_identity" '.registry | select(. == "ar-reg-" + $run_identity + ".localhost")' "$ownership_record")"
           registry_container="$(jq -er '.registry_container' "$ownership_record")"
           registry_container_id="$(jq -er '.registry_container_id' "$ownership_record")"
           cluster_server_container="$(jq -er '.cluster_server_container' "$ownership_record")"

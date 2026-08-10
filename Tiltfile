@@ -1,11 +1,18 @@
 # The only local topology starts from the typed Stack renderer. This file owns
 # no infrastructure schema and is intentionally locked to OrbStack.
-allow_k8s_contexts(['orbstack', 'k3d-agent-runtime-isolated'])
 config.define_string('stack', usage='sole local Stack identity')
 config.define_string('profile', usage='explicit local or CI Stack profile')
+config.define_string('ci-context', usage='generated private k3d CI context')
+config.define_string('ci-registry-host', usage='generated loopback CI registry host')
+config.define_string('ci-registry-host-from-cluster', usage='generated in-cluster CI registry host')
 cfg = config.parse()
 stack = cfg.get('stack', '')
 profile = cfg.get('profile', 'local')
+ci_context = cfg.get('ci-context', 'k3d-ar-ci-')
+ci_registry_host = cfg.get('ci-registry-host', 'localhost:0')
+ci_registry_host_from_cluster = cfg.get('ci-registry-host-from-cluster', 'k3d-ar-reg-.localhost:5000')
+ci_context_prefix = 'k3d-ar-ci-'
+allow_k8s_contexts(['orbstack', ci_context])
 
 if not stack:
     fail('pass -- --stack=<lowercase-dns-label>')
@@ -18,14 +25,20 @@ if stack_remainder:
     fail('--stack must be a lowercase DNS label up to 40 characters')
 if profile not in ['local', 'ci']:
     fail('--profile must be local or ci')
+if profile == 'ci':
+    if k8s_context() != ci_context or not ci_context.startswith(ci_context_prefix):
+        fail('CI profile must use its generated private agent-runtime k3d context')
+    ci_identity = ci_context[len(ci_context_prefix):]
+    if not ci_identity or not ci_registry_host.startswith('localhost:') or ci_registry_host_from_cluster != 'k3d-ar-reg-' + ci_identity + '.localhost:5000':
+        fail('CI infrastructure inputs must use generated agent-runtime k3d identities')
 ci_readiness_timeout = '12m' if profile == 'ci' else '10m'
 ci_settings(readiness_timeout=ci_readiness_timeout)
 if k8s_context() == 'orbstack' and profile != 'local':
     fail('the explicit orbstack context only permits the local profile')
-if k8s_context() == 'k3d-agent-runtime-isolated' and profile != 'ci':
+if k8s_context() == ci_context and profile != 'ci':
     fail('the isolated CI k3d context only permits the ci profile')
-if k8s_context() == 'k3d-agent-runtime-isolated':
-    default_registry('localhost:5111', host_from_cluster='k3d-agent-runtime-registry.localhost:5111')
+if k8s_context() == ci_context:
+    default_registry(ci_registry_host, host_from_cluster=ci_registry_host_from_cluster)
 
 stack_file = '.runtime/dev/' + stack + '.stack.json'
 local('go run ./tools/dev render --stack=' + stack + ' --output=' + stack_file, quiet=True)
