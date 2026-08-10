@@ -121,6 +121,7 @@ func (result PlanResult) Clone() PlanResult {
 
 // TransitionPlan is a centrally-produced atomic state replacement and its ordered derived effects.
 type TransitionPlan struct {
+	base    RuntimeState
 	kind    CommandKind
 	state   RuntimeState
 	effects EffectSet
@@ -250,7 +251,7 @@ func (planner *RuntimeStatePlanner) Plan(ctx context.Context, prior RuntimeState
 	if err := validateState(state); err != nil {
 		return TransitionPlan{}, err
 	}
-	plan := TransitionPlan{kind: mutation.mutation.kind, state: state, effects: effects, result: result}
+	plan := TransitionPlan{base: prior.Clone(), kind: mutation.mutation.kind, state: state, effects: effects, result: result}
 	if err := plan.Validate(); err != nil {
 		return TransitionPlan{}, err
 	}
@@ -924,5 +925,5 @@ func (planner *RuntimeStatePlanner) replayPlan(state RuntimeState, kind CommandK
 			result.Turn = turn
 		}
 	}
-	return TransitionPlan{kind: kind, state: state, result: result}, nil
+	return TransitionPlan{base: state.Clone(), kind: kind, state: state, result: result}, nil
 }
