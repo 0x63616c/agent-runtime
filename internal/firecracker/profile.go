@@ -199,7 +199,7 @@ func Compile(profile Profile) (Plan, error) {
 		vmID:            profile.VMID,
 		uid:             profile.UID,
 		gid:             profile.GID,
-		jailerArguments: []string{"--id", profile.VMID, "--exec-file", profile.Firecracker.Path, "--uid", strconv.FormatUint(uint64(profile.UID), 10), "--gid", strconv.FormatUint(uint64(profile.GID), 10), "--chroot-base-dir", profile.ChrootBaseDir, "--cgroup-version", "2", "--", "--api-sock", "/run/firecracker.socket"},
+		jailerArguments: baseJailerArguments(profile.VMID, profile.Firecracker.Path, profile.UID, profile.GID),
 		machine:         machine,
 		resources: ResourceEnforcement{
 			CgroupVersion:       2,
@@ -397,6 +397,10 @@ func hasPinnedLaunchPlan(plan Plan) bool {
 
 func validCompiledPlan(plan Plan) bool {
 	return plan.compiled && validVMID(plan.vmID) && plan.uid != 0 && plan.gid != 0 && validArtifact(plan.firecracker) && validArtifact(plan.jailer) && validArtifact(plan.kernel) && validArtifact(plan.rootFS) && validArtifact(plan.guestAgent) && len(plan.jailerArguments) > 0 && plan.machine.VCPUCount > 0 && plan.machine.MemoryMiB >= 128 && validResourceEnforcement(plan.resources) && plan.network.Mode == NetworkDenyAll && len(plan.network.Allowlist) == 0
+}
+
+func baseJailerArguments(vmID, firecrackerPath string, uid, gid uint32) []string {
+	return []string{"--id", vmID, "--exec-file", firecrackerPath, "--uid", strconv.FormatUint(uint64(uid), 10), "--gid", strconv.FormatUint(uint64(gid), 10), "--chroot-base-dir", declaredJailerBaseDirectory, "--cgroup-version", "2", "--", "--api-sock", "/run/firecracker.socket"}
 }
 
 func validResourceEnforcement(resources ResourceEnforcement) bool {
