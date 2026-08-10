@@ -96,6 +96,21 @@ func (ledger *PostgresLedger) RecordBootProbeLaunchStarted(ctx context.Context, 
 	return ledger.casBootProbeSession(ctx, identity, expected, next, now)
 }
 
+// LoadBootProbeSession recovers the canonical v2 session for a host instance.
+func (ledger *PostgresLedger) LoadBootProbeSession(ctx context.Context, hostInstanceSessionID string) (firecrackerbootprobev2.Snapshot, error) {
+	var version int64
+	var wire []byte
+	err := ledger.pool.QueryRow(ctx, `SELECT version,session_body FROM runtime.firecracker_boot_probe_sessions WHERE host_instance_session_id=$1`, hostInstanceSessionID).Scan(&version, &wire)
+	if err != nil {
+		return firecrackerbootprobev2.Snapshot{}, errors.Wrap(err, "load PostgreSQL v2 boot-probe session")
+	}
+	session, err := firecrackerbootprobev2.DecodeSession(wire)
+	if err != nil {
+		return firecrackerbootprobev2.Snapshot{}, err
+	}
+	return firecrackerbootprobev2.Snapshot{Version: uint64(version), Session: session, Wire: wire}, nil
+}
+
 func (ledger *PostgresLedger) casBootProbeSession(ctx context.Context, identity HostIdentity, expected firecrackerbootprobev2.Snapshot, successor firecrackerbootprobev2.Session, now time.Time) (firecrackerbootprobev2.Snapshot, error) {
 	expectedWire, err := firecrackerbootprobev2.EncodeSession(expected.Session)
 	if err != nil || !bytes.Equal(expectedWire, expected.Wire) {
