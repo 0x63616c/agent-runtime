@@ -31,7 +31,9 @@ func TestEvaluateDeniesMismatchedTenantToolActionOrPolicyBeforeCreatingApproval(
 
 	now := time.Date(2026, 8, 10, 16, 0, 0, 0, time.UTC)
 	for name, mutate := range map[string]func(*toolpolicy.Intent, *toolpolicy.Projection){
-		"tenant": func(intent *toolpolicy.Intent, _ *toolpolicy.Projection) { intent.Owner.TenantID = "tenant-b" },
+		"tenant": func(intent *toolpolicy.Intent, _ *toolpolicy.Projection) {
+			intent.Owner.TenantID = mustTenantID(t, "ten_AAAABBBBCCCCDDDD")
+		},
 		"tool":   func(intent *toolpolicy.Intent, _ *toolpolicy.Projection) { intent.ToolName = "other-tool" },
 		"action": func(intent *toolpolicy.Intent, _ *toolpolicy.Projection) { intent.ActionDigest = digest('4') },
 		"policy": func(intent *toolpolicy.Intent, _ *toolpolicy.Projection) { intent.PolicyRevisionDigest = digest('5') },
@@ -118,7 +120,7 @@ func validIntent(t *testing.T) toolpolicy.Intent {
 		t.Fatalf("parse tool call ID: %v", err)
 	}
 	return toolpolicy.Intent{
-		Owner:                approval.Actor{TenantID: "tenant-a", PrincipalID: "owner"},
+		Owner:                approval.Actor{TenantID: mustTenantID(t, "ten_1234567890ABCDEF"), PrincipalID: mustPrincipalID(t, "prn_1234567890ABCDEF")},
 		SessionID:            sessionID,
 		TurnID:               turnID,
 		ToolCallID:           toolCallID,
@@ -130,7 +132,7 @@ func validIntent(t *testing.T) toolpolicy.Intent {
 
 func validProjection(now time.Time) toolpolicy.Projection {
 	return toolpolicy.Projection{
-		TenantID:             "tenant-a",
+		TenantID:             "ten_1234567890ABCDEF",
 		ToolName:             "restart-service",
 		ActionDigest:         digest('1'),
 		PolicyRevisionDigest: digest('2'),
@@ -147,6 +149,24 @@ func validApprovalID(t *testing.T) approval.ID {
 		t.Fatalf("parse approval ID: %v", err)
 	}
 	return value
+}
+
+func mustTenantID(t *testing.T, value string) approval.TenantID {
+	t.Helper()
+	parsed, err := approval.ParseTenantID(value)
+	if err != nil {
+		t.Fatalf("parse tenant ID: %v", err)
+	}
+	return parsed
+}
+
+func mustPrincipalID(t *testing.T, value string) approval.PrincipalID {
+	t.Helper()
+	parsed, err := approval.ParsePrincipalID(value)
+	if err != nil {
+		t.Fatalf("parse principal ID: %v", err)
+	}
+	return parsed
 }
 
 func digest(character rune) string {

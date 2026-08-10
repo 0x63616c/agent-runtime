@@ -2,8 +2,11 @@
 package approval
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/cockroachdb/errors"
 )
@@ -37,6 +40,14 @@ type SessionID string
 // TurnID is the internal canonical Turn correlation reference.
 type TurnID string
 
+// TenantID is an internal opaque tenant reference. It must never contain an
+// arbitrary authentication subject or bearer token.
+type TenantID string
+
+// PrincipalID is an internal opaque principal reference. It must never contain
+// an arbitrary authentication subject or bearer token.
+type PrincipalID string
+
 // String returns the canonical internal Approval identity.
 func (id ID) String() string { return string(id) }
 
@@ -48,6 +59,12 @@ func (id SessionID) String() string { return string(id) }
 
 // String returns the canonical internal Turn reference.
 func (id TurnID) String() string { return string(id) }
+
+// String returns the canonical internal tenant reference.
+func (id TenantID) String() string { return string(id) }
+
+// String returns the canonical internal principal reference.
+func (id PrincipalID) String() string { return string(id) }
 
 // ParseID validates one canonical internal Approval identity.
 func ParseID(value string) (ID, error) {
@@ -81,6 +98,22 @@ func ParseTurnID(value string) (TurnID, error) {
 	return TurnID(value), nil
 }
 
+// ParseTenantID validates one canonical internal tenant reference.
+func ParseTenantID(value string) (TenantID, error) {
+	if !validID(value, "ten_") {
+		return "", errors.New("parse approval tenant ID: invalid identifier")
+	}
+	return TenantID(value), nil
+}
+
+// ParsePrincipalID validates one canonical internal principal reference.
+func ParsePrincipalID(value string) (PrincipalID, error) {
+	if !validID(value, "prn_") {
+		return "", errors.New("parse approval principal ID: invalid identifier")
+	}
+	return PrincipalID(value), nil
+}
+
 func validID(value, prefix string) bool {
 	payload := strings.TrimPrefix(value, prefix)
 	if len(payload) != 16 || prefix+payload != value {
@@ -96,13 +129,13 @@ func validID(value, prefix string) bool {
 
 // Actor is the exact tenant/principal decision boundary. Admin is tenant-scoped only.
 type Actor struct {
-	TenantID    string
-	PrincipalID string
+	TenantID    TenantID
+	PrincipalID PrincipalID
 	Admin       bool
 }
 
 func (actor Actor) valid() bool {
-	return safeReference(actor.TenantID) && safeReference(actor.PrincipalID)
+	return validID(actor.TenantID.String(), "ten_") && validID(actor.PrincipalID.String(), "prn_")
 }
 
 // Scope carries only an immutable capability description digest and two bounded narrowing controls.
@@ -197,11 +230,11 @@ type DecisionCommand struct {
 }
 
 type decisionRecord struct {
-	actor          Actor
-	idempotencyKey string
-	decision       Decision
-	grantedScope   Scope
-	decidedAt      time.Time
+	actor                Actor
+	idempotencyKeyDigest string
+	decision             Decision
+	grantedScope         Scope
+	decidedAt            time.Time
 }
 
 // Approval is an immutable value snapshot. It has no execution callback or tool adapter.
@@ -257,7 +290,7 @@ func (value Approval) Decide(actor Actor, command DecisionCommand, now time.Time
 		return Approval{}, errors.New("deny approval decision: granted scope must be absent")
 	}
 	value.hasDecision = true
-	value.decision = decisionRecord{actor: actor, idempotencyKey: command.IdempotencyKey, decision: command.Decision, grantedScope: command.GrantedScope, decidedAt: now}
+	value.decision = decisionRecord{actor: actor, idempotencyKeyDigest: idempotencyDigest(command.IdempotencyKey), decision: command.Decision, grantedScope: command.GrantedScope, decidedAt: now}
 	value.terminalAt = now
 	if command.Decision == DecisionApproved {
 		value.state = StateApproved
@@ -321,12 +354,19 @@ func (value Approval) ExpiresAt() time.Time { return value.proposal.ExpiresAt }
 // ProposedScope returns the immutable bounded proposed scope.
 func (value Approval) ProposedScope() Scope { return value.proposal.ProposedScope }
 
-// Decision returns a copied decision record when a human decision was recorded.
-func (value Approval) Decision() *DecisionCommand {
+// DecisionRecord is the redacted persisted decision projection. It deliberately
+// omits caller idempotency material, which is retained only as a private digest.
+type DecisionRecord struct {
+	Decision     Decision
+	GrantedScope Scope
+}
+
+// Decision returns a copied redacted decision record when a human decision was recorded.
+func (value Approval) Decision() *DecisionRecord {
 	if !value.hasDecision {
 		return nil
 	}
-	return &DecisionCommand{IdempotencyKey: value.decision.idempotencyKey, Decision: value.decision.decision, GrantedScope: value.decision.grantedScope}
+	return &DecisionRecord{Decision: value.decision.decision, GrantedScope: value.decision.grantedScope}
 }
 
 func (value Approval) authorized(actor Actor) bool {
@@ -366,7 +406,7 @@ func (value Approval) endPending(next State, now time.Time) (Approval, error) {
 }
 
 func (value Approval) matches(actor Actor, command DecisionCommand) bool {
-	return value.hasDecision && value.decision.actor == actor && value.decision.idempotencyKey == command.IdempotencyKey && value.decision.decision == command.Decision && value.decision.grantedScope == command.GrantedScope
+	return value.hasDecision && value.decision.actor == actor && value.decision.idempotencyKeyDigest == idempotencyDigest(command.IdempotencyKey) && value.decision.decision == command.Decision && value.decision.grantedScope == command.GrantedScope
 }
 
 func validateProposal(proposal Proposal) error {
@@ -377,7 +417,7 @@ func validateProposal(proposal Proposal) error {
 }
 
 func validateDecisionCommand(command DecisionCommand) error {
-	if !safeReference(command.IdempotencyKey) || (command.Decision != DecisionApproved && command.Decision != DecisionDenied) {
+	if !validIdempotencyKey(command.IdempotencyKey) || (command.Decision != DecisionApproved && command.Decision != DecisionDenied) {
 		return errors.New("approval decision command is invalid")
 	}
 	return nil
@@ -395,17 +435,13 @@ func validDigest(value string) bool {
 	return true
 }
 
-func safeReference(value string) bool {
-	if len(value) == 0 || len(value) > maxIdentityBytes {
-		return false
-	}
-	for _, character := range value {
-		if (character >= 'a' && character <= 'z') || (character >= 'A' && character <= 'Z') || (character >= '0' && character <= '9') || character == '-' || character == '_' || character == '.' {
-			continue
-		}
-		return false
-	}
-	return true
+func validIdempotencyKey(value string) bool {
+	return len(value) > 0 && len(value) <= maxIdentityBytes && utf8.ValidString(value) && !strings.ContainsAny(value, "\x00\r\n")
+}
+
+func idempotencyDigest(value string) string {
+	sum := sha256.Sum256([]byte("agent-runtime/approval-idempotency/v1\x00" + value))
+	return "sha256:" + hex.EncodeToString(sum[:])
 }
 
 func validUTC(value time.Time) bool { return !value.IsZero() && value.Location() == time.UTC }

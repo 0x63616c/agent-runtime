@@ -2,6 +2,8 @@ package approval_test
 
 import (
 	"errors"
+	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -14,9 +16,9 @@ func TestApprovalOwnerOrTenantAdminMayInspectAndDecideExactlyOnce(t *testing.T) 
 	if pending.ID().String() != "appr_1234567890ABCDEF" || pending.ActionDigest() != "sha256:1111111111111111111111111111111111111111111111111111111111111111" {
 		t.Fatalf("immutable approval identity/action projection = %q %q", pending.ID(), pending.ActionDigest())
 	}
-	owner := approval.Actor{TenantID: "tenant-a", PrincipalID: "owner"}
-	admin := approval.Actor{TenantID: "tenant-a", PrincipalID: "admin", Admin: true}
-	other := approval.Actor{TenantID: "tenant-a", PrincipalID: "other"}
+	owner := ownerActor(t)
+	admin := adminActor(t)
+	other := otherActor(t)
 	if _, err := pending.Inspect(owner, pending.CreatedAt()); err != nil {
 		t.Fatalf("owner inspect: %v", err)
 	}
@@ -53,7 +55,7 @@ func TestApprovalOwnerOrTenantAdminMayInspectAndDecideExactlyOnce(t *testing.T) 
 
 func TestApprovalRefusesBroadenedScopeAndLateDecision(t *testing.T) {
 	pending := validApproval(t)
-	owner := approval.Actor{TenantID: "tenant-a", PrincipalID: "owner"}
+	owner := ownerActor(t)
 	fakeClock, err := clock.NewFake(pending.CreatedAt())
 	if err != nil {
 		t.Fatalf("new fake clock: %v", err)
@@ -75,19 +77,19 @@ func TestApprovalRefusesBroadenedScopeAndLateDecision(t *testing.T) {
 
 func TestTenantAdminMayDenyAnotherOwnerApprovalInsideTheSameTenant(t *testing.T) {
 	pending := validApproval(t)
-	admin := approval.Actor{TenantID: "tenant-a", PrincipalID: "admin", Admin: true}
+	admin := adminActor(t)
 	denied, err := pending.Decide(admin, approval.DecisionCommand{IdempotencyKey: "deny-1", Decision: approval.DecisionDenied}, pending.CreatedAt().Add(time.Minute))
 	if err != nil || denied.State() != approval.StateDenied {
 		t.Fatalf("tenant-admin denial = %#v, %v", denied, err)
 	}
-	if _, err := pending.Inspect(approval.Actor{TenantID: "tenant-b", PrincipalID: "admin", Admin: true}, pending.CreatedAt()); !errors.Is(err, approval.ErrNotFoundOrDenied) {
+	if _, err := pending.Inspect(actor(t, "AAAABBBBCCCCDDDD", "3333444455556666", true), pending.CreatedAt()); !errors.Is(err, approval.ErrNotFoundOrDenied) {
 		t.Fatalf("cross-tenant admin inspect = %v, want safe refusal", err)
 	}
 }
 
 func TestApprovalReplaysExactRecordedDecisionAfterExpiryWithoutReopeningIt(t *testing.T) {
 	pending := validApproval(t)
-	owner := approval.Actor{TenantID: "tenant-a", PrincipalID: "owner"}
+	owner := ownerActor(t)
 	command := approval.DecisionCommand{
 		IdempotencyKey: "approve-1", Decision: approval.DecisionApproved,
 		GrantedScope: approval.Scope{CapabilityDigest: pending.ProposedScope().CapabilityDigest, MaximumUses: 1, ExpiresAt: pending.ExpiresAt().Add(-time.Minute)},
@@ -108,7 +110,7 @@ func TestApprovalCancellationAndInvalidationAreTerminalWithoutToolExecution(t *t
 	if err != nil || cancelled.State() != approval.StateCancelled || cancelled.Decision() != nil {
 		t.Fatalf("cancel = %#v, %v", cancelled, err)
 	}
-	if _, err := cancelled.Decide(approval.Actor{TenantID: "tenant-a", PrincipalID: "owner"}, approval.DecisionCommand{IdempotencyKey: "late", Decision: approval.DecisionDenied}, pending.CreatedAt().Add(2*time.Minute)); !errors.Is(err, approval.ErrConflict) {
+	if _, err := cancelled.Decide(ownerActor(t), approval.DecisionCommand{IdempotencyKey: "late", Decision: approval.DecisionDenied}, pending.CreatedAt().Add(2*time.Minute)); !errors.Is(err, approval.ErrConflict) {
 		t.Fatalf("cancelled decision = %v, want conflict", err)
 	}
 	invalidated, err := pending.Invalidate(pending.CreatedAt().Add(time.Minute))
@@ -125,7 +127,7 @@ func TestApprovalCancellationAndInvalidationAreTerminalWithoutToolExecution(t *t
 
 func TestApprovalInspectionExpiresWithFakeClockAndExposesSafeContext(t *testing.T) {
 	pending := validApproval(t)
-	owner := approval.Actor{TenantID: "tenant-a", PrincipalID: "owner"}
+	owner := ownerActor(t)
 	fakeClock, err := clock.NewFake(pending.CreatedAt())
 	if err != nil {
 		t.Fatalf("new fake clock: %v", err)
@@ -160,20 +162,35 @@ func TestApprovalRejectsArbitrarySummaryPayload(t *testing.T) {
 }
 
 func TestApprovalRefusesSecretLikeIdentityOrIdempotencyBeforeRetention(t *testing.T) {
-	proposal := validProposal(t)
-	proposal.Owner.PrincipalID = "Authorization: Bearer secret"
-	if _, err := approval.New(proposal); err == nil {
-		t.Fatal("secret-like principal identity was accepted")
+	for _, token := range []string{
+		"Authorization: Bearer secret",
+		"authorization-bearer-topsecret",
+		"Authorization.Bearer.topsecret",
+		"eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJvd25lciJ9.signature",
+		"sk_live_1234567890ABCDEF",
+	} {
+		t.Run(token, func(t *testing.T) {
+			proposal := validProposal(t)
+			proposal.Owner.PrincipalID = approval.PrincipalID(token)
+			if _, err := approval.New(proposal); err == nil {
+				t.Fatal("secret-like principal identity was accepted")
+			}
+		})
 	}
 
 	pending := validApproval(t)
-	owner := approval.Actor{TenantID: "tenant-a", PrincipalID: "owner"}
-	decided, err := pending.Decide(owner, approval.DecisionCommand{IdempotencyKey: "Authorization: Bearer secret", Decision: approval.DecisionDenied}, pending.CreatedAt().Add(time.Minute))
-	if err == nil || decided != (approval.Approval{}) {
-		t.Fatalf("secret-like idempotency key recorded a decision: %#v, %v", decided, err)
+	owner := ownerActor(t)
+	secretKey := "Authorization: Bearer secret"
+	decided, err := pending.Decide(owner, approval.DecisionCommand{IdempotencyKey: secretKey, Decision: approval.DecisionDenied}, pending.CreatedAt().Add(time.Minute))
+	if err != nil || decided.State() != approval.StateDenied {
+		t.Fatalf("secret-like idempotency key was not safely accepted: %#v, %v", decided, err)
 	}
-	if pending.Decision() != nil || pending.State() != approval.StatePending {
-		t.Fatalf("rejected idempotency key changed approval state: %#v", pending)
+	if decision := decided.Decision(); decision == nil || strings.Contains(fmt.Sprintf("%#v", decision), secretKey) || strings.Contains(fmt.Sprintf("%#v", decided), secretKey) {
+		t.Fatalf("secret-like idempotency key was retained or re-exposed: decision=%#v approval=%#v", decision, decided)
+	}
+	replayed, err := decided.Decide(owner, approval.DecisionCommand{IdempotencyKey: secretKey, Decision: approval.DecisionDenied}, decided.ExpiresAt().Add(time.Minute))
+	if err != nil || replayed != decided {
+		t.Fatalf("secret-key replay changed terminal decision: %#v, %v", replayed, err)
 	}
 }
 
@@ -198,7 +215,7 @@ func validProposal(t *testing.T) approval.Proposal {
 	createdAt := time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC)
 	return approval.Proposal{
 		ID:                   approvalID,
-		Owner:                approval.Actor{TenantID: "tenant-a", PrincipalID: "owner"},
+		Owner:                ownerActor(t),
 		SessionID:            sessionID,
 		TurnID:               turnID,
 		ToolCallID:           toolCallID,
@@ -209,4 +226,32 @@ func validProposal(t *testing.T) approval.Proposal {
 		CreatedAt:            createdAt,
 		ExpiresAt:            createdAt.Add(5 * time.Minute),
 	}
+}
+
+func ownerActor(t *testing.T) approval.Actor {
+	t.Helper()
+	return actor(t, "1234567890ABCDEF", "1234567890ABCDEF", false)
+}
+
+func adminActor(t *testing.T) approval.Actor {
+	t.Helper()
+	return actor(t, "1234567890ABCDEF", "FEDCBA0987654321", true)
+}
+
+func otherActor(t *testing.T) approval.Actor {
+	t.Helper()
+	return actor(t, "1234567890ABCDEF", "AAAABBBBCCCCDDDD", false)
+}
+
+func actor(t *testing.T, tenantPayload, principalPayload string, admin bool) approval.Actor {
+	t.Helper()
+	tenant, err := approval.ParseTenantID("ten_" + tenantPayload)
+	if err != nil {
+		t.Fatalf("parse tenant ID: %v", err)
+	}
+	principal, err := approval.ParsePrincipalID("prn_" + principalPayload)
+	if err != nil {
+		t.Fatalf("parse principal ID: %v", err)
+	}
+	return approval.Actor{TenantID: tenant, PrincipalID: principal, Admin: admin}
 }

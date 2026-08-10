@@ -100,7 +100,7 @@ func Evaluate(intent Intent, projection Projection, approvalID approval.ID, now 
 func denied() Disposition { return Disposition{outcome: OutcomeDenied} }
 
 func matches(intent Intent, projection Projection) bool {
-	return intent.Owner.TenantID == projection.TenantID &&
+	return intent.Owner.TenantID.String() == projection.TenantID &&
 		intent.ToolName == projection.ToolName &&
 		intent.ActionDigest == projection.ActionDigest &&
 		intent.PolicyRevisionDigest == projection.PolicyRevisionDigest
@@ -144,7 +144,9 @@ func validApprovalID(value approval.ID) bool {
 }
 
 func validActor(actor approval.Actor) bool {
-	return boundedIdentity(actor.TenantID) && boundedIdentity(actor.PrincipalID)
+	_, tenantErr := approval.ParseTenantID(actor.TenantID.String())
+	_, principalErr := approval.ParsePrincipalID(actor.PrincipalID.String())
+	return tenantErr == nil && principalErr == nil
 }
 
 func validScope(scope approval.Scope) bool {
