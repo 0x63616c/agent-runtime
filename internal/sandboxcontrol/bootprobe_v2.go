@@ -25,6 +25,22 @@ func (ledger *PostgresLedger) CreateBootProbeSession(ctx context.Context, identi
 		if err != nil {
 			return err
 		}
+		if op.State == StateAccepted {
+			if op.Assignment.FencingToken == ^uint64(0) {
+				return ErrStaleFence
+			}
+			op.Assignment = Assignment{HostID: host.HostID, HostGeneration: host.Generation, AssignmentID: "v2-" + hostInstanceSessionID, LeaseEpoch: 1, FencingToken: op.Assignment.FencingToken + 1, LeaseExpiresAt: initial.ExpiresAt.UTC()}
+			op.State = StateDispatched
+			op.Version++
+			if err := updateOperation(ctx, tx, op); err != nil {
+				return err
+			}
+			if err := insertOutbox(ctx, tx, op, OutboxDispatched); err != nil {
+				return err
+			}
+			initial.LeaseEpoch = op.Assignment.LeaseEpoch
+			initial.FencingToken = op.Assignment.FencingToken
+		}
 		binding := firecrackerbootprobev2.Binding{HostID: host.HostID, HostGeneration: host.Generation, AssignmentID: op.Assignment.AssignmentID, Tenant: op.Tenant, Principal: op.Principal, SandboxID: op.TargetID, OperationID: op.ID, OperationKind: op.Kind, EffectiveSpecDigest: digestToSandbox(op.EffectiveSpecDigest), CapabilityDigest: digestToSandbox(op.CapabilityDigest), CanonicalRequestDigest: digestToSandbox(op.CanonicalDigest)}
 		if op.Assignment.HostID != host.HostID || op.Assignment.HostGeneration != host.Generation || op.Assignment.LeaseEpoch != initial.LeaseEpoch || op.Assignment.FencingToken != initial.FencingToken || !now.Before(op.Assignment.LeaseExpiresAt) {
 			return ErrStaleFence
