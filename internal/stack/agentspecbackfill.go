@@ -123,6 +123,14 @@ var staticAgentSpecBackfillTeardownInventory = []string{
 	"agentspecbackfill-validating-admission-policy",
 }
 
+var staticAgentSpecBackfillRoutes = map[string]StaticAgentSpecBackfillRoute{
+	"kubernetes_api": {Kind: "kubernetes_api", Namespace: "kube-system", Service: "kubernetes", PortName: "https", PortNumber: 443, Protocol: "TCP"},
+	"database":       {Kind: "database", Namespace: "runtime", Service: "postgres", PortName: "postgres", PortNumber: 5432, Protocol: "TCP"},
+	"blob":           {Kind: "blob", Namespace: "runtime", Service: "object-store", PortName: "https", PortNumber: 443, Protocol: "TCP"},
+	"dns_tcp":        {Kind: "dns_tcp", Namespace: "kube-system", Service: "kube-dns", PortName: "dns-tcp", PortNumber: 53, Protocol: "TCP"},
+	"dns_udp":        {Kind: "dns_udp", Namespace: "kube-system", Service: "kube-dns", PortName: "dns-udp", PortNumber: 53, Protocol: "UDP"},
+}
+
 func validateStaticAgentSpecBackfill(declaration StaticAgentSpecBackfillV1) error {
 	if declaration.Version != 1 || !sha256Pattern.MatchString(declaration.CRDDigest) {
 		return errors.New("validate static AgentSpecBackfill declaration: version and CRD digest are required")
@@ -217,14 +225,9 @@ func validateStaticAgentSpecBackfillRoutes(routes []StaticAgentSpecBackfillRoute
 		if !resourceIDPattern.MatchString(route.Namespace) || !resourceIDPattern.MatchString(route.Service) || !resourceIDPattern.MatchString(route.PortName) || route.PortNumber < 1 || route.PortNumber > 65535 || !sha256Pattern.MatchString(route.AuthorityDigest) {
 			return errors.New("validate static AgentSpecBackfill declaration: routes must declare bounded names, ports, and authority digests")
 		}
-		if route.Protocol != "TCP" && route.Protocol != "UDP" {
-			return errors.New("validate static AgentSpecBackfill declaration: route protocol is invalid")
-		}
-		if route.Kind == "dns_tcp" && (route.Protocol != "TCP" || route.PortNumber != 53) || route.Kind == "dns_udp" && (route.Protocol != "UDP" || route.PortNumber != 53) {
-			return errors.New("validate static AgentSpecBackfill declaration: DNS routes must use their exact protocol and port 53")
-		}
-		if (route.Kind == "kubernetes_api" || route.Kind == "database" || route.Kind == "blob") && route.Protocol != "TCP" {
-			return errors.New("validate static AgentSpecBackfill declaration: API, database, and blob routes must use TCP")
+		expected := staticAgentSpecBackfillRoutes[route.Kind]
+		if route.Namespace != expected.Namespace || route.Service != expected.Service || route.PortName != expected.PortName || route.PortNumber != expected.PortNumber || route.Protocol != expected.Protocol {
+			return errors.New("validate static AgentSpecBackfill declaration: route endpoint, port, and protocol must match the fixed reviewed authority")
 		}
 	}
 	for _, present := range required {
