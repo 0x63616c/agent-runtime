@@ -1,7 +1,6 @@
 package temporalpayloaduiprocess
 
 import (
-	"bytes"
 	"context"
 	"net"
 	"net/http"
@@ -10,6 +9,8 @@ import (
 	"github.com/0x63616c/agent-runtime/temporalpayload"
 	"github.com/cockroachdb/errors"
 )
+
+const shutdownSchedulingAllowance = 5 * time.Second
 
 // Serve runs the authenticated Temporal UI inspection handler on an already-owned listener.
 func Serve(ctx context.Context, config Config, store temporalpayload.BlobStore, authorizer temporalpayload.UIRequestAuthorizer, listener net.Listener) error {
@@ -43,9 +44,15 @@ func Serve(ctx context.Context, config Config, store temporalpayload.BlobStore, 
 		}
 		return errors.Wrap(err, "serve Temporal UI payload process")
 	case <-ctx.Done():
-		shutdownContext, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+		shutdownContext, cancel := context.WithTimeout(context.WithoutCancel(ctx), shutdownTimeout(config.ioTimeout))
 		defer cancel()
 		if err := server.Shutdown(shutdownContext); err != nil {
+			if closeErr := server.Close(); closeErr != nil && !errors.Is(closeErr, http.ErrServerClosed) {
+				return errors.Join(errors.Wrap(err, "stop Temporal UI payload process"), errors.Wrap(closeErr, "force-close Temporal UI payload process"))
+			}
+			if serveErr := <-result; serveErr != nil && !errors.Is(serveErr, http.ErrServerClosed) {
+				return errors.Join(errors.Wrap(err, "stop Temporal UI payload process"), errors.Wrap(serveErr, "force-close Temporal UI payload process"))
+			}
 			return errors.Wrap(err, "stop Temporal UI payload process")
 		}
 		if err := <-result; err != nil && !errors.Is(err, http.ErrServerClosed) {
@@ -55,43 +62,56 @@ func Serve(ctx context.Context, config Config, store temporalpayload.BlobStore, 
 	}
 }
 
-type bufferedResponseWriter struct {
-	header http.Header
-	status int
-	body   bytes.Buffer
-}
-
-func newBufferedResponseWriter() *bufferedResponseWriter {
-	return &bufferedResponseWriter{header: make(http.Header), status: http.StatusOK}
-}
-
-func (writer *bufferedResponseWriter) Header() http.Header { return writer.header }
-
-func (writer *bufferedResponseWriter) WriteHeader(status int) {
-	if writer.status != http.StatusOK || writer.body.Len() > 0 {
-		return
-	}
-	writer.status = status
-}
-
-func (writer *bufferedResponseWriter) Write(value []byte) (int, error) {
-	return writer.body.Write(value)
+func shutdownTimeout(ioTimeout time.Duration) time.Duration {
+	return ioTimeout + shutdownSchedulingAllowance
 }
 
 func redactDiagnostics(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		buffered := newBufferedResponseWriter()
-		next.ServeHTTP(buffered, request)
-		for key, values := range buffered.header {
-			writer.Header()[key] = append([]string(nil), values...)
-		}
-		if buffered.status >= http.StatusBadRequest && buffered.status != http.StatusUnauthorized && buffered.status != http.StatusForbidden && buffered.status != http.StatusNotFound {
-			writer.Header().Set("Content-Type", "text/plain; charset=utf-8")
-			writer.WriteHeader(buffered.status)
-			_, _ = writer.Write([]byte("Temporal UI payload transformation failed\n"))
-			return
-		}
-		writer.WriteHeader(buffered.status)
-		_, _ = writer.Write(buffered.body.Bytes())
+		response := &diagnosticResponseWriter{ResponseWriter: writer}
+		next.ServeHTTP(response, request)
+		response.finish()
 	})
+}
+
+type diagnosticResponseWriter struct {
+	http.ResponseWriter
+	status    int
+	committed bool
+}
+
+func (writer *diagnosticResponseWriter) WriteHeader(status int) {
+	if writer.status != 0 {
+		return
+	}
+	writer.status = status
+	if redactsDiagnostics(status) {
+		return
+	}
+	writer.ResponseWriter.WriteHeader(status)
+	writer.committed = true
+}
+
+func (writer *diagnosticResponseWriter) Write(value []byte) (int, error) {
+	if writer.status == 0 {
+		writer.WriteHeader(http.StatusOK)
+	}
+	if redactsDiagnostics(writer.status) {
+		return len(value), nil
+	}
+	return writer.ResponseWriter.Write(value)
+}
+
+func (writer *diagnosticResponseWriter) finish() {
+	if writer.status == 0 || writer.committed || !redactsDiagnostics(writer.status) {
+		return
+	}
+	writer.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	writer.ResponseWriter.WriteHeader(writer.status)
+	writer.committed = true
+	_, _ = writer.ResponseWriter.Write([]byte("Temporal UI payload transformation failed\n"))
+}
+
+func redactsDiagnostics(status int) bool {
+	return status >= http.StatusBadRequest && status != http.StatusUnauthorized && status != http.StatusForbidden && status != http.StatusNotFound
 }

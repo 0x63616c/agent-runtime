@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	stderrors "errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -214,6 +215,71 @@ func TestServeBoundsUIRequestBodiesByTheDeclaredBlobPolicy(t *testing.T) {
 	}
 }
 
+func TestServeCompletesAnInFlightBoundedBlobReadDuringCancellation(t *testing.T) {
+	config, err := temporalpayloaduiprocess.Parse(strings.NewReader(strings.Replace(validConfig, `1000`, `1`, 1)))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	backing := temporalpayload.NewMemoryBlobStore()
+	producer, err := temporalpayload.NewCodec(backing,
+		temporalpayload.WithBlobPrefix("runtime/payloads"),
+		temporalpayload.WithMaximumBlobBytes(1<<20),
+		temporalpayload.WithIOTimeout(time.Second),
+	)
+	if err != nil {
+		t.Fatalf("NewCodec(producer): %v", err)
+	}
+	remote, err := producer.DataConverter().ToPayload(payloadValue{Bytes: incompressibleBytes(64 << 10)})
+	if err != nil {
+		t.Fatalf("ToPayload(remote): %v", err)
+	}
+	if got := string(remote.Metadata[converter.MetadataEncoding]); got != temporalpayload.EncodingRemote {
+		t.Fatalf("remote encoding = %q, want %q", got, temporalpayload.EncodingRemote)
+	}
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("Listen: %v", err)
+	}
+	store := &blockingStore{started: make(chan struct{}), finished: make(chan struct{})}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		done <- temporalpayloaduiprocess.Serve(ctx, config, store, temporalpayload.UIRequestAuthorizerFunc(testAuthorizer), listener)
+	}()
+
+	requestDone := make(chan error, 1)
+	go func() {
+		response, err := payloadRequest("http://"+listener.Addr().String()+"/decode", remote, "Bearer allowed")
+		if err == nil {
+			body, readErr := io.ReadAll(response.Body)
+			response.Body.Close()
+			if readErr != nil {
+				err = readErr
+			} else if response.StatusCode != http.StatusBadRequest {
+				err = fmt.Errorf("response status = %d, body = %q", response.StatusCode, body)
+			}
+		}
+		requestDone <- err
+	}()
+	select {
+	case <-store.started:
+	case err := <-requestDone:
+		t.Fatalf("payload request started no blob read: %v", err)
+	}
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatalf("Serve: %v", err)
+	}
+	select {
+	case <-store.finished:
+	default:
+		t.Fatal("bounded BlobStore read had not completed before Serve returned")
+	}
+	if err := <-requestDone; err != nil {
+		t.Fatalf("payload request: %v", err)
+	}
+}
+
 func parseConfig(t *testing.T) temporalpayloaduiprocess.Config {
 	t.Helper()
 	config, err := temporalpayloaduiprocess.Parse(strings.NewReader(validConfig))
@@ -225,22 +291,26 @@ func parseConfig(t *testing.T) temporalpayloaduiprocess.Config {
 
 func callEndpoint(t *testing.T, baseURL, path string, payload *commonpb.Payload, authorization string) *http.Response {
 	t.Helper()
-	body, err := protojson.Marshal(&commonpb.Payloads{Payloads: []*commonpb.Payload{payload}})
-	if err != nil {
-		t.Fatalf("marshal request: %v", err)
-	}
-	request, err := http.NewRequest(http.MethodPost, baseURL+path, bytes.NewReader(body))
-	if err != nil {
-		t.Fatalf("NewRequest: %v", err)
-	}
-	request.Header.Set("X-Namespace", "runtime-test")
-	request.Header.Set("Origin", "https://temporal.example")
-	request.Header.Set("Authorization", authorization)
-	response, err := http.DefaultClient.Do(request)
+	response, err := payloadRequest(baseURL+path, payload, authorization)
 	if err != nil {
 		t.Fatalf("Do: %v", err)
 	}
 	return response
+}
+
+func payloadRequest(url string, payload *commonpb.Payload, authorization string) (*http.Response, error) {
+	body, err := protojson.Marshal(&commonpb.Payloads{Payloads: []*commonpb.Payload{payload}})
+	if err != nil {
+		return nil, err
+	}
+	request, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	request.Header.Set("X-Namespace", "runtime-test")
+	request.Header.Set("Origin", "https://temporal.example")
+	request.Header.Set("Authorization", authorization)
+	return http.DefaultClient.Do(request)
 }
 
 func mustRead(t *testing.T, reader io.Reader) []byte {
@@ -271,6 +341,22 @@ type recordingStore struct {
 	err   error
 	mu    sync.Mutex
 	gets  int
+}
+
+type blockingStore struct {
+	started  chan struct{}
+	finished chan struct{}
+}
+
+func (*blockingStore) Put(context.Context, temporalpayload.BlobKey, []byte) error {
+	return stderrors.New("unexpected payload write")
+}
+
+func (store *blockingStore) Get(ctx context.Context, _ temporalpayload.BlobKey, _ int) ([]byte, error) {
+	close(store.started)
+	<-ctx.Done()
+	close(store.finished)
+	return nil, ctx.Err()
 }
 
 func (store *recordingStore) Put(ctx context.Context, key temporalpayload.BlobKey, value []byte) error {
