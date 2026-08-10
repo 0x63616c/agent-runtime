@@ -280,6 +280,25 @@ var _ = Describe("M1 deployment safety boundaries", func() {
 		Expect(proof.NetworkPolicy.Denied).To(Equal(3))
 		Expect(proof.Cleanup.NamespacesAbsent).To(BeTrue())
 		Expect(proof.Cleanup.LocalStateAbsent).To(BeTrue())
+
+		var contractProof struct {
+			ImplementationRevision string          `json:"implementation_revision"`
+			ProofProvenance        proofProvenance `json:"proof_provenance"`
+			RenderProfiles         []string        `json:"render_profiles"`
+			SchemaPolicyOwnership  bool            `json:"schema_policy_ownership"`
+			MigrationRollback      bool            `json:"migration_upgrade_rollback"`
+			RBACNegative           bool            `json:"rbac_negative"`
+			NetworkPolicyAdmission bool            `json:"network_policy_admission"`
+			Result                 string          `json:"result"`
+		}
+		Expect(json.Unmarshal([]byte(read("evidence/issue-14-m1-stack-contract-e2e.json")), &contractProof)).To(Succeed())
+		verifyRetainedProof("evidence/issue-14-m1-stack-contract-e2e.json", contractProof.ImplementationRevision, contractProof.ProofProvenance)
+		Expect(contractProof.RenderProfiles).To(ConsistOf("local", "ci", "production"))
+		Expect(contractProof.SchemaPolicyOwnership).To(BeTrue())
+		Expect(contractProof.MigrationRollback).To(BeTrue())
+		Expect(contractProof.RBACNegative).To(BeTrue())
+		Expect(contractProof.NetworkPolicyAdmission).To(BeTrue())
+		Expect(contractProof.Result).To(Equal("passed"))
 	})
 
 	It("never treats a failed or raced k3d create as authority to delete", func() {
