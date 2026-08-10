@@ -23,6 +23,8 @@ Implemented M3 behavior includes:
 - persisted exact-envelope replay across control or host restart;
 - a journal-before-effect reference host with lost receipt and lost result
   acknowledgement recovery;
+- a cancellable host daemon with an explicit poll interval, healthy verified
+  no-work observation, and bounded transient control retry;
 - host-signed results and ordered stdout/stderr integrity headers;
 - stale fence, rogue signature, altered duplicate, and sequence-gap refusal;
 - quarantine to an explicit uncertain state; and
@@ -44,5 +46,5 @@ Repository references:
 - `docs/reference/sandbox-host-control-v1.md` — exact trust and wire contract;
 - `docs/operations/sandbox-host-routing.md` — authority, deployment, rotation,
   recovery, cleanup, and disposable PostgreSQL proof; and
-- `deploy/sandboxhost/reference.example.json` — strict one-shot reference-host
+- `deploy/sandboxhost/reference.example.json` — strict reference-host
   declaration.
