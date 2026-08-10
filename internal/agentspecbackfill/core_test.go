@@ -2,6 +2,7 @@ package agentspecbackfill_test
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -14,10 +15,10 @@ func TestRequestUsesCanonicalDigestNameAndBoundedImmutableStatus(t *testing.T) {
 	if err != nil {
 		t.Fatalf("digest request: %v", err)
 	}
-	if digest != "sha256:873b7b017d3d2741db1060c80c9dc549b61f0ccf5826d9643f389374a89c4f77" {
+	if digest != "sha256:a6c4897e72695f6b4884080058c1ab90b2750c4e814ee6008e04a747abad7fc4" {
 		t.Fatalf("request digest = %q", digest)
 	}
-	if name, err := request.Name(); err != nil || name != "asb-q45xwal5hutudwyqmdeazhofjg3b6dgplatnszb7hcjxjke4j53q" {
+	if name, err := request.Name(); err != nil || name != "asb-u3cis7tsnfpwwseebaafrqnlsczhkdcoqfhomaeoastupk5np7ca" {
 		t.Fatalf("request name = %q, %v", name, err)
 	}
 	status := agentbackfillVerifiedStatus(t, request)
@@ -32,6 +33,21 @@ func TestRequestUsesCanonicalDigestNameAndBoundedImmutableStatus(t *testing.T) {
 	if err := changed.ValidateTransitionFrom(status); err == nil {
 		t.Fatal("terminal status transition succeeded")
 	}
+	farFuture := request
+	farFuture.ExpiresAt = farFuture.CreatedAt.Add(10*time.Minute + time.Nanosecond)
+	if err := farFuture.ValidateAt(request.CreatedAt); err == nil {
+		t.Fatal("far-future request was accepted")
+	}
+	upper := request
+	upper.StackDigest = "sha256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+	if _, err := upper.Canonical(); err == nil {
+		t.Fatal("uppercase digest was accepted")
+	}
+	unknown := status
+	unknown.Phase, unknown.Reason = agentspecbackfill.PhaseRefused, "unknown"
+	if _, err := unknown.Canonical(); err == nil {
+		t.Fatal("unknown refusal reason was canonicalized")
+	}
 }
 
 func TestVerifyRefusesFrozenSnapshotAndImmutableContentFailures(t *testing.T) {
@@ -40,13 +56,16 @@ func TestVerifyRefusesFrozenSnapshotAndImmutableContentFailures(t *testing.T) {
 		Snapshot:  agentspecbackfill.Snapshot{Fingerprint: request.SnapshotFingerprint, Count: 1},
 		Revisions: []agentspecbackfill.LegacyRevision{{TenantID: "tenant_a", AgentID: "agent_0000000000000001", RevisionID: "arev_0000000000000001", SpecificationDigest: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", SpecificationSizeBytes: 42}},
 	}
-	for _, failure := range []error{agentspecbackfill.ErrStaleSnapshot, agentspecbackfill.ErrWrongOwner, agentspecbackfill.ErrContentIntegrity} {
-		status, err := agentspecbackfill.Verify(context.Background(), request, fixedReader{set: set}, failingVerifier{err: failure}, time.Date(2026, 8, 9, 0, 1, 0, 0, time.UTC))
+	for _, failure := range []struct {
+		err    error
+		reason agentspecbackfill.Reason
+	}{{agentspecbackfill.ErrStaleSnapshot, agentspecbackfill.RefusalSnapshot}, {agentspecbackfill.ErrWrongOwner, agentspecbackfill.RefusalContent}, {agentspecbackfill.ErrContentIntegrity, agentspecbackfill.RefusalContent}} {
+		status, err := agentspecbackfill.Verify(context.Background(), request, fixedReader{set: set}, failingVerifier{err: failure.err}, time.Date(2026, 8, 9, 0, 1, 0, 0, time.UTC))
 		if err != nil {
-			t.Fatalf("verify %v: %v", failure, err)
+			t.Fatalf("verify %v: %v", failure.err, err)
 		}
-		if status.Phase != agentspecbackfill.PhaseRefused || status.Reason != agentspecbackfill.RefusalContent {
-			t.Fatalf("failure %v status = %#v", failure, status)
+		if status.Phase != agentspecbackfill.PhaseRefused || status.Reason != failure.reason {
+			t.Fatalf("failure %v status = %#v", failure.err, status)
 		}
 	}
 	stale := set
@@ -61,6 +80,26 @@ func TestVerifyRefusesFrozenSnapshotAndImmutableContentFailures(t *testing.T) {
 	if err != nil || status.Phase != agentspecbackfill.PhaseRefused || status.Reason != agentspecbackfill.RefusalExpired {
 		t.Fatalf("expired request = %#v, %v", status, err)
 	}
+	reader := &countingReader{set: set}
+	status, err = agentspecbackfill.Verify(context.Background(), expired, reader, passingVerifier{}, time.Date(2026, 8, 9, 0, 1, 0, 0, time.UTC))
+	if err != nil || status.Phase != agentspecbackfill.PhaseRefused || status.Reason != agentspecbackfill.RefusalExpired || reader.calls != 0 {
+		t.Fatalf("expired request I/O = %#v, %v, calls=%d", status, err, reader.calls)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err = agentspecbackfill.Verify(ctx, request, fixedReader{set: set}, passingVerifier{}, time.Date(2026, 8, 9, 0, 1, 0, 0, time.UTC))
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancelled verification error = %v", err)
+	}
+	transient := errors.New("temporary reader failure")
+	_, err = agentspecbackfill.Verify(context.Background(), request, errorReader{err: transient}, passingVerifier{}, time.Date(2026, 8, 9, 0, 1, 0, 0, time.UTC))
+	if !errors.Is(err, transient) {
+		t.Fatalf("transient reader error = %v", err)
+	}
+	_, err = agentspecbackfill.Verify(context.Background(), request, fixedReader{set: set}, failingVerifier{err: transient}, time.Date(2026, 8, 9, 0, 1, 0, 0, time.UTC))
+	if !errors.Is(err, transient) {
+		t.Fatalf("transient verifier error = %v", err)
+	}
 }
 
 func TestArchiveIsRequestKeyedAndRetainsCertificateAbsentTerminalResult(t *testing.T) {
@@ -73,7 +112,7 @@ func TestArchiveIsRequestKeyedAndRetainsCertificateAbsentTerminalResult(t *testi
 	if bundle.CertificatePresent() {
 		t.Fatal("refused terminal result has certificate")
 	}
-	if key := bundle.Key("retained/preflight"); key != "retained/preflight/agentspecbackfill/v1/asb-q45xwal5hutudwyqmdeazhofjg3b6dgplatnszb7hcjxjke4j53q/sha256-873b7b017d3d2741db1060c80c9dc549b61f0ccf5826d9643f389374a89c4f77.cbor" {
+	if key := bundle.Key("retained/preflight"); key != "retained/preflight/agentspecbackfill/v1/asb-u3cis7tsnfpwwseebaafrqnlsczhkdcoqfhomaeoastupk5np7ca/sha256-a6c4897e72695f6b4884080058c1ab90b2750c4e814ee6008e04a747abad7fc4.cbor" {
 		t.Fatalf("archive key = %q", key)
 	}
 	if _, err := bundle.Canonical(); err != nil {
@@ -93,7 +132,7 @@ func TestArchiveIsRequestKeyedAndRetainsCertificateAbsentTerminalResult(t *testi
 }
 
 func validRequest() agentspecbackfill.Request {
-	return agentspecbackfill.Request{StackDigest: "sha256:1111111111111111111111111111111111111111111111111111111111111111", MigrationVersion: 4, MigrationArtifactDigest: "sha256:2222222222222222222222222222222222222222222222222222222222222222", ManifestDigest: "sha256:3333333333333333333333333333333333333333333333333333333333333333", ControllerImageDigest: "sha256:4444444444444444444444444444444444444444444444444444444444444444", SnapshotFingerprint: "sha256:5555555555555555555555555555555555555555555555555555555555555555", SnapshotCount: 1, FenceNonce: "MDEyMzQ1Njc4OWFiY2RlZg", StaticReadinessDigest: "sha256:6666666666666666666666666666666666666666666666666666666666666666", DatabaseAuthorityDigest: "sha256:7777777777777777777777777777777777777777777777777777777777777777", BlobReadCapabilityDigest: "sha256:8888888888888888888888888888888888888888888888888888888888888888", ExpiresAt: time.Date(2026, 8, 9, 0, 10, 0, 0, time.UTC)}
+	return agentspecbackfill.Request{StackDigest: "sha256:1111111111111111111111111111111111111111111111111111111111111111", MigrationVersion: 4, MigrationArtifactDigest: "sha256:2222222222222222222222222222222222222222222222222222222222222222", ManifestDigest: "sha256:3333333333333333333333333333333333333333333333333333333333333333", ControllerImageDigest: "sha256:4444444444444444444444444444444444444444444444444444444444444444", SnapshotFingerprint: "sha256:5555555555555555555555555555555555555555555555555555555555555555", SnapshotCount: 1, FenceNonce: "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY", StaticReadinessDigest: "sha256:6666666666666666666666666666666666666666666666666666666666666666", DatabaseAuthorityDigest: "sha256:7777777777777777777777777777777777777777777777777777777777777777", BlobReadCapabilityDigest: "sha256:8888888888888888888888888888888888888888888888888888888888888888", CreatedAt: time.Date(2026, 8, 9, 0, 0, 0, 0, time.UTC), ExpiresAt: time.Date(2026, 8, 9, 0, 10, 0, 0, time.UTC)}
 }
 
 func mustDigest(t *testing.T, request agentspecbackfill.Request) string {
@@ -111,6 +150,22 @@ func agentbackfillVerifiedStatus(t *testing.T, request agentspecbackfill.Request
 
 type fixedReader struct {
 	set agentspecbackfill.FrozenLegacySet
+}
+
+type countingReader struct {
+	set   agentspecbackfill.FrozenLegacySet
+	calls int
+}
+
+func (reader *countingReader) ReadFrozen(context.Context) (agentspecbackfill.FrozenLegacySet, error) {
+	reader.calls++
+	return reader.set, nil
+}
+
+type errorReader struct{ err error }
+
+func (reader errorReader) ReadFrozen(context.Context) (agentspecbackfill.FrozenLegacySet, error) {
+	return agentspecbackfill.FrozenLegacySet{}, reader.err
 }
 
 func (reader fixedReader) ReadFrozen(context.Context) (agentspecbackfill.FrozenLegacySet, error) {

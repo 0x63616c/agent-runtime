@@ -27,6 +27,8 @@ var (
 	ErrWrongOwner = errors.New("agent spec backfill wrong owner")
 	// ErrContentIntegrity reports immutable content that does not verify against its reference.
 	ErrContentIntegrity = errors.New("agent spec backfill immutable content integrity")
+	// ErrExpiredRequest reports a request outside its immutable admission window.
+	ErrExpiredRequest = errors.New("agent spec backfill request expired")
 )
 
 // Request is the immutable, bounded controller request with no raw Agent specification or object key.
@@ -42,6 +44,7 @@ type Request struct {
 	StaticReadinessDigest    string
 	DatabaseAuthorityDigest  string
 	BlobReadCapabilityDigest string
+	CreatedAt                time.Time
 	ExpiresAt                time.Time
 }
 
@@ -74,7 +77,7 @@ func (request Request) Canonical() ([]byte, error) {
 		return nil, err
 	}
 	var value bytes.Buffer
-	writeHead(&value, 4, 13)
+	writeHead(&value, 4, 14)
 	writeUint(&value, requestVersion)
 	writeText(&value, request.StackDigest)
 	writeUint(&value, uint64(request.MigrationVersion))
@@ -88,6 +91,7 @@ func (request Request) Canonical() ([]byte, error) {
 	writeText(&value, request.StaticReadinessDigest)
 	writeText(&value, request.DatabaseAuthorityDigest)
 	writeText(&value, request.BlobReadCapabilityDigest)
+	writeText(&value, request.CreatedAt.UTC().Format(time.RFC3339Nano))
 	writeText(&value, request.ExpiresAt.UTC().Format(time.RFC3339Nano))
 	if value.Len() > maxRequestBytes {
 		return nil, errors.New("canonical backfill request exceeds bound")
@@ -96,7 +100,7 @@ func (request Request) Canonical() ([]byte, error) {
 }
 
 func (request Request) validate() error {
-	if request.MigrationVersion != 4 || request.SnapshotCount == 0 || request.ExpiresAt.IsZero() || request.ExpiresAt.Location() != time.UTC {
+	if request.MigrationVersion != 4 || request.SnapshotCount == 0 || request.CreatedAt.IsZero() || request.ExpiresAt.IsZero() || request.CreatedAt.Location() != time.UTC || request.ExpiresAt.Location() != time.UTC || !request.ExpiresAt.After(request.CreatedAt) || request.ExpiresAt.After(request.CreatedAt.Add(10*time.Minute)) {
 		return errors.New("invalid backfill request fields")
 	}
 	for _, digest := range []string{request.StackDigest, request.MigrationArtifactDigest, request.ManifestDigest, request.ControllerImageDigest, request.SnapshotFingerprint, request.StaticReadinessDigest, request.DatabaseAuthorityDigest, request.BlobReadCapabilityDigest} {
@@ -105,14 +109,28 @@ func (request Request) validate() error {
 		}
 	}
 	nonce, err := base64.RawURLEncoding.DecodeString(request.FenceNonce)
-	if err != nil || len(nonce) != 16 {
+	if err != nil || len(nonce) != 32 {
 		return errors.New("invalid backfill fence nonce")
+	}
+	return nil
+}
+
+// ValidateAt verifies the immutable request admission window at an explicit UTC time.
+func (request Request) ValidateAt(now time.Time) error {
+	if err := request.validate(); err != nil {
+		return err
+	}
+	if now.UTC().After(request.ExpiresAt) {
+		return ErrExpiredRequest
 	}
 	return nil
 }
 
 func validDigest(value string) bool {
 	if len(value) != len("sha256:")+64 || !strings.HasPrefix(value, "sha256:") {
+		return false
+	}
+	if value != strings.ToLower(value) {
 		return false
 	}
 	_, err := hex.DecodeString(strings.TrimPrefix(value, "sha256:"))
@@ -160,7 +178,7 @@ func (status Status) Canonical() ([]byte, error) {
 	if (status.Phase != PhaseVerified && status.Phase != PhaseRefused) || !validDigest(status.RequestDigest) || !validDigest(status.SnapshotFingerprint) || status.SnapshotCount == 0 || status.CompletedAt.IsZero() || status.CompletedAt.Location() != time.UTC {
 		return nil, errors.New("invalid backfill status")
 	}
-	if (status.Phase == PhaseVerified && status.Reason != "") || (status.Phase == PhaseRefused && status.Reason == "") {
+	if (status.Phase == PhaseVerified && status.Reason != "") || (status.Phase == PhaseRefused && !validReason(status.Reason)) {
 		return nil, errors.New("invalid backfill terminal status")
 	}
 	var value bytes.Buffer
@@ -178,6 +196,10 @@ func (status Status) Canonical() ([]byte, error) {
 	return value.Bytes(), nil
 }
 
+func validReason(reason Reason) bool {
+	return reason == RefusalSnapshot || reason == RefusalContent || reason == RefusalExpired
+}
+
 // ValidateFor proves the status matches one request at an explicit time.
 func (status Status) ValidateFor(request Request, now time.Time) error {
 	digest, err := request.Digest()
@@ -187,7 +209,7 @@ func (status Status) ValidateFor(request Request, now time.Time) error {
 	if status.Phase == PhaseVerified && status.Reason != "" {
 		return errors.New("verified backfill status has refusal reason")
 	}
-	if status.Phase == PhaseRefused && status.Reason == "" {
+	if status.Phase == PhaseRefused && !validReason(status.Reason) {
 		return errors.New("refused backfill status has no reason")
 	}
 	if status.Phase != PhaseVerified && status.Phase != PhaseRefused {
@@ -240,13 +262,6 @@ func Verify(ctx context.Context, request Request, reader FrozenLegacyReader, ver
 	if err := request.validate(); err != nil {
 		return Status{}, errors.Wrap(err, "validate backfill request")
 	}
-	if reader == nil || verifier == nil {
-		return Status{}, errors.New("backfill reader and verifier are required")
-	}
-	set, err := reader.ReadFrozen(ctx)
-	if err != nil {
-		return Status{}, errors.Wrap(err, "read frozen legacy set")
-	}
 	digest, err := request.Digest()
 	if err != nil {
 		return Status{}, err
@@ -255,6 +270,16 @@ func Verify(ctx context.Context, request Request, reader FrozenLegacyReader, ver
 	if now.UTC().After(request.ExpiresAt) {
 		status.Phase, status.Reason = PhaseRefused, RefusalExpired
 		return status, nil
+	}
+	if err := ctx.Err(); err != nil {
+		return Status{}, errors.Wrap(err, "verify backfill request")
+	}
+	if reader == nil || verifier == nil {
+		return Status{}, errors.New("backfill reader and verifier are required")
+	}
+	set, err := reader.ReadFrozen(ctx)
+	if err != nil {
+		return classifyVerificationError(status, err, "read frozen legacy set")
 	}
 	if set.Snapshot.Fingerprint != request.SnapshotFingerprint || set.Snapshot.Count != request.SnapshotCount || uint64(len(set.Revisions)) != request.SnapshotCount {
 		status.Phase, status.Reason = PhaseRefused, RefusalSnapshot
@@ -266,12 +291,26 @@ func Verify(ctx context.Context, request Request, reader FrozenLegacyReader, ver
 			return status, nil
 		}
 		if err := verifier.VerifyImmutable(ctx, revision); err != nil {
-			status.Phase, status.Reason = PhaseRefused, RefusalContent
-			return status, nil
+			return classifyVerificationError(status, err, "verify immutable content")
 		}
 	}
 	status.Phase = PhaseVerified
 	return status, nil
+}
+
+func classifyVerificationError(status Status, err error, action string) (Status, error) {
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return Status{}, errors.Wrap(err, action)
+	}
+	if errors.Is(err, ErrStaleSnapshot) {
+		status.Phase, status.Reason = PhaseRefused, RefusalSnapshot
+		return status, nil
+	}
+	if errors.Is(err, ErrWrongOwner) || errors.Is(err, ErrContentIntegrity) {
+		status.Phase, status.Reason = PhaseRefused, RefusalContent
+		return status, nil
+	}
+	return Status{}, errors.Wrap(err, action)
 }
 
 // Audit is bounded redacted terminal evidence.
