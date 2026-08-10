@@ -63,7 +63,8 @@ type BootstrapAuthority struct {
 	Namespace string `json:"namespace"`
 	// NamespaceUID is the immutable provider identity returned by bootstrap.
 	NamespaceUID ObservedUID `json:"namespace_uid"`
-	// RenderDigest binds the authority to canonical desired state.
+	// RenderDigest records the reviewed rendering that created the Namespace.
+	// Later reviewed revisions retain this namespace-bound authority.
 	RenderDigest string `json:"render_digest"`
 	// Nonce is private capability material; only its digest is stored on the Namespace.
 	Nonce string `json:"nonce"`
@@ -524,7 +525,7 @@ func validateBootstrapAuthority(authority BootstrapAuthority, document renderedD
 	if authority.NamespaceUID == "" || authority.Nonce == "" {
 		return errors.New("validate bootstrap authority: bootstrap authority is required")
 	}
-	if authority.Stack != document.Stack || authority.Profile != document.Profile || authority.Namespace != document.Namespace || authority.RenderDigest != document.Digest {
+	if authority.Stack != document.Stack || authority.Profile != document.Profile || authority.Namespace != document.Namespace {
 		return errors.New("validate bootstrap authority: Stack identity does not match reviewed rendered state")
 	}
 	return nil

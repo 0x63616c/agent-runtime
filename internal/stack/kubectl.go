@@ -210,7 +210,7 @@ func (adapter KubectlAdapter) Teardown(ctx context.Context, target OperatorTarge
 }
 
 func (adapter KubectlAdapter) verifyBootstrapAuthority(ctx context.Context, target OperatorTarget, manifests KubernetesManifests, authority BootstrapAuthority) error {
-	if authority.Stack != manifests.stack || authority.Profile != manifests.profile || authority.Namespace != manifests.namespace.Metadata.Name || authority.RenderDigest != manifests.digest || authority.NamespaceUID == "" {
+	if authority.Stack != manifests.stack || authority.Profile != manifests.profile || authority.Namespace != manifests.namespace.Metadata.Name || authority.NamespaceUID == "" {
 		return errors.New("verify bootstrap authority: authority does not match rendered Kubernetes manifests")
 	}
 	observed, err := adapter.observeManifest(ctx, target, manifests.namespace)

@@ -71,6 +71,11 @@ stackctl() {
 }
 
 stackctl bootstrap --stack-file "$v1" --stack issue10-work --profile ci --bootstrap-capability-file "$bootstrap_capability_file"
+# This is the declared disposable-harness external Secret controller boundary.
+# The reference declares no key material; the empty synthetic Secret is created
+# only after namespace bootstrap and is never retained as evidence.
+printf '%s\n' '{"apiVersion":"v1","kind":"Secret","metadata":{"name":"postgres-trust"},"type":"Opaque","data":{}}' |
+  "$kubectl_bin" --kubeconfig "$kubeconfig_path" --context "$K3S_CONTEXT" --namespace ar-ci-issue10-work create -f - >/dev/null
 stackctl apply --stack-file "$v1" --stack issue10-work --profile ci --bootstrap-capability-file "$bootstrap_capability_file"
 service_ip=$("$kubectl_bin" --kubeconfig "$kubeconfig_path" --context "$K3S_CONTEXT" --namespace ar-ci-issue10-work get service database-service -o jsonpath='{.spec.clusterIP}')
 
