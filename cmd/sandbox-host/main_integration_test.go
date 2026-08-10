@@ -151,6 +151,9 @@ func TestReferenceHostMultiProcessLostAckQuarantineCleanupAndReassignment(t *tes
 
 func requeueUncertainOperation(t *testing.T, ledger *sandboxcontrol.PostgresLedger, id sandbox.OperationID) {
 	t.Helper()
+	if _, err := ledger.RecoverExpiredAssignments(context.Background(), time.Now().UTC().Add(2*time.Minute), 100); err != nil {
+		t.Fatalf("RecoverExpiredAssignments: %v", err)
+	}
 	operation, err := ledger.Get(context.Background(), "tenant_01:runtime_01", string(id))
 	if err != nil || operation.State != sandboxcontrol.StateUncertain || operation.Assignment.HostID != "" {
 		t.Fatalf("uncertain operation before cleanup = %#v, %v", operation, err)
