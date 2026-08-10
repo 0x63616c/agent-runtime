@@ -70,8 +70,8 @@ type OutboxID string
 // AgentRevisionRecord is persisted revision metadata; the behavior body remains in runtimecontent.
 type AgentRevisionRecord struct {
 	Tenant        runtimecontent.TenantID
-	AgentID       agentruntime.AgentID
-	RevisionID    agentruntime.AgentRevisionID
+	AgentID       agentruntime.AgentID         `json:",omitempty"`
+	RevisionID    agentruntime.AgentRevisionID `json:",omitempty"`
 	Revision      uint64
 	Name          string
 	ModelProfile  string
@@ -87,9 +87,9 @@ func (record AgentRevisionRecord) Clone() AgentRevisionRecord { return record }
 type SessionRecord struct {
 	Tenant      runtimecontent.TenantID
 	Principal   runtimecontent.PrincipalID
-	SessionID   agentruntime.SessionID
-	AgentID     agentruntime.AgentID
-	RevisionID  agentruntime.AgentRevisionID
+	SessionID   agentruntime.SessionID       `json:",omitempty"`
+	AgentID     agentruntime.AgentID         `json:",omitempty"`
+	RevisionID  agentruntime.AgentRevisionID `json:",omitempty"`
 	State       agentruntime.SessionState
 	Version     uint64
 	CreatedAt   time.Time
@@ -104,8 +104,8 @@ func (record SessionRecord) Clone() SessionRecord { return record }
 type InputRecord struct {
 	Tenant         runtimecontent.TenantID
 	Principal      runtimecontent.PrincipalID
-	SessionID      agentruntime.SessionID
-	InputID        agentruntime.InputID
+	SessionID      agentruntime.SessionID `json:",omitempty"`
+	InputID        agentruntime.InputID   `json:",omitempty"`
 	Content        runtimecontent.Reference
 	AcceptedAt     time.Time
 	RetentionUntil time.Time
@@ -118,9 +118,9 @@ func (record InputRecord) Clone() InputRecord { return record }
 type TurnRecord struct {
 	Tenant         runtimecontent.TenantID
 	Principal      runtimecontent.PrincipalID
-	SessionID      agentruntime.SessionID
-	TurnID         agentruntime.TurnID
-	InputID        agentruntime.InputID
+	SessionID      agentruntime.SessionID `json:",omitempty"`
+	TurnID         agentruntime.TurnID    `json:",omitempty"`
+	InputID        agentruntime.InputID   `json:",omitempty"`
 	Position       uint64
 	State          agentruntime.TurnState
 	Version        uint64
@@ -165,8 +165,8 @@ const (
 type InvocationRecord struct {
 	Tenant         runtimecontent.TenantID
 	Principal      runtimecontent.PrincipalID
-	SessionID      agentruntime.SessionID
-	TurnID         agentruntime.TurnID
+	SessionID      agentruntime.SessionID `json:",omitempty"`
+	TurnID         agentruntime.TurnID    `json:",omitempty"`
 	InvocationID   InvocationID
 	OperationID    OperationID
 	Ordinal        uint64
@@ -194,13 +194,13 @@ func (record InvocationRecord) Clone() InvocationRecord {
 type ProductEventRecord struct {
 	Tenant         runtimecontent.TenantID
 	Principal      runtimecontent.PrincipalID
-	SessionID      agentruntime.SessionID
+	SessionID      agentruntime.SessionID `json:",omitempty"`
 	Sequence       uint64
-	Cursor         agentruntime.Cursor
-	EventID        agentruntime.EventID
+	Cursor         agentruntime.Cursor  `json:",omitempty"`
+	EventID        agentruntime.EventID `json:",omitempty"`
 	Kind           agentruntime.EventKind
-	InputID        agentruntime.InputID
-	TurnID         agentruntime.TurnID
+	InputID        agentruntime.InputID `json:",omitempty"`
+	TurnID         agentruntime.TurnID  `json:",omitempty"`
 	OperationID    OperationID
 	OccurredAt     time.Time
 	RetentionUntil time.Time
@@ -216,8 +216,8 @@ type AuditFactRecord struct {
 	OperationID    OperationID
 	Actor          runtimecontent.PrincipalID
 	Kind           string
-	SessionID      agentruntime.SessionID
-	TurnID         agentruntime.TurnID
+	SessionID      agentruntime.SessionID `json:",omitempty"`
+	TurnID         agentruntime.TurnID    `json:",omitempty"`
 	OccurredAt     time.Time
 	RetentionUntil time.Time
 }
@@ -247,10 +247,10 @@ type OutboxRecord struct {
 	Aggregate         string
 	AggregateVersion  uint64
 	Version           uint64
-	EventID           agentruntime.EventID
+	EventID           agentruntime.EventID `json:",omitempty"`
 	OperationID       OperationID
-	SessionID         agentruntime.SessionID
-	TurnID            agentruntime.TurnID
+	SessionID         agentruntime.SessionID `json:",omitempty"`
+	TurnID            agentruntime.TurnID    `json:",omitempty"`
 	InvocationID      InvocationID
 	InvocationOrdinal uint64
 	InvocationFence   uint64
@@ -280,11 +280,11 @@ type MutationReceipt struct {
 	OperationID    OperationID
 	Command        string
 	RequestDigest  RequestDigest
-	AgentID        agentruntime.AgentID
-	RevisionID     agentruntime.AgentRevisionID
-	SessionID      agentruntime.SessionID
-	InputID        agentruntime.InputID
-	TurnID         agentruntime.TurnID
+	AgentID        agentruntime.AgentID         `json:",omitempty"`
+	RevisionID     agentruntime.AgentRevisionID `json:",omitempty"`
+	SessionID      agentruntime.SessionID       `json:",omitempty"`
+	InputID        agentruntime.InputID         `json:",omitempty"`
+	TurnID         agentruntime.TurnID          `json:",omitempty"`
 	AcceptedAt     time.Time
 	RetentionUntil time.Time
 }

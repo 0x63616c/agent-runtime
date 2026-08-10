@@ -134,6 +134,10 @@ func (plan TransitionPlan) Kind() CommandKind { return plan.kind }
 // State returns the complete metadata state to persist atomically.
 func (plan TransitionPlan) State() RuntimeState { return plan.state.Clone() }
 
+// BaseState returns the exact metadata snapshot against which this sealed plan was derived.
+// Persistence adapters use it only for atomic compare-and-set; it contains no raw content.
+func (plan TransitionPlan) BaseState() RuntimeState { return plan.base.Clone() }
+
 // Effects returns the ordered effects included in State.
 func (plan TransitionPlan) Effects() EffectSet { return plan.effects.Clone() }
 

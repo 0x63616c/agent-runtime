@@ -342,7 +342,7 @@ func applyRuntimeMigrations(t *testing.T, ctx context.Context, pool *pgxpool.Poo
 	for _, migration := range []struct {
 		version  int
 		filename string
-	}{{1, "runtime-v1.up.sql"}, {2, "runtime-v2.up.sql"}, {3, "runtime-v3.up.sql"}} {
+	}{{1, "runtime-v1.up.sql"}, {2, "runtime-v2.up.sql"}, {3, "runtime-v3.up.sql"}, {4, "runtime-v4.up.sql"}} {
 		version, filename := migration.version, migration.filename
 		if version > 1 && migrationApplied(t, ctx, pool, version) {
 			continue
@@ -396,7 +396,8 @@ func openRuntimePool(t *testing.T) *pgxpool.Pool {
 func resetRuntimeV2(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
 	t.Helper()
 	if _, err := pool.Exec(ctx, `
-		DROP TABLE IF EXISTS runtime.runtime_outbox, runtime.audit_records, runtime.session_events,
+		DROP TABLE IF EXISTS runtime.runtime_state_snapshots, runtime.outbox_leases, runtime.mutation_receipts,
+			runtime.invocations, runtime.runtime_outbox, runtime.audit_records, runtime.session_events,
 			runtime.turns, runtime.inputs, runtime.sessions, runtime.agent_revisions,
 			runtime.tenants, runtime.schema_migrations CASCADE`); err != nil {
 		t.Fatalf("reset runtime v2 tables: %v", err)

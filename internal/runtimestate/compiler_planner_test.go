@@ -110,6 +110,9 @@ func TestCompilerCreatesTheOnlyReceiptBoundMutationAndPlannerCreatesRevision(t *
 	if len(plan.State().Revisions) != 1 || len(plan.Effects().Audit) != 1 || len(plan.Effects().Outbox) != 1 {
 		t.Fatalf("plan failed to atomically derive revision/effects: %#v", plan)
 	}
+	if len(plan.BaseState().Revisions) != 0 {
+		t.Fatalf("plan base = %#v, want exact pre-transition snapshot", plan.BaseState())
+	}
 	principal, err := runtimecontent.ParsePrincipalID("principal-a")
 	if err != nil {
 		t.Fatalf("parse principal: %v", err)
