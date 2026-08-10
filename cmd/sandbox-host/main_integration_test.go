@@ -377,8 +377,14 @@ func (process *process) terminate() (bool, error) {
 			return false, err
 		}
 	}
-	<-process.done
-	return true, nil
+	reap, cancel := context.WithTimeout(context.Background(), hostProcessTerminationGrace)
+	defer cancel()
+	select {
+	case <-process.done:
+		return true, nil
+	case <-reap.Done():
+		return true, fmt.Errorf("sandbox-host did not exit after SIGKILL within %s", hostProcessTerminationGrace)
+	}
 }
 
 func (process *process) wait() error {

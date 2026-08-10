@@ -174,6 +174,63 @@ func TestControlProcessHarnessPreservesGracefulStopWaitError(t *testing.T) {
 	}
 }
 
+func TestControlProcessHarnessBoundsReapWhenDescendantRetainsPipes(t *testing.T) {
+	if os.Getenv("CONTROL_PROCESS_PIPE_HOLDER_DESCENDANT") == "1" {
+		select {}
+	}
+	if os.Getenv("CONTROL_PROCESS_PIPE_HOLDER_HELPER") == "1" {
+		signal.Ignore(syscall.SIGTERM)
+		child := exec.Command(os.Args[0], "-test.run=^TestControlProcessHarnessBoundsReapWhenDescendantRetainsPipes$")
+		child.Env = append(os.Environ(), "CONTROL_PROCESS_PIPE_HOLDER_DESCENDANT=1")
+		child.Stdout, child.Stderr = os.Stdout, os.Stderr
+		if err := child.Start(); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(2)
+		}
+		if err := os.WriteFile(os.Getenv("CONTROL_PROCESS_PIPE_HOLDER_PID_FILE"), []byte(fmt.Sprint(child.Process.Pid)), 0o600); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(2)
+		}
+		_, _ = fmt.Fprintln(os.Stdout, `{"msg":"sandbox control ready","role":"sandbox-control","public_address":"127.0.0.1:1","host_control_address":""}`)
+		select {}
+	}
+
+	pidFile := filepath.Join(t.TempDir(), "pipe-holder.pid")
+	process := startCommand(t, os.Args[0], []string{"-test.run=^TestControlProcessHarnessBoundsReapWhenDescendantRetainsPipes$"}, map[string]string{"CONTROL_PROCESS_PIPE_HOLDER_HELPER": "1", "CONTROL_PROCESS_PIPE_HOLDER_PID_FILE": pidFile})
+	process.awaitReady(t)
+	pidWire, err := os.ReadFile(pidFile)
+	if err != nil {
+		t.Fatalf("read descendant PID: %v", err)
+	}
+	descendant, err := os.FindProcess(parseProcessPID(t, string(pidWire)))
+	if err != nil {
+		t.Fatalf("find descendant: %v", err)
+	}
+	defer func() {
+		_ = descendant.Kill()
+		if err := process.wait(); err == nil {
+			t.Fatal("killed parent wait error = nil")
+		}
+	}()
+
+	forced, err := process.terminate()
+	if !forced {
+		t.Fatal("terminate() did not force-kill pipe-holder parent")
+	}
+	if err == nil || !strings.Contains(err.Error(), "did not exit after SIGKILL") {
+		t.Fatalf("terminate() error = %v; want bounded reap error", err)
+	}
+}
+
+func parseProcessPID(t *testing.T, value string) int {
+	t.Helper()
+	var pid int
+	if _, err := fmt.Sscan(strings.TrimSpace(value), &pid); err != nil || pid <= 0 {
+		t.Fatalf("invalid child PID %q: %v", value, err)
+	}
+	return pid
+}
+
 func (process *controlProcess) awaitReady(t *testing.T) controlReady {
 	t.Helper()
 	timeout, cancel := context.WithTimeout(context.Background(), 15*time.Second)
@@ -239,8 +296,14 @@ func (process *controlProcess) terminate() (bool, error) {
 			return false, err
 		}
 	}
-	<-process.done
-	return true, nil
+	reap, cancel := context.WithTimeout(context.Background(), controlProcessTerminationGrace)
+	defer cancel()
+	select {
+	case <-process.done:
+		return true, nil
+	case <-reap.Done():
+		return true, fmt.Errorf("sandbox-control did not exit after SIGKILL within %s", controlProcessTerminationGrace)
+	}
 }
 
 func (process *controlProcess) wait() error {
