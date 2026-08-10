@@ -7,6 +7,9 @@ import (
 	"syscall"
 )
 
-func systemShutdown(context.Context) error {
+func systemShutdown(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	return syscall.Reboot(syscall.LINUX_REBOOT_CMD_POWER_OFF)
 }

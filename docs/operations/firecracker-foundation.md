@@ -140,10 +140,14 @@ adapter tests use a temporary local socket only. Neither starts a Jailer, opens
 minimal no-download ext4 recipe. The recipe rejects dynamically linked or
 non-x86_64 ELF init input and emits a rootfs-attestation sidecar for lock-bundle
 assembly. The guest's closed boot-input contract is
-`init=/sbin/init -- <vm-id> <fixture-version>`; it writes the marker, answers
-one bounded PING/PONG, then attempts controlled power-off using a five-second
-deadline. These are deliberately only build and lifecycle inputs: there is no
-checked-in final lock, rootfs image, SBOM, fixture digest, guest transport
-implementation, or boot evidence yet. The lease-fenced authenticated M3-to-vsock
-transport remains a required bridge. Neither unit tests nor attestation checks
-establish a guest boot, actual controlled shutdown, or hardware-isolation claim.
+`init=/sbin/init -- <vm-id> <fixture-version>`; it writes the serial marker,
+then listens on its fixed private AF_VSOCK port `10777`, accepting only the
+host CID. One connection must complete `CONNECT <vm-id> <fixture-version>` /
+`OK <vm-id> <fixture-version>` before its bounded `PING <nonce>` /
+`PONG <vm-id> <nonce>` exchange. The exchange has a five-second deadline; only
+after it succeeds does the guest request controlled power-off. This is only a
+guest-side protocol implementation: there is no checked-in final lock, rootfs
+image, SBOM, fixture digest, host-side vsock composition, M3 launch bridge, or
+boot evidence yet. The lease-fenced authenticated M3-to-vsock transport remains
+a required bridge. Neither unit tests nor attestation checks establish a guest
+boot, actual controlled shutdown, or hardware-isolation claim.

@@ -57,18 +57,25 @@ The static `guest-agent` prints this serial marker first:
 AGENT_RUNTIME_FC_SMOKE <vm-id> <fixture-version> agent-runtime-firecracker-guest/v1
 ```
 
-It then accepts exactly one line, `PING <nonce>`, and returns
-`PONG <vm-id> <nonce>`. Its bounded lifecycle contract attempts controlled
-power-off within five seconds only after that PONG has been written. The kernel
-must invoke `/sbin/init` with this closed argument sequence:
+It then listens only on the private guest AF_VSOCK port `10777` and accepts a
+peer only from the host CID. The one accepted connection must send
+`CONNECT <vm-id> <fixture-version>` and receives `OK <vm-id> <fixture-version>`
+before it may send `PING <nonce>` and receive `PONG <vm-id> <nonce>`. Every
+control line is capped at 1024 bytes; the full connection and frame exchange
+has a five-second deadline, and malformed, mismatched, and timed-out frames
+fail closed without echoing control input. The guest requests controlled
+power-off only after that PONG has been written; a bounded guest protocol test
+does not prove that the kernel completed a reboot. The kernel must invoke
+`/sbin/init` with this closed argument sequence:
 
 ```text
 console=ttyS0 reboot=k panic=1 init=/sbin/init -- <vm-id> <fixture-version>
 ```
 
-The real host transport is intentionally not implemented here: the protected M3
-host-control bridge must bind this byte protocol to a private per-VM vsock
-endpoint and authenticate/fence the request before launch.
+The guest listener is not a host transport, proxy, or authorization boundary:
+the protected M3 host-control bridge must bind this byte protocol to a private
+per-VM vsock endpoint and authenticate/fence the request before launch. No
+host-side vsock composition or M3 launch path is implemented here.
 There is no guest NIC, shell, package manager, inherited environment, or secret
 fixture.
 
