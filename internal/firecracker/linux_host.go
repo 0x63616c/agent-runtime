@@ -14,11 +14,9 @@ import (
 
 const defaultGuestCID = 3
 
-// JailerStartRequest is the complete Jailer invocation with its mandatory resource enforcement and jailed paths.
+// JailerStartRequest is the complete immutable authority and staged-resource binding for one Jailer process.
 type JailerStartRequest struct {
-	Path      string
-	Arguments []string
-	Resources ResourceEnforcement
+	Authority JailerExecutionAuthority
 	Stage     JailedResourceStage
 }
 
@@ -81,6 +79,7 @@ type LinuxJailerHost struct {
 	PreflightState KVMPreflight
 	RootFSCopyPath string
 	Resources      JailerResourceStager
+	Authority      JailerExecutionAuthority
 	Jailer         JailerStarter
 	HTTP           FirecrackerHTTPPort
 	Guest          GuestChannel
@@ -94,6 +93,7 @@ type LinuxJailerHost struct {
 	cleaned      bool
 	process      JailerProcess
 	plan         Plan
+	authority    JailerExecutionAuthority
 	request      LaunchRequest
 	stage        JailedResourceStage
 	launchDone   chan struct{}
@@ -134,7 +134,7 @@ func (host *LinuxJailerHost) Preflight(ctx context.Context, plan Plan, fixtures 
 	if err := contextError(ctx); err != nil {
 		return err
 	}
-	if host == nil || host.Resources == nil || host.Jailer == nil || host.HTTP == nil || host.Guest == nil || !safeAbsolutePath(host.RootFSCopyPath) || !validCompiledPlan(plan) || !fixturesMatchPlan(fixtures, plan) {
+	if host == nil || host.Resources == nil || host.Jailer == nil || host.HTTP == nil || host.Guest == nil || !safeAbsolutePath(host.RootFSCopyPath) || !validCompiledPlan(plan) || !validJailerExecutionAuthority(host.Authority, plan) || !fixturesMatchPlan(fixtures, plan) {
 		return fmt.Errorf("%w: Linux Jailer ports, resource stage, private rootfs copy, compiled plan, and verified fixtures are required", ErrSmokeUnavailable)
 	}
 	if err := host.PreflightState.Validate(); err != nil {
@@ -146,6 +146,7 @@ func (host *LinuxJailerHost) Preflight(ctx context.Context, plan Plan, fixtures 
 		return fmt.Errorf("%w: Linux Jailer host is single-use", ErrSmokeUnavailable)
 	}
 	host.preflight = true
+	host.authority = cloneJailerExecutionAuthority(host.Authority)
 	return nil
 }
 
@@ -206,9 +207,12 @@ func (host *LinuxJailerHost) Launch(ctx context.Context, request LaunchRequest) 
 	}
 	host.launching = true
 	host.launchDone = make(chan struct{})
-	startRequest := JailerStartRequest{Path: request.JailerPath, Arguments: append([]string(nil), request.JailerArguments...), Resources: host.plan.Resources(), Stage: host.stage}
-	jailer, http, guest, stage, plan := host.Jailer, host.HTTP, host.Guest, host.stage, host.plan
+	startRequest := JailerStartRequest{Authority: cloneJailerExecutionAuthority(host.authority), Stage: host.stage}
+	jailer, http, guest, stage, plan, authority := host.Jailer, host.HTTP, host.Guest, host.stage, host.plan, host.authority
 	host.mu.Unlock()
+	if !validJailerExecutionAuthority(authority, plan) {
+		return host.failLaunch(fmt.Errorf("%w: preflight-bound Jailer execution authority is required", ErrSmokeUnavailable))
+	}
 
 	if err := contextError(ctx); err != nil {
 		return host.failLaunch(err)
@@ -489,6 +493,12 @@ func cloneLaunchRequest(request LaunchRequest) LaunchRequest {
 	request.JailerArguments = append([]string(nil), request.JailerArguments...)
 	request.KernelArguments = append([]string(nil), request.KernelArguments...)
 	return request
+}
+
+func cloneJailerExecutionAuthority(authority JailerExecutionAuthority) JailerExecutionAuthority {
+	authority.arguments = append([]string(nil), authority.arguments...)
+	authority.external = append([]ExternalJailerLimitOwner(nil), authority.external...)
+	return authority
 }
 
 func callWithContextFence(ctx context.Context, action string, call func(context.Context) error) error {
