@@ -155,42 +155,41 @@ func validApproval(t *testing.T) approval.Approval {
 
 func TestApprovalRejectsArbitrarySummaryPayload(t *testing.T) {
 	proposal := validProposal(t)
-	proposal.Summary = approval.Summary{Verb: approval.SummaryVerb("Authorization: Bearer secret"), Target: approval.SummaryTarget("untrusted")}
+	proposal.Summary = approval.Summary{Verb: approval.SummaryVerb("untrusted-freeform"), Target: approval.SummaryTarget("untrusted")}
 	if _, err := approval.New(proposal); err == nil {
 		t.Fatal("arbitrary raw summary payload was accepted")
 	}
 }
 
-func TestApprovalRefusesSecretLikeIdentityOrIdempotencyBeforeRetention(t *testing.T) {
-	for _, token := range []string{
-		"Authorization: Bearer secret",
-		"authorization-bearer-topsecret",
-		"Authorization.Bearer.topsecret",
-		"eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJvd25lciJ9.signature",
-		"sk_live_1234567890ABCDEF",
+func TestApprovalRejectsUntrustedIdentityReferencesAndHashesIdempotencyInput(t *testing.T) {
+	for _, value := range []string{
+		"untrusted-reference",
+		"invalid.reference",
+		"prn_short",
+		"prn_1234567890ABCDE-",
 	} {
-		t.Run(token, func(t *testing.T) {
+		t.Run(value, func(t *testing.T) {
 			proposal := validProposal(t)
-			proposal.Owner.PrincipalID = approval.PrincipalID(token)
+			proposal.Owner.PrincipalID = approval.PrincipalID(value)
 			if _, err := approval.New(proposal); err == nil {
-				t.Fatal("secret-like principal identity was accepted")
+				t.Fatal("untrusted principal identity was accepted")
 			}
 		})
 	}
 
 	pending := validApproval(t)
 	owner := ownerActor(t)
-	secretKey := "Authorization: Bearer secret"
-	decided, err := pending.Decide(owner, approval.DecisionCommand{IdempotencyKey: secretKey, Decision: approval.DecisionDenied}, pending.CreatedAt().Add(time.Minute))
+	idempotencyKey := "approval-decision:1"
+	decided, err := pending.Decide(owner, approval.DecisionCommand{IdempotencyKey: idempotencyKey, Decision: approval.DecisionDenied}, pending.CreatedAt().Add(time.Minute))
 	if err != nil || decided.State() != approval.StateDenied {
-		t.Fatalf("secret-like idempotency key was not safely accepted: %#v, %v", decided, err)
+		t.Fatalf("idempotency input was not safely accepted: %#v, %v", decided, err)
 	}
-	if decision := decided.Decision(); decision == nil || strings.Contains(fmt.Sprintf("%#v", decision), secretKey) || strings.Contains(fmt.Sprintf("%#v", decided), secretKey) {
-		t.Fatalf("secret-like idempotency key was retained or re-exposed: decision=%#v approval=%#v", decision, decided)
+	if decision := decided.Decision(); decision == nil || strings.Contains(fmt.Sprintf("%#v", decision), idempotencyKey) || strings.Contains(fmt.Sprintf("%#v", decided), idempotencyKey) {
+		t.Fatalf("idempotency input was retained or re-exposed: decision=%#v approval=%#v", decision, decided)
 	}
-	replayed, err := decided.Decide(owner, approval.DecisionCommand{IdempotencyKey: secretKey, Decision: approval.DecisionDenied}, decided.ExpiresAt().Add(time.Minute))
+	replayed, err := decided.Decide(owner, approval.DecisionCommand{IdempotencyKey: idempotencyKey, Decision: approval.DecisionDenied}, decided.ExpiresAt().Add(time.Minute))
 	if err != nil || replayed != decided {
-		t.Fatalf("secret-key replay changed terminal decision: %#v, %v", replayed, err)
+		t.Fatalf("idempotency replay changed terminal decision: %#v, %v", replayed, err)
 	}
 }
 
