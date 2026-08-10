@@ -28,9 +28,13 @@ cluster. It is Kubernetes-in-container lifecycle and NetworkPolicy evidence,
 not Linux/KVM or Firecracker evidence.
 
 Each CI attempt owns a generated k3d cluster and registry name derived from
-the run and attempt IDs. It uses a private kubeconfig and OS-selected loopback
-ports, then passes the discovered registry addresses to Tilt. The workflow
-will not reuse or delete a pre-existing resource; cleanup requires the
+the run and attempt IDs. It uses a private kubeconfig and deterministically
+derived loopback API and registry-port candidates, then availability-checks
+them before creation. A
+TOCTOU collision during the subsequent k3d bind fails safely rather than using
+an OS-selected port or adopting a pre-existing resource. After successful
+registry creation, it passes the discovered registry addresses to Tilt. The
+workflow will not reuse or delete a pre-existing resource; cleanup requires the
 successful-create record and matching immutable Docker container IDs.
 
 ## Start

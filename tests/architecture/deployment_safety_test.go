@@ -301,6 +301,19 @@ var _ = Describe("M1 deployment safety boundaries", func() {
 		Expect(contractProof.Result).To(Equal("passed"))
 	})
 
+	It("describes deterministic CI loopback-port selection truthfully", func() {
+		for _, document := range []string{
+			read("docs/operations/self-hosted-deployment.md"),
+			read("website/docs/build-and-run/local-stack.mdx"),
+		} {
+			Expect(document).To(ContainSubstring("availability-checks"))
+			Expect(document).To(ContainSubstring("TOCTOU"))
+			Expect(document).To(ContainSubstring("fails safely"))
+			Expect(document).To(ContainSubstring("OS-selected port"))
+			Expect(document).NotTo(ContainSubstring("OS-selected loopback"))
+		}
+	})
+
 	It("never treats a failed or raced k3d create as authority to delete", func() {
 		workflow := read(".github/workflows/ci.yml")
 		for _, required := range []string{

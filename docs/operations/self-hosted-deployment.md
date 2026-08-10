@@ -178,9 +178,12 @@ Development images pass only through a loopback k3d registry pinned as
 `registry:2.8.3@sha256:a3d8aaa63ed8681a604f1dea0aa03f100d5895b6a58ace528858a7b332415373`;
 the pre-apply Tilt plan rejects Docker Hub runtime-image references and binds
 the host and in-cluster registry names explicitly.
-Every CI attempt derives unique k3d cluster and registry names from its GitHub
-run and attempt identifiers. The registry and API use OS-selected loopback
-ports; the workflow discovers the selected registry port after creation and
+Every CI attempt deterministically derives unique k3d cluster and registry
+names, plus API and registry loopback-port candidates, from its GitHub run and
+attempt identifiers. It availability-checks each candidate before creation; a
+TOCTOU collision when k3d later binds it fails safely rather than using an
+OS-selected port or reusing a pre-existing resource. After successful registry
+creation, the workflow discovers the verified `5000/tcp` host mapping and
 threads the exact host and in-cluster registry addresses into the Tiltfile.
 It uses a private temporary kubeconfig named for that generated cluster, and a
 fixed twelve-minute startup bound. This accommodates a clean node's bounded
