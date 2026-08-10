@@ -1,0 +1,29 @@
+{
+  "version": 1,
+  "issue": 10,
+  "milestone": "M1 declarative Stack NetworkPolicy enforcement",
+  "proof_level": "disposable_k3s_integration",
+  "observed_at_utc": "2026-08-10T21:29:00Z",
+  "implementation_revision": "cdd42c7b2ff103685e5785477ae31b22607be971",
+  "command": {
+    "path": "deploy/harness/run-k3s-networkpolicy-evidence.sh",
+    "profile": "ci",
+    "result": "passed"
+  },
+  "toolchain": {
+    "k3s_image": "rancher/k3s@sha256:846f86bdb15e4eef385e7d699d7c644f28711253c2f437c4aa30bea773214bb1"
+  },
+  "network_policy": {
+    "default_deny_consecutive_failures": 3,
+    "declared_egress_consecutive_successes": 3
+  },
+  "lifecycle": {
+    "bootstrap_capability_required": true,
+    "declared_external_secret_fixture_materialized": true,
+    "container_cleanup_required": true
+  },
+  "limitations": [
+    "This proves the disposable NetworkPolicy slice, not the full two-Stack Tilt lifecycle.",
+    "OrbStack CNI admission without packet enforcement is explicitly not accepted as NetworkPolicy evidence."
+  ]
+}
