@@ -169,15 +169,53 @@
     },
     {
       "id": "DEP-004",
-      "status": "not_started"
+      "status": "completed",
+      "evidence": [
+        {
+          "revision": "fa8ac05de0b347bffdf1b23c86f8f09acd6341f8",
+          "utc_time": "2026-08-10T22:29:15Z",
+          "proof_level": "integration",
+          "command_id": "issue14-self-hosted-kubernetes-smoke",
+          "artifact_ref": "issue-14-deployment-e2e",
+          "result": "passed"
+        }
+      ]
     },
     {
       "id": "DEP-005",
-      "status": "not_started"
+      "status": "completed",
+      "evidence": [
+        {
+          "revision": "fa8ac05de0b347bffdf1b23c86f8f09acd6341f8",
+          "utc_time": "2026-08-10T22:29:15Z",
+          "proof_level": "integration",
+          "command_id": "issue14-self-hosted-kubernetes-smoke",
+          "artifact_ref": "issue-14-deployment-e2e",
+          "result": "passed"
+        }
+      ]
     },
     {
       "id": "DEP-006",
-      "status": "not_started"
+      "status": "completed",
+      "evidence": [
+        {
+          "revision": "fa8ac05de0b347bffdf1b23c86f8f09acd6341f8",
+          "utc_time": "2026-08-10T22:29:15Z",
+          "proof_level": "integration",
+          "command_id": "issue14-self-hosted-kubernetes-smoke",
+          "artifact_ref": "issue-14-deployment-e2e",
+          "result": "passed"
+        },
+        {
+          "revision": "cebee20dc6ad7156e05828c6549b0017b91a74cd",
+          "utc_time": "2026-08-10T23:25:26Z",
+          "proof_level": "documentation",
+          "command_id": "m1-evidence-docs-source-refresh",
+          "artifact_ref": "source-inventory-m1-evidence",
+          "result": "passed"
+        }
+      ]
     },
     {
       "id": "DEP-007",
@@ -513,30 +551,30 @@
     },
     {
       "id": "INF-005",
-      "status": "in_progress",
+      "status": "completed",
       "evidence": [
         {
-          "revision": "042b192988b3ebd706f73668fb5c0ccbef49533c",
-          "utc_time": "2026-08-07T04:51:17Z",
-          "proof_level": "main_ci",
-          "command_id": "just-check",
-          "artifact_ref": "gha-31148671560-check",
+          "revision": "6bb0da69befd89adffbf3aefd5068194607cfca9",
+          "utc_time": "2026-08-10T23:19:54Z",
+          "proof_level": "integration",
+          "command_id": "m1-stack-contract-gate",
+          "artifact_ref": "issue-14-m1-stack-contract-e2e",
           "result": "passed"
         },
         {
-          "revision": "042b192988b3ebd706f73668fb5c0ccbef49533c",
-          "utc_time": "2026-08-07T04:51:17Z",
+          "revision": "6bb0da69befd89adffbf3aefd5068194607cfca9",
+          "utc_time": "2026-08-10T23:19:54Z",
           "proof_level": "integration",
-          "command_id": "issue10-orbstack-profile-suite",
-          "artifact_ref": "issue10-orbstack-operator-audit",
+          "command_id": "m1-hosted-two-stack-isolation",
+          "artifact_ref": "issue-14-two-stack-e2e",
           "result": "passed"
         },
         {
-          "revision": "042b192988b3ebd706f73668fb5c0ccbef49533c",
-          "utc_time": "2026-08-07T04:51:17Z",
-          "proof_level": "integration",
-          "command_id": "issue10-k3s-networkpolicy-suite",
-          "artifact_ref": "issue10-k3s-networkpolicy-result",
+          "revision": "cebee20dc6ad7156e05828c6549b0017b91a74cd",
+          "utc_time": "2026-08-10T23:25:26Z",
+          "proof_level": "documentation",
+          "command_id": "m1-evidence-docs-source-refresh",
+          "artifact_ref": "source-inventory-m1-evidence",
           "result": "passed"
         }
       ]
@@ -1097,7 +1135,17 @@
     },
     {
       "id": "TMP-001",
-      "status": "not_started"
+      "status": "completed",
+      "evidence": [
+        {
+          "revision": "fa8ac05de0b347bffdf1b23c86f8f09acd6341f8",
+          "utc_time": "2026-08-10T22:29:15Z",
+          "proof_level": "integration",
+          "command_id": "issue14-self-hosted-kubernetes-smoke",
+          "artifact_ref": "issue-14-deployment-e2e",
+          "result": "passed"
+        }
+      ]
     },
     {
       "id": "TMP-002",
@@ -1173,11 +1221,31 @@
     },
     {
       "id": "TMP-007",
-      "status": "not_started"
+      "status": "completed",
+      "evidence": [
+        {
+          "revision": "fa8ac05de0b347bffdf1b23c86f8f09acd6341f8",
+          "utc_time": "2026-08-10T22:29:15Z",
+          "proof_level": "integration",
+          "command_id": "issue14-self-hosted-kubernetes-smoke",
+          "artifact_ref": "issue-14-deployment-e2e",
+          "result": "passed"
+        }
+      ]
     },
     {
       "id": "TMP-008",
-      "status": "not_started"
+      "status": "completed",
+      "evidence": [
+        {
+          "revision": "fa8ac05de0b347bffdf1b23c86f8f09acd6341f8",
+          "utc_time": "2026-08-10T22:29:15Z",
+          "proof_level": "integration",
+          "command_id": "issue14-self-hosted-kubernetes-smoke",
+          "artifact_ref": "issue-14-deployment-e2e",
+          "result": "passed"
+        }
+      ]
     },
     {
       "id": "TMP-009",
