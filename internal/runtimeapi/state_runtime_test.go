@@ -78,7 +78,53 @@ func TestStateRuntimeServesTheCompletePublicLifecycleThroughContentAndMemoryStat
 	}
 }
 
+func TestStateRuntimeReadsOnlyStateAuthorizedArtifactBytes(t *testing.T) {
+	runtime, content, compiler, store := newMemoryStateAuthority(t)
+	ctx := context.Background()
+	admin := runtimeapi.Identity{Tenant: "tenant-a", Principal: "admin", Admin: true}
+	alice := runtimeapi.Identity{Tenant: "tenant-a", Principal: "alice"}
+	bob := runtimeapi.Identity{Tenant: "tenant-a", Principal: "bob"}
+	agent, err := runtime.CreateAgent(ctx, admin, agentruntime.CreateAgentRequest{IdempotencyKey: "artifact-agent", Name: "assistant", ModelProfile: "balanced", Instructions: "safe"})
+	if err != nil {
+		t.Fatalf("create Agent: %v", err)
+	}
+	session, err := runtime.CreateSession(ctx, alice, agentruntime.CreateSessionRequest{IdempotencyKey: "artifact-session", AgentRevision: agent.RevisionID})
+	if err != nil {
+		t.Fatalf("create Session: %v", err)
+	}
+	accepted, err := runtime.SendInput(ctx, alice, agentruntime.SendInputRequest{SessionID: session.ID, IdempotencyKey: "artifact-input", Parts: []agentruntime.ContentPart{{Kind: agentruntime.ContentText, Text: "produce artifact"}}})
+	if err != nil {
+		t.Fatalf("send Input: %v", err)
+	}
+	tenant, _ := runtimecontent.ParseTenantID("tenant-a")
+	principal, _ := runtimecontent.ParsePrincipalID("alice")
+	handoff, err := content.StageArtifact(ctx, tenant, "text/plain", []byte("approved report"))
+	if err != nil {
+		t.Fatalf("stage artifact: %v", err)
+	}
+	mutation, err := compiler.CompileRegisterArtifact(runtimestate.RegisterArtifactCommand{Scope: runtimestate.MutationScope{Tenant: tenant, Principal: principal, Authority: runtimestate.AuthorityRuntimeWorker}, IdempotencyKey: "artifact-record", SessionID: session.ID, TurnID: accepted.Turn.ID, Artifact: handoff})
+	if err != nil {
+		t.Fatalf("compile artifact: %v", err)
+	}
+	plan, err := store.Apply(ctx, mutation)
+	if err != nil {
+		t.Fatalf("persist artifact: %v", err)
+	}
+	artifact, err := runtime.ReadArtifact(ctx, alice, plan.Result().Artifact.ArtifactID)
+	if err != nil || string(artifact.Body) != "approved report" || artifact.Artifact.SHA256 == "" {
+		t.Fatalf("read artifact = %#v, %v", artifact, err)
+	}
+	if _, err := runtime.ReadArtifact(ctx, bob, plan.Result().Artifact.ArtifactID); !hasFailure(err, agentruntime.FailureNotFound) {
+		t.Fatalf("cross-principal artifact read error = %v, want safe not-found", err)
+	}
+}
+
 func newMemoryStateRuntime(t *testing.T) *runtimeapi.StateRuntime {
+	runtime, _, _, _ := newMemoryStateAuthority(t)
+	return runtime
+}
+
+func newMemoryStateAuthority(t *testing.T) (*runtimeapi.StateRuntime, *runtimecontent.Store, *runtimestate.Compiler, *runtimestate.MemoryRuntimeStateStore) {
 	t.Helper()
 	objects := &stateRuntimeObjects{values: map[string][]byte{}}
 	content, err := runtimecontent.New("runtime-content", objects)
@@ -105,7 +151,7 @@ func newMemoryStateRuntime(t *testing.T) *runtimeapi.StateRuntime {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return runtime
+	return runtime, content, compiler, store
 }
 
 type stateRuntimeObjects struct{ values map[string][]byte }

@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"sync"
+	"testing"
 	"time"
 
 	"github.com/0x63616c/agent-runtime/internal/clock"
@@ -378,6 +379,8 @@ type recordingRuntime struct {
 	onCreateAgent       func(context.Context)
 	createSessionCalls  int
 	createSessionErr    error
+	artifact            agentruntime.ArtifactDownload
+	artifactErr         error
 }
 
 func (runtime *recordingRuntime) CreateAgent(ctx context.Context, identity runtimeapi.Identity, _ agentruntime.CreateAgentRequest) (agentruntime.AgentSpecification, error) {
@@ -396,6 +399,28 @@ func (runtime *recordingRuntime) ReviseAgent(context.Context, runtimeapi.Identit
 
 func (runtime *recordingRuntime) GetAgentRevision(context.Context, runtimeapi.Identity, agentruntime.AgentID, agentruntime.AgentRevisionID) (agentruntime.AgentSpecification, error) {
 	return agentruntime.AgentSpecification{}, nil
+}
+
+func (runtime *recordingRuntime) ReadArtifact(context.Context, runtimeapi.Identity, agentruntime.ArtifactID) (agentruntime.ArtifactDownload, error) {
+	return runtime.artifact.Clone(), runtime.artifactErr
+}
+
+func TestArtifactHTTPRouteStreamsAuthorizedRuntimeBytes(t *testing.T) {
+	runtime := &recordingRuntime{artifact: agentruntime.ArtifactDownload{Artifact: agentruntime.ArtifactReference{ID: "art_0000000000000001", MediaType: "text/plain", SizeBytes: 14, SHA256: "4659fc0570122b0e0aa14f4ff7c261b1fe51795a01ba79963f462ebf40d7520d"}, Body: []byte("artifact bytes")}}
+	handler, err := runtimeapi.NewHandler(runtimeapi.Config{Runtime: runtime, Authenticator: staticAuth{identities: map[string]runtimeapi.Identity{"alice-token-000000": {Tenant: "tenant-a", Principal: "alice"}}}, RequestIDs: &requestIDs{}})
+	if err != nil {
+		t.Fatalf("new handler: %v", err)
+	}
+	server := httptest.NewServer(handler)
+	defer server.Close()
+	client := newClient(server.URL, "alice-token-000000", &requestIDs{})
+	artifact, err := client.ReadArtifact(context.Background(), "art_0000000000000001")
+	if err != nil {
+		t.Fatalf("read artifact: %v", err)
+	}
+	if string(artifact.Body) != "artifact bytes" || artifact.Artifact != runtime.artifact.Artifact {
+		t.Fatalf("artifact download = %#v, want exact authorized bytes and metadata", artifact)
+	}
 }
 
 func (runtime *recordingRuntime) CreateSession(_ context.Context, _ runtimeapi.Identity, _ agentruntime.CreateSessionRequest) (agentruntime.Session, error) {

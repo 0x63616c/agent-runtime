@@ -19,6 +19,7 @@ const (
 	IdentifierRevision   IdentifierKind = "arev"
 	IdentifierSession    IdentifierKind = "sess"
 	IdentifierInput      IdentifierKind = "inpt"
+	IdentifierArtifact   IdentifierKind = "art"
 	IdentifierTurn       IdentifierKind = "turn"
 	IdentifierInvocation IdentifierKind = "invocation"
 	IdentifierEvent      IdentifierKind = "evt"
@@ -58,6 +59,7 @@ type RuntimeState struct {
 	Revisions   []AgentRevisionRecord
 	Sessions    []SessionRecord
 	Inputs      []InputRecord
+	Artifacts   []ArtifactRecord
 	Turns       []TurnRecord
 	Invocations []InvocationRecord
 	Receipts    []MutationReceipt
@@ -72,6 +74,7 @@ func (state RuntimeState) Clone() RuntimeState {
 	clone.Revisions = append([]AgentRevisionRecord(nil), state.Revisions...)
 	clone.Sessions = append([]SessionRecord(nil), state.Sessions...)
 	clone.Inputs = append([]InputRecord(nil), state.Inputs...)
+	clone.Artifacts = append([]ArtifactRecord(nil), state.Artifacts...)
 	clone.Turns = make([]TurnRecord, len(state.Turns))
 	for i := range state.Turns {
 		clone.Turns[i] = state.Turns[i].Clone()
@@ -96,6 +99,7 @@ type PlanResult struct {
 	Revision   AgentRevisionRecord
 	Session    SessionRecord
 	Input      InputRecord
+	Artifact   ArtifactRecord
 	Turn       TurnRecord
 	Promoted   *TurnRecord
 	Invocation InvocationRecord
@@ -108,6 +112,7 @@ func (result PlanResult) Clone() PlanResult {
 	result.Revision = result.Revision.Clone()
 	result.Session = result.Session.Clone()
 	result.Input = result.Input.Clone()
+	result.Artifact = result.Artifact.Clone()
 	result.Turn = result.Turn.Clone()
 	result.Invocation = result.Invocation.Clone()
 	result.Outbox = result.Outbox.Clone()
@@ -229,6 +234,8 @@ func (planner *RuntimeStatePlanner) Plan(ctx context.Context, prior RuntimeState
 		result, effects, err = planner.createSession(&state, mutation.mutation.receipt, command, now)
 	case compiledAdmit:
 		result, effects, err = planner.admit(&state, mutation.mutation.receipt, command, now)
+	case compiledArtifact:
+		result, effects, err = planner.registerArtifact(&state, mutation.mutation.receipt, command, now)
 	case BeginInvocationAttemptCommand:
 		result, effects, err = planner.begin(&state, mutation.mutation.receipt, command, now)
 	case RecordInvocationOutcomeCommand:
@@ -379,6 +386,31 @@ func (planner *RuntimeStatePlanner) admit(state *RuntimeState, binding ReceiptBi
 		return PlanResult{}, EffectSet{}, err
 	}
 	return PlanResult{Input: input, Turn: turn, Session: session}, effects, nil
+}
+
+func (planner *RuntimeStatePlanner) registerArtifact(state *RuntimeState, binding ReceiptBinding, compiled compiledArtifact, now time.Time) (PlanResult, EffectSet, error) {
+	command := compiled.command
+	if findTurn(state, binding.Scope, command.SessionID, command.TurnID) < 0 {
+		return PlanResult{}, EffectSet{}, ErrNotFoundOrDenied
+	}
+	id, err := planner.artifactID()
+	if err != nil {
+		return PlanResult{}, EffectSet{}, err
+	}
+	until := planner.retain(now)
+	record := ArtifactRecord{Tenant: binding.Scope.Tenant, Principal: binding.Scope.Principal, ArtifactID: id, SessionID: command.SessionID, TurnID: command.TurnID, Reference: compiled.commitment.Reference, CreatedAt: now, RetainUntil: until}
+	state.Artifacts = append(state.Artifacts, record)
+	effects, err := planner.auditOnly(state, binding, "artifact.registered", command.SessionID, command.TurnID, now, until)
+	if err != nil {
+		return PlanResult{}, EffectSet{}, err
+	}
+	outbox, err := planner.artifactOutbox(binding, record, now, until)
+	if err != nil {
+		return PlanResult{}, EffectSet{}, err
+	}
+	state.Outbox = append(state.Outbox, outbox)
+	effects.Outbox = append(effects.Outbox, outbox)
+	return PlanResult{Artifact: record}, effects, nil
 }
 
 func (planner *RuntimeStatePlanner) begin(state *RuntimeState, binding ReceiptBinding, command BeginInvocationAttemptCommand, now time.Time) (PlanResult, EffectSet, error) {
@@ -670,10 +702,23 @@ func (planner *RuntimeStatePlanner) catalogOutbox(binding ReceiptBinding, revisi
 	}
 	return OutboxRecord{Tenant: binding.Scope.Tenant, Principal: binding.Scope.Principal, OutboxID: id, Aggregate: "agent_revision", AggregateVersion: revision.Revision, Version: 1, OperationID: OperationID(binding.IdempotencyKey), State: OutboxPending, CommittedAt: now, RetentionUntil: until}, nil
 }
+func (planner *RuntimeStatePlanner) artifactOutbox(binding ReceiptBinding, artifact ArtifactRecord, now, until time.Time) (OutboxRecord, error) {
+	id, err := planner.outboxID()
+	if err != nil {
+		return OutboxRecord{}, err
+	}
+	return OutboxRecord{Tenant: artifact.Tenant, Principal: artifact.Principal, OutboxID: id, Aggregate: "artifact", AggregateVersion: 1, Version: 1, OperationID: OperationID(binding.IdempotencyKey), SessionID: artifact.SessionID, TurnID: artifact.TurnID, State: OutboxPending, CommittedAt: now, RetentionUntil: until}, nil
+}
 func (planner *RuntimeStatePlanner) receipt(binding ReceiptBinding, result PlanResult, now time.Time) MutationReceipt {
-	return MutationReceipt{Scope: binding.Scope, IdempotencyKey: binding.IdempotencyKey, OperationID: OperationID(binding.IdempotencyKey), Command: string(binding.Command), RequestDigest: binding.RequestDigest, AgentID: result.Revision.AgentID, RevisionID: result.Revision.RevisionID, SessionID: firstID(result.Session.SessionID, result.Turn.SessionID), InputID: result.Input.InputID, TurnID: result.Turn.TurnID, AcceptedAt: now, RetentionUntil: planner.retain(now)}
+	return MutationReceipt{Scope: binding.Scope, IdempotencyKey: binding.IdempotencyKey, OperationID: OperationID(binding.IdempotencyKey), Command: string(binding.Command), RequestDigest: binding.RequestDigest, AgentID: result.Revision.AgentID, RevisionID: result.Revision.RevisionID, SessionID: firstID(firstID(result.Session.SessionID, result.Turn.SessionID), result.Artifact.SessionID), InputID: result.Input.InputID, TurnID: firstTurnID(result.Turn.TurnID, result.Artifact.TurnID), ArtifactID: result.Artifact.ArtifactID, AcceptedAt: now, RetentionUntil: planner.retain(now)}
 }
 func firstID(left, right agentruntime.SessionID) agentruntime.SessionID {
+	if left != "" {
+		return left
+	}
+	return right
+}
+func firstTurnID(left, right agentruntime.TurnID) agentruntime.TurnID {
 	if left != "" {
 		return left
 	}
@@ -716,6 +761,13 @@ func (planner *RuntimeStatePlanner) inputID() (agentruntime.InputID, error) {
 		return "", err
 	}
 	return agentruntime.ParseInputID(value)
+}
+func (planner *RuntimeStatePlanner) artifactID() (agentruntime.ArtifactID, error) {
+	value, err := planner.raw(IdentifierArtifact)
+	if err != nil {
+		return "", err
+	}
+	return agentruntime.ParseArtifactID(value)
 }
 func (planner *RuntimeStatePlanner) turnID() (agentruntime.TurnID, error) {
 	value, err := planner.raw(IdentifierTurn)
@@ -842,7 +894,7 @@ func containsOutbox(state RuntimeState, record OutboxRecord) bool {
 	return false
 }
 func validateState(state RuntimeState) error {
-	revisions, sessions, inputs, turns, operations := map[string]struct{}{}, map[string]struct{}{}, map[string]struct{}{}, map[string]struct{}{}, map[string]struct{}{}
+	revisions, sessions, inputs, artifacts, turns, operations := map[string]struct{}{}, map[string]struct{}{}, map[string]struct{}{}, map[string]struct{}{}, map[string]struct{}{}, map[string]struct{}{}
 	events, cursors, audit, outbox, receipts := map[string]struct{}{}, map[string]struct{}{}, map[string]struct{}{}, map[string]struct{}{}, map[string]struct{}{}
 	active, positions := map[agentruntime.SessionID]uint64{}, map[string]struct{}{}
 	for _, record := range state.Revisions {
@@ -857,6 +909,11 @@ func validateState(state RuntimeState) error {
 	}
 	for _, record := range state.Inputs {
 		if duplicate(inputs, record.InputID.String()) {
+			return ErrIntegrity
+		}
+	}
+	for _, record := range state.Artifacts {
+		if duplicate(artifacts, record.ArtifactID.String()) {
 			return ErrIntegrity
 		}
 	}
@@ -923,6 +980,11 @@ func (planner *RuntimeStatePlanner) replayPlan(state RuntimeState, kind CommandK
 	for _, input := range state.Inputs {
 		if input.InputID == receipt.InputID {
 			result.Input = input
+		}
+	}
+	for _, artifact := range state.Artifacts {
+		if artifact.ArtifactID == receipt.ArtifactID {
+			result.Artifact = artifact
 		}
 	}
 	for _, turn := range state.Turns {

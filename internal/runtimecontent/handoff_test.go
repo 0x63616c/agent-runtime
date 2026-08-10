@@ -118,6 +118,46 @@ func TestStoreStagesArtifactInputEnvelopeWithinPublicContract(t *testing.T) {
 	}
 }
 
+func TestArtifactReaderRequiresExactTenantPrincipalMetadataAuthorization(t *testing.T) {
+	store, objects, tenant, _ := testStore(t)
+	alice := testPrincipalID(t, "alice")
+	bob := testPrincipalID(t, "bob")
+	handoff, err := store.StageArtifact(context.Background(), tenant, "text/plain", []byte("approved report"))
+	if err != nil {
+		t.Fatalf("stage artifact: %v", err)
+	}
+	commitment, err := store.ValidateArtifactHandoff(handoff)
+	if err != nil {
+		t.Fatalf("validate artifact handoff: %v", err)
+	}
+	artifactID, err := agentruntime.ParseArtifactID("art_0000000000000001")
+	if err != nil {
+		t.Fatalf("parse artifact ID: %v", err)
+	}
+	repository := artifactRepository{record: runtimecontent.ArtifactRecord{Tenant: tenant, Principal: alice, ArtifactID: artifactID, Reference: commitment.Reference}}
+	reader, err := runtimecontent.NewArtifactReader(store, repository)
+	if err != nil {
+		t.Fatalf("new artifact reader: %v", err)
+	}
+	got, err := reader.ReadArtifact(context.Background(), tenant, alice, artifactID)
+	if err != nil {
+		t.Fatalf("read authorized artifact: %v", err)
+	}
+	if string(got) != "approved report" {
+		t.Fatalf("artifact bytes = %q, want approved report", got)
+	}
+	gets := objects.gets
+	if _, err := reader.ReadArtifact(context.Background(), tenant, bob, artifactID); !errors.Is(err, runtimecontent.ErrNotFoundOrDenied) {
+		t.Fatalf("cross-principal artifact read error = %v, want ErrNotFoundOrDenied", err)
+	}
+	if objects.gets != gets {
+		t.Fatalf("cross-principal denial read object storage: gets=%d want=%d", objects.gets, gets)
+	}
+	if commitment.Reference.MediaType != "text/plain" || commitment.Reference.SizeBytes != int64(len("approved report")) {
+		t.Fatalf("artifact commitment = %#v, want immutable digest metadata", commitment)
+	}
+}
+
 func TestInputEnvelopeReaderAuthorizesAndHydratesExactInputMetadata(t *testing.T) {
 	store, _, tenant, _ := testStore(t)
 	principal := testPrincipalID(t, "alice")
@@ -330,6 +370,14 @@ type inputEnvelopeRepository struct {
 }
 
 func (repository inputEnvelopeRepository) AuthorizeInputEnvelopeRead(context.Context, runtimecontent.TenantID, runtimecontent.PrincipalID, agentruntime.SessionID, agentruntime.InputID) (runtimecontent.InputEnvelopeRecord, error) {
+	return repository.record, nil
+}
+
+type artifactRepository struct {
+	record runtimecontent.ArtifactRecord
+}
+
+func (repository artifactRepository) AuthorizeArtifactRead(context.Context, runtimecontent.TenantID, runtimecontent.PrincipalID, agentruntime.ArtifactID) (runtimecontent.ArtifactRecord, error) {
 	return repository.record, nil
 }
 

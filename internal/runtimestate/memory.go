@@ -143,6 +143,18 @@ func (store *MemoryRuntimeStateStore) GetTurn(ctx context.Context, query TurnQue
 	}
 	return state.Turns[index].Clone(), nil
 }
+func (store *MemoryRuntimeStateStore) GetArtifact(ctx context.Context, query ArtifactQuery) (ArtifactRecord, error) {
+	if err := requireScope(ctx, query.Scope, AuthoritySessionOwner, true); err != nil {
+		return ArtifactRecord{}, err
+	}
+	state := store.snapshot(query.Scope.Tenant)
+	for _, record := range state.Artifacts {
+		if record.Principal == query.Scope.Principal && record.ArtifactID == query.ArtifactID {
+			return record.Clone(), nil
+		}
+	}
+	return ArtifactRecord{}, ErrNotFoundOrDenied
+}
 func (store *MemoryRuntimeStateStore) GetInvocation(ctx context.Context, query InvocationQuery) (InvocationRecord, error) {
 	if err := requireScope(ctx, query.Scope, AuthorityRuntimeWorker, true); err != nil {
 		return InvocationRecord{}, err
@@ -286,6 +298,18 @@ func (store *MemoryRuntimeStateStore) AuthorizeInputEnvelopeRead(ctx context.Con
 		}
 	}
 	return runtimecontent.InputEnvelopeRecord{}, ErrNotFoundOrDenied
+}
+func (store *MemoryRuntimeStateStore) AuthorizeArtifactRead(ctx context.Context, authorization CompiledReadAuthorization) (runtimecontent.ArtifactRecord, error) {
+	if err := requireScope(ctx, authorization.scope, AuthoritySessionOwner, true); err != nil {
+		return runtimecontent.ArtifactRecord{}, err
+	}
+	state := store.snapshot(authorization.scope.Tenant)
+	for _, record := range state.Artifacts {
+		if record.Principal == authorization.scope.Principal && record.ArtifactID == authorization.artifactID {
+			return runtimecontent.ArtifactRecord{Tenant: record.Tenant, Principal: record.Principal, ArtifactID: record.ArtifactID, Reference: record.Reference}, nil
+		}
+	}
+	return runtimecontent.ArtifactRecord{}, ErrNotFoundOrDenied
 }
 func (store *MemoryRuntimeStateStore) snapshot(tenant runtimecontent.TenantID) RuntimeState {
 	store.mu.RLock()

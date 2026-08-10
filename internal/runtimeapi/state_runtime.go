@@ -3,6 +3,7 @@ package runtimeapi
 import (
 	"context"
 	"sort"
+	"strings"
 
 	"github.com/0x63616c/agent-runtime/internal/runtimecontent"
 	"github.com/0x63616c/agent-runtime/internal/runtimestate"
@@ -111,6 +112,29 @@ func (runtime *StateRuntime) GetAgentRevision(ctx context.Context, identity Iden
 		return agentruntime.AgentSpecification{}, err
 	}
 	return runtime.readAgentSpecification(ctx, scope.Tenant, agentID, revisionID)
+}
+
+// ReadArtifact returns one principal-authorized immutable artifact through the
+// state-authorized runtime-content reader.  Blob storage is never addressed by
+// a public ID alone.
+func (runtime *StateRuntime) ReadArtifact(ctx context.Context, identity Identity, artifactID agentruntime.ArtifactID) (agentruntime.ArtifactDownload, error) {
+	scope, err := ownerScope(identity)
+	if err != nil {
+		return agentruntime.ArtifactDownload{}, err
+	}
+	record, err := runtime.store.GetArtifact(ctx, runtimestate.ArtifactQuery{Scope: scope, ArtifactID: artifactID})
+	if err != nil {
+		return agentruntime.ArtifactDownload{}, runtimeFailure("read Artifact", err)
+	}
+	reader, err := runtimecontent.NewArtifactReader(runtime.content, stateArtifactRepository{compiler: runtime.compiler, store: runtime.store})
+	if err != nil {
+		return agentruntime.ArtifactDownload{}, runtimeFailure("read Artifact", err)
+	}
+	body, err := reader.ReadArtifact(ctx, scope.Tenant, scope.Principal, artifactID)
+	if err != nil {
+		return agentruntime.ArtifactDownload{}, contentReadFailure("read Artifact", err)
+	}
+	return agentruntime.ArtifactDownload{Artifact: publicArtifact(record), Body: body}, nil
 }
 
 // CreateSession pins a principal-owned Session to one existing immutable revision.
@@ -300,6 +324,19 @@ type stateInputRepository struct {
 	store    runtimestate.RuntimeStateStore
 }
 
+type stateArtifactRepository struct {
+	compiler *runtimestate.Compiler
+	store    runtimestate.RuntimeStateStore
+}
+
+func (repository stateArtifactRepository) AuthorizeArtifactRead(ctx context.Context, tenant runtimecontent.TenantID, principal runtimecontent.PrincipalID, artifactID agentruntime.ArtifactID) (runtimecontent.ArtifactRecord, error) {
+	authorization, err := repository.compiler.CompileAuthorizeArtifactRead(runtimestate.ArtifactReadCommand{Scope: runtimestate.MutationScope{Tenant: tenant, Principal: principal, Authority: runtimestate.AuthoritySessionOwner}, ArtifactID: artifactID})
+	if err != nil {
+		return runtimecontent.ArtifactRecord{}, err
+	}
+	return repository.store.AuthorizeArtifactRead(ctx, authorization)
+}
+
 func (repository stateInputRepository) AuthorizeInputEnvelopeRead(ctx context.Context, tenant runtimecontent.TenantID, principal runtimecontent.PrincipalID, sessionID agentruntime.SessionID, inputID agentruntime.InputID) (runtimecontent.InputEnvelopeRecord, error) {
 	authorization, err := repository.compiler.CompileAuthorizeInputEnvelopeRead(runtimestate.InputEnvelopeReadCommand{Scope: runtimestate.MutationScope{Tenant: tenant, Principal: principal, Authority: runtimestate.AuthoritySessionOwner}, SessionID: sessionID, InputID: inputID})
 	if err != nil {
@@ -352,6 +389,10 @@ func publicSession(record runtimestate.SessionRecord) agentruntime.Session {
 
 func publicTurn(record runtimestate.TurnRecord) agentruntime.Turn {
 	return agentruntime.Turn{ID: record.TurnID, InputID: record.InputID, Position: record.Position, State: record.State, StartedAt: record.StartedAt, CompletedAt: record.CompletedAt, Failure: record.Failure.Clone()}
+}
+
+func publicArtifact(record runtimestate.ArtifactRecord) agentruntime.ArtifactReference {
+	return agentruntime.ArtifactReference{ID: record.ArtifactID, MediaType: record.Reference.MediaType, SizeBytes: record.Reference.SizeBytes, SHA256: strings.TrimPrefix(record.Reference.Digest, "sha256:")}
 }
 
 func publicEvents(records []runtimestate.ProductEventRecord) []agentruntime.Event {

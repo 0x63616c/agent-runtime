@@ -20,15 +20,17 @@ const (
 	// AgentSpecificationBodyMediaTypeV1 identifies an identity-free canonical Agent specification body.
 	AgentSpecificationBodyMediaTypeV1 = "application/vnd.agent-runtime.agent-specification-body+cbor;version=1"
 	// InputEnvelopeMediaTypeV1 identifies the canonical identity-free Input envelope.
-	InputEnvelopeMediaTypeV1    = "application/vnd.agent-runtime.input+cbor;version=1"
-	maximumSpecificationBytes   = 1 << 20
-	maximumInputEnvelopeBytes   = 2<<20 + 4<<10
-	maximumInstructionsBytes    = 256 * 1024
-	maximumToolDescriptionBytes = 4096
-	maximumNameBytes            = 128
-	maximumTools                = 64
-	maximumTenantIDBytes        = 128
-	maximumContentRootBytes     = 128
+	InputEnvelopeMediaTypeV1      = "application/vnd.agent-runtime.input+cbor;version=1"
+	maximumSpecificationBytes     = 1 << 20
+	maximumInputEnvelopeBytes     = 2<<20 + 4<<10
+	maximumArtifactBytes          = 8 << 20
+	maximumArtifactMediaTypeBytes = 255
+	maximumInstructionsBytes      = 256 * 1024
+	maximumToolDescriptionBytes   = 4096
+	maximumNameBytes              = 128
+	maximumTools                  = 64
+	maximumTenantIDBytes          = 128
+	maximumContentRootBytes       = 128
 )
 
 var (
@@ -98,6 +100,13 @@ type InputEnvelopeCommitment struct {
 	Reference Reference
 }
 
+// ArtifactCommitment is the bounded immutable content metadata a runtime state
+// command may persist.  It deliberately contains no storage locator or bytes.
+type ArtifactCommitment struct {
+	Tenant    TenantID
+	Reference Reference
+}
+
 // ContentHandoff is an opaque, in-process proof that Store wrote and read back one tenant-bound immutable content object.
 //
 // It is not a persistent record or a public capability. A state composition
@@ -106,14 +115,24 @@ type ContentHandoff struct {
 	issuer       *Store
 	tenant       TenantID
 	reference    Reference
+	kind         contentKind
 	name         string
 	modelProfile string
 }
+
+type contentKind uint8
+
+const (
+	contentKindAgentSpecificationBody contentKind = iota + 1
+	contentKindInputEnvelope
+	contentKindArtifact
+)
 
 // ContentHandoffValidator validates opaque staged-content commitments before a runtime state command persists their metadata.
 type ContentHandoffValidator interface {
 	ValidateAgentSpecificationBodyHandoff(ContentHandoff) (AgentSpecificationBodyCommitment, error)
 	ValidateInputEnvelopeHandoff(ContentHandoff) (InputEnvelopeCommitment, error)
+	ValidateArtifactHandoff(ContentHandoff) (ArtifactCommitment, error)
 }
 
 // ImmutableObjectStore conditionally stores and bounded-reads runtime-owned immutable bytes.
@@ -168,6 +187,20 @@ type InputEnvelopeRepository interface {
 	AuthorizeInputEnvelopeRead(context.Context, TenantID, PrincipalID, agentruntime.SessionID, agentruntime.InputID) (InputEnvelopeRecord, error)
 }
 
+// ArtifactRecord is the exact durable metadata required before immutable
+// artifact bytes may be read.  The object-store key remains private to Store.
+type ArtifactRecord struct {
+	Tenant     TenantID
+	Principal  PrincipalID
+	ArtifactID agentruntime.ArtifactID
+	Reference  Reference
+}
+
+// ArtifactRepository authorizes one exact artifact download under principal ownership.
+type ArtifactRepository interface {
+	AuthorizeArtifactRead(context.Context, TenantID, PrincipalID, agentruntime.ArtifactID) (ArtifactRecord, error)
+}
+
 // AgentSpecificationReader reads Agent specification content only after repository authorization.
 type AgentSpecificationReader struct {
 	store      *Store
@@ -186,6 +219,12 @@ type InputEnvelopeReader struct {
 	repository InputEnvelopeRepository
 }
 
+// ArtifactReader reads immutable bytes only after runtime-state authorization.
+type ArtifactReader struct {
+	store      *Store
+	repository ArtifactRepository
+}
+
 // agentSpecificationLocator is a package-private capability created only after repository authorization.
 type agentSpecificationLocator struct {
 	tenant     TenantID
@@ -202,6 +241,8 @@ type agentSpecificationBodyLocator struct {
 type inputEnvelopeLocator struct {
 	record InputEnvelopeRecord
 }
+
+type artifactLocator struct{ record ArtifactRecord }
 
 // Store owns one explicit runtime content namespace.
 type Store struct {
@@ -239,6 +280,14 @@ func NewInputEnvelopeReader(store *Store, repository InputEnvelopeRepository) (*
 		return nil, errors.New("Input envelope reader requires content store and repository authority")
 	}
 	return &InputEnvelopeReader{store: store, repository: repository}, nil
+}
+
+// NewArtifactReader constructs the authorization-before-content-read boundary.
+func NewArtifactReader(store *Store, repository ArtifactRepository) (*ArtifactReader, error) {
+	if store == nil || repository == nil {
+		return nil, errors.New("Artifact reader requires content store and repository authority")
+	}
+	return &ArtifactReader{store: store, repository: repository}, nil
 }
 
 // ReadAgentSpecification authorizes and reads one exact tenant-owned Agent revision.
@@ -323,6 +372,30 @@ func (reader *InputEnvelopeReader) ReadInputEnvelope(ctx context.Context, tenant
 	return reader.store.getInputEnvelope(ctx, inputEnvelopeLocator{record: record})
 }
 
+// ReadArtifact returns bounded immutable bytes after exact tenant/principal metadata authorization.
+func (reader *ArtifactReader) ReadArtifact(ctx context.Context, tenant TenantID, principal PrincipalID, artifactID agentruntime.ArtifactID) ([]byte, error) {
+	if !validTenantID(tenant) || !validPrincipalID(principal) {
+		return nil, ErrNotFoundOrDenied
+	}
+	if _, err := agentruntime.ParseArtifactID(artifactID.String()); err != nil {
+		return nil, ErrNotFoundOrDenied
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, errors.Wrap(err, "authorize Artifact read")
+	}
+	record, err := reader.repository.AuthorizeArtifactRead(ctx, tenant, principal, artifactID)
+	if err != nil {
+		return nil, classifyObjectError("authorize Artifact read", err, ErrNotFoundOrDenied)
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, errors.Wrap(err, "authorize Artifact read")
+	}
+	if record.Tenant != tenant || record.Principal != principal || record.ArtifactID != artifactID || !validArtifactRecord(record) {
+		return nil, ErrNotFoundOrDenied
+	}
+	return reader.store.getArtifact(ctx, artifactLocator{record: record})
+}
+
 // PutAgentSpecification canonically encodes and conditionally stores one immutable specification.
 func (store *Store) PutAgentSpecification(ctx context.Context, tenant TenantID, specification agentruntime.AgentSpecification) (Reference, error) {
 	if !validTenantID(tenant) {
@@ -375,12 +448,12 @@ func (store *Store) StageAgentSpecificationBody(ctx context.Context, tenant Tena
 	if err := store.putVerified(ctx, tenant, reference, encoded, "stage Agent specification body"); err != nil {
 		return ContentHandoff{}, err
 	}
-	return ContentHandoff{issuer: store, tenant: tenant, reference: reference, name: body.Name, modelProfile: body.ModelProfile}, nil
+	return ContentHandoff{issuer: store, tenant: tenant, reference: reference, kind: contentKindAgentSpecificationBody, name: body.Name, modelProfile: body.ModelProfile}, nil
 }
 
 // ValidateAgentSpecificationBodyHandoff returns metadata only when this Store issued an intact tenant-bound body handoff.
 func (store *Store) ValidateAgentSpecificationBodyHandoff(handoff ContentHandoff) (AgentSpecificationBodyCommitment, error) {
-	if store == nil || handoff.issuer != store || !validTenantID(handoff.tenant) || !validAgentSpecificationBodyReference(handoff.reference) || !validName(handoff.name) || !validName(handoff.modelProfile) {
+	if store == nil || handoff.issuer != store || handoff.kind != contentKindAgentSpecificationBody || !validTenantID(handoff.tenant) || !validAgentSpecificationBodyReference(handoff.reference) || !validName(handoff.name) || !validName(handoff.modelProfile) {
 		return AgentSpecificationBodyCommitment{}, ErrNotFoundOrDenied
 	}
 	return AgentSpecificationBodyCommitment{Tenant: handoff.tenant, Reference: handoff.reference, Name: handoff.name, ModelProfile: handoff.modelProfile}, nil
@@ -402,15 +475,41 @@ func (store *Store) StageInputEnvelope(ctx context.Context, tenant TenantID, par
 	if err := store.putVerified(ctx, tenant, reference, encoded, "stage Input envelope"); err != nil {
 		return ContentHandoff{}, err
 	}
-	return ContentHandoff{issuer: store, tenant: tenant, reference: reference}, nil
+	return ContentHandoff{issuer: store, tenant: tenant, reference: reference, kind: contentKindInputEnvelope}, nil
 }
 
 // ValidateInputEnvelopeHandoff returns metadata only when this Store issued an intact tenant-bound Input handoff.
 func (store *Store) ValidateInputEnvelopeHandoff(handoff ContentHandoff) (InputEnvelopeCommitment, error) {
-	if store == nil || handoff.issuer != store || !validTenantID(handoff.tenant) || !validInputEnvelopeReference(handoff.reference) || handoff.name != "" || handoff.modelProfile != "" {
+	if store == nil || handoff.issuer != store || handoff.kind != contentKindInputEnvelope || !validTenantID(handoff.tenant) || !validInputEnvelopeReference(handoff.reference) || handoff.name != "" || handoff.modelProfile != "" {
 		return InputEnvelopeCommitment{}, ErrNotFoundOrDenied
 	}
 	return InputEnvelopeCommitment{Tenant: handoff.tenant, Reference: handoff.reference}, nil
+}
+
+// StageArtifact conditionally stores bounded immutable artifact bytes before
+// state admission.  The caller receives only an opaque handoff, never a key.
+func (store *Store) StageArtifact(ctx context.Context, tenant TenantID, mediaType string, data []byte) (ContentHandoff, error) {
+	if !validTenantID(tenant) || !validArtifactMediaType(mediaType) || len(data) == 0 || len(data) > maximumArtifactBytes {
+		return ContentHandoff{}, errors.New("stage Artifact: invalid immutable content")
+	}
+	if err := ctx.Err(); err != nil {
+		return ContentHandoff{}, errors.Wrap(err, "stage Artifact")
+	}
+	copyData := append([]byte(nil), data...)
+	reference := referenceForMediaType(copyData, mediaType)
+	if err := store.putVerified(ctx, tenant, reference, copyData, "stage Artifact"); err != nil {
+		return ContentHandoff{}, err
+	}
+	return ContentHandoff{issuer: store, tenant: tenant, reference: reference, kind: contentKindArtifact}, nil
+}
+
+// ValidateArtifactHandoff returns digest metadata only for an intact handoff
+// issued by this exact Store.
+func (store *Store) ValidateArtifactHandoff(handoff ContentHandoff) (ArtifactCommitment, error) {
+	if store == nil || handoff.issuer != store || handoff.kind != contentKindArtifact || !validTenantID(handoff.tenant) || !validArtifactReference(handoff.reference) || handoff.name != "" || handoff.modelProfile != "" {
+		return ArtifactCommitment{}, ErrNotFoundOrDenied
+	}
+	return ArtifactCommitment{Tenant: handoff.tenant, Reference: handoff.reference}, nil
 }
 
 func (store *Store) getAgentSpecification(ctx context.Context, locator agentSpecificationLocator) (agentruntime.AgentSpecification, error) {
@@ -491,6 +590,27 @@ func (store *Store) getInputEnvelope(ctx context.Context, locator inputEnvelopeL
 		return nil, errors.Wrap(ErrIntegrity, "decode immutable Input envelope")
 	}
 	return parts, nil
+}
+
+func (store *Store) getArtifact(ctx context.Context, locator artifactLocator) ([]byte, error) {
+	record := locator.record
+	if !validArtifactRecord(record) {
+		return nil, ErrNotFoundOrDenied
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, errors.Wrap(err, "read Artifact")
+	}
+	raw, err := store.objects.Get(ctx, store.key(record.Tenant, record.Reference.Digest), int(record.Reference.SizeBytes))
+	if err != nil {
+		return nil, classifyObjectError("read immutable Artifact", err, ErrNotFoundOrDenied)
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, errors.Wrap(err, "read Artifact")
+	}
+	if int64(len(raw)) != record.Reference.SizeBytes || referenceForMediaType(raw, record.Reference.MediaType).Digest != record.Reference.Digest {
+		return nil, ErrIntegrity
+	}
+	return append([]byte(nil), raw...), nil
 }
 
 func (store *Store) key(tenant TenantID, digest string) string {
@@ -587,6 +707,14 @@ func validInputEnvelopeReference(reference Reference) bool {
 	return reference.MediaType == InputEnvelopeMediaTypeV1 && reference.SizeBytes > 0 && reference.SizeBytes <= maximumInputEnvelopeBytes && validDigest(reference.Digest)
 }
 
+func validArtifactReference(reference Reference) bool {
+	return validArtifactMediaType(reference.MediaType) && reference.SizeBytes > 0 && reference.SizeBytes <= maximumArtifactBytes && validDigest(reference.Digest)
+}
+
+func validArtifactMediaType(value string) bool {
+	return value != "" && len(value) <= maximumArtifactMediaTypeBytes && utf8.ValidString(value) && !strings.ContainsAny(value, "\\\x00\r\n")
+}
+
 func validInputEnvelopeRecord(record InputEnvelopeRecord) bool {
 	if !validTenantID(record.Tenant) || !validPrincipalID(record.Principal) || !validInputEnvelopeReference(record.Reference) {
 		return false
@@ -595,6 +723,14 @@ func validInputEnvelopeRecord(record InputEnvelopeRecord) bool {
 		return false
 	}
 	_, err := agentruntime.ParseInputID(record.InputID.String())
+	return err == nil
+}
+
+func validArtifactRecord(record ArtifactRecord) bool {
+	if !validTenantID(record.Tenant) || !validPrincipalID(record.Principal) || !validArtifactReference(record.Reference) {
+		return false
+	}
+	_, err := agentruntime.ParseArtifactID(record.ArtifactID.String())
 	return err == nil
 }
 

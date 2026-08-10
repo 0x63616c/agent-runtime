@@ -17,6 +17,9 @@
     "/v1/admin/agents/{agent_id}/revisions/{revision_id}": {
       "get": {"operationId": "getAgentRevision", "parameters": [{"$ref": "#/components/parameters/AgentID"}, {"$ref": "#/components/parameters/RevisionID"}, {"$ref": "#/components/parameters/RequestID"}], "responses": {"200": {"$ref": "#/components/responses/AgentRevision"}, "default": {"$ref": "#/components/responses/Failure"}}}
     },
+    "/v1/artifacts/{artifact_id}": {
+      "get": {"operationId": "readArtifact", "parameters": [{"$ref": "#/components/parameters/ArtifactID"}, {"$ref": "#/components/parameters/RequestID"}], "responses": {"200": {"$ref": "#/components/responses/ArtifactDownload"}, "default": {"$ref": "#/components/responses/Failure"}}}
+    },
     "/v1/sessions": {
       "post": {"operationId": "createSession", "parameters": [{"$ref": "#/components/parameters/RequestID"}, {"$ref": "#/components/parameters/IdempotencyKey"}], "requestBody": {"$ref": "#/components/requestBodies/CreateSession"}, "responses": {"201": {"$ref": "#/components/responses/Session"}, "default": {"$ref": "#/components/responses/Failure"}}}
     },
@@ -49,6 +52,7 @@
       "RevisionID": {"name": "revision_id", "in": "path", "required": true, "schema": {"$ref": "#/components/schemas/AgentRevisionID"}},
       "SessionID": {"name": "session_id", "in": "path", "required": true, "schema": {"$ref": "#/components/schemas/SessionID"}},
       "TurnID": {"name": "turn_id", "in": "path", "required": true, "schema": {"$ref": "#/components/schemas/TurnID"}}
+      ,"ArtifactID": {"name": "artifact_id", "in": "path", "required": true, "schema": {"$ref": "#/components/schemas/ArtifactID"}}
     },
     "schemas": {
       "RequestID": {"type": "string", "pattern": "^req_[A-Za-z0-9]{16}$"},
@@ -127,6 +131,7 @@
       "SendInput": {"description": "Accepted Input and Turn", "headers": {"X-Request-ID": {"$ref": "#/components/headers/RequestID"}}, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/SendInputResult"}}}},
       "Turn": {"description": "Turn", "headers": {"X-Request-ID": {"$ref": "#/components/headers/RequestID"}}, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Turn"}}}},
       "EventPage": {"description": "Ordered Product events", "headers": {"X-Request-ID": {"$ref": "#/components/headers/RequestID"}}, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/EventPage"}}}},
+      "ArtifactDownload": {"description": "Authorized immutable artifact bytes", "headers": {"X-Request-ID": {"$ref": "#/components/headers/RequestID"}, "Digest": {"required": true, "schema": {"type": "string", "pattern": "^sha-256=[0-9a-f]{64}$"}}}, "content": {"application/octet-stream": {"schema": {"type": "string", "format": "binary"}}, "text/plain": {"schema": {"type": "string"}}}},
       "Failure": {"description": "Safe runtime failure", "headers": {"X-Request-ID": {"$ref": "#/components/headers/RequestID"}}, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorEnvelope"}}}}
     }
   }

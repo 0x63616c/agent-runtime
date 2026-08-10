@@ -21,6 +21,7 @@ const (
 	CommandRegisterAgentRevision CommandKind = "register_agent_revision"
 	CommandCreateSession         CommandKind = "create_session"
 	CommandAdmitInput            CommandKind = "admit_input"
+	CommandRegisterArtifact      CommandKind = "register_artifact"
 	CommandBeginInvocation       CommandKind = "begin_invocation_attempt"
 	CommandRecordOutcome         CommandKind = "record_invocation_outcome"
 	CommandSettleTurn            CommandKind = "settle_turn"
@@ -114,6 +115,23 @@ func (compiler *Compiler) CompileAdmitInput(command AdmitInputCommand) (Compiled
 	}{command.SessionID.String(), commitment.Reference}, compiledAdmit{command: command, commitment: commitment})
 }
 
+// CompileRegisterArtifact validates a worker-owned artifact tied to one exact
+// Session/Turn.  A public caller cannot forge a digest or choose another owner.
+func (compiler *Compiler) CompileRegisterArtifact(command RegisterArtifactCommand) (CompiledMutation, error) {
+	command = command.Owned()
+	if err := validateScope(command.Scope, AuthorityRuntimeWorker, true); err != nil || validSession(command.SessionID) != nil || validTurn(command.TurnID) != nil {
+		return CompiledMutation{}, errors.New("compile register Artifact: invalid scope or target")
+	}
+	commitment, err := compiler.content.ValidateArtifactHandoff(command.Artifact)
+	if err != nil || commitment.Tenant != command.Scope.Tenant || !validArtifactReference(commitment.Reference) {
+		return CompiledMutation{}, ErrIntegrity
+	}
+	return compiler.compile(CommandRegisterArtifact, command.Scope, command.IdempotencyKey, struct {
+		Session, Turn string
+		Reference     runtimecontent.Reference
+	}{command.SessionID.String(), command.TurnID.String(), commitment.Reference}, compiledArtifact{command: command, commitment: commitment})
+}
+
 // CompileBeginInvocationAttempt validates a fenced runtime-worker intent command.
 func (compiler *Compiler) CompileBeginInvocationAttempt(command BeginInvocationAttemptCommand) (CompiledMutation, error) {
 	command = command.Owned()
@@ -191,6 +209,12 @@ type InputEnvelopeReadCommand struct {
 	InputID   agentruntime.InputID
 }
 
+// ArtifactReadCommand requests compiler-validated principal-owned artifact read authority.
+type ArtifactReadCommand struct {
+	Scope      MutationScope
+	ArtifactID agentruntime.ArtifactID
+}
+
 // CompiledReadAuthorization is an opaque validated reader capability for an adapter query.
 type CompiledReadAuthorization struct {
 	scope      MutationScope
@@ -198,6 +222,7 @@ type CompiledReadAuthorization struct {
 	revisionID agentruntime.AgentRevisionID
 	sessionID  agentruntime.SessionID
 	inputID    agentruntime.InputID
+	artifactID agentruntime.ArtifactID
 }
 
 // Scope returns the authenticated reader scope.
@@ -211,6 +236,11 @@ func (authorization CompiledReadAuthorization) AgentRevision() (agentruntime.Age
 // Input returns the authorized Input reader target.
 func (authorization CompiledReadAuthorization) Input() (agentruntime.SessionID, agentruntime.InputID) {
 	return authorization.sessionID, authorization.inputID
+}
+
+// Artifact returns the exact authorized immutable artifact target.
+func (authorization CompiledReadAuthorization) Artifact() agentruntime.ArtifactID {
+	return authorization.artifactID
 }
 
 // CompileAuthorizeAgentSpecificationBodyRead validates a tenant-scoped metadata reader request.
@@ -229,6 +259,14 @@ func (compiler *Compiler) CompileAuthorizeInputEnvelopeRead(command InputEnvelop
 	return CompiledReadAuthorization{scope: command.Scope, sessionID: command.SessionID, inputID: command.InputID}, nil
 }
 
+// CompileAuthorizeArtifactRead validates a principal-owned metadata reader request.
+func (compiler *Compiler) CompileAuthorizeArtifactRead(command ArtifactReadCommand) (CompiledReadAuthorization, error) {
+	if err := validateScope(command.Scope, AuthoritySessionOwner, true); err != nil || validArtifact(command.ArtifactID) != nil {
+		return CompiledReadAuthorization{}, errors.New("compile Artifact reader: invalid scope or target")
+	}
+	return CompiledReadAuthorization{scope: command.Scope, artifactID: command.ArtifactID}, nil
+}
+
 type compiledRegister struct {
 	command    RegisterAgentRevisionCommand
 	commitment runtimecontent.AgentSpecificationBodyCommitment
@@ -236,6 +274,10 @@ type compiledRegister struct {
 type compiledAdmit struct {
 	command    AdmitInputCommand
 	commitment runtimecontent.InputEnvelopeCommitment
+}
+type compiledArtifact struct {
+	command    RegisterArtifactCommand
+	commitment runtimecontent.ArtifactCommitment
 }
 
 func (compiler *Compiler) compile(kind CommandKind, scope MutationScope, key string, shape any, command any) (CompiledMutation, error) {
@@ -278,6 +320,9 @@ func validName(value string) bool { return validOpaque(value, 128) }
 func validReference(reference runtimecontent.Reference) bool {
 	return reference.SizeBytes > 0 && reference.SizeBytes <= 2<<20+4<<10 && validOpaque(reference.Digest, 128) && validOpaque(reference.MediaType, 256)
 }
+func validArtifactReference(reference runtimecontent.Reference) bool {
+	return reference.SizeBytes > 0 && reference.SizeBytes <= 8<<20 && validOpaque(reference.Digest, 128) && validOpaque(reference.MediaType, 256)
+}
 func validAgent(id agentruntime.AgentID) error {
 	_, err := agentruntime.ParseAgentID(id.String())
 	return err
@@ -296,6 +341,10 @@ func validInput(id agentruntime.InputID) error {
 }
 func validTurn(id agentruntime.TurnID) error {
 	_, err := agentruntime.ParseTurnID(id.String())
+	return err
+}
+func validArtifact(id agentruntime.ArtifactID) error {
+	_, err := agentruntime.ParseArtifactID(id.String())
 	return err
 }
 func validOutcome(outcome InvocationState, result *runtimecontent.Reference, failure *agentruntime.Failure) bool {

@@ -122,6 +122,19 @@ type ArtifactReference struct {
 	SHA256    string     `json:"sha256"`
 }
 
+// ArtifactDownload is one authorized immutable artifact read.  It contains
+// metadata chosen by runtime state and bounded bytes, never a storage URL.
+type ArtifactDownload struct {
+	Artifact ArtifactReference `json:"artifact"`
+	Body     []byte            `json:"body"`
+}
+
+// Clone returns an independent authorized artifact read.
+func (download ArtifactDownload) Clone() ArtifactDownload {
+	download.Body = append([]byte(nil), download.Body...)
+	return download
+}
+
 // ContentPart carries either bounded text or an Artifact reference.
 type ContentPart struct {
 	Kind     ContentPartKind    `json:"kind"`

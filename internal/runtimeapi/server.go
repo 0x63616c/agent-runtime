@@ -69,6 +69,7 @@ func NewHandler(config Config) (http.Handler, error) {
 	mux.HandleFunc(openAPIMethodCreateAgent+" "+openAPIPathCreateAgent, server.createAgent)
 	mux.HandleFunc(openAPIMethodReviseAgent+" "+openAPIPathReviseAgent, server.reviseAgent)
 	mux.HandleFunc(openAPIMethodGetAgentRevision+" "+openAPIPathGetAgentRevision, server.getAgentRevision)
+	mux.HandleFunc(openAPIMethodReadArtifact+" "+openAPIPathReadArtifact, server.readArtifact)
 	mux.HandleFunc(openAPIMethodCreateSession+" "+openAPIPathCreateSession, server.createSession)
 	mux.HandleFunc(openAPIMethodSendInput+" "+openAPIPathSendInput, server.sendInput)
 	mux.HandleFunc(openAPIMethodInspectSession+" "+openAPIPathInspectSession, server.inspectSession)
@@ -234,6 +235,29 @@ func (server *server) getAgentRevision(writer http.ResponseWriter, request *http
 	}
 	result, err := server.runtime.GetAgentRevision(request.Context(), contextValue.identity, agentID, revisionID)
 	server.writeResult(writer, contextValue.requestID, http.StatusOK, result, err)
+}
+
+func (server *server) readArtifact(writer http.ResponseWriter, request *http.Request) {
+	contextValue := request.Context().Value(requestContextKey{}).(requestContext)
+	artifactID, err := agentruntime.ParseArtifactID(request.PathValue("artifact_id"))
+	if err != nil {
+		server.writeInvalid(writer, contextValue.requestID)
+		return
+	}
+	result, err := server.runtime.ReadArtifact(request.Context(), contextValue.identity, artifactID)
+	if err != nil {
+		server.writeResult(writer, contextValue.requestID, http.StatusOK, nil, err)
+		return
+	}
+	if result.Artifact.ID != artifactID || result.Artifact.SizeBytes != int64(len(result.Body)) || result.Artifact.MediaType == "" || len(result.Artifact.SHA256) != 64 {
+		server.writeFailure(writer, contextValue.requestID, http.StatusInternalServerError, agentruntime.Failure{Code: agentruntime.FailureInternal, Message: "request failed"})
+		return
+	}
+	writer.Header().Set("Content-Type", result.Artifact.MediaType)
+	writer.Header().Set("Content-Length", strconv.FormatInt(result.Artifact.SizeBytes, 10))
+	writer.Header().Set("Digest", "sha-256="+result.Artifact.SHA256)
+	writer.WriteHeader(http.StatusOK)
+	_, _ = writer.Write(result.Body)
 }
 
 func (server *server) createSession(writer http.ResponseWriter, request *http.Request) {

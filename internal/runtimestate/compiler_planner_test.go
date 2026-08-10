@@ -2,6 +2,7 @@ package runtimestate_test
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"testing"
 	"time"
@@ -308,6 +309,52 @@ func TestPlannerCancelsQueuedWorkClosesAfterDrainAndFencesOutboxLeases(t *testin
 	}
 	if ackPlan.Result().Outbox.State != runtimestate.OutboxPublished {
 		t.Fatalf("acknowledged Outbox = %#v", ackPlan.Result().Outbox)
+	}
+}
+
+func TestPlannerRegistersWorkerArtifactWithAuthorizationAuditOutboxAndReplay(t *testing.T) {
+	now := time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC)
+	content, _, tenant, principal := testRuntimeContent(t)
+	compiler, err := runtimestate.NewCompiler(content)
+	if err != nil {
+		t.Fatalf("new compiler: %v", err)
+	}
+	planner, err := runtimestate.NewRuntimeStatePlanner(fixedPlannerClock{now: now}, &uniquePlannerIDs{})
+	if err != nil {
+		t.Fatalf("new planner: %v", err)
+	}
+	sessionID, turnID := validSessionID(t), agentruntime.TurnID("turn_1234567890ABCDEF")
+	state := runtimestate.RuntimeState{Sessions: []runtimestate.SessionRecord{{Tenant: tenant, Principal: principal, SessionID: sessionID, State: agentruntime.SessionOpen, Version: 1, CreatedAt: now, UpdatedAt: now, RetainUntil: now.Add(time.Hour)}}, Turns: []runtimestate.TurnRecord{{Tenant: tenant, Principal: principal, SessionID: sessionID, TurnID: turnID, State: agentruntime.TurnRunning, Version: 1, RetentionUntil: now.Add(time.Hour)}}}
+	handoff, err := content.StageArtifact(context.Background(), tenant, "text/plain", []byte("safe artifact"))
+	if err != nil {
+		t.Fatalf("stage artifact: %v", err)
+	}
+	command, err := compiler.CompileRegisterArtifact(runtimestate.RegisterArtifactCommand{Scope: workerScope(tenant, principal), IdempotencyKey: "artifact-1", SessionID: sessionID, TurnID: turnID, Artifact: handoff})
+	if err != nil {
+		t.Fatalf("compile artifact: %v", err)
+	}
+	plan, err := planner.Plan(context.Background(), state, command)
+	if err != nil {
+		t.Fatalf("plan artifact: %v", err)
+	}
+	result := plan.Result()
+	if result.Artifact.ArtifactID == "" || result.Artifact.Reference.Digest == "" || len(plan.Effects().Audit) != 1 || len(plan.Effects().Outbox) != 1 {
+		t.Fatalf("artifact plan = %#v / %#v, want metadata plus audit/outbox", result, plan.Effects())
+	}
+	replay, err := planner.Plan(context.Background(), plan.State(), command)
+	if err != nil || replay.Result().Artifact != result.Artifact {
+		t.Fatalf("artifact exact replay = %#v, %v; want original metadata", replay.Result(), err)
+	}
+	other, err := content.StageArtifact(context.Background(), tenant, "text/plain", []byte("different artifact"))
+	if err != nil {
+		t.Fatalf("stage conflicting artifact: %v", err)
+	}
+	conflict, err := compiler.CompileRegisterArtifact(runtimestate.RegisterArtifactCommand{Scope: workerScope(tenant, principal), IdempotencyKey: "artifact-1", SessionID: sessionID, TurnID: turnID, Artifact: other})
+	if err != nil {
+		t.Fatalf("compile conflicting artifact: %v", err)
+	}
+	if _, err := planner.Plan(context.Background(), plan.State(), conflict); !errors.Is(err, runtimestate.ErrConflict) {
+		t.Fatalf("conflicting artifact receipt error = %v, want ErrConflict", err)
 	}
 }
 

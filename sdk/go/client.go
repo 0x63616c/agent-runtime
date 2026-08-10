@@ -27,6 +27,8 @@ type RuntimeClient interface {
 	ReviseAgent(context.Context, ReviseAgentRequest) (AgentSpecification, error)
 	// GetAgentRevision reads one immutable Agent revision through the admin surface.
 	GetAgentRevision(context.Context, AgentID, AgentRevisionID) (AgentSpecification, error)
+	// ReadArtifact downloads one caller-authorized immutable artifact.
+	ReadArtifact(context.Context, ArtifactID) (ArtifactDownload, error)
 	// CreateSession creates a principal-owned Session pinned to one Agent revision.
 	CreateSession(context.Context, CreateSessionRequest) (Session, error)
 	// SendInput idempotently admits bounded Input into a Session.
@@ -166,6 +168,15 @@ func (client *Client) GetAgentRevision(ctx context.Context, agentID AgentID, rev
 	return doJSON[AgentSpecification](client, ctx, openAPIMethodGetAgentRevision, path, "", nil)
 }
 
+// ReadArtifact downloads bounded immutable content only after the server has
+// authorized the exact tenant/principal/artifact tuple.
+func (client *Client) ReadArtifact(ctx context.Context, artifactID ArtifactID) (ArtifactDownload, error) {
+	if _, err := ParseArtifactID(artifactID.String()); err != nil {
+		return ArtifactDownload{}, errors.New("read Artifact: invalid artifact ID")
+	}
+	return doArtifact(client, ctx, replacePath(openAPIPathReadArtifact, "artifact_id", artifactID.String()), artifactID)
+}
+
 // CreateSession creates a principal-owned Session pinned to one Agent revision.
 func (client *Client) CreateSession(ctx context.Context, request CreateSessionRequest) (Session, error) {
 	body := struct {
@@ -294,6 +305,72 @@ func doJSON[Response any](client *Client, ctx context.Context, method, path, ide
 		return zero, errors.Wrap(err, "read Agent Runtime response: decode body")
 	}
 	return zero, nil
+}
+
+func doArtifact(client *Client, ctx context.Context, path string, artifactID ArtifactID) (ArtifactDownload, error) {
+	if client == nil {
+		return ArtifactDownload{}, errors.New("read Artifact: client is nil")
+	}
+	if err := contextError(ctx); err != nil {
+		return ArtifactDownload{}, err
+	}
+	requestID, err := client.requestIDs.NextRequestID()
+	if err != nil {
+		return ArtifactDownload{}, errors.Wrap(err, "read Artifact: allocate request ID")
+	}
+	request, err := http.NewRequestWithContext(ctx, openAPIMethodReadArtifact, client.baseURL.String()+path, nil)
+	if err != nil {
+		return ArtifactDownload{}, errors.Wrap(err, "read Artifact: construct request")
+	}
+	request.Header.Set("Accept", "application/octet-stream")
+	request.Header.Set("X-Request-ID", requestID.String())
+	sink := &requestAuthorizationSink{header: request.Header}
+	if err := client.credentials.Authorize(ctx, sink); err != nil {
+		return ArtifactDownload{}, errors.Wrap(err, "read Artifact: authorize")
+	}
+	response, err := client.httpClient.Do(request)
+	request.Header.Del("Authorization")
+	if err != nil || response == nil {
+		if err != nil {
+			return ArtifactDownload{}, errors.Wrap(err, "read Artifact")
+		}
+		return ArtifactDownload{}, errors.New("read Artifact: transport returned no response")
+	}
+	defer func() { _ = response.Body.Close() }()
+	if response.Header.Get("X-Request-ID") != requestID.String() {
+		return ArtifactDownload{}, errors.New("read Artifact: request ID mismatch")
+	}
+	limited := io.LimitReader(response.Body, client.maxResponseBytes+1)
+	body, err := io.ReadAll(limited)
+	if err != nil {
+		return ArtifactDownload{}, errors.Wrap(err, "read Artifact")
+	}
+	if int64(len(body)) > client.maxResponseBytes {
+		return ArtifactDownload{}, errors.New("read Artifact: body exceeds configured limit")
+	}
+	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		var envelope struct {
+			RequestID RequestID `json:"request_id"`
+			Error     Failure   `json:"error"`
+		}
+		if decodeStrict(body, &envelope) != nil || envelope.RequestID != requestID || !validSafeFailure(envelope.Error) {
+			return ArtifactDownload{}, errors.New("read Artifact: invalid safe failure envelope")
+		}
+		return ArtifactDownload{}, &Error{Failure: *envelope.Error.Clone()}
+	}
+	mediaType, _, err := mime.ParseMediaType(response.Header.Get("Content-Type"))
+	if err != nil || mediaType == "application/json" || mediaType == "" {
+		return ArtifactDownload{}, errors.New("read Artifact: invalid media type")
+	}
+	size, err := strconv.ParseInt(response.Header.Get("Content-Length"), 10, 64)
+	if err != nil || size != int64(len(body)) {
+		return ArtifactDownload{}, errors.New("read Artifact: invalid content length")
+	}
+	digest := response.Header.Get("Digest")
+	if !strings.HasPrefix(digest, "sha-256=") || len(strings.TrimPrefix(digest, "sha-256=")) != 64 {
+		return ArtifactDownload{}, errors.New("read Artifact: invalid digest")
+	}
+	return ArtifactDownload{Artifact: ArtifactReference{ID: artifactID, MediaType: mediaType, SizeBytes: size, SHA256: strings.TrimPrefix(digest, "sha-256=")}, Body: body}, nil
 }
 
 func validSafeFailure(failure Failure) bool {

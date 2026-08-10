@@ -114,6 +114,22 @@ type InputRecord struct {
 // Clone returns an independent Input metadata snapshot.
 func (record InputRecord) Clone() InputRecord { return record }
 
+// ArtifactRecord is immutable state metadata for one principal-readable blob.
+// Its reference never contains a bucket/key or content bytes.
+type ArtifactRecord struct {
+	Tenant      runtimecontent.TenantID
+	Principal   runtimecontent.PrincipalID
+	ArtifactID  agentruntime.ArtifactID `json:",omitempty"`
+	SessionID   agentruntime.SessionID  `json:",omitempty"`
+	TurnID      agentruntime.TurnID     `json:",omitempty"`
+	Reference   runtimecontent.Reference
+	CreatedAt   time.Time
+	RetainUntil time.Time
+}
+
+// Clone returns an independent Artifact metadata snapshot.
+func (record ArtifactRecord) Clone() ArtifactRecord { return record }
+
 // TurnRecord is the bounded execution state for one accepted Input.
 type TurnRecord struct {
 	Tenant         runtimecontent.TenantID
@@ -290,6 +306,7 @@ type MutationReceipt struct {
 	SessionID      agentruntime.SessionID       `json:",omitempty"`
 	InputID        agentruntime.InputID         `json:",omitempty"`
 	TurnID         agentruntime.TurnID          `json:",omitempty"`
+	ArtifactID     agentruntime.ArtifactID      `json:",omitempty"`
 	AcceptedAt     time.Time
 	RetentionUntil time.Time
 }
@@ -350,6 +367,19 @@ type AdmitInputCommand struct {
 	SessionID      agentruntime.SessionID
 	Input          runtimecontent.ContentHandoff
 }
+
+// RegisterArtifactCommand records a worker-produced immutable artifact only
+// after the content store issued an opaque staged handoff for the same owner.
+type RegisterArtifactCommand struct {
+	Scope          MutationScope
+	IdempotencyKey string
+	SessionID      agentruntime.SessionID
+	TurnID         agentruntime.TurnID
+	Artifact       runtimecontent.ContentHandoff
+}
+
+// Owned returns a value-owned artifact command.
+func (command RegisterArtifactCommand) Owned() RegisterArtifactCommand { return command }
 
 // Owned returns a value-owned command. ContentHandoff is opaque and immutable to callers.
 func (command AdmitInputCommand) Owned() AdmitInputCommand {
@@ -483,6 +513,13 @@ type AdmitInputResult struct {
 	Effects EffectSet
 }
 
+// RegisterArtifactResult returns one immutable artifact and its audit/outbox effects.
+type RegisterArtifactResult struct {
+	Artifact ArtifactRecord
+	Receipt  MutationReceipt
+	Effects  EffectSet
+}
+
 // BeginInvocationAttemptResult returns the committed fenced invocation intent and declared effects.
 type BeginInvocationAttemptResult struct {
 	Invocation InvocationRecord
@@ -552,6 +589,12 @@ func (result CreateSessionResult) Clone() CreateSessionResult {
 func (result AdmitInputResult) Clone() AdmitInputResult {
 	result.Input, result.Turn, result.Session = result.Input.Clone(), result.Turn.Clone(), result.Session.Clone()
 	result.Receipt, result.Effects = result.Receipt.Clone(), result.Effects.Clone()
+	return result
+}
+
+// Clone returns an independent artifact registration result.
+func (result RegisterArtifactResult) Clone() RegisterArtifactResult {
+	result.Artifact, result.Receipt, result.Effects = result.Artifact.Clone(), result.Receipt.Clone(), result.Effects.Clone()
 	return result
 }
 
@@ -628,6 +671,12 @@ type TurnQuery struct {
 	Scope     MutationScope
 	SessionID agentruntime.SessionID
 	TurnID    agentruntime.TurnID
+}
+
+// ArtifactQuery requests one principal-authorized artifact metadata projection.
+type ArtifactQuery struct {
+	Scope      MutationScope
+	ArtifactID agentruntime.ArtifactID
 }
 
 // InvocationQuery resolves one exact principal-scoped operation for recovery without a provider handle.
@@ -779,6 +828,7 @@ type RuntimeStateStore interface {
 	GetAgentRevision(context.Context, AgentRevisionQuery) (AgentRevisionRecord, error)
 	GetSessionView(context.Context, SessionViewQuery) (SessionView, error)
 	GetTurn(context.Context, TurnQuery) (TurnRecord, error)
+	GetArtifact(context.Context, ArtifactQuery) (ArtifactRecord, error)
 	GetInvocation(context.Context, InvocationQuery) (InvocationRecord, error)
 	ReadEvents(context.Context, EventsQuery) (EventPage, error)
 	GetMutationReceipt(context.Context, MutationReceiptQuery) (MutationReceipt, error)
@@ -786,6 +836,7 @@ type RuntimeStateStore interface {
 	ReadOutbox(context.Context, OutboxQuery) (OutboxPage, error)
 	AuthorizeAgentSpecificationBodyRead(context.Context, CompiledReadAuthorization) (runtimecontent.AgentSpecificationBodyRecord, error)
 	AuthorizeInputEnvelopeRead(context.Context, CompiledReadAuthorization) (runtimecontent.InputEnvelopeRecord, error)
+	AuthorizeArtifactRead(context.Context, CompiledReadAuthorization) (runtimecontent.ArtifactRecord, error)
 }
 
 // OutboxTenantSource is the deliberately narrow discovery capability used by

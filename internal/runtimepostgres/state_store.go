@@ -179,6 +179,21 @@ func (store *RuntimeStateStore) GetTurn(ctx context.Context, query runtimestate.
 	}
 	return runtimestate.TurnRecord{}, runtimestate.ErrNotFoundOrDenied
 }
+func (store *RuntimeStateStore) GetArtifact(ctx context.Context, query runtimestate.ArtifactQuery) (runtimestate.ArtifactRecord, error) {
+	if !hasScope(query.Scope, runtimestate.AuthoritySessionOwner, true) {
+		return runtimestate.ArtifactRecord{}, runtimestate.ErrNotFoundOrDenied
+	}
+	state, err := store.LoadRuntimeState(ctx, query.Scope)
+	if err != nil {
+		return runtimestate.ArtifactRecord{}, err
+	}
+	for _, record := range state.Artifacts {
+		if record.Tenant == query.Scope.Tenant && record.Principal == query.Scope.Principal && record.ArtifactID == query.ArtifactID {
+			return record.Clone(), nil
+		}
+	}
+	return runtimestate.ArtifactRecord{}, runtimestate.ErrNotFoundOrDenied
+}
 func (store *RuntimeStateStore) GetInvocation(ctx context.Context, query runtimestate.InvocationQuery) (runtimestate.InvocationRecord, error) {
 	if !hasScope(query.Scope, runtimestate.AuthorityRuntimeWorker, true) {
 		return runtimestate.InvocationRecord{}, runtimestate.ErrNotFoundOrDenied
@@ -358,6 +373,20 @@ func (store *RuntimeStateStore) AuthorizeInputEnvelopeRead(ctx context.Context, 
 		}
 	}
 	return runtimecontent.InputEnvelopeRecord{}, runtimestate.ErrNotFoundOrDenied
+}
+func (store *RuntimeStateStore) AuthorizeArtifactRead(ctx context.Context, authorization runtimestate.CompiledReadAuthorization) (runtimecontent.ArtifactRecord, error) {
+	scope := authorization.Scope()
+	artifactID := authorization.Artifact()
+	state, err := store.LoadRuntimeState(ctx, scope)
+	if err != nil {
+		return runtimecontent.ArtifactRecord{}, err
+	}
+	for _, record := range state.Artifacts {
+		if record.Tenant == scope.Tenant && record.Principal == scope.Principal && record.ArtifactID == artifactID {
+			return runtimecontent.ArtifactRecord{Tenant: record.Tenant, Principal: record.Principal, ArtifactID: record.ArtifactID, Reference: record.Reference}, nil
+		}
+	}
+	return runtimecontent.ArtifactRecord{}, runtimestate.ErrNotFoundOrDenied
 }
 
 func hasScope(scope runtimestate.MutationScope, authority runtimestate.Authority, principalRequired bool) bool {

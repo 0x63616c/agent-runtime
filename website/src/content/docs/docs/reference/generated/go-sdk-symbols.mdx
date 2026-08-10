@@ -25,6 +25,8 @@ This index is derived only from the declared public `sdk/go` source files. It li
 | `method` | `AgentRevisionID.UnmarshalJSON` | UnmarshalJSON decodes and validates an Agent revision ID. |
 | `type` | `AgentSpecification` | AgentSpecification is one immutable, versioned definition of Agent behavior. |
 | `method` | `AgentSpecification.Clone` | Clone returns an independent Agent specification snapshot. |
+| `type` | `ArtifactDownload` | ArtifactDownload is one authorized immutable artifact read. It contains metadata chosen by runtime state and bounded bytes, never a storage URL. |
+| `method` | `ArtifactDownload.Clone` | Clone returns an independent authorized artifact read. |
 | `type` | `ArtifactID` | ArtifactID identifies an authorized immutable Artifact reference. |
 | `method` | `ArtifactID.LogValue` | LogValue returns a redacted Artifact ID for structured logs. |
 | `method` | `ArtifactID.MarshalJSON` | MarshalJSON encodes a validated Artifact ID. |
@@ -44,6 +46,7 @@ This index is derived only from the declared public `sdk/go` source files. It li
 | `method` | `Client.GetAgentRevision` | GetAgentRevision reads one immutable Agent revision through the admin surface. |
 | `method` | `Client.InspectSession` | InspectSession returns caller-safe Session state without backend identifiers. |
 | `method` | `Client.InspectTurn` | InspectTurn returns one caller-safe Turn snapshot. |
+| `method` | `Client.ReadArtifact` | ReadArtifact downloads bounded immutable content only after the server has authorized the exact tenant/principal/artifact tuple. |
 | `method` | `Client.ReviseAgent` | ReviseAgent creates another immutable Agent revision through the admin surface. |
 | `method` | `Client.SendInput` | SendInput idempotently admits bounded Input into a Session. |
 | `type` | `ClientConfig` | ClientConfig contains every dependency and finite bound required by Client. |
@@ -133,6 +136,7 @@ This index is derived only from the declared public `sdk/go` source files. It li
 | `method` | `RuntimeClient.GetAgentRevision` | GetAgentRevision reads one immutable Agent revision through the admin surface. |
 | `method` | `RuntimeClient.InspectSession` | InspectSession returns caller-safe Session state without backend identifiers. |
 | `method` | `RuntimeClient.InspectTurn` | InspectTurn returns one caller-safe Turn snapshot. |
+| `method` | `RuntimeClient.ReadArtifact` | ReadArtifact downloads one caller-authorized immutable artifact. |
 | `method` | `RuntimeClient.ReviseAgent` | ReviseAgent creates another immutable Agent revision through the admin surface. |
 | `method` | `RuntimeClient.SendInput` | SendInput idempotently admits bounded Input into a Session. |
 | `type` | `SendInputRequest` | SendInputRequest idempotently submits bounded content to a Session. |

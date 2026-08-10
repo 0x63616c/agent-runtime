@@ -11,6 +11,7 @@ type Runtime interface {
 	CreateAgent(context.Context, Identity, agentruntime.CreateAgentRequest) (agentruntime.AgentSpecification, error)
 	ReviseAgent(context.Context, Identity, agentruntime.ReviseAgentRequest) (agentruntime.AgentSpecification, error)
 	GetAgentRevision(context.Context, Identity, agentruntime.AgentID, agentruntime.AgentRevisionID) (agentruntime.AgentSpecification, error)
+	ReadArtifact(context.Context, Identity, agentruntime.ArtifactID) (agentruntime.ArtifactDownload, error)
 	CreateSession(context.Context, Identity, agentruntime.CreateSessionRequest) (agentruntime.Session, error)
 	SendInput(context.Context, Identity, agentruntime.SendInputRequest) (agentruntime.SendInputResult, error)
 	InspectSession(context.Context, Identity, agentruntime.SessionID) (agentruntime.SessionView, error)

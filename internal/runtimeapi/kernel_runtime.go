@@ -36,6 +36,12 @@ func (runtime kernelRuntime) GetAgentRevision(ctx context.Context, identity Iden
 	return runtime.kernel.GetAgentRevision(ctx, tenantScope(identity), agentID, revisionID)
 }
 
+// ReadArtifact is intentionally unavailable in the legacy memory-only kernel.
+// Artifact reads require the state-authorized immutable-content authority.
+func (runtime kernelRuntime) ReadArtifact(context.Context, Identity, agentruntime.ArtifactID) (agentruntime.ArtifactDownload, error) {
+	return agentruntime.ArtifactDownload{}, &agentruntime.Error{Failure: agentruntime.Failure{Code: agentruntime.FailureNotFound, Message: "resource not found"}}
+}
+
 func (runtime kernelRuntime) CreateSession(ctx context.Context, identity Identity, request agentruntime.CreateSessionRequest) (agentruntime.Session, error) {
 	revision, err := runtime.kernel.ResolveAgentRevision(ctx, tenantScope(identity), request.AgentRevision)
 	if err != nil {
