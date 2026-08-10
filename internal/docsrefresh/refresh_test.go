@@ -3,6 +3,7 @@ package docsrefresh_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -66,14 +67,7 @@ var _ = Describe("refreshing public documentation", func() {
 			Kind:         "openapi-operation-index",
 			PublicStatus: "current public contract; runtime transport remains development evidence",
 		}
-		files.content["api/openapi/openapi.yaml"] = []byte(`{
-  "openapi": "3.1.0",
-  "info": {"title": "Agent Runtime API", "version": "v1"},
-  "paths": {
-    "/v1/sessions/{session_id}": {"get": {"operationId": "inspectSession", "responses": {"200": {}}}},
-    "/v1/sessions": {"post": {"operationId": "createSession", "responses": {"201": {}}}}
-  }
-}`)
+		files.content["api/openapi/openapi.yaml"] = validOpenAPIContract("v1")
 
 		result, err := docsrefresh.Refresh(context.Background(), ".", manifest, files, changes, docsrefresh.Options{})
 
@@ -81,7 +75,7 @@ var _ = Describe("refreshing public documentation", func() {
 		Expect(result.Changed).To(Equal([]string{"website/docs/reference/generated/http-operations.mdx"}))
 		output := string(files.content[manifest.Generated[0].Output])
 		Expect(output).To(ContainSubstring("# HTTP operation index"))
-		Expect(output).To(ContainSubstring("`v1`"))
+		Expect(output).To(ContainSubstring("`3.1.0`"))
 		Expect(output).To(ContainSubstring("| `POST` | `/v1/sessions` | `createSession` | `201` |"))
 		Expect(output).To(ContainSubstring("| `GET` | `/v1/sessions/{session_id}` | `inspectSession` | `200` |"))
 		Expect(output).To(HavePrefix("---\ntitle: HTTP operation index\n"))
@@ -95,16 +89,103 @@ var _ = Describe("refreshing public documentation", func() {
 			Kind:         "openapi-operation-index",
 			PublicStatus: "current public contract; runtime transport remains development evidence",
 		}
-		files.content["api/openapi/openapi.yaml"] = []byte(`{
-  "openapi": "3.1.0",
-  "info": {"title": "Agent Runtime API", "version": "v1"},
-  "paths": {"/v1/sessions": {"post": {"operationId": "createSession", "responses": {"400": {}}}}}
-}`)
+		files.content["api/openapi/openapi.yaml"] = []byte(strings.Replace(string(validOpenAPIContract("v1")), `"responses":{"201":{"description":"success"},"default":{"description":"failure"}}`, `"responses":{"400":{"description":"failure"},"default":{"description":"failure"}}`, 1))
 
 		_, err := docsrefresh.Refresh(context.Background(), ".", manifest, files, changes, docsrefresh.Options{})
 
-		Expect(err).To(MatchError(ContainSubstring("has no successful response")))
+		Expect(err).To(MatchError(ContainSubstring("expected success and default failure responses")))
 		Expect(files.atomicWrites).To(BeEmpty())
+	})
+
+	It("refuses an incomplete or unsafe OpenAPI document before writing an index", func() {
+		manifest.Generated[0] = docsrefresh.Artifact{
+			Output:       "website/docs/reference/generated/http-operations.mdx",
+			Inputs:       []string{"api/openapi/openapi.yaml"},
+			Kind:         "openapi-operation-index",
+			PublicStatus: "current public contract; runtime transport remains development evidence",
+		}
+		for _, test := range []struct {
+			name, expected string
+			document       []byte
+		}{
+			{
+				name:     "wrong OpenAPI version",
+				expected: "version must be 3.1.0",
+				document: []byte(strings.Replace(string(validOpenAPIContract("v1")), `"openapi":"3.1.0"`, `"openapi":"3.1.1"`, 1)),
+			},
+			{
+				name:     "unsafe API info version",
+				expected: "v1 info version",
+				document: validOpenAPIContract("v1\n\n<script>alert(1)</script>"),
+			},
+			{
+				name:     "reference path item",
+				expected: "decode runtime OpenAPI authority",
+				document: withOpenAPIPathItem(`"/v1/hidden":{"$ref":"#/components/pathItems/Hidden"}`),
+			},
+			{
+				name:     "null path item",
+				expected: "not a concrete versioned path item",
+				document: withOpenAPIPathItem(`"/v1/null":null`),
+			},
+			{
+				name:     "duplicate operation ID",
+				expected: "operation createSession",
+				document: withOpenAPIPathItem(`"/v1/duplicate":{"get":{"operationId":"createSession","parameters":[{"$ref":"#/components/parameters/RequestID"}],"responses":{"200":{"description":"success"},"default":{"description":"failure"}}}}`),
+			},
+			{
+				name:     "incomplete authority document",
+				expected: "title, v1 info version, and servers are required",
+				document: []byte(`{"openapi":"3.1.0","info":{"title":"Agent Runtime API","version":"v1"},"paths":{}}`),
+			},
+			{
+				name:     "empty security authority",
+				expected: "security requirements are required",
+				document: []byte(strings.Replace(string(validOpenAPIContract("v1")), `"security":[{"bearerAuth":[]}]`, `"security":[]`, 1)),
+			},
+			{
+				name:     "empty security requirement",
+				expected: "security requirement",
+				document: []byte(strings.Replace(string(validOpenAPIContract("v1")), `"security":[{"bearerAuth":[]}]`, `"security":[{}]`, 1)),
+			},
+			{
+				name:     "null security requirement",
+				expected: "security requirement",
+				document: []byte(strings.Replace(string(validOpenAPIContract("v1")), `"security":[{"bearerAuth":[]}]`, `"security":[null]`, 1)),
+			},
+			{
+				name:     "unknown security scheme",
+				expected: "unknown security scheme",
+				document: []byte(strings.Replace(string(validOpenAPIContract("v1")), `"security":[{"bearerAuth":[]}]`, `"security":[{"unknown":[]}]`, 1)),
+			},
+			{
+				name:     "null mutation request body",
+				expected: "request body is invalid",
+				document: []byte(strings.Replace(string(validOpenAPIContract("v1")), `"requestBody":{"$ref":"#/components/requestBodies/EmptyMutation"}`, `"requestBody":null`, 1)),
+			},
+			{
+				name:     "scalar mutation request body",
+				expected: "request body is invalid",
+				document: []byte(strings.Replace(string(validOpenAPIContract("v1")), `"requestBody":{"$ref":"#/components/requestBodies/EmptyMutation"}`, `"requestBody":true`, 1)),
+			},
+			{
+				name:     "null success response",
+				expected: "expected success and default failure responses are required",
+				document: []byte(strings.Replace(string(validOpenAPIContract("v1")), `"responses":{"201":{"description":"success"},"default":{"description":"failure"}}`, `"responses":{"201":null,"default":{"description":"failure"}}`, 1)),
+			},
+			{
+				name:     "scalar default response",
+				expected: "expected success and default failure responses are required",
+				document: []byte(strings.Replace(string(validOpenAPIContract("v1")), `"responses":{"201":{"description":"success"},"default":{"description":"failure"}}`, `"responses":{"201":{"description":"success"},"default":false}`, 1)),
+			},
+		} {
+			files.content["api/openapi/openapi.yaml"] = test.document
+
+			_, err := docsrefresh.Refresh(context.Background(), ".", manifest, files, changes, docsrefresh.Options{})
+
+			Expect(err).To(MatchError(ContainSubstring(test.expected)), test.name)
+			Expect(files.atomicWrites).To(BeEmpty(), test.name)
+		}
 	})
 
 	It("rejects input and output paths that escape the repository", func() {
@@ -272,6 +353,42 @@ func runGit(root string, arguments ...string) {
 	command.Dir = root
 	output, err := command.CombinedOutput()
 	ExpectWithOffset(1, err).NotTo(HaveOccurred(), string(output))
+}
+
+func validOpenAPIContract(infoVersion string) []byte {
+	operations := []struct {
+		id, method, path, status string
+		mutation                 bool
+	}{
+		{"createAgent", "post", "/v1/admin/agents", "201", true},
+		{"reviseAgent", "post", "/v1/admin/agents/{agent_id}/revisions", "201", true},
+		{"getAgentRevision", "get", "/v1/admin/agents/{agent_id}/revisions/{revision_id}", "200", false},
+		{"createSession", "post", "/v1/sessions", "201", true},
+		{"inspectSession", "get", "/v1/sessions/{session_id}", "200", false},
+		{"sendInput", "post", "/v1/sessions/{session_id}/inputs", "202", true},
+		{"inspectTurn", "get", "/v1/sessions/{session_id}/turns/{turn_id}", "200", false},
+		{"listEvents", "get", "/v1/sessions/{session_id}/events", "200", false},
+		{"cancelTurn", "post", "/v1/sessions/{session_id}/turns/{turn_id}/cancel", "200", true},
+		{"closeSession", "post", "/v1/sessions/{session_id}/close", "200", true},
+	}
+	var paths strings.Builder
+	for index, operation := range operations {
+		if index > 0 {
+			paths.WriteByte(',')
+		}
+		parameters := `[ {"$ref":"#/components/parameters/RequestID"} ]`
+		requestBody := ""
+		if operation.mutation {
+			parameters = `[ {"$ref":"#/components/parameters/RequestID"}, {"$ref":"#/components/parameters/IdempotencyKey"} ]`
+			requestBody = `,"requestBody":{"$ref":"#/components/requestBodies/EmptyMutation"}`
+		}
+		fmt.Fprintf(&paths, `%q:{%q:{"operationId":%q,"parameters":%s%s,"responses":{%q:{"description":"success"},"default":{"description":"failure"}}}}`, operation.path, operation.method, operation.id, parameters, requestBody, operation.status)
+	}
+	return []byte(fmt.Sprintf(`{"openapi":"3.1.0","info":{"title":"Agent Runtime API","version":%q},"servers":[{"url":"https://runtime.example.invalid"}],"security":[{"bearerAuth":[]}],"paths":{%s},"components":{"securitySchemes":{"bearerAuth":{"type":"http","scheme":"bearer"}},"schemas":{}}}`, infoVersion, paths.String()))
+}
+
+func withOpenAPIPathItem(pathItem string) []byte {
+	return []byte(strings.Replace(string(validOpenAPIContract("v1")), `},"components":{"securitySchemes":{"bearerAuth":{"type":"http","scheme":"bearer"}},"schemas":{}}}`, `,`+pathItem+`},"components":{"securitySchemes":{"bearerAuth":{"type":"http","scheme":"bearer"}},"schemas":{}}}`, 1))
 }
 
 type memoryFiles struct {
