@@ -29,6 +29,8 @@ var (
 	ErrContentIntegrity = errors.New("agent spec backfill immutable content integrity")
 	// ErrExpiredRequest reports a request outside its immutable admission window.
 	ErrExpiredRequest = errors.New("agent spec backfill request expired")
+	// ErrFutureRequest reports a request before its immutable creation time.
+	ErrFutureRequest = errors.New("agent spec backfill request is not yet admitted")
 )
 
 // Request is the immutable, bounded controller request with no raw Agent specification or object key.
@@ -86,7 +88,7 @@ func (request Request) Canonical() ([]byte, error) {
 	writeText(&value, request.ControllerImageDigest)
 	writeText(&value, request.SnapshotFingerprint)
 	writeUint(&value, request.SnapshotCount)
-	nonce, _ := base64.RawURLEncoding.DecodeString(request.FenceNonce)
+	nonce, _ := base64.RawURLEncoding.Strict().DecodeString(request.FenceNonce)
 	writeBytes(&value, nonce)
 	writeText(&value, request.StaticReadinessDigest)
 	writeText(&value, request.DatabaseAuthorityDigest)
@@ -108,8 +110,8 @@ func (request Request) validate() error {
 			return errors.New("invalid backfill digest")
 		}
 	}
-	nonce, err := base64.RawURLEncoding.DecodeString(request.FenceNonce)
-	if err != nil || len(nonce) != 32 {
+	nonce, err := base64.RawURLEncoding.Strict().DecodeString(request.FenceNonce)
+	if err != nil || len(nonce) != 32 || base64.RawURLEncoding.EncodeToString(nonce) != request.FenceNonce {
 		return errors.New("invalid backfill fence nonce")
 	}
 	return nil
@@ -119,6 +121,9 @@ func (request Request) validate() error {
 func (request Request) ValidateAt(now time.Time) error {
 	if err := request.validate(); err != nil {
 		return err
+	}
+	if now.UTC().Before(request.CreatedAt) {
+		return ErrFutureRequest
 	}
 	if now.UTC().After(request.ExpiresAt) {
 		return ErrExpiredRequest
@@ -161,6 +166,8 @@ const (
 	RefusalContent Reason = "content"
 	// RefusalExpired identifies an expired request.
 	RefusalExpired Reason = "expired"
+	// RefusalNotAdmitted identifies a request before its immutable creation time.
+	RefusalNotAdmitted Reason = "not_admitted"
 )
 
 // Status is the bounded redacted result for one immutable request.
@@ -197,7 +204,7 @@ func (status Status) Canonical() ([]byte, error) {
 }
 
 func validReason(reason Reason) bool {
-	return reason == RefusalSnapshot || reason == RefusalContent || reason == RefusalExpired
+	return reason == RefusalSnapshot || reason == RefusalContent || reason == RefusalExpired || reason == RefusalNotAdmitted
 }
 
 // ValidateFor proves the status matches one request at an explicit time.
@@ -267,6 +274,10 @@ func Verify(ctx context.Context, request Request, reader FrozenLegacyReader, ver
 		return Status{}, err
 	}
 	status := Status{RequestDigest: digest, SnapshotFingerprint: request.SnapshotFingerprint, SnapshotCount: request.SnapshotCount, CompletedAt: now.UTC()}
+	if now.UTC().Before(request.CreatedAt) {
+		status.Phase, status.Reason = PhaseRefused, RefusalNotAdmitted
+		return status, nil
+	}
 	if now.UTC().After(request.ExpiresAt) {
 		status.Phase, status.Reason = PhaseRefused, RefusalExpired
 		return status, nil
@@ -281,6 +292,9 @@ func Verify(ctx context.Context, request Request, reader FrozenLegacyReader, ver
 	if err != nil {
 		return classifyVerificationError(status, err, "read frozen legacy set")
 	}
+	if err := ctx.Err(); err != nil {
+		return Status{}, errors.Wrap(err, "read frozen legacy set")
+	}
 	if set.Snapshot.Fingerprint != request.SnapshotFingerprint || set.Snapshot.Count != request.SnapshotCount || uint64(len(set.Revisions)) != request.SnapshotCount {
 		status.Phase, status.Reason = PhaseRefused, RefusalSnapshot
 		return status, nil
@@ -292,6 +306,9 @@ func Verify(ctx context.Context, request Request, reader FrozenLegacyReader, ver
 		}
 		if err := verifier.VerifyImmutable(ctx, revision); err != nil {
 			return classifyVerificationError(status, err, "verify immutable content")
+		}
+		if err := ctx.Err(); err != nil {
+			return Status{}, errors.Wrap(err, "verify immutable content")
 		}
 	}
 	status.Phase = PhaseVerified

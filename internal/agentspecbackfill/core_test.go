@@ -38,6 +38,17 @@ func TestRequestUsesCanonicalDigestNameAndBoundedImmutableStatus(t *testing.T) {
 	if err := farFuture.ValidateAt(request.CreatedAt); err == nil {
 		t.Fatal("far-future request was accepted")
 	}
+	futureCreated := request
+	futureCreated.CreatedAt = request.CreatedAt.Add(time.Second)
+	futureCreated.ExpiresAt = futureCreated.CreatedAt.Add(time.Minute)
+	if err := futureCreated.ValidateAt(request.CreatedAt); err == nil {
+		t.Fatal("future-created request was accepted")
+	}
+	aliasNonce := request
+	aliasNonce.FenceNonce = request.FenceNonce[:len(request.FenceNonce)-1] + "Z"
+	if _, err := aliasNonce.Canonical(); err == nil {
+		t.Fatal("noncanonical nonce alias was accepted")
+	}
 	upper := request
 	upper.StackDigest = "sha256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
 	if _, err := upper.Canonical(); err == nil {
@@ -85,6 +96,14 @@ func TestVerifyRefusesFrozenSnapshotAndImmutableContentFailures(t *testing.T) {
 	if err != nil || status.Phase != agentspecbackfill.PhaseRefused || status.Reason != agentspecbackfill.RefusalExpired || reader.calls != 0 {
 		t.Fatalf("expired request I/O = %#v, %v, calls=%d", status, err, reader.calls)
 	}
+	future := request
+	future.CreatedAt = request.CreatedAt.Add(time.Second)
+	future.ExpiresAt = future.CreatedAt.Add(time.Minute)
+	reader = &countingReader{set: set}
+	status, err = agentspecbackfill.Verify(context.Background(), future, reader, passingVerifier{}, request.CreatedAt)
+	if err != nil || status.Phase != agentspecbackfill.PhaseRefused || status.Reason != agentspecbackfill.RefusalNotAdmitted || reader.calls != 0 {
+		t.Fatalf("future-created request I/O = %#v, %v, calls=%d", status, err, reader.calls)
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	_, err = agentspecbackfill.Verify(ctx, request, fixedReader{set: set}, passingVerifier{}, time.Date(2026, 8, 9, 0, 1, 0, 0, time.UTC))
@@ -99,6 +118,18 @@ func TestVerifyRefusesFrozenSnapshotAndImmutableContentFailures(t *testing.T) {
 	_, err = agentspecbackfill.Verify(context.Background(), request, fixedReader{set: set}, failingVerifier{err: transient}, time.Date(2026, 8, 9, 0, 1, 0, 0, time.UTC))
 	if !errors.Is(err, transient) {
 		t.Fatalf("transient verifier error = %v", err)
+	}
+	cancelledReader := cancelThenReader{set: set}
+	ctx, cancel = context.WithCancel(context.Background())
+	cancelledReader.cancel = cancel
+	_, err = agentspecbackfill.Verify(ctx, request, cancelledReader, passingVerifier{}, time.Date(2026, 8, 9, 0, 1, 0, 0, time.UTC))
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("reader cancellation ignored = %v", err)
+	}
+	ctx, cancel = context.WithCancel(context.Background())
+	_, err = agentspecbackfill.Verify(ctx, request, fixedReader{set: set}, cancelThenVerifier{cancel: cancel}, time.Date(2026, 8, 9, 0, 1, 0, 0, time.UTC))
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("verifier cancellation ignored = %v", err)
 	}
 }
 
@@ -168,6 +199,16 @@ func (reader errorReader) ReadFrozen(context.Context) (agentspecbackfill.FrozenL
 	return agentspecbackfill.FrozenLegacySet{}, reader.err
 }
 
+type cancelThenReader struct {
+	set    agentspecbackfill.FrozenLegacySet
+	cancel context.CancelFunc
+}
+
+func (reader cancelThenReader) ReadFrozen(context.Context) (agentspecbackfill.FrozenLegacySet, error) {
+	reader.cancel()
+	return reader.set, nil
+}
+
 func (reader fixedReader) ReadFrozen(context.Context) (agentspecbackfill.FrozenLegacySet, error) {
 	return reader.set, nil
 }
@@ -181,5 +222,12 @@ func (verifier failingVerifier) VerifyImmutable(context.Context, agentspecbackfi
 type passingVerifier struct{}
 
 func (passingVerifier) VerifyImmutable(context.Context, agentspecbackfill.LegacyRevision) error {
+	return nil
+}
+
+type cancelThenVerifier struct{ cancel context.CancelFunc }
+
+func (verifier cancelThenVerifier) VerifyImmutable(context.Context, agentspecbackfill.LegacyRevision) error {
+	verifier.cancel()
 	return nil
 }
