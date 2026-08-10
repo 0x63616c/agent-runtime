@@ -179,6 +179,8 @@ must be declared, owned, scoped, and lifecycle-documented.
 
 ## Test-driven evidence
 
+Work independent milestone streams in parallel; serialize only shared authority decisions, integration, and retained evidence gates.
+
 Write acceptance criteria and behavior tests before implementation. Begin each
 vertical slice by naming its approved seam and a small matrix: happy path, most
 dangerous negative path, retry/cancel/lifecycle path, and a literal expected
