@@ -100,8 +100,12 @@ after start aborts and performs bounded cleanup without reporting launch.
 Cleanup is single-flight/idempotent, clears its process reference before blocking
 I/O, and requires guest close, process termination, wait, and Jailer resource
 proof, including when a starter returns both a process and an error. The
-checked-in tests use recording ports to validate this contract. They do not start
-a Jailer, open `/dev/kvm`, or count as Linux/KVM evidence.
+private REST adapter is constrained to one configured Unix socket and the five
+fixed JSON requests above; it rejects proxy, TCP, redirect, arbitrary-route,
+and arbitrary-body use. It is not yet composed with a Jailer starter or guest
+transport. The host-contract tests still use recording ports, and the Unix
+adapter tests use a temporary local socket only. Neither starts a Jailer, opens
+`/dev/kvm`, nor counts as Linux/KVM evidence.
 
 `tools/firecracker/` contains a static Linux/amd64 guest-agent source and a
 minimal no-download ext4 recipe. The recipe rejects dynamically linked or
