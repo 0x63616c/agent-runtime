@@ -18,6 +18,7 @@ const (
 	maxRequestBytes = 1024
 	maxStatusBytes  = 2048
 	requestVersion  = 1
+	maximumCount    = uint64(^uint64(0) >> 1)
 )
 
 var (
@@ -102,7 +103,7 @@ func (request Request) Canonical() ([]byte, error) {
 }
 
 func (request Request) validate() error {
-	if request.MigrationVersion != 4 || request.SnapshotCount == 0 || request.CreatedAt.IsZero() || request.ExpiresAt.IsZero() || request.CreatedAt.Location() != time.UTC || request.ExpiresAt.Location() != time.UTC || !request.ExpiresAt.After(request.CreatedAt) || request.ExpiresAt.After(request.CreatedAt.Add(10*time.Minute)) {
+	if request.MigrationVersion != 4 || request.SnapshotCount == 0 || request.SnapshotCount > maximumCount || request.CreatedAt.IsZero() || request.ExpiresAt.IsZero() || request.CreatedAt.Location() != time.UTC || request.ExpiresAt.Location() != time.UTC || !request.ExpiresAt.After(request.CreatedAt) || request.ExpiresAt.After(request.CreatedAt.Add(10*time.Minute)) {
 		return errors.New("invalid backfill request fields")
 	}
 	for _, digest := range []string{request.StackDigest, request.MigrationArtifactDigest, request.ManifestDigest, request.ControllerImageDigest, request.SnapshotFingerprint, request.StaticReadinessDigest, request.DatabaseAuthorityDigest, request.BlobReadCapabilityDigest} {

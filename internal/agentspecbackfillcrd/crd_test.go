@@ -56,7 +56,7 @@ func TestRenderProducesTheStrictV1AgentSpecBackfillCRD(t *testing.T) {
 		t.Fatalf("spec is not strictly immutable: %#v", specification)
 	}
 	fields := specification["properties"].(map[string]any)
-	if len(fields) != 13 || fields["migrationVersion"].(map[string]any)["minimum"] != float64(4) || fields["migrationVersion"].(map[string]any)["maximum"] != float64(4) || fields["fenceNonce"].(map[string]any)["pattern"] != "^[A-Za-z0-9_-]{43}$" {
+	if len(fields) != 13 || fields["migrationVersion"].(map[string]any)["minimum"] != float64(4) || fields["migrationVersion"].(map[string]any)["maximum"] != float64(4) || fields["snapshotCount"].(map[string]any)["maximum"] != float64(9223372036854775807) || fields["fenceNonce"].(map[string]any)["pattern"] != "^[A-Za-z0-9_-]{43}$" {
 		t.Fatalf("spec does not preserve canonical request bounds: %#v", fields)
 	}
 	status := properties["status"].(map[string]any)
@@ -95,10 +95,56 @@ func TestPinnedKubernetesCELRefusesStatusThatDoesNotBindItsRequest(t *testing.T)
 	if errs, _ := validator.Validate(t.Context(), field.NewPath("root"), structural, object, nil, celconfig.RuntimeCELCostBudget); len(errs) != 0 {
 		t.Fatalf("expected canonical request/status to pass CEL validation: %v", errs)
 	}
-	invalid := cloneObject(object)
-	invalid["status"].(map[string]any)["snapshotCount"] = int64(2)
-	if errs, _ := validator.Validate(t.Context(), field.NewPath("root"), structural, invalid, nil, celconfig.RuntimeCELCostBudget); len(errs) == 0 {
-		t.Fatal("expected mismatched status snapshot count to be refused")
+	for _, test := range []struct {
+		name   string
+		mutate func(map[string]any)
+	}{
+		{name: "controller image", mutate: func(value map[string]any) {
+			value["status"].(map[string]any)["controllerImageDigest"] = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+		}},
+		{name: "snapshot fingerprint", mutate: func(value map[string]any) {
+			value["status"].(map[string]any)["snapshotFingerprint"] = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+		}},
+		{name: "snapshot count", mutate: func(value map[string]any) { value["status"].(map[string]any)["snapshotCount"] = int64(2) }},
+		{name: "manifest digest", mutate: func(value map[string]any) {
+			value["status"].(map[string]any)["manifestDigest"] = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+		}},
+		{name: "static readiness digest", mutate: func(value map[string]any) {
+			value["status"].(map[string]any)["staticReadinessDigest"] = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+		}},
+		{name: "verified count", mutate: func(value map[string]any) { value["status"].(map[string]any)["verifiedCount"] = int64(2) }},
+		{name: "verified reason", mutate: func(value map[string]any) { value["status"].(map[string]any)["reason"] = "content" }},
+		{name: "expired before expiry", mutate: func(value map[string]any) {
+			status := value["status"].(map[string]any)
+			status["phase"], status["reason"] = "Refused", "expired"
+		}},
+		{name: "not admitted after creation", mutate: func(value map[string]any) {
+			status := value["status"].(map[string]any)
+			status["phase"], status["reason"] = "Refused", "not_admitted"
+		}},
+		{name: "integrity refusal at expiry", mutate: func(value map[string]any) {
+			status := value["status"].(map[string]any)
+			status["phase"], status["reason"], status["completedAt"] = "Refused", "content", value["spec"].(map[string]any)["requestExpiresAt"]
+		}},
+		{name: "nonterminal completion", mutate: func(value map[string]any) { value["status"].(map[string]any)["phase"] = "Pending" }},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			invalid := cloneObject(object)
+			test.mutate(invalid)
+			if errs, _ := validator.Validate(t.Context(), field.NewPath("root"), structural, invalid, nil, celconfig.RuntimeCELCostBudget); len(errs) == 0 {
+				t.Fatal("expected unsafe status to be refused")
+			}
+		})
+	}
+	updated := cloneObject(object)
+	updated["status"].(map[string]any)["completedAt"] = "2026-08-09T12:00:00.000000001Z"
+	if errs, _ := validator.Validate(t.Context(), field.NewPath("root"), structural, updated, object, celconfig.RuntimeCELCostBudget); len(errs) == 0 {
+		t.Fatal("expected terminal status mutation to be refused")
+	}
+	updated = cloneObject(object)
+	updated["spec"].(map[string]any)["manifestDigest"] = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	if errs, _ := validator.Validate(t.Context(), field.NewPath("root"), structural, updated, object, celconfig.RuntimeCELCostBudget); len(errs) == 0 {
+		t.Fatal("expected immutable spec mutation to be refused")
 	}
 }
 

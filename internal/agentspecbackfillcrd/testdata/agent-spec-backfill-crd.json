@@ -34,7 +34,7 @@
                   "migrationArtifactDigest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$", "minLength": 71, "maxLength": 71 },
                   "migrationVersion": { "type": "integer", "format": "int32", "minimum": 4, "maximum": 4 },
                   "requestExpiresAt": { "type": "string", "format": "date-time", "maxLength": 35 },
-                  "snapshotCount": { "type": "integer", "format": "int64", "minimum": 1 },
+                  "snapshotCount": { "type": "integer", "format": "int64", "minimum": 1, "maximum": 9223372036854775807 },
                   "snapshotFingerprint": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$", "minLength": 71, "maxLength": 71 },
                   "stackDigest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$", "minLength": 71, "maxLength": 71 },
                   "staticReadinessDigest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$", "minLength": 71, "maxLength": 71 }
@@ -52,22 +52,22 @@
                   "completedAt": { "type": "string", "format": "date-time", "maxLength": 35 },
                   "controllerImageDigest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$", "minLength": 71, "maxLength": 71 },
                   "manifestDigest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$", "minLength": 71, "maxLength": 71 },
-                  "observedGeneration": { "type": "integer", "format": "int64", "minimum": 1 },
+                  "observedGeneration": { "type": "integer", "format": "int64", "minimum": 1, "maximum": 9223372036854775807 },
                   "phase": { "type": "string", "enum": ["Pending", "Verifying", "Verified", "Refused"] },
                   "reason": { "type": "string", "enum": ["snapshot", "content", "expired", "not_admitted"] },
                   "requestDigest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$", "minLength": 71, "maxLength": 71 },
                   "requestUID": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]{0,127}$", "minLength": 1, "maxLength": 128 },
-                  "snapshotCount": { "type": "integer", "format": "int64", "minimum": 1 },
+                  "snapshotCount": { "type": "integer", "format": "int64", "minimum": 1, "maximum": 9223372036854775807 },
                   "snapshotFingerprint": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$", "minLength": 71, "maxLength": 71 },
                   "staticReadinessDigest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$", "minLength": 71, "maxLength": 71 },
-                  "verifiedCount": { "type": "integer", "format": "int64", "minimum": 0 }
+                  "verifiedCount": { "type": "integer", "format": "int64", "minimum": 0, "maximum": 9223372036854775807 }
                 },
                 "required": ["phase", "requestUID", "observedGeneration", "controllerImageDigest", "requestDigest", "snapshotFingerprint", "snapshotCount", "manifestDigest", "staticReadinessDigest", "verifiedCount", "completedAt"],
                 "x-kubernetes-validations": [
                   { "rule": "!(has(oldSelf.phase) \u0026\u0026 (oldSelf.phase == 'Verified' || oldSelf.phase == 'Refused')) || self == oldSelf", "message": "terminal AgentSpecBackfill status is immutable" },
                   { "rule": "self.phase != 'Verified' || (!has(self.reason) \u0026\u0026 self.verifiedCount == self.snapshotCount)", "message": "verified status has no reason and verifies every snapshot" },
                   { "rule": "self.phase != 'Refused' || has(self.reason)", "message": "refused status has a bounded reason" },
-                  { "rule": "(self.phase != 'Pending' \u0026\u0026 self.phase != 'Verifying') || !has(self.reason)", "message": "nonterminal status has no refusal reason" }
+                  { "rule": "(self.phase != 'Pending' \u0026\u0026 self.phase != 'Verifying') || (!has(self.reason) \u0026\u0026 self.completedAt == timestamp('0001-01-01T00:00:00Z'))", "message": "nonterminal status has no refusal reason or completion time" }
                 ]
               }
             },

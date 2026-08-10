@@ -85,6 +85,11 @@ func TestRequestUsesCanonicalDigestNameAndBoundedImmutableStatus(t *testing.T) {
 	if err := status.ValidateFor(request, request.ExpiresAt); err == nil {
 		t.Fatal("verified status was accepted at expiry")
 	}
+	overflowCount := request
+	overflowCount.SnapshotCount = uint64(1) << 63
+	if _, err := overflowCount.Canonical(); err == nil {
+		t.Fatal("request count outside Kubernetes int64 domain was canonicalized")
+	}
 }
 
 func TestVerifyRefusesFrozenSnapshotAndImmutableContentFailures(t *testing.T) {

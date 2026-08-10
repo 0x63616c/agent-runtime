@@ -15,6 +15,7 @@ import (
 const (
 	crdAPIVersion = "apiextensions.k8s.io/v1"
 	crdKind       = "CustomResourceDefinition"
+	maximumCount  = int64(9223372036854775807)
 )
 
 type document struct {
@@ -159,7 +160,7 @@ func statusSchema() schema {
 		{Rule: "!(has(oldSelf.phase) && (oldSelf.phase == 'Verified' || oldSelf.phase == 'Refused')) || self == oldSelf", Message: "terminal AgentSpecBackfill status is immutable"},
 		{Rule: "self.phase != 'Verified' || (!has(self.reason) && self.verifiedCount == self.snapshotCount)", Message: "verified status has no reason and verifies every snapshot"},
 		{Rule: "self.phase != 'Refused' || has(self.reason)", Message: "refused status has a bounded reason"},
-		{Rule: "(self.phase != 'Pending' && self.phase != 'Verifying') || !has(self.reason)", Message: "nonterminal status has no refusal reason"},
+		{Rule: "(self.phase != 'Pending' && self.phase != 'Verifying') || (!has(self.reason) && self.completedAt == timestamp('0001-01-01T00:00:00Z'))", Message: "nonterminal status has no refusal reason or completion time"},
 	}
 	return result
 }
@@ -182,9 +183,13 @@ func fixedInteger(value int64) schema {
 	return schema{Type: "integer", Format: "int32", Minimum: pointer(value), Maximum: pointer(value)}
 }
 
-func positiveInteger() schema { return schema{Type: "integer", Format: "int64", Minimum: pointer(1)} }
+func positiveInteger() schema {
+	return schema{Type: "integer", Format: "int64", Minimum: pointer(1), Maximum: pointer(maximumCount)}
+}
 
-func unsignedInteger() schema { return schema{Type: "integer", Format: "int64", Minimum: pointer(0)} }
+func unsignedInteger() schema {
+	return schema{Type: "integer", Format: "int64", Minimum: pointer(0), Maximum: pointer(maximumCount)}
+}
 
 func stringEnum(values ...string) schema {
 	return schema{Type: "string", Enum: append([]string(nil), values...)}
