@@ -35,6 +35,7 @@ var (
 	// ErrInjectedResultAcknowledgementFault is the explicit test profile after
 	// control commits a result but before the host journals its acknowledgement.
 	ErrInjectedResultAcknowledgementFault = errors.New("sandbox reference host injected fault after result send")
+	redirectRefused                       = errors.New("sandbox reference host redirect refused")
 )
 
 // SecretLookup resolves only explicitly named already-injected values.
@@ -84,8 +85,11 @@ func RunOnce(ctx context.Context, config Config, lookup SecretLookup, source clo
 	}
 	for _, pending := range journal.PendingResults() {
 		resultResponse, err := do(ctx, client, config.controlURL+resultPath, pending.Wire)
-		if err != nil || resultResponse.status != http.StatusOK {
-			return errors.New("run sandbox reference host: pending result was not accepted")
+		if err != nil {
+			return err
+		}
+		if err := requireControlStatus(resultResponse.status, "pending result control endpoint is unavailable", "pending result was not accepted"); err != nil {
+			return err
 		}
 		if err := journal.AcknowledgeResult(pending.ReceiptKey, sandboxhostprotocol.Digest(pending.Wire)); err != nil {
 			return err
@@ -99,8 +103,8 @@ func RunOnce(ctx context.Context, config Config, lookup SecretLookup, source clo
 	if response.status == http.StatusNoContent {
 		return ErrNoWork
 	}
-	if response.status != http.StatusOK {
-		return errors.New("run sandbox reference host: pull denied or unavailable")
+	if err := requireControlStatus(response.status, "pull control endpoint is unavailable", "pull denied or unavailable"); err != nil {
+		return err
 	}
 	now := source.Now().UTC()
 	envelope, err := sandboxhostprotocol.VerifyEnvelopeWithTrust(response.body, config.hostID, config.hostGeneration, now, controlTrust.Snapshot())
@@ -116,8 +120,11 @@ func RunOnce(ctx context.Context, config Config, lookup SecretLookup, source clo
 	}
 	receiptBody, _ := json.Marshal(receiptRequest{ProtocolVersion: sandboxhostprotocol.Version, Kind: "receipt", AssignmentID: envelope.AssignmentID, FencingToken: envelope.FencingToken, ReceiptDigest: entry.ReceiptDigest})
 	receiptResponse, err := do(ctx, client, config.controlURL+receiptPath, receiptBody)
-	if err != nil || receiptResponse.status != http.StatusOK {
-		return errors.New("run sandbox reference host: receipt was not accepted")
+	if err != nil {
+		return err
+	}
+	if err := requireControlStatus(receiptResponse.status, "receipt control endpoint is unavailable", "receipt was not accepted"); err != nil {
+		return err
 	}
 	if config.testFaultAfterReceipt {
 		return ErrInjectedReceiptFault
@@ -130,8 +137,11 @@ func RunOnce(ctx context.Context, config Config, lookup SecretLookup, source clo
 		return err
 	}
 	resultResponse, err := do(ctx, client, config.controlURL+resultPath, resultWire)
-	if err != nil || resultResponse.status != http.StatusOK {
-		return errors.New("run sandbox reference host: result was not accepted")
+	if err != nil {
+		return err
+	}
+	if err := requireControlStatus(resultResponse.status, "result control endpoint is unavailable", "result was not accepted"); err != nil {
+		return err
 	}
 	if config.testFaultAfterResultSend {
 		return ErrInjectedResultAcknowledgementFault
@@ -158,7 +168,10 @@ func do(ctx context.Context, client *http.Client, target string, body []byte) (r
 		if ctx.Err() != nil {
 			return response{}, errors.Wrap(ctx.Err(), "run sandbox reference host")
 		}
-		return response{}, errors.New("run sandbox reference host: transport unavailable")
+		if isTerminalTransportError(err) {
+			return response{}, errors.Wrap(err, "run sandbox reference host transport refused")
+		}
+		return response{}, retryableControlError("transport unavailable")
 	}
 	wire, readErr := io.ReadAll(io.LimitReader(httpResponse.Body, maxBodyBytes+1))
 	closeErr := httpResponse.Body.Close()
@@ -166,6 +179,28 @@ func do(ctx context.Context, client *http.Client, target string, body []byte) (r
 		return response{}, errors.New("run sandbox reference host: invalid bounded response")
 	}
 	return response{status: httpResponse.StatusCode, body: wire}, nil
+}
+
+func retryableControlError(reason string) error {
+	return errors.Mark(errors.New("run sandbox reference host: "+reason), ErrRetryable)
+}
+
+func requireControlStatus(status int, retryReason, refusalReason string) error {
+	if status >= http.StatusInternalServerError {
+		return retryableControlError(retryReason)
+	}
+	if status != http.StatusOK {
+		return errors.New("run sandbox reference host: " + refusalReason)
+	}
+	return nil
+}
+
+func isTerminalTransportError(err error) bool {
+	if errors.Is(err, redirectRefused) {
+		return true
+	}
+	var unknownAuthority x509.UnknownAuthorityError
+	return errors.As(err, &unknownAuthority)
 }
 
 func newClient(config Config) (*http.Client, error) {
@@ -183,7 +218,7 @@ func newClient(config Config) (*http.Client, error) {
 	}
 	transport := &http.Transport{TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS13, ServerName: config.serverName, RootCAs: roots, Certificates: []tls.Certificate{certificate}}}
 	return &http.Client{Transport: transport, Timeout: config.requestTimeout, CheckRedirect: func(*http.Request, []*http.Request) error {
-		return errors.New("sandbox reference host redirect refused")
+		return redirectRefused
 	}}, nil
 }
 

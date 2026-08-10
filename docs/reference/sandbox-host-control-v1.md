@@ -106,8 +106,12 @@ recover both a lost receipt acknowledgement and a lost result acknowledgement
 without executing twice. This is protocol/idempotency evidence, not a promise
 that arbitrary external effects are exactly once.
 
-`cmd/sandbox-host` is a separately runnable, one-poll reference role. It proves
-mTLS, signature refusal, journal-before-effect ordering, restart, receipt, and
-result behavior. It deliberately performs no guest process or VM work and
-provides no isolation, cgroup, network, image, mount, output-storage, Jailer,
-KVM, or Firecracker evidence.
+`cmd/sandbox-host` is a separately runnable, long-lived reference role. It
+requires both `--config` and an explicit finite `--poll-interval`. A verified
+no-work poll is a healthy bounded observation for its supervisor; transient
+transport and control-server failures retry with a deterministic capped backoff.
+Configuration, trust, journal, and protocol refusals remain terminal rather
+than spinning. It proves mTLS, signature refusal, journal-before-effect
+ordering, restart, receipt, and result behavior. It deliberately performs no
+guest process or VM work and provides no deployment, isolation, cgroup,
+network, image, mount, output-storage, Jailer, KVM, or Firecracker evidence.

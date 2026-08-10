@@ -72,11 +72,12 @@ func TestReferenceHostMultiProcessLostAckQuarantineCleanupAndReassignment(t *tes
 	faultConfig := writeHostConfig(t, directory, "host-fault.json", hostAddress, identities, 1, journalPath, true, false, false)
 	hostSigning1 := base64.RawStdEncoding.EncodeToString(hostPrivate1)
 	controlVerify := base64.RawStdEncoding.EncodeToString(controlPublic)
-	fault := startProcess(t, hostBinary, []string{"--config", faultConfig}, map[string]string{"TEST_CONTROL_PUBLIC_KEY": controlVerify, "TEST_HOST_SIGNING_KEY": hostSigning1})
+	fault := startProcess(t, hostBinary, hostArguments(faultConfig), map[string]string{"TEST_CONTROL_PUBLIC_KEY": controlVerify, "TEST_HOST_SIGNING_KEY": hostSigning1})
 	fault.stop(t, false, controlVerify, hostSigning1)
 
 	resumeConfig := writeHostConfig(t, directory, "host-resume.json", hostAddress, identities, 1, journalPath, false, false, false)
-	resumed := startProcess(t, hostBinary, []string{"--config", resumeConfig}, map[string]string{"TEST_CONTROL_PUBLIC_KEY": controlVerify, "TEST_HOST_SIGNING_KEY": hostSigning1})
+	resumed := startProcess(t, hostBinary, hostArguments(resumeConfig), map[string]string{"TEST_CONTROL_PUBLIC_KEY": controlVerify, "TEST_HOST_SIGNING_KEY": hostSigning1})
+	waitForOperationState(t, client, request.ID, sandbox.OperationSucceeded)
 	resumed.stop(t, true, controlVerify, hostSigning1)
 	got, err := client.GetOperation(context.Background(), request.ID)
 	if err != nil || got.State != sandbox.OperationSucceeded {
@@ -93,10 +94,11 @@ func TestReferenceHostMultiProcessLostAckQuarantineCleanupAndReassignment(t *tes
 	}
 	resultJournalPath := filepath.Join(directory, "result-receipts.json")
 	resultFaultConfig := writeHostConfig(t, directory, "host-result-fault.json", hostAddress, identities, 1, resultJournalPath, false, false, true)
-	resultFault := startProcess(t, hostBinary, []string{"--config", resultFaultConfig}, map[string]string{"TEST_CONTROL_PUBLIC_KEY": controlVerify, "TEST_HOST_SIGNING_KEY": hostSigning1})
+	resultFault := startProcess(t, hostBinary, hostArguments(resultFaultConfig), map[string]string{"TEST_CONTROL_PUBLIC_KEY": controlVerify, "TEST_HOST_SIGNING_KEY": hostSigning1})
 	resultFault.stop(t, false, controlVerify, hostSigning1)
 	resultResumeConfig := writeHostConfig(t, directory, "host-result-resume.json", hostAddress, identities, 1, resultJournalPath, false, false, false)
-	resultResumed := startProcess(t, hostBinary, []string{"--config", resultResumeConfig}, map[string]string{"TEST_CONTROL_PUBLIC_KEY": controlVerify, "TEST_HOST_SIGNING_KEY": hostSigning1})
+	resultResumed := startProcess(t, hostBinary, hostArguments(resultResumeConfig), map[string]string{"TEST_CONTROL_PUBLIC_KEY": controlVerify, "TEST_HOST_SIGNING_KEY": hostSigning1})
+	waitForOperationState(t, client, resultRetryRequest.ID, sandbox.OperationSucceeded)
 	resultResumed.stop(t, true, controlVerify, hostSigning1)
 	got, err = client.GetOperation(context.Background(), resultRetryRequest.ID)
 	if err != nil || got.State != sandbox.OperationSucceeded {
@@ -116,7 +118,7 @@ func TestReferenceHostMultiProcessLostAckQuarantineCleanupAndReassignment(t *tes
 		t.Fatal(err)
 	}
 	rogueConfig := writeHostConfig(t, directory, "host-rogue.json", hostAddress, identities, 1, filepath.Join(directory, "rogue-receipts.json"), false, false, false)
-	rogue := startProcess(t, hostBinary, []string{"--config", rogueConfig}, map[string]string{"TEST_CONTROL_PUBLIC_KEY": controlVerify, "TEST_HOST_SIGNING_KEY": base64.RawStdEncoding.EncodeToString(roguePrivate)})
+	rogue := startProcess(t, hostBinary, hostArguments(rogueConfig), map[string]string{"TEST_CONTROL_PUBLIC_KEY": controlVerify, "TEST_HOST_SIGNING_KEY": base64.RawStdEncoding.EncodeToString(roguePrivate)})
 	rogue.stop(t, false, controlVerify)
 	quarantined, err := ledger.Get(context.Background(), "tenant_01:runtime_01", string(quarantineRequest.ID))
 	if err != nil || quarantined.State != sandboxcontrol.StateUncertain || quarantined.Assignment.HostID != "" {
@@ -136,7 +138,8 @@ func TestReferenceHostMultiProcessLostAckQuarantineCleanupAndReassignment(t *tes
 		t.Fatal(err)
 	}
 	reassignedConfig := writeHostConfig(t, directory, "host-reassigned.json", hostAddress, identities, 2, filepath.Join(directory, "reassigned-receipts.json"), false, false, false)
-	reassigned := startProcess(t, hostBinary, []string{"--config", reassignedConfig}, map[string]string{"TEST_CONTROL_PUBLIC_KEY": controlVerify, "TEST_HOST_SIGNING_KEY": base64.RawStdEncoding.EncodeToString(hostPrivate2)})
+	reassigned := startProcess(t, hostBinary, hostArguments(reassignedConfig), map[string]string{"TEST_CONTROL_PUBLIC_KEY": controlVerify, "TEST_HOST_SIGNING_KEY": base64.RawStdEncoding.EncodeToString(hostPrivate2)})
+	waitForOperationState(t, client, quarantineRequest.ID, sandbox.OperationSucceeded)
 	reassigned.stop(t, true, controlVerify)
 	got, err = client.GetOperation(context.Background(), quarantineRequest.ID)
 	if err != nil || got.State != sandbox.OperationSucceeded {
@@ -247,9 +250,13 @@ func startProcess(t *testing.T, binary string, args []string, environment map[st
 	return &process{command: command, output: output}
 }
 
+func hostArguments(config string) []string {
+	return []string{"--config", config, "--poll-interval", "100ms"}
+}
+
 func (process *process) stop(t *testing.T, expectSuccess bool, secrets ...string) {
 	t.Helper()
-	if process.command.ProcessState == nil && strings.Contains(filepath.Base(process.command.Path), "sandbox-control") {
+	if expectSuccess && process.command.ProcessState == nil {
 		if err := process.command.Process.Signal(syscall.SIGTERM); err != nil {
 			t.Fatal(err)
 		}
@@ -265,6 +272,23 @@ func (process *process) stop(t *testing.T, expectSuccess bool, secrets ...string
 		if strings.Contains(process.output.String(), secret) {
 			t.Fatalf("process disclosed secret: %s", process.output.String())
 		}
+	}
+}
+
+func waitForOperationState(t *testing.T, client sandbox.Client, id sandbox.OperationID, want sandbox.OperationState) {
+	t.Helper()
+	deadline := time.Now().Add(15 * time.Second)
+	for {
+		operation, err := client.GetOperation(context.Background(), id)
+		if err == nil && operation.State == want {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("operation %s did not reach %s: %#v, %v", id, want, operation, err)
+		}
+		interval, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+		<-interval.Done()
+		cancel()
 	}
 }
 

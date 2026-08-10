@@ -4,6 +4,7 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"log/slog"
 	"os"
 	"os/signal"
 	"syscall"
@@ -21,15 +22,11 @@ func main() {
 }
 
 func run() error {
-	arguments := flag.NewFlagSet("sandbox-host", flag.ContinueOnError)
-	configPath := arguments.String("config", "", "absolute path to the strict sandbox-host configuration")
-	if err := arguments.Parse(os.Args[1:]); err != nil {
+	arguments, err := parseArguments(os.Args[1:])
+	if err != nil {
 		return err
 	}
-	if *configPath == "" || (*configPath)[0] != '/' || arguments.NArg() != 0 {
-		return errors.New("--config must be one explicit absolute path")
-	}
-	file, err := os.Open(*configPath)
+	file, err := os.Open(arguments.configPath)
 	if err != nil {
 		return errors.Wrap(err, "open sandbox-host configuration")
 	}
@@ -43,9 +40,40 @@ func run() error {
 	}
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
-	return sandboxhostprocess.RunOnce(ctx, config, os.LookupEnv, wallClock{})
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
+	return sandboxhostprocess.Run(ctx, config, os.LookupEnv, wallClock{}, arguments.pollInterval, boundedWait, func(summary sandboxhostprocess.Summary) {
+		logger.InfoContext(ctx, "sandbox host poll", "observed_at", summary.ObservedAt, "outcome", summary.Outcome, "ready", summary.Ready, "consecutive_failures", summary.ConsecutiveFailures)
+	})
+}
+
+type commandArguments struct {
+	configPath   string
+	pollInterval time.Duration
+}
+
+func parseArguments(input []string) (commandArguments, error) {
+	arguments := flag.NewFlagSet("sandbox-host", flag.ContinueOnError)
+	configPath := arguments.String("config", "", "absolute path to the strict sandbox-host configuration")
+	pollInterval := arguments.Duration("poll-interval", 0, "finite interval between control polls")
+	if err := arguments.Parse(input); err != nil {
+		return commandArguments{}, err
+	}
+	if *configPath == "" || (*configPath)[0] != '/' || *pollInterval <= 0 || arguments.NArg() != 0 {
+		return commandArguments{}, errors.New("--config and --poll-interval must be one explicit absolute path and positive duration")
+	}
+	return commandArguments{configPath: *configPath, pollInterval: *pollInterval}, nil
 }
 
 type wallClock struct{}
 
 func (wallClock) Now() time.Time { return time.Now().UTC() }
+
+func boundedWait(ctx context.Context, duration time.Duration) error {
+	waitContext, cancel := context.WithTimeout(ctx, duration)
+	defer cancel()
+	<-waitContext.Done()
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+	return nil
+}

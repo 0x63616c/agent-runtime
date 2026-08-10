@@ -82,7 +82,7 @@ honestly `metadata-only`, never hardware-attested.
 ## Rotation and revocation
 
 The following is the required operator procedure for a future deployed
-rotation controller; it is not evidence that M3's one-poll reference host or
+rotation controller; it is not evidence that M3's long-lived reference host or
 the multi-process harness performs a certificate or control-trust rotation.
 M3 unit coverage exercises complete in-memory control-trust replacement and
 refusal of a retired key within one running `AtomicTrust` instance. It does not
