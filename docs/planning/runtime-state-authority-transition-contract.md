@@ -183,6 +183,17 @@ No intermediate public configuration may send one route to PostgreSQL or read
 Events from another authority. A PostgreSQL table, content object, or
 adapter-level test is not public-command proof by itself.
 
+### Contract implementation checkpoint
+
+`internal/runtimestate` declares this complete initial lifecycle command/query
+matrix and its metadata-only records. It intentionally supplies no memory or
+PostgreSQL adapter and is not wired to a public route. Its boundary tests keep
+raw Agent/Input content out of runtime-state records, require the opaque
+`runtimecontent.ContentHandoff` at the two current content-entry commands, and
+require every listed lifecycle and Outbox operation to remain in the closed
+interface. The next migration step is a complete deterministic memory
+conformance implementation, not an incremental route migration.
+
 ## First executable vertical
 
 Implement the `runtimecontent` identity-free Agent-specification body and
