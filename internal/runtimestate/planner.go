@@ -61,6 +61,9 @@ type RuntimeState struct {
 	Inputs        []InputRecord
 	Artifacts     []ArtifactRecord
 	Conversations []ConversationRecord
+	ToolIntents   []ToolIntentRecord
+	Grants        []CapabilityGrantRecord
+	Approvals     []ApprovalRecord
 	Turns         []TurnRecord
 	Invocations   []InvocationRecord
 	Receipts      []MutationReceipt
@@ -77,6 +80,12 @@ func (state RuntimeState) Clone() RuntimeState {
 	clone.Inputs = append([]InputRecord(nil), state.Inputs...)
 	clone.Artifacts = append([]ArtifactRecord(nil), state.Artifacts...)
 	clone.Conversations = append([]ConversationRecord(nil), state.Conversations...)
+	clone.ToolIntents = append([]ToolIntentRecord(nil), state.ToolIntents...)
+	clone.Grants = append([]CapabilityGrantRecord(nil), state.Grants...)
+	clone.Approvals = make([]ApprovalRecord, len(state.Approvals))
+	for i := range state.Approvals {
+		clone.Approvals[i] = state.Approvals[i].Clone()
+	}
 	clone.Turns = make([]TurnRecord, len(state.Turns))
 	for i := range state.Turns {
 		clone.Turns[i] = state.Turns[i].Clone()
@@ -242,6 +251,12 @@ func (planner *RuntimeStatePlanner) Plan(ctx context.Context, prior RuntimeState
 		result, effects, err = planner.registerArtifact(&state, mutation.mutation.receipt, command, now)
 	case compiledConversation:
 		result, effects, err = planner.appendConversation(&state, mutation.mutation.receipt, command, now)
+	case RecordToolIntentCommand:
+		result, effects, err = planner.recordToolIntent(&state, mutation.mutation.receipt, command, now)
+	case RequestApprovalCommand:
+		result, effects, err = planner.requestApproval(&state, mutation.mutation.receipt, command, now)
+	case DecideApprovalCommand:
+		result, effects, err = planner.decideApproval(&state, mutation.mutation.receipt, command, now)
 	case BeginInvocationAttemptCommand:
 		result, effects, err = planner.begin(&state, mutation.mutation.receipt, command, now)
 	case RecordInvocationOutcomeCommand:
@@ -447,6 +462,62 @@ func (planner *RuntimeStatePlanner) appendConversation(state *RuntimeState, bind
 	state.Outbox = append(state.Outbox, outbox)
 	effects.Outbox = append(effects.Outbox, outbox)
 	return PlanResult{Conversation: record}, effects, nil
+}
+
+func (planner *RuntimeStatePlanner) recordToolIntent(state *RuntimeState, binding ReceiptBinding, c RecordToolIntentCommand, now time.Time) (PlanResult, EffectSet, error) {
+	if findTurn(state, binding.Scope, c.SessionID, c.TurnID) < 0 {
+		return PlanResult{}, EffectSet{}, ErrNotFoundOrDenied
+	}
+	r := ToolIntentRecord{Tenant: binding.Scope.Tenant, Principal: binding.Scope.Principal, SessionID: c.SessionID, TurnID: c.TurnID, ToolCallID: c.ToolCallID, ToolName: c.ToolName, ActionDigest: c.ActionDigest, PolicyRevisionDigest: c.PolicyRevisionDigest, CreatedAt: now, RetainUntil: planner.retain(now)}
+	state.ToolIntents = append(state.ToolIntents, r)
+	e, err := planner.auditOnly(state, binding, "tool.intent_recorded", c.SessionID, c.TurnID, now, r.RetainUntil)
+	return PlanResult{}, e, err
+}
+func (planner *RuntimeStatePlanner) requestApproval(state *RuntimeState, binding ReceiptBinding, c RequestApprovalCommand, now time.Time) (PlanResult, EffectSet, error) {
+	if !c.ExpiresAt.After(now) {
+		return PlanResult{}, EffectSet{}, ErrConflict
+	}
+	found := false
+	for _, i := range state.ToolIntents {
+		if i.ToolCallID == c.ToolCallID && i.SessionID == c.SessionID && i.TurnID == c.TurnID {
+			found = true
+		}
+	}
+	if !found {
+		return PlanResult{}, EffectSet{}, ErrNotFoundOrDenied
+	}
+	for _, a := range state.Approvals {
+		if a.ApprovalID == c.ApprovalID {
+			return PlanResult{}, EffectSet{}, ErrConflict
+		}
+	}
+	r := ApprovalRecord{Tenant: binding.Scope.Tenant, Principal: binding.Scope.Principal, ApprovalID: c.ApprovalID, SessionID: c.SessionID, TurnID: c.TurnID, ToolCallID: c.ToolCallID, ActionDigest: c.ActionDigest, PolicyRevisionDigest: c.PolicyRevisionDigest, State: "pending", CapabilityDigest: c.CapabilityDigest, MaximumUses: c.MaximumUses, ExpiresAt: c.ExpiresAt, CreatedAt: now, RetainUntil: planner.retain(now)}
+	state.Approvals = append(state.Approvals, r)
+	e, err := planner.auditOnly(state, binding, "approval.requested", c.SessionID, c.TurnID, now, r.RetainUntil)
+	return PlanResult{}, e, err
+}
+func (planner *RuntimeStatePlanner) decideApproval(state *RuntimeState, binding ReceiptBinding, c DecideApprovalCommand, now time.Time) (PlanResult, EffectSet, error) {
+	for n := range state.Approvals {
+		a := state.Approvals[n]
+		if a.ApprovalID != c.ApprovalID || a.Tenant != binding.Scope.Tenant || a.Principal != binding.Scope.Principal {
+			continue
+		}
+		if a.State != "pending" {
+			return PlanResult{}, EffectSet{}, ErrConflict
+		}
+		if !now.Before(a.ExpiresAt) {
+			a.State = "expired"
+			state.Approvals[n] = a
+			return PlanResult{}, EffectSet{}, ErrConflict
+		}
+		a.State = c.Decision
+		a.Decision = c.Decision
+		a.DecidedAt = &now
+		state.Approvals[n] = a
+		e, err := planner.auditOnly(state, binding, "approval."+c.Decision, a.SessionID, a.TurnID, now, a.RetainUntil)
+		return PlanResult{}, e, err
+	}
+	return PlanResult{}, EffectSet{}, ErrNotFoundOrDenied
 }
 
 func (planner *RuntimeStatePlanner) begin(state *RuntimeState, binding ReceiptBinding, command BeginInvocationAttemptCommand, now time.Time) (PlanResult, EffectSet, error) {

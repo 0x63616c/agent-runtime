@@ -23,6 +23,9 @@ const (
 	CommandAdmitInput            CommandKind = "admit_input"
 	CommandRegisterArtifact      CommandKind = "register_artifact"
 	CommandAppendConversation    CommandKind = "append_conversation"
+	CommandRecordToolIntent      CommandKind = "record_tool_intent"
+	CommandRequestApproval       CommandKind = "request_approval"
+	CommandDecideApproval        CommandKind = "decide_approval"
 	CommandBeginInvocation       CommandKind = "begin_invocation_attempt"
 	CommandRecordOutcome         CommandKind = "record_invocation_outcome"
 	CommandSettleTurn            CommandKind = "settle_turn"
@@ -149,6 +152,28 @@ func (compiler *Compiler) CompileAppendConversation(command AppendConversationCo
 		Expected  uint64
 		Reference runtimecontent.Reference
 	}{command.SessionID.String(), command.ExpectedVersion, commitment.Reference}, compiledConversation{command: command, commitment: commitment})
+}
+
+func (compiler *Compiler) CompileRecordToolIntent(command RecordToolIntentCommand) (CompiledMutation, error) {
+	command = command.Owned()
+	if err := validateWorkerCommand(command.Scope, command.SessionID, command.TurnID, OperationID(command.ToolCallID)); err != nil || !validOpaque(command.ToolName, 128) || !validDigest(command.ActionDigest) || !validDigest(command.PolicyRevisionDigest) {
+		return CompiledMutation{}, errors.New("compile tool intent: invalid command")
+	}
+	return compiler.compile(CommandRecordToolIntent, command.Scope, command.IdempotencyKey, command, command)
+}
+func (compiler *Compiler) CompileRequestApproval(command RequestApprovalCommand) (CompiledMutation, error) {
+	command = command.Owned()
+	if err := validateWorkerCommand(command.Scope, command.SessionID, command.TurnID, OperationID(command.ToolCallID)); err != nil || !validOpaque(command.ApprovalID, 128) || !validDigest(command.ActionDigest) || !validDigest(command.PolicyRevisionDigest) || !validDigest(command.CapabilityDigest) || command.MaximumUses == 0 || command.MaximumUses > 32 || command.ExpiresAt.IsZero() {
+		return CompiledMutation{}, errors.New("compile approval request: invalid command")
+	}
+	return compiler.compile(CommandRequestApproval, command.Scope, command.IdempotencyKey, command, command)
+}
+func (compiler *Compiler) CompileDecideApproval(command DecideApprovalCommand) (CompiledMutation, error) {
+	command = command.Owned()
+	if err := validateScope(command.Scope, AuthoritySessionOwner, true); err != nil || !validOpaque(command.ApprovalID, 128) || (command.Decision != "approved" && command.Decision != "denied") {
+		return CompiledMutation{}, errors.New("compile approval decision: invalid command")
+	}
+	return compiler.compile(CommandDecideApproval, command.Scope, command.IdempotencyKey, command, command)
 }
 
 // CompileBeginInvocationAttempt validates a fenced runtime-worker intent command.
@@ -338,6 +363,9 @@ func validateWorkerCommand(scope MutationScope, session agentruntime.SessionID, 
 }
 func validOpaque(value string, maximum int) bool {
 	return value != "" && len(value) <= maximum && utf8.ValidString(value) && strings.TrimSpace(value) == value
+}
+func validDigest(value string) bool {
+	return len(value) == 71 && strings.HasPrefix(value, "sha256:") && strings.Trim(value[7:], "0123456789abcdef") == ""
 }
 func validName(value string) bool { return validOpaque(value, 128) }
 func validReference(reference runtimecontent.Reference) bool {

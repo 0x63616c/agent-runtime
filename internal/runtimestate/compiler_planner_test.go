@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -399,6 +400,41 @@ func TestPlannerAppendsConversationOnlyAtExpectedVersionAndReplaysIdempotently(t
 	}
 	if _, err := planner.Plan(context.Background(), plan.State(), conflict); !errors.Is(err, runtimestate.ErrConflict) {
 		t.Fatalf("stale append error = %v, want conflict", err)
+	}
+}
+
+func TestPlannerPersistsToolIntentBeforeApprovalDecision(t *testing.T) {
+	now := time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC)
+	content, _, tenant, principal := testRuntimeContent(t)
+	compiler, _ := runtimestate.NewCompiler(content)
+	planner, _ := runtimestate.NewRuntimeStatePlanner(fixedPlannerClock{now: now}, &uniquePlannerIDs{})
+	session := validSessionID(t)
+	turn := agentruntime.TurnID("turn_1234567890ABCDEF")
+	state := runtimestate.RuntimeState{Sessions: []runtimestate.SessionRecord{{Tenant: tenant, Principal: principal, SessionID: session, State: agentruntime.SessionOpen, CreatedAt: now, UpdatedAt: now}}, Turns: []runtimestate.TurnRecord{{Tenant: tenant, Principal: principal, SessionID: session, TurnID: turn, State: agentruntime.TurnRunning}}}
+	digest := "sha256:" + strings.Repeat("a", 64)
+	intent, err := compiler.CompileRecordToolIntent(runtimestate.RecordToolIntentCommand{Scope: workerScope(tenant, principal), IdempotencyKey: "intent", SessionID: session, TurnID: turn, ToolCallID: "tcall_1234567890ABCDEF", ToolName: "write", ActionDigest: digest, PolicyRevisionDigest: digest})
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan, err := planner.Plan(context.Background(), state, intent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	approval, err := compiler.CompileRequestApproval(runtimestate.RequestApprovalCommand{Scope: workerScope(tenant, principal), IdempotencyKey: "approval", SessionID: session, TurnID: turn, ToolCallID: "tcall_1234567890ABCDEF", ApprovalID: "appr_1234567890ABCDEF", ActionDigest: digest, PolicyRevisionDigest: digest, CapabilityDigest: digest, MaximumUses: 1, ExpiresAt: now.Add(time.Hour)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan, err = planner.Plan(context.Background(), plan.State(), approval)
+	if err != nil || len(plan.State().Approvals) != 1 {
+		t.Fatalf("approval=%v state=%#v", err, plan.State().Approvals)
+	}
+	decision, err := compiler.CompileDecideApproval(runtimestate.DecideApprovalCommand{Scope: ownerScope(tenant, principal), IdempotencyKey: "decision", ApprovalID: "appr_1234567890ABCDEF", Decision: "approved"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan, err = planner.Plan(context.Background(), plan.State(), decision)
+	if err != nil || plan.State().Approvals[0].State != "approved" || len(plan.Effects().Audit) != 1 {
+		t.Fatalf("decision=%v %#v", err, plan.State().Approvals)
 	}
 }
 

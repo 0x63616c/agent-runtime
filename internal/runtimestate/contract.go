@@ -145,6 +145,68 @@ type ConversationRecord struct {
 // Clone returns an independent conversation metadata snapshot.
 func (record ConversationRecord) Clone() ConversationRecord { return record }
 
+// ToolIntentRecord separates a model request from any execution authority.
+type ToolIntentRecord struct {
+	Tenant               runtimecontent.TenantID
+	Principal            runtimecontent.PrincipalID
+	SessionID            agentruntime.SessionID `json:",omitempty"`
+	TurnID               agentruntime.TurnID    `json:",omitempty"`
+	ToolCallID           string
+	ToolName             string
+	ActionDigest         string
+	PolicyRevisionDigest string
+	CreatedAt            time.Time
+	RetainUntil          time.Time
+}
+
+func (record ToolIntentRecord) Clone() ToolIntentRecord { return record }
+
+// CapabilityGrantRecord is bounded metadata only; secret capability material is never persisted.
+type CapabilityGrantRecord struct {
+	Tenant               runtimecontent.TenantID
+	Principal            runtimecontent.PrincipalID
+	GrantID              string
+	ToolCallID           string
+	CapabilityDigest     string
+	MaximumUses          uint32
+	Uses                 uint32
+	ExpiresAt            time.Time
+	PolicyRevisionDigest string
+	CreatedAt            time.Time
+	RetainUntil          time.Time
+}
+
+func (record CapabilityGrantRecord) Clone() CapabilityGrantRecord { return record }
+
+// ApprovalRecord is durable bounded approval metadata governed by a Session/Turn.
+type ApprovalRecord struct {
+	Tenant               runtimecontent.TenantID
+	Principal            runtimecontent.PrincipalID
+	ApprovalID           string
+	SessionID            agentruntime.SessionID `json:",omitempty"`
+	TurnID               agentruntime.TurnID    `json:",omitempty"`
+	ToolCallID           string
+	ActionDigest         string
+	PolicyRevisionDigest string
+	State                string
+	CapabilityDigest     string
+	MaximumUses          uint32
+	ExpiresAt            time.Time
+	Decision             string
+	DecidedAt            *time.Time
+	CreatedAt            time.Time
+	RetainUntil          time.Time
+}
+
+func (record ApprovalRecord) Clone() ApprovalRecord {
+	clone := record
+	if record.DecidedAt != nil {
+		value := *record.DecidedAt
+		clone.DecidedAt = &value
+	}
+	return clone
+}
+
 // TurnRecord is the bounded execution state for one accepted Input.
 type TurnRecord struct {
 	Tenant         runtimecontent.TenantID
@@ -410,6 +472,41 @@ type AppendConversationCommand struct {
 
 // Owned returns a value-owned conversation append command.
 func (command AppendConversationCommand) Owned() AppendConversationCommand { return command }
+
+// RecordToolIntentCommand records model intent; it grants no execution authority.
+type RecordToolIntentCommand struct {
+	Scope                                                    MutationScope
+	IdempotencyKey                                           string
+	SessionID                                                agentruntime.SessionID
+	TurnID                                                   agentruntime.TurnID
+	ToolCallID, ToolName, ActionDigest, PolicyRevisionDigest string
+}
+
+func (command RecordToolIntentCommand) Owned() RecordToolIntentCommand { return command }
+
+// RequestApprovalCommand creates bounded pending approval metadata for a recorded intent.
+type RequestApprovalCommand struct {
+	Scope                                                                        MutationScope
+	IdempotencyKey                                                               string
+	SessionID                                                                    agentruntime.SessionID
+	TurnID                                                                       agentruntime.TurnID
+	ToolCallID, ApprovalID, ActionDigest, PolicyRevisionDigest, CapabilityDigest string
+	MaximumUses                                                                  uint32
+	ExpiresAt                                                                    time.Time
+}
+
+func (command RequestApprovalCommand) Owned() RequestApprovalCommand {
+	command.ExpiresAt = normalizeTime(command.ExpiresAt)
+	return command
+}
+
+// DecideApprovalCommand is a principal-authorized, idempotent terminal decision.
+type DecideApprovalCommand struct {
+	Scope                                MutationScope
+	IdempotencyKey, ApprovalID, Decision string
+}
+
+func (command DecideApprovalCommand) Owned() DecideApprovalCommand { return command }
 
 // Owned returns a value-owned command. ContentHandoff is opaque and immutable to callers.
 func (command AdmitInputCommand) Owned() AdmitInputCommand {
