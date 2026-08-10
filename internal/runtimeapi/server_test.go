@@ -405,6 +405,10 @@ func (runtime *recordingRuntime) ReadArtifact(context.Context, runtimeapi.Identi
 	return runtime.artifact.Clone(), runtime.artifactErr
 }
 
+func (runtime *recordingRuntime) IdempotencyStatus(context.Context, runtimeapi.Identity, string) (agentruntime.IdempotencyStatus, error) {
+	return agentruntime.IdempotencyStatus{}, nil
+}
+
 func TestArtifactHTTPRouteStreamsAuthorizedRuntimeBytes(t *testing.T) {
 	runtime := &recordingRuntime{artifact: agentruntime.ArtifactDownload{Artifact: agentruntime.ArtifactReference{ID: "art_0000000000000001", MediaType: "text/plain", SizeBytes: 14, SHA256: "4659fc0570122b0e0aa14f4ff7c261b1fe51795a01ba79963f462ebf40d7520d"}, Body: []byte("artifact bytes")}}
 	handler, err := runtimeapi.NewHandler(runtimeapi.Config{Runtime: runtime, Authenticator: staticAuth{identities: map[string]runtimeapi.Identity{"alice-token-000000": {Tenant: "tenant-a", Principal: "alice"}}}, RequestIDs: &requestIDs{}})

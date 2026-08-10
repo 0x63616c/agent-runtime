@@ -137,6 +137,29 @@ func (runtime *StateRuntime) ReadArtifact(ctx context.Context, identity Identity
 	return agentruntime.ArtifactDownload{Artifact: publicArtifact(record), Body: body}, nil
 }
 
+// IdempotencyStatus safely returns a retained receipt for the caller's exact
+// durable scope. It is an observation only: no command is compiled or replayed.
+func (runtime *StateRuntime) IdempotencyStatus(ctx context.Context, identity Identity, key string) (agentruntime.IdempotencyStatus, error) {
+	var scope runtimestate.MutationScope
+	var err error
+	if identity.Admin {
+		scope, err = administratorScope(identity)
+	} else {
+		scope, err = ownerScope(identity)
+	}
+	if err != nil {
+		return agentruntime.IdempotencyStatus{}, err
+	}
+	if key == "" || len(key) > agentruntime.MaxIdempotencyKeyBytes {
+		return agentruntime.IdempotencyStatus{}, invalidFailure("idempotency key is invalid")
+	}
+	receipt, err := runtime.store.GetMutationReceipt(ctx, runtimestate.MutationReceiptQuery{Scope: scope, IdempotencyKey: key})
+	if err != nil {
+		return agentruntime.IdempotencyStatus{}, runtimeFailure("read idempotency status", err)
+	}
+	return agentruntime.IdempotencyStatus{OperationID: string(receipt.OperationID), Command: receipt.Command, SessionID: receipt.SessionID, TurnID: receipt.TurnID, ArtifactID: receipt.ArtifactID, AcceptedAt: receipt.AcceptedAt}, nil
+}
+
 // CreateSession pins a principal-owned Session to one existing immutable revision.
 func (runtime *StateRuntime) CreateSession(ctx context.Context, identity Identity, request agentruntime.CreateSessionRequest) (agentruntime.Session, error) {
 	scope, err := ownerScope(identity)

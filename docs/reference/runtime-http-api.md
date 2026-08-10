@@ -2,7 +2,7 @@
 
 [`api/openapi/openapi.yaml`](../../api/openapi/openapi.yaml) is the canonical
 versioned public transport contract. Generated route constants used by the Go
-SDK and HTTP adapter are checked against its eleven operations by `just check`.
+SDK and HTTP adapter are checked against its twelve operations by `just check`.
 Neither surface exposes Temporal workflow IDs, task queues, payloads, database
 positions, or backend configuration.
 
@@ -12,6 +12,10 @@ events after an opaque Cursor, explicitly cancel a Turn, and drain-close a
 Session, and download caller-authorized immutable Artifacts. Agent catalog operations require a tenant administrator. Sessions are
 owned by the authenticated tenant and principal; absent and unauthorized
 resources return the same safe `not_found` classification.
+
+`GET /v1/idempotency` requires an `Idempotency-Key` header and returns only the
+caller-scoped retained receipt status. It never replays a command or exposes
+the canonical request body.
 
 Every `/v1` request is authenticated with a bearer credential and correlated by a
 typed `X-Request-ID`. Mutations require `Idempotency-Key`. Request and response

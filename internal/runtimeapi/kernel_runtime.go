@@ -42,6 +42,11 @@ func (runtime kernelRuntime) ReadArtifact(context.Context, Identity, agentruntim
 	return agentruntime.ArtifactDownload{}, &agentruntime.Error{Failure: agentruntime.Failure{Code: agentruntime.FailureNotFound, Message: "resource not found"}}
 }
 
+// IdempotencyStatus requires the durable state receipt authority.
+func (runtime kernelRuntime) IdempotencyStatus(context.Context, Identity, string) (agentruntime.IdempotencyStatus, error) {
+	return agentruntime.IdempotencyStatus{}, &agentruntime.Error{Failure: agentruntime.Failure{Code: agentruntime.FailureNotFound, Message: "resource not found"}}
+}
+
 func (runtime kernelRuntime) CreateSession(ctx context.Context, identity Identity, request agentruntime.CreateSessionRequest) (agentruntime.Session, error) {
 	revision, err := runtime.kernel.ResolveAgentRevision(ctx, tenantScope(identity), request.AgentRevision)
 	if err != nil {

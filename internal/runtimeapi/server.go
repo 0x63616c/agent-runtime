@@ -70,6 +70,7 @@ func NewHandler(config Config) (http.Handler, error) {
 	mux.HandleFunc(openAPIMethodReviseAgent+" "+openAPIPathReviseAgent, server.reviseAgent)
 	mux.HandleFunc(openAPIMethodGetAgentRevision+" "+openAPIPathGetAgentRevision, server.getAgentRevision)
 	mux.HandleFunc(openAPIMethodReadArtifact+" "+openAPIPathReadArtifact, server.readArtifact)
+	mux.HandleFunc(openAPIMethodIdempotencyStatus+" "+openAPIPathIdempotencyStatus, server.idempotencyStatus)
 	mux.HandleFunc(openAPIMethodCreateSession+" "+openAPIPathCreateSession, server.createSession)
 	mux.HandleFunc(openAPIMethodSendInput+" "+openAPIPathSendInput, server.sendInput)
 	mux.HandleFunc(openAPIMethodInspectSession+" "+openAPIPathInspectSession, server.inspectSession)
@@ -258,6 +259,17 @@ func (server *server) readArtifact(writer http.ResponseWriter, request *http.Req
 	writer.Header().Set("Digest", "sha-256="+result.Artifact.SHA256)
 	writer.WriteHeader(http.StatusOK)
 	_, _ = writer.Write(result.Body)
+}
+
+func (server *server) idempotencyStatus(writer http.ResponseWriter, request *http.Request) {
+	contextValue := request.Context().Value(requestContextKey{}).(requestContext)
+	keys := request.Header.Values("Idempotency-Key")
+	if len(keys) != 1 || keys[0] == "" {
+		server.writeInvalid(writer, contextValue.requestID)
+		return
+	}
+	result, err := server.runtime.IdempotencyStatus(request.Context(), contextValue.identity, keys[0])
+	server.writeResult(writer, contextValue.requestID, http.StatusOK, result, err)
 }
 
 func (server *server) createSession(writer http.ResponseWriter, request *http.Request) {

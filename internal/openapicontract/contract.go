@@ -18,11 +18,12 @@ const (
 
 // Route is one validated public HTTP operation from the canonical OpenAPI contract.
 type Route struct {
-	Name     string
-	Method   string
-	Path     string
-	Status   string
-	Mutation bool
+	Name        string
+	Method      string
+	Path        string
+	Status      string
+	Mutation    bool
+	Idempotency bool
 }
 
 // Operation is the narrow operation shape required to validate the repository contract.
@@ -84,17 +85,18 @@ func Parse(data []byte) ([]Route, error) {
 // CollectRoutes validates the exact public route set independently of document decoding.
 func CollectRoutes(paths map[string]map[string]Operation) ([]Route, error) {
 	expected := map[string]Route{
-		"createAgent":      {Method: "POST", Path: "/v1/admin/agents", Status: "201", Mutation: true},
-		"reviseAgent":      {Method: "POST", Path: "/v1/admin/agents/{agent_id}/revisions", Status: "201", Mutation: true},
-		"getAgentRevision": {Method: "GET", Path: "/v1/admin/agents/{agent_id}/revisions/{revision_id}", Status: "200"},
-		"readArtifact":     {Method: "GET", Path: "/v1/artifacts/{artifact_id}", Status: "200"},
-		"createSession":    {Method: "POST", Path: "/v1/sessions", Status: "201", Mutation: true},
-		"inspectSession":   {Method: "GET", Path: "/v1/sessions/{session_id}", Status: "200"},
-		"sendInput":        {Method: "POST", Path: "/v1/sessions/{session_id}/inputs", Status: "202", Mutation: true},
-		"inspectTurn":      {Method: "GET", Path: "/v1/sessions/{session_id}/turns/{turn_id}", Status: "200"},
-		"listEvents":       {Method: "GET", Path: "/v1/sessions/{session_id}/events", Status: "200"},
-		"cancelTurn":       {Method: "POST", Path: "/v1/sessions/{session_id}/turns/{turn_id}/cancel", Status: "200", Mutation: true},
-		"closeSession":     {Method: "POST", Path: "/v1/sessions/{session_id}/close", Status: "200", Mutation: true},
+		"createAgent":       {Method: "POST", Path: "/v1/admin/agents", Status: "201", Mutation: true},
+		"reviseAgent":       {Method: "POST", Path: "/v1/admin/agents/{agent_id}/revisions", Status: "201", Mutation: true},
+		"getAgentRevision":  {Method: "GET", Path: "/v1/admin/agents/{agent_id}/revisions/{revision_id}", Status: "200"},
+		"readArtifact":      {Method: "GET", Path: "/v1/artifacts/{artifact_id}", Status: "200"},
+		"idempotencyStatus": {Method: "GET", Path: "/v1/idempotency", Status: "200", Idempotency: true},
+		"createSession":     {Method: "POST", Path: "/v1/sessions", Status: "201", Mutation: true},
+		"inspectSession":    {Method: "GET", Path: "/v1/sessions/{session_id}", Status: "200"},
+		"sendInput":         {Method: "POST", Path: "/v1/sessions/{session_id}/inputs", Status: "202", Mutation: true},
+		"inspectTurn":       {Method: "GET", Path: "/v1/sessions/{session_id}/turns/{turn_id}", Status: "200"},
+		"listEvents":        {Method: "GET", Path: "/v1/sessions/{session_id}/events", Status: "200"},
+		"cancelTurn":        {Method: "POST", Path: "/v1/sessions/{session_id}/turns/{turn_id}/cancel", Status: "200", Mutation: true},
+		"closeSession":      {Method: "POST", Path: "/v1/sessions/{session_id}/close", Status: "200", Mutation: true},
 	}
 	var routes []Route
 	for path, methods := range paths {
@@ -140,7 +142,10 @@ func validateOperationContract(operation Operation, expected Route) error {
 		return fmt.Errorf("request ID parameter is required")
 	}
 	_, hasIdempotency := references["#/components/parameters/IdempotencyKey"]
-	if expected.Mutation != hasIdempotency {
+	if (expected.Idempotency || expected.Mutation) && !hasIdempotency {
+		return fmt.Errorf("idempotency parameter does not match operation semantics")
+	}
+	if !expected.Idempotency && !expected.Mutation && hasIdempotency {
 		return fmt.Errorf("idempotency parameter does not match mutation semantics")
 	}
 	if expected.Mutation != validJSONObject(operation.RequestBody) {

@@ -135,6 +135,17 @@ func (download ArtifactDownload) Clone() ArtifactDownload {
 	return download
 }
 
+// IdempotencyStatus is the safe durable outcome lookup for one exact caller
+// scope and idempotency key.  It never exposes request bytes or backend IDs.
+type IdempotencyStatus struct {
+	OperationID string     `json:"operation_id"`
+	Command     string     `json:"command"`
+	SessionID   SessionID  `json:"session_id,omitempty"`
+	TurnID      TurnID     `json:"turn_id,omitempty"`
+	ArtifactID  ArtifactID `json:"artifact_id,omitempty"`
+	AcceptedAt  time.Time  `json:"accepted_at"`
+}
+
 // ContentPart carries either bounded text or an Artifact reference.
 type ContentPart struct {
 	Kind     ContentPartKind    `json:"kind"`

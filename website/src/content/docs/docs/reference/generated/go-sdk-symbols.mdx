@@ -44,6 +44,7 @@ This index is derived only from the declared public `sdk/go` source files. It li
 | `method` | `Client.CreateSession` | CreateSession creates a principal-owned Session pinned to one Agent revision. |
 | `method` | `Client.Events` | Events resumes bounded Product-event observation after an opaque Cursor. |
 | `method` | `Client.GetAgentRevision` | GetAgentRevision reads one immutable Agent revision through the admin surface. |
+| `method` | `Client.IdempotencyStatus` | IdempotencyStatus reads the caller-scoped durable status of one mutation key. |
 | `method` | `Client.InspectSession` | InspectSession returns caller-safe Session state without backend identifiers. |
 | `method` | `Client.InspectTurn` | InspectTurn returns one caller-safe Turn snapshot. |
 | `method` | `Client.ReadArtifact` | ReadArtifact downloads bounded immutable content only after the server has authorized the exact tenant/principal/artifact tuple. |
@@ -95,6 +96,7 @@ This index is derived only from the declared public `sdk/go` source files. It li
 | `const` | `FailureInvalidInput` | FailureInvalidInput means a request violated the public contract. |
 | `const` | `FailureNotFound` | FailureNotFound safely covers absent or unauthorized resources. |
 | `const` | `FailureUnavailable` | FailureUnavailable means durable progress may be retried later. |
+| `type` | `IdempotencyStatus` | IdempotencyStatus is the safe durable outcome lookup for one exact caller scope and idempotency key. It never exposes request bytes or backend IDs. |
 | `type` | `Input` | Input is an immutable accepted Input snapshot. |
 | `method` | `Input.Clone` | Clone returns an independent Input snapshot. |
 | `type` | `InputID` | InputID identifies one accepted Input. |
@@ -134,6 +136,7 @@ This index is derived only from the declared public `sdk/go` source files. It li
 | `method` | `RuntimeClient.CreateSession` | CreateSession creates a principal-owned Session pinned to one Agent revision. |
 | `method` | `RuntimeClient.Events` | Events resumes bounded Product-event observation after an opaque Cursor. |
 | `method` | `RuntimeClient.GetAgentRevision` | GetAgentRevision reads one immutable Agent revision through the admin surface. |
+| `method` | `RuntimeClient.IdempotencyStatus` | IdempotencyStatus reads one retained receipt without re-executing work. |
 | `method` | `RuntimeClient.InspectSession` | InspectSession returns caller-safe Session state without backend identifiers. |
 | `method` | `RuntimeClient.InspectTurn` | InspectTurn returns one caller-safe Turn snapshot. |
 | `method` | `RuntimeClient.ReadArtifact` | ReadArtifact downloads one caller-authorized immutable artifact. |

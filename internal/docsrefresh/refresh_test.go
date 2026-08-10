@@ -418,18 +418,20 @@ func validOpenAPIContract(infoVersion string) []byte {
 	operations := []struct {
 		id, method, path, status string
 		mutation                 bool
+		idempotency              bool
 	}{
-		{"createAgent", "post", "/v1/admin/agents", "201", true},
-		{"reviseAgent", "post", "/v1/admin/agents/{agent_id}/revisions", "201", true},
-		{"getAgentRevision", "get", "/v1/admin/agents/{agent_id}/revisions/{revision_id}", "200", false},
-		{"readArtifact", "get", "/v1/artifacts/{artifact_id}", "200", false},
-		{"createSession", "post", "/v1/sessions", "201", true},
-		{"inspectSession", "get", "/v1/sessions/{session_id}", "200", false},
-		{"sendInput", "post", "/v1/sessions/{session_id}/inputs", "202", true},
-		{"inspectTurn", "get", "/v1/sessions/{session_id}/turns/{turn_id}", "200", false},
-		{"listEvents", "get", "/v1/sessions/{session_id}/events", "200", false},
-		{"cancelTurn", "post", "/v1/sessions/{session_id}/turns/{turn_id}/cancel", "200", true},
-		{"closeSession", "post", "/v1/sessions/{session_id}/close", "200", true},
+		{"createAgent", "post", "/v1/admin/agents", "201", true, true},
+		{"reviseAgent", "post", "/v1/admin/agents/{agent_id}/revisions", "201", true, true},
+		{"getAgentRevision", "get", "/v1/admin/agents/{agent_id}/revisions/{revision_id}", "200", false, false},
+		{"readArtifact", "get", "/v1/artifacts/{artifact_id}", "200", false, false},
+		{"idempotencyStatus", "get", "/v1/idempotency", "200", false, true},
+		{"createSession", "post", "/v1/sessions", "201", true, true},
+		{"inspectSession", "get", "/v1/sessions/{session_id}", "200", false, false},
+		{"sendInput", "post", "/v1/sessions/{session_id}/inputs", "202", true, true},
+		{"inspectTurn", "get", "/v1/sessions/{session_id}/turns/{turn_id}", "200", false, false},
+		{"listEvents", "get", "/v1/sessions/{session_id}/events", "200", false, false},
+		{"cancelTurn", "post", "/v1/sessions/{session_id}/turns/{turn_id}/cancel", "200", true, true},
+		{"closeSession", "post", "/v1/sessions/{session_id}/close", "200", true, true},
 	}
 	var paths strings.Builder
 	for index, operation := range operations {
@@ -438,8 +440,10 @@ func validOpenAPIContract(infoVersion string) []byte {
 		}
 		parameters := `[ {"$ref":"#/components/parameters/RequestID"} ]`
 		requestBody := ""
-		if operation.mutation {
+		if operation.idempotency {
 			parameters = `[ {"$ref":"#/components/parameters/RequestID"}, {"$ref":"#/components/parameters/IdempotencyKey"} ]`
+		}
+		if operation.mutation {
 			requestBody = `,"requestBody":{"$ref":"#/components/requestBodies/EmptyMutation"}`
 		}
 		fmt.Fprintf(&paths, `%q:{%q:{"operationId":%q,"parameters":%s%s,"responses":{%q:{"description":"success"},"default":{"description":"failure"}}}}`, operation.path, operation.method, operation.id, parameters, requestBody, operation.status)

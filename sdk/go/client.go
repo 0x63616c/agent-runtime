@@ -29,6 +29,8 @@ type RuntimeClient interface {
 	GetAgentRevision(context.Context, AgentID, AgentRevisionID) (AgentSpecification, error)
 	// ReadArtifact downloads one caller-authorized immutable artifact.
 	ReadArtifact(context.Context, ArtifactID) (ArtifactDownload, error)
+	// IdempotencyStatus reads one retained receipt without re-executing work.
+	IdempotencyStatus(context.Context, string) (IdempotencyStatus, error)
 	// CreateSession creates a principal-owned Session pinned to one Agent revision.
 	CreateSession(context.Context, CreateSessionRequest) (Session, error)
 	// SendInput idempotently admits bounded Input into a Session.
@@ -175,6 +177,14 @@ func (client *Client) ReadArtifact(ctx context.Context, artifactID ArtifactID) (
 		return ArtifactDownload{}, errors.New("read Artifact: invalid artifact ID")
 	}
 	return doArtifact(client, ctx, replacePath(openAPIPathReadArtifact, "artifact_id", artifactID.String()), artifactID)
+}
+
+// IdempotencyStatus reads the caller-scoped durable status of one mutation key.
+func (client *Client) IdempotencyStatus(ctx context.Context, key string) (IdempotencyStatus, error) {
+	if key == "" || len(key) > MaxIdempotencyKeyBytes {
+		return IdempotencyStatus{}, errors.New("read idempotency status: invalid idempotency key")
+	}
+	return doJSON[IdempotencyStatus](client, ctx, openAPIMethodIdempotencyStatus, openAPIPathIdempotencyStatus, key, nil)
 }
 
 // CreateSession creates a principal-owned Session pinned to one Agent revision.

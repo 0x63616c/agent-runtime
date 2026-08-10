@@ -57,6 +57,13 @@ func TestStateRuntimeServesTheCompletePublicLifecycleThroughContentAndMemoryStat
 	if replay, err := runtime.SendInput(ctx, alice, agentruntime.SendInputRequest{SessionID: session.ID, IdempotencyKey: "send-input", Parts: []agentruntime.ContentPart{{Kind: agentruntime.ContentText, Text: "hello"}}}); err != nil || !reflect.DeepEqual(replay, accepted) {
 		t.Fatalf("replay Input = %#v, %v; want %#v, nil", replay, err, accepted)
 	}
+	status, err := runtime.IdempotencyStatus(ctx, alice, "send-input")
+	if err != nil || status.Command != "admit_input" || status.SessionID != session.ID || status.TurnID != accepted.Turn.ID {
+		t.Fatalf("idempotency status = %#v, %v; want retained caller receipt", status, err)
+	}
+	if _, err := runtime.IdempotencyStatus(ctx, bob, "send-input"); !hasFailure(err, agentruntime.FailureNotFound) {
+		t.Fatalf("cross-principal idempotency status error = %v, want safe not-found", err)
+	}
 	if got, err := runtime.InspectTurn(ctx, alice, session.ID, accepted.Turn.ID); err != nil || got.State != agentruntime.TurnRunning {
 		t.Fatalf("inspect running Turn = %#v, %v", got, err)
 	}
