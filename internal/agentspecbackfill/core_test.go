@@ -59,6 +59,29 @@ func TestRequestUsesCanonicalDigestNameAndBoundedImmutableStatus(t *testing.T) {
 	if _, err := unknown.Canonical(); err == nil {
 		t.Fatal("unknown refusal reason was canonicalized")
 	}
+	notAdmitted := agentspecbackfill.Status{Phase: agentspecbackfill.PhaseRefused, RequestDigest: mustDigest(t, futureCreated), SnapshotFingerprint: futureCreated.SnapshotFingerprint, SnapshotCount: futureCreated.SnapshotCount, Reason: agentspecbackfill.RefusalNotAdmitted, CompletedAt: request.CreatedAt}
+	if err := notAdmitted.ValidateFor(futureCreated, request.CreatedAt); err != nil {
+		t.Fatalf("pre-creation terminal refusal: %v", err)
+	}
+	lateNotAdmitted := notAdmitted
+	lateNotAdmitted.CompletedAt = futureCreated.CreatedAt
+	if err := lateNotAdmitted.ValidateFor(futureCreated, futureCreated.CreatedAt); err == nil {
+		t.Fatal("not-admitted status at creation was accepted")
+	}
+	tooEarlyContent := status
+	tooEarlyContent.Phase, tooEarlyContent.Reason = agentspecbackfill.PhaseRefused, agentspecbackfill.RefusalContent
+	tooEarlyContent.CompletedAt = request.CreatedAt.Add(-time.Nanosecond)
+	if err := tooEarlyContent.ValidateFor(request, request.CreatedAt); err == nil {
+		t.Fatal("pre-creation content refusal was accepted")
+	}
+	expiredTooEarly := status
+	expiredTooEarly.Phase, expiredTooEarly.Reason = agentspecbackfill.PhaseRefused, agentspecbackfill.RefusalExpired
+	if err := expiredTooEarly.ValidateFor(request, request.ExpiresAt.Add(-time.Nanosecond)); err == nil {
+		t.Fatal("pre-expiry expired status was accepted")
+	}
+	if err := status.ValidateFor(request, request.ExpiresAt); err == nil {
+		t.Fatal("verified status was accepted at expiry")
+	}
 }
 
 func TestVerifyRefusesFrozenSnapshotAndImmutableContentFailures(t *testing.T) {
@@ -135,8 +158,8 @@ func TestVerifyRefusesFrozenSnapshotAndImmutableContentFailures(t *testing.T) {
 
 func TestArchiveIsRequestKeyedAndRetainsCertificateAbsentTerminalResult(t *testing.T) {
 	request := validRequest()
-	status := agentspecbackfill.Status{Phase: agentspecbackfill.PhaseRefused, RequestDigest: mustDigest(t, request), SnapshotFingerprint: request.SnapshotFingerprint, SnapshotCount: request.SnapshotCount, Reason: agentspecbackfill.RefusalExpired, CompletedAt: time.Date(2026, 8, 9, 0, 1, 0, 0, time.UTC)}
-	bundle, err := agentspecbackfill.NewArchiveBundle(request, status, agentspecbackfill.Audit{Code: "expired"}, nil)
+	status := agentspecbackfill.Status{Phase: agentspecbackfill.PhaseRefused, RequestDigest: mustDigest(t, request), SnapshotFingerprint: request.SnapshotFingerprint, SnapshotCount: request.SnapshotCount, Reason: agentspecbackfill.RefusalContent, CompletedAt: time.Date(2026, 8, 9, 0, 1, 0, 0, time.UTC)}
+	bundle, err := agentspecbackfill.NewArchiveBundle(request, status, agentspecbackfill.Audit{Code: "content"}, nil)
 	if err != nil {
 		t.Fatalf("new archive bundle: %v", err)
 	}
@@ -151,7 +174,7 @@ func TestArchiveIsRequestKeyedAndRetainsCertificateAbsentTerminalResult(t *testi
 	}
 	later := status
 	later.CompletedAt = later.CompletedAt.Add(time.Second)
-	laterBundle, err := agentspecbackfill.NewArchiveBundle(request, later, agentspecbackfill.Audit{Code: "expired"}, nil)
+	laterBundle, err := agentspecbackfill.NewArchiveBundle(request, later, agentspecbackfill.Audit{Code: "content"}, nil)
 	if err != nil {
 		t.Fatalf("new later archive bundle: %v", err)
 	}

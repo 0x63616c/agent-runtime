@@ -222,8 +222,23 @@ func (status Status) ValidateFor(request Request, now time.Time) error {
 	if status.Phase != PhaseVerified && status.Phase != PhaseRefused {
 		return errors.New("backfill status is not terminal")
 	}
-	if status.CompletedAt.After(request.ExpiresAt) && status.Phase == PhaseVerified {
-		return errors.New("verified backfill status is expired")
+	if status.Reason == RefusalNotAdmitted {
+		if !status.CompletedAt.Before(request.CreatedAt) {
+			return errors.New("not admitted backfill status is outside admission interval")
+		}
+		return nil
+	}
+	if status.CompletedAt.Before(request.CreatedAt) {
+		return errors.New("backfill status precedes request creation")
+	}
+	if status.Reason == RefusalExpired {
+		if status.CompletedAt.Before(request.ExpiresAt) {
+			return errors.New("expired backfill status precedes expiry")
+		}
+		return nil
+	}
+	if !status.CompletedAt.Before(request.ExpiresAt) || !now.UTC().Before(request.ExpiresAt) {
+		return errors.New("backfill status is outside request interval")
 	}
 	return nil
 }
