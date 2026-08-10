@@ -31,6 +31,74 @@ type StaticAgentSpecBackfillV1 struct {
 	EvidenceRetentionDays int `json:"evidence_retention_days"`
 	// TeardownInventory is the complete static resource inventory for declarative teardown.
 	TeardownInventory []string `json:"teardown_inventory"`
+	// Inventory supplies every explicit non-secret authority fact required by the static inventory compiler.
+	Inventory *StaticAgentSpecBackfillInventoryV1 `json:"inventory,omitempty"`
+}
+
+// StaticAgentSpecBackfillInventoryV1 names the explicit authority facts for one non-applying static inventory.
+// It deliberately declares rather than infers profile, cluster ownership, identities, routes, and UID handoff.
+type StaticAgentSpecBackfillInventoryV1 struct {
+	// Profile binds the inventory to one reviewed Stack profile.
+	Profile Profile `json:"profile"`
+	// ClusterOwnership identifies the separately declared owner of cluster-scoped static resources.
+	ClusterOwnership StaticAgentSpecBackfillClusterOwnership `json:"cluster_ownership"`
+	// ControllerIdentity declares the controller subject, reference, and least-privilege rules.
+	ControllerIdentity StaticAgentSpecBackfillIdentity `json:"controller_identity"`
+	// OperatorIdentity declares the request-creator subject, reference, and least-privilege rules.
+	OperatorIdentity StaticAgentSpecBackfillIdentity `json:"operator_identity"`
+	// LifecycleIdentity declares the distinct read-only readiness observer.
+	LifecycleIdentity StaticAgentSpecBackfillLifecycleIdentity `json:"lifecycle_identity"`
+	// ArchiveIdentity declares the distinct retained-evidence exporter.
+	ArchiveIdentity StaticAgentSpecBackfillArchiveIdentity `json:"archive_identity"`
+	// Admission pins the static validating policy and binding that fence request mutation authority.
+	Admission StaticAgentSpecBackfillAdmission `json:"admission"`
+	// RuntimeTarget declares the runtime namespace and an explicit later UID-bound ingress handoff.
+	RuntimeTarget StaticAgentSpecBackfillRuntimeTarget `json:"runtime_target"`
+}
+
+// StaticAgentSpecBackfillClusterOwnership identifies a declared cluster-scoped authority without choosing one.
+type StaticAgentSpecBackfillClusterOwnership struct {
+	Owner           string `json:"owner"`
+	AuthorityDigest string `json:"authority_digest"`
+}
+
+// StaticAgentSpecBackfillIdentity declares one explicit Kubernetes or external identity and narrow rules.
+type StaticAgentSpecBackfillIdentity struct {
+	SubjectKind               string       `json:"subject_kind"`
+	Subject                   string       `json:"subject"`
+	Namespace                 string       `json:"namespace"`
+	CredentialReferenceDigest string       `json:"credential_reference_digest"`
+	RBACDigest                string       `json:"rbac_digest"`
+	Permissions               []Permission `json:"permissions"`
+}
+
+// StaticAgentSpecBackfillLifecycleIdentity declares the static readiness observer's distinct authority.
+type StaticAgentSpecBackfillLifecycleIdentity struct {
+	Name                       string `json:"name"`
+	CredentialReferenceDigest  string `json:"credential_reference_digest"`
+	RBACDigest                 string `json:"rbac_digest"`
+	ObservationAuthorityDigest string `json:"observation_authority_digest"`
+}
+
+// StaticAgentSpecBackfillArchiveIdentity declares the retained-evidence export authority.
+type StaticAgentSpecBackfillArchiveIdentity struct {
+	Name                      string `json:"name"`
+	CredentialReferenceDigest string `json:"credential_reference_digest"`
+	RBACDigest                string `json:"rbac_digest"`
+	ArchivePolicyDigest       string `json:"archive_policy_digest"`
+}
+
+// StaticAgentSpecBackfillAdmission pins the static validating admission policy and its binding.
+type StaticAgentSpecBackfillAdmission struct {
+	PolicyDigest  string `json:"policy_digest"`
+	BindingDigest string `json:"binding_digest"`
+}
+
+// StaticAgentSpecBackfillRuntimeTarget declares a target namespace and the not-yet-realized UID-bound ingress handoff.
+type StaticAgentSpecBackfillRuntimeTarget struct {
+	Namespace           string `json:"namespace"`
+	TargetIngressDigest string `json:"target_ingress_digest"`
+	UIDHandshakeDigest  string `json:"uid_handshake_digest"`
 }
 
 // StaticAgentSpecBackfillController is the immutable controller workload declaration.
@@ -94,6 +162,21 @@ func (plan StaticAgentSpecBackfillPlan) Digest() string { return plan.digest }
 // JSON returns a copy of the canonical render-only plan.
 func (plan StaticAgentSpecBackfillPlan) JSON() []byte { return append([]byte(nil), plan.data...) }
 
+// StaticAgentSpecBackfillInventory is immutable canonical static control-plane desired state.
+// It is deliberately non-applicable; a separately authorized future operator must consume it.
+type StaticAgentSpecBackfillInventory struct {
+	digest string
+	data   []byte
+}
+
+// Digest returns the canonical SHA-256 identity of the non-applying static inventory.
+func (inventory StaticAgentSpecBackfillInventory) Digest() string { return inventory.digest }
+
+// JSON returns a copy of the canonical non-applying static inventory.
+func (inventory StaticAgentSpecBackfillInventory) JSON() []byte {
+	return append([]byte(nil), inventory.data...)
+}
+
 type staticAgentSpecBackfillPlanDocument struct {
 	Version               int                                `json:"version"`
 	Stack                 string                             `json:"stack"`
@@ -109,6 +192,22 @@ type staticAgentSpecBackfillPlanDocument struct {
 	Digest                string                             `json:"digest,omitempty"`
 }
 
+type staticAgentSpecBackfillInventoryDocument struct {
+	Version               int                                `json:"version"`
+	Stack                 string                             `json:"stack"`
+	NotApplied            bool                               `json:"not_applied"`
+	CRDDigest             string                             `json:"crd_digest"`
+	Controller            StaticAgentSpecBackfillController  `json:"controller"`
+	Identities            StaticAgentSpecBackfillIdentities  `json:"identities"`
+	Routes                []StaticAgentSpecBackfillRoute     `json:"routes"`
+	RBAC                  StaticAgentSpecBackfillRBAC        `json:"rbac"`
+	Credentials           StaticAgentSpecBackfillCredentials `json:"credentials"`
+	EvidenceRetentionDays int                                `json:"evidence_retention_days"`
+	TeardownInventory     []string                           `json:"teardown_inventory"`
+	Inventory             StaticAgentSpecBackfillInventoryV1 `json:"inventory"`
+	Digest                string                             `json:"digest,omitempty"`
+}
+
 var staticAgentSpecBackfillTeardownInventory = []string{
 	"agent-spec-backfill-controller",
 	"agent-spec-backfill-controller-role",
@@ -121,6 +220,7 @@ var staticAgentSpecBackfillTeardownInventory = []string{
 	"agent-spec-backfill-routes",
 	"agentspecbackfill-crd",
 	"agentspecbackfill-validating-admission-policy",
+	"agentspecbackfill-validating-admission-policy-binding",
 }
 
 var staticAgentSpecBackfillRoutes = map[string]StaticAgentSpecBackfillRoute{
@@ -284,6 +384,25 @@ func cloneStaticAgentSpecBackfill(declaration StaticAgentSpecBackfillV1) StaticA
 	}
 	clone.Routes = append([]StaticAgentSpecBackfillRoute(nil), declaration.Routes...)
 	clone.TeardownInventory = append([]string(nil), declaration.TeardownInventory...)
+	if declaration.Inventory != nil {
+		inventory := cloneStaticAgentSpecBackfillInventory(*declaration.Inventory)
+		clone.Inventory = &inventory
+	}
+	return clone
+}
+
+func cloneStaticAgentSpecBackfillInventory(inventory StaticAgentSpecBackfillInventoryV1) StaticAgentSpecBackfillInventoryV1 {
+	clone := inventory
+	clone.ControllerIdentity.Permissions = clonePermissions(inventory.ControllerIdentity.Permissions)
+	clone.OperatorIdentity.Permissions = clonePermissions(inventory.OperatorIdentity.Permissions)
+	return clone
+}
+
+func clonePermissions(permissions []Permission) []Permission {
+	clone := append([]Permission(nil), permissions...)
+	for index := range clone {
+		clone[index].Verbs = append([]string(nil), clone[index].Verbs...)
+	}
 	return clone
 }
 
@@ -314,4 +433,138 @@ func RenderStaticAgentSpecBackfill(spec Spec) (StaticAgentSpecBackfillPlan, erro
 		return StaticAgentSpecBackfillPlan{}, errors.Wrap(err, "render static AgentSpecBackfill control plane")
 	}
 	return StaticAgentSpecBackfillPlan{digest: document.Digest, data: append(encoded, '\n')}, nil
+}
+
+// CompileStaticAgentSpecBackfillInventory compiles declared static control-plane facts without provider effects.
+func CompileStaticAgentSpecBackfillInventory(spec Spec) (StaticAgentSpecBackfillInventory, error) {
+	declaration, found := spec.StaticAgentSpecBackfill()
+	if !found {
+		return StaticAgentSpecBackfillInventory{}, errors.New("compile static AgentSpecBackfill inventory: declaration is not declared")
+	}
+	if err := validateStaticAgentSpecBackfill(declaration); err != nil {
+		return StaticAgentSpecBackfillInventory{}, errors.Wrap(err, "compile static AgentSpecBackfill inventory")
+	}
+	if err := validateStaticAgentSpecBackfillInventory(declaration); err != nil {
+		return StaticAgentSpecBackfillInventory{}, errors.Wrap(err, "compile static AgentSpecBackfill inventory")
+	}
+	inventory := cloneStaticAgentSpecBackfillInventory(*declaration.Inventory)
+	sort.Slice(declaration.Routes, func(left, right int) bool { return declaration.Routes[left].Kind < declaration.Routes[right].Kind })
+	sort.Strings(declaration.TeardownInventory)
+	canonicalizeStaticIdentity(&inventory.ControllerIdentity)
+	canonicalizeStaticIdentity(&inventory.OperatorIdentity)
+	document := staticAgentSpecBackfillInventoryDocument{
+		Version: declaration.Version, Stack: spec.Name.String(), NotApplied: true, CRDDigest: declaration.CRDDigest,
+		Controller: declaration.Controller, Identities: declaration.Identities, Routes: declaration.Routes,
+		RBAC: declaration.RBAC, Credentials: declaration.Credentials, EvidenceRetentionDays: declaration.EvidenceRetentionDays,
+		TeardownInventory: declaration.TeardownInventory, Inventory: inventory,
+	}
+	unsigned, err := json.Marshal(document)
+	if err != nil {
+		return StaticAgentSpecBackfillInventory{}, errors.Wrap(err, "compile static AgentSpecBackfill inventory")
+	}
+	document.Digest = digest(unsigned)
+	encoded, err := json.MarshalIndent(document, "", "  ")
+	if err != nil {
+		return StaticAgentSpecBackfillInventory{}, errors.Wrap(err, "compile static AgentSpecBackfill inventory")
+	}
+	return StaticAgentSpecBackfillInventory{digest: document.Digest, data: append(encoded, '\n')}, nil
+}
+
+func validateStaticAgentSpecBackfillInventory(declaration StaticAgentSpecBackfillV1) error {
+	if declaration.Inventory == nil {
+		return errors.New("static AgentSpecBackfill inventory must declare every authority fact")
+	}
+	inventory := declaration.Inventory
+	if inventory.Profile != ProfileLocal && inventory.Profile != ProfileCI && inventory.Profile != ProfileProduction {
+		return errors.New("static AgentSpecBackfill inventory must declare one reviewed profile")
+	}
+	if !resourceIDPattern.MatchString(inventory.ClusterOwnership.Owner) || !sha256Pattern.MatchString(inventory.ClusterOwnership.AuthorityDigest) {
+		return errors.New("static AgentSpecBackfill inventory must declare cluster ownership")
+	}
+	if err := validateStaticIdentity(inventory.ControllerIdentity, declaration.Identities.Namespace, declaration.Identities.ControllerServiceAccount, declaration.RBAC.ControllerDigest, declaration.Credentials.ControllerReferenceDigest, controllerStaticPermissions()); err != nil {
+		return errors.Wrap(err, "validate static AgentSpecBackfill controller identity")
+	}
+	if err := validateStaticIdentity(inventory.OperatorIdentity, "", "", declaration.RBAC.OperatorDigest, "", operatorStaticPermissions()); err != nil {
+		return errors.Wrap(err, "validate static AgentSpecBackfill operator identity")
+	}
+	if !resourceIDPattern.MatchString(inventory.LifecycleIdentity.Name) || !allDistinctDigests([]string{inventory.LifecycleIdentity.CredentialReferenceDigest, inventory.LifecycleIdentity.RBACDigest, inventory.LifecycleIdentity.ObservationAuthorityDigest}) {
+		return errors.New("static AgentSpecBackfill inventory must declare distinct lifecycle identity authority")
+	}
+	if !resourceIDPattern.MatchString(inventory.ArchiveIdentity.Name) || !allDistinctDigests([]string{inventory.ArchiveIdentity.CredentialReferenceDigest, inventory.ArchiveIdentity.RBACDigest, inventory.ArchiveIdentity.ArchivePolicyDigest}) {
+		return errors.New("static AgentSpecBackfill inventory must declare distinct archive identity authority")
+	}
+	identityCredentials := []string{inventory.ControllerIdentity.CredentialReferenceDigest, inventory.OperatorIdentity.CredentialReferenceDigest, inventory.LifecycleIdentity.CredentialReferenceDigest, inventory.ArchiveIdentity.CredentialReferenceDigest}
+	if !allDistinctDigests(identityCredentials) {
+		return errors.New("static AgentSpecBackfill inventory must keep identity credential authority distinct")
+	}
+	if !allDistinctDigests([]string{inventory.Admission.PolicyDigest, inventory.Admission.BindingDigest}) {
+		return errors.New("static AgentSpecBackfill inventory must declare distinct admission policy and binding authority")
+	}
+	if !resourceIDPattern.MatchString(inventory.RuntimeTarget.Namespace) || !sha256Pattern.MatchString(inventory.RuntimeTarget.TargetIngressDigest) || !sha256Pattern.MatchString(inventory.RuntimeTarget.UIDHandshakeDigest) {
+		return errors.New("static AgentSpecBackfill inventory must declare runtime target and UID handoff")
+	}
+	return nil
+}
+
+func validateStaticIdentity(identity StaticAgentSpecBackfillIdentity, expectedNamespace, expectedSubject, expectedRBACDigest, expectedCredentialDigest string, expectedPermissions []Permission) error {
+	if (identity.SubjectKind != "service_account" && identity.SubjectKind != "external") || !resourceIDPattern.MatchString(identity.Subject) || !sha256Pattern.MatchString(identity.CredentialReferenceDigest) || identity.RBACDigest != expectedRBACDigest || !samePermissions(identity.Permissions, expectedPermissions) {
+		return errors.New("identity kind, subject, credential, RBAC, and exact permissions are required")
+	}
+	if expectedCredentialDigest != "" && identity.CredentialReferenceDigest != expectedCredentialDigest {
+		return errors.New("identity credential reference does not match static declaration")
+	}
+	if identity.SubjectKind == "service_account" {
+		if !resourceIDPattern.MatchString(identity.Namespace) {
+			return errors.New("service-account identity namespace is required")
+		}
+	} else if identity.Namespace != "" {
+		return errors.New("external identity must not imply a Kubernetes namespace")
+	}
+	if expectedNamespace != "" && identity.Namespace != expectedNamespace {
+		return errors.New("identity namespace does not match static declaration")
+	}
+	if expectedSubject != "" && identity.Subject != expectedSubject {
+		return errors.New("identity subject does not match static declaration")
+	}
+	return nil
+}
+
+func controllerStaticPermissions() []Permission {
+	return []Permission{{APIGroup: "runtime.0x63616c.dev", Resource: "agentspecbackfills", Verbs: []string{"get", "list", "watch"}}, {APIGroup: "runtime.0x63616c.dev", Resource: "agentspecbackfills/status", Verbs: []string{"patch", "update"}}}
+}
+
+func operatorStaticPermissions() []Permission {
+	return []Permission{{APIGroup: "runtime.0x63616c.dev", Resource: "agentspecbackfills", Verbs: []string{"create", "get"}}}
+}
+
+func samePermissions(actual, expected []Permission) bool {
+	actual = clonePermissions(actual)
+	expected = clonePermissions(expected)
+	canonicalizePermissions(actual)
+	canonicalizePermissions(expected)
+	if len(actual) != len(expected) {
+		return false
+	}
+	for index := range actual {
+		if actual[index].APIGroup != expected[index].APIGroup || actual[index].Resource != expected[index].Resource || !slices.Equal(actual[index].Verbs, expected[index].Verbs) {
+			return false
+		}
+	}
+	return true
+}
+
+func canonicalizeStaticIdentity(identity *StaticAgentSpecBackfillIdentity) {
+	canonicalizePermissions(identity.Permissions)
+}
+
+func canonicalizePermissions(permissions []Permission) {
+	for index := range permissions {
+		sort.Strings(permissions[index].Verbs)
+	}
+	sort.Slice(permissions, func(left, right int) bool {
+		if permissions[left].APIGroup != permissions[right].APIGroup {
+			return permissions[left].APIGroup < permissions[right].APIGroup
+		}
+		return permissions[left].Resource < permissions[right].Resource
+	})
 }
