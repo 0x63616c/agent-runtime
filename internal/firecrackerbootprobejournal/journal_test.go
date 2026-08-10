@@ -42,6 +42,9 @@ func TestJournalRecoversIntentAndRefusesConcurrentHost(t *testing.T) {
 	if err := j.StageLaunchIntent(session); err != nil {
 		t.Fatal(err)
 	}
+	if err := j.StageLaunchSnapshot(firecrackerbootprobev2.Snapshot{Version: 9, Session: session, Wire: mustSessionWire(t, session)}); err != nil {
+		t.Fatal(err)
+	}
 	if err := j.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -56,6 +59,18 @@ func TestJournalRecoversIntentAndRefusesConcurrentHost(t *testing.T) {
 	if !ok || wantErr != nil || gotErr != nil || string(gotWire) != string(wantWire) {
 		t.Fatal("journal did not recover exact intent")
 	}
+	if snapshot, ok := recovered.LaunchSnapshot(); !ok || snapshot.Version != 9 {
+		t.Fatalf("LaunchSnapshot() = %#v, %t", snapshot, ok)
+	}
+}
+
+func mustSessionWire(t *testing.T, session firecrackerbootprobev2.Session) []byte {
+	t.Helper()
+	wire, err := firecrackerbootprobev2.EncodeSession(session)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return wire
 }
 func digest(n rune) sandbox.Digest {
 	b := make([]rune, 64)
