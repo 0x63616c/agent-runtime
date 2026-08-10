@@ -4,6 +4,12 @@
   "proof_level": "local_disposable_kubernetes_integration",
   "utc_time": "2026-08-10T22:29:15Z",
   "implementation_revision": "fa8ac05de0b347bffdf1b23c86f8f09acd6341f8",
+  "proof_provenance": {
+    "source_revision": "fa8ac05de0b347bffdf1b23c86f8f09acd6341f8",
+    "source_tree_id": "88cffd04f72c46d68c24edd8ad0f9cb6df41b6af",
+    "retention_revision": "c27b334ebfbbb3e496b88e216c9283addc8741e8",
+    "retained_artifact_sha256": "sha256:2d5eb7c0d5d3eb590e98036eb68fbd1278545bd5510c930de1d708e53225b491"
+  },
   "stack": {
     "path": "deploy/production/stack.json",
     "profile": "local",
