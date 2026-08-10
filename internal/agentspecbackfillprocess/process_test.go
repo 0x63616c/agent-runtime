@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"strings"
 	"testing"
 	"time"
 
@@ -71,6 +72,49 @@ func TestControllerRefusesNonCanonicalWireBeforeDurablePorts(t *testing.T) {
 	}
 }
 
+func TestControllerUsesOneInstantForTerminalStatusValidation(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 8, 9, 12, 0, 0, 0, time.UTC)
+	request, wire := testRequest(t, now)
+	statuses := &recordingStatuses{}
+	archives := &recordingArchives{}
+	controller, err := agentspecbackfillprocess.New(
+		agentspecbackfillprocess.Config{ControllerImageDigest: request.Spec.ControllerImageDigest, WatchRetry: time.Millisecond},
+		&recordingSource{}, statuses, testReader{request: request.Spec}, passingVerifier{}, archives, &advancingClock{now: now}, func(context.Context, time.Duration) error { return nil },
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	status, err := controller.ReconcileWire(context.Background(), wire)
+	if err != nil || status.Phase != agentspecbackfill.PhaseVerified || statuses.creates != 1 {
+		t.Fatalf("expected advancing clock to record terminal status once, got status=%+v creates=%d err=%v", status, statuses.creates, err)
+	}
+}
+
+func TestControllerTreatsCallerCancellationDuringListAsNormalExit(t *testing.T) {
+	t.Parallel()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	source := &recordingSource{list: func(context.Context) ([][]byte, error) {
+		cancel()
+		return nil, context.Canceled
+	}}
+	fakeClock, err := clock.NewFake(time.Date(2026, 8, 9, 12, 0, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatal(err)
+	}
+	controller, err := agentspecbackfillprocess.New(
+		agentspecbackfillprocess.Config{ControllerImageDigest: "sha256:4444444444444444444444444444444444444444444444444444444444444444", WatchRetry: time.Millisecond},
+		source, &recordingStatuses{}, testReader{}, passingVerifier{}, &recordingArchives{}, fakeClock, func(context.Context, time.Duration) error { return nil },
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := controller.Run(ctx); err != nil {
+		t.Fatalf("expected caller cancellation during list to stop normally, got %v", err)
+	}
+}
+
 func TestParseRefusesAmbientKubernetesConfiguration(t *testing.T) {
 	t.Parallel()
 	config := `{"version":1,"controller_image_digest":"sha256:4444444444444444444444444444444444444444444444444444444444444444","watch_retry_millis":25}`
@@ -81,22 +125,39 @@ func TestParseRefusesAmbientKubernetesConfiguration(t *testing.T) {
 	if _, err := agentspecbackfillprocess.ParseConfig(bytes.NewBufferString(withKubeConfig)); err == nil {
 		t.Fatal("expected ambient Kubernetes configuration to be refused")
 	}
+	if _, err := agentspecbackfillprocess.ParseConfig(strings.NewReader(config + strings.Repeat(" ", 4097))); err == nil {
+		t.Fatal("expected oversized controller configuration to be refused")
+	}
 }
 
 type recordingSource struct {
+	list       func(context.Context) ([][]byte, error)
 	lists      [][][]byte
 	watches    []agentspecbackfillprocess.Watch
 	listCalls  int
 	watchCalls int
 }
 
-func (source *recordingSource) List(context.Context) ([][]byte, error) {
+func (source *recordingSource) List(ctx context.Context) ([][]byte, error) {
+	if source.list != nil {
+		return source.list(ctx)
+	}
 	if source.listCalls >= len(source.lists) {
 		return nil, nil
 	}
 	items := source.lists[source.listCalls]
 	source.listCalls++
 	return items, nil
+}
+
+type advancingClock struct {
+	now time.Time
+}
+
+func (clock *advancingClock) Now() time.Time {
+	current := clock.now
+	clock.now = clock.now.Add(time.Nanosecond)
+	return current
 }
 
 func (source *recordingSource) Watch(context.Context) (agentspecbackfillprocess.Watch, error) {

@@ -14,7 +14,10 @@ import (
 	"github.com/cockroachdb/errors"
 )
 
-const maximumWatchRetry = time.Minute
+const (
+	maximumConfigBytes = 4096
+	maximumWatchRetry  = time.Minute
+)
 
 // Config is the explicit, versioned declaration for one AgentSpecBackfill controller process.
 type Config struct {
@@ -33,7 +36,11 @@ func ParseConfig(input io.Reader) (Config, error) {
 	if input == nil {
 		return Config{}, errors.New("parse agent spec backfill controller configuration: input is required")
 	}
-	decoder := json.NewDecoder(input)
+	encoded, err := io.ReadAll(io.LimitReader(input, maximumConfigBytes+1))
+	if err != nil || len(encoded) == 0 || len(encoded) > maximumConfigBytes {
+		return Config{}, errors.New("parse agent spec backfill controller configuration: bounded input is required")
+	}
+	decoder := json.NewDecoder(bytes.NewReader(encoded))
 	decoder.DisallowUnknownFields()
 	var decoded configDocument
 	if err := decoder.Decode(&decoded); err != nil {
@@ -106,6 +113,9 @@ func (controller *Controller) Run(ctx context.Context) error {
 		}
 		items, err := controller.source.List(ctx)
 		if err != nil {
+			if ctx.Err() != nil {
+				return nil
+			}
 			return errors.Wrap(err, "list agent spec backfill requests")
 		}
 		if err := ctx.Err(); err != nil {
@@ -168,12 +178,13 @@ func (controller *Controller) ReconcileWire(ctx context.Context, wire []byte) (a
 	if request.Metadata.UID == "" || request.Metadata.Generation == 0 {
 		return agentspecbackfill.Status{}, errors.New("reconcile agent spec backfill request: observed immutable metadata is required")
 	}
-	statuses := crTerminalStatuses{store: controller.statuses, request: request, now: controller.clock.Now().UTC()}
+	now := controller.clock.Now().UTC()
+	statuses := crTerminalStatuses{store: controller.statuses, request: request, now: now}
 	reconciler, err := agentspecbackfill.NewReconciler(&statuses, controller.archives)
 	if err != nil {
 		return agentspecbackfill.Status{}, errors.Wrap(err, "construct agent spec backfill reconciler")
 	}
-	status, err := reconciler.Reconcile(ctx, request.Spec, controller.reader, controller.verifier, controller.clock.Now().UTC())
+	status, err := reconciler.Reconcile(ctx, request.Spec, controller.reader, controller.verifier, now)
 	if err != nil {
 		return agentspecbackfill.Status{}, errors.Wrap(err, "reconcile immutable agent spec backfill request")
 	}
