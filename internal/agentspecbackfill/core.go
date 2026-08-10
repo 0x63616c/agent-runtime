@@ -321,13 +321,15 @@ func (bundle ArchiveBundle) Canonical() ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
+	status, err := bundle.status.Canonical()
+	if err != nil {
+		return nil, err
+	}
 	var value bytes.Buffer
-	writeHead(&value, 4, 7)
+	writeHead(&value, 4, 5)
 	writeUint(&value, 1)
 	writeBytes(&value, request)
-	writeText(&value, string(bundle.status.Phase))
-	writeText(&value, bundle.status.RequestDigest)
-	writeText(&value, string(bundle.status.Reason))
+	writeBytes(&value, status)
 	writeText(&value, bundle.audit.Code)
 	if bundle.certificate == nil {
 		value.WriteByte(0xf6)

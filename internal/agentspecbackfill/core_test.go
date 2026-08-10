@@ -79,6 +79,17 @@ func TestArchiveIsRequestKeyedAndRetainsCertificateAbsentTerminalResult(t *testi
 	if _, err := bundle.Canonical(); err != nil {
 		t.Fatalf("canonical archive: %v", err)
 	}
+	later := status
+	later.CompletedAt = later.CompletedAt.Add(time.Second)
+	laterBundle, err := agentspecbackfill.NewArchiveBundle(request, later, agentspecbackfill.Audit{Code: "expired"}, nil)
+	if err != nil {
+		t.Fatalf("new later archive bundle: %v", err)
+	}
+	first, _ := bundle.Canonical()
+	second, _ := laterBundle.Canonical()
+	if string(first) == string(second) {
+		t.Fatal("archive omitted terminal status completion time")
+	}
 }
 
 func validRequest() agentspecbackfill.Request {
