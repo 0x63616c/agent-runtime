@@ -178,10 +178,14 @@ Development images pass only through a loopback k3d registry pinned as
 `registry:2.8.3@sha256:a3d8aaa63ed8681a604f1dea0aa03f100d5895b6a58ace528858a7b332415373`;
 the pre-apply Tilt plan rejects Docker Hub runtime-image references and binds
 the host and in-cluster registry names explicitly.
-The lane uses a private temporary kubeconfig, a fixed twelve-minute startup
-bound. This accommodates a clean node's bounded immutable dependency-image
-pulls without prewarming an unreviewed dependency set; both Stack starts remain
-individually bounded inside the 45-minute CI job. It then runs live
+Every CI attempt derives unique k3d cluster and registry names from its GitHub
+run and attempt identifiers. The registry and API use OS-selected loopback
+ports; the workflow discovers the selected registry port after creation and
+threads the exact host and in-cluster registry addresses into the Tiltfile.
+It uses a private temporary kubeconfig named for that generated cluster, and a
+fixed twelve-minute startup bound. This accommodates a clean node's bounded
+immutable dependency-image pulls without prewarming an unreviewed dependency
+set; both Stack starts remain individually bounded inside the 45-minute CI job. It then runs live
 declared-egress/default-deny connectivity probes. Before Tilt
 starts either Stack, it reads K3s's `local-path-config` helper declaration and
 requires `rancher/mirrored-library-busybox:1.37.0` with `IfNotPresent`. It
@@ -204,15 +208,16 @@ envelope records the source commit/tree, retention commit, and SHA-256 of the
 historical retained artifact. This is provenance, not a claim that the local
 proof ran on the retention commit or on the current checkout.
 
-The two-Stack CI lane refuses existing k3d cluster and registry names before
-it starts creation. It records ownership only after each exact k3d create
+The two-Stack CI lane refuses an existing generated k3d cluster or registry
+name before it starts creation. It records ownership only after each exact k3d create
 returns successfully, and cleanup deletes only a resource with that successful
 ownership record and exact name. That record includes the immutable Docker ID
 of the registry container and of the cluster's exact server container. Every
 cleanup path re-reads those IDs before invoking k3d; a same-named replacement
 is retained and reported rather than deleted. A failed or raced create also
 retains its bounded ownership record and does not authorize deletion of a
-same-named resource. CI retains only schema-validated diagnostic summaries
+same-named resource. This permits fully owned per-run infrastructure without
+adopting or deleting user-owned k3d resources. CI retains only schema-validated diagnostic summaries
 (identity, bounded readiness counts, and Tilt exit code); it never publishes
 workload logs, raw Tilt snapshots, arbitrary Kubernetes object dumps, or K3s
 server logs. A hosted run of this exact revised lane remains required before

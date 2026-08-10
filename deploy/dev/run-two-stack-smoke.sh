@@ -7,6 +7,9 @@ root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$root"
 context="${AGENT_RUNTIME_DEV_CONTEXT:-orbstack}"
 profile="${AGENT_RUNTIME_DEV_PROFILE:-local}"
+ci_context="${AGENT_RUNTIME_CI_CONTEXT:-}"
+ci_registry_host="${AGENT_RUNTIME_CI_REGISTRY_HOST:-}"
+ci_registry_host_from_cluster="${AGENT_RUNTIME_CI_REGISTRY_HOST_FROM_CLUSTER:-}"
 stack_a="${AGENT_RUNTIME_DEV_STACK_A:-m1-isolation-a}"
 stack_b="${AGENT_RUNTIME_DEV_STACK_B:-m1-isolation-b}"
 evidence_file="${AGENT_RUNTIME_TWO_STACK_EVIDENCE:-}"
@@ -37,11 +40,20 @@ if [[ "$context" == "orbstack" && "$profile" != "local" ]]; then
   echo "orbstack two-Stack smoke only permits the local profile" >&2
   exit 1
 fi
-if [[ "$context" == "k3d-agent-runtime-isolated" && "$profile" != "ci" ]]; then
-	echo "isolated k3d two-Stack smoke only permits the ci profile" >&2
-	exit 1
-fi
-if [[ "$context" != "orbstack" && "$context" != "k3d-agent-runtime-isolated" ]]; then
+ci_tilt_args=()
+if [[ "$profile" == "ci" ]]; then
+  ci_context_prefix="k3d-ar-ci-"
+  if [[ "$context" != "$ci_context" || "$ci_context" != "$ci_context_prefix"* ]]; then
+    echo "CI two-Stack smoke requires its generated private k3d context" >&2
+    exit 1
+  fi
+  ci_identity="${ci_context#"$ci_context_prefix"}"
+  if [[ -z "$ci_identity" || ! "$ci_registry_host" =~ ^localhost:[1-9][0-9]{0,4}$ || "$ci_registry_host_from_cluster" != "k3d-ar-reg-${ci_identity}.localhost:5000" ]]; then
+    echo "CI two-Stack smoke requires generated registry identities" >&2
+    exit 1
+  fi
+  ci_tilt_args=(--ci-context="$ci_context" --ci-registry-host="$ci_registry_host" --ci-registry-host-from-cluster="$ci_registry_host_from_cluster")
+elif [[ "$context" != "orbstack" ]]; then
   echo "two-Stack smoke context is not allowlisted" >&2
   exit 1
 fi
@@ -203,14 +215,14 @@ verify_registry_plan() {
 	local stack="$1"
 	local plan
 	plan="$(mktemp "${TMPDIR:-/tmp}/agent-runtime-tilt-plan.XXXXXX")"
-	if ! tilt alpha tiltfile-result --context "$context" -- --stack="$stack" --profile="$profile" >"$plan"; then
+	if ! tilt alpha tiltfile-result --context "$context" -- --stack="$stack" --profile="$profile" "${ci_tilt_args[@]}" >"$plan"; then
 		rm -f -- "$plan"
 		remove_local_state "$stack"
 		return 1
 	fi
-	if ! jq -e --arg prefix "agent-runtime-dev/$stack/" '
-		.DefaultRegistry.host == "localhost:5111" and
-		.DefaultRegistry.hostFromContainerRuntime == "k3d-agent-runtime-registry.localhost:5111" and
+	if ! jq -e --arg prefix "agent-runtime-dev/$stack/" --arg registry_host "$ci_registry_host" --arg registry_host_from_cluster "$ci_registry_host_from_cluster" '
+		.DefaultRegistry.host == $registry_host and
+		.DefaultRegistry.hostFromContainerRuntime == $registry_host_from_cluster and
 		.CISettings.readinessTimeout == "12m0s" and
 		([.Manifests[]?.ImageTargets[]?.selector] | length) == 9 and
 		all(.Manifests[]?.ImageTargets[]?.selector; startswith($prefix)) and
@@ -224,7 +236,7 @@ verify_registry_plan() {
 	remove_local_state "$stack"
 }
 
-if [[ "$context" == "k3d-agent-runtime-isolated" ]]; then
+if [[ "$profile" == "ci" ]]; then
 	verify_registry_plan "$stack_a"
 	verify_registry_plan "$stack_b"
 fi
@@ -232,7 +244,7 @@ fi
 down_stack() {
   local stack="$1"
   local namespace="$2"
-  tilt down --context "$context" --namespace "$namespace" --delete-namespaces -- --stack="$stack" --profile="$profile" >/dev/null
+  tilt down --context "$context" --namespace "$namespace" --delete-namespaces -- --stack="$stack" --profile="$profile" "${ci_tilt_args[@]}" >/dev/null
   kubectl --context "$context" wait --for=delete "namespace/$namespace" --timeout=120s >/dev/null 2>&1 || true
   remove_local_state "$stack"
 }
@@ -277,7 +289,7 @@ start_stack() {
   # Do not retain Tilt output: it may contain workload environment or headers.
   # The allowlisted summary below records only bounded readiness metadata.
   tilt ci --context "$context" --namespace "$namespace" --port 0 --timeout "$readiness_timeout" \
-    -- --stack="$stack" --profile="$profile" >/dev/null 2>&1 || ci_status=$?
+    -- --stack="$stack" --profile="$profile" "${ci_tilt_args[@]}" >/dev/null 2>&1 || ci_status=$?
   capture_stack_diagnostics "$stack" "$namespace" "$ci_status"
   if [[ "$ci_status" != 0 ]]; then
     return "$ci_status"
