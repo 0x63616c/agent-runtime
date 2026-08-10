@@ -1,55 +1,54 @@
 {
-  "version": 1,
-  "milestone": "M1 local Stack instance isolation",
-  "proof_level": "isolated_kubernetes_integration",
-  "utc_time": "2026-08-10T22:20:01Z",
-  "implementation_revision": "18a55a90827cf21abba274826262f002a1c111fb",
-  "proof_provenance": {
-    "source_revision": "18a55a90827cf21abba274826262f002a1c111fb",
-    "source_tree_id": "1eaede49da1a59a1e8f9c73052f881c2de93c583",
-    "retention_revision": "2626dbad3e4c66a76cd1f83138499497abe614e1",
-    "retained_artifact_sha256": "sha256:90433e233e4f49f9c2cef083105ed0bfdde9aa1cdb50b2757aab3801cfc7138a"
+  "both_stacks_concurrently_ready": true,
+  "cleanup": {
+    "local_state_absent": true,
+    "namespaces_absent": true
   },
   "command": {
+    "kubernetes_context": "k3d-ar-ci-31441112582-1",
     "path": "deploy/dev/run-two-stack-smoke.sh",
-    "kubernetes_context": "k3d-ar-ci-m1-20260810220444",
     "profile": "ci",
     "result": "passed"
   },
-  "toolchain": {
-    "cluster_runtime": "k3d-v5.9.0",
-    "cluster_image": "rancher/k3s:v1.33.9-k3s1@sha256:f17e43023cce2b9c613e198f26e73637bf734b5156d37c9f44819d97bac4d655",
-    "registry_image": "registry:2.8.3@sha256:a3d8aaa63ed8681a604f1dea0aa03f100d5895b6a58ace528858a7b332415373",
-    "kubectl": "v1.33.9",
-    "tilt": "v0.37.6"
-  },
-  "stacks": [
-    {
-      "name": "m1-final-a",
-      "namespace": "ar-ci-m1-final-a",
-      "namespace_uid": "f152bb67-e3e5-481b-8a12-f115c68d9d1d"
-    },
-    {
-      "name": "m1-final-b",
-      "namespace": "ar-ci-m1-final-b",
-      "namespace_uid": "1adfdec2-3faf-4c8d-91d8-fae2b61d704c"
-    }
-  ],
-  "both_stacks_concurrently_ready": true,
   "distinct_namespace_and_workload_identities": true,
   "distinct_private_state": true,
+  "first_teardown_left_second_unchanged": true,
+  "hosted_ci": {
+    "artifact": "two-stack-isolation-670ebcaa4e1ca0ad0d86230a919122293a34d6de",
+    "job_url": "https://github.com/0x63616c/agent-runtime/actions/runs/31441112582/job/93625824672",
+    "run_url": "https://github.com/0x63616c/agent-runtime/actions/runs/31441112582"
+  },
+  "implementation_revision": "670ebcaa4e1ca0ad0d86230a919122293a34d6de",
+  "limitations": [
+    "does not claim Linux KVM or Firecracker isolation",
+    "does not mutate a production cluster"
+  ],
+  "milestone": "M1 local Stack instance isolation",
   "network_policy": {
     "declared_egress_consecutive_successes": 3,
     "default_deny_consecutive_failures": 3,
     "service_ip_probe": true
   },
-  "first_teardown_left_second_unchanged": true,
-  "cleanup": {
-    "namespaces_absent": true,
-    "local_state_absent": true
+  "proof_level": "isolated_kubernetes_integration",
+  "stacks": [
+    {
+      "name": "ci-isolation-a",
+      "namespace": "ar-ci-ci-isolation-a",
+      "namespace_uid": "c6195654-bd06-4523-8c82-d03da2ec2699"
+    },
+    {
+      "name": "ci-isolation-b",
+      "namespace": "ar-ci-ci-isolation-b",
+      "namespace_uid": "eabec18b-5285-4d52-bf55-a42314fad9a5"
+    }
+  ],
+  "toolchain": {
+    "cluster_image": "rancher/k3s:v1.33.9-k3s1@sha256:f17e43023cce2b9c613e198f26e73637bf734b5156d37c9f44819d97bac4d655",
+    "cluster_runtime": "k3d-v5.9.0",
+    "kubectl": "v1.33.9",
+    "registry_image": "registry:2.8.3@sha256:a3d8aaa63ed8681a604f1dea0aa03f100d5895b6a58ace528858a7b332415373",
+    "tilt": "v0.37.6"
   },
-  "limitations": [
-    "does not claim Linux KVM or Firecracker isolation",
-    "does not mutate a production cluster"
-  ]
+  "utc_time": "2026-08-10T23:11:02Z",
+  "version": 1
 }
