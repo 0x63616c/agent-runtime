@@ -1,7 +1,6 @@
 package firecracker
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -39,11 +38,6 @@ type jailerCommand interface {
 	Start() error
 	Wait() error
 	Signal(os.Signal) error
-}
-
-type jailerSerialOutputCommand interface {
-	jailerCommand
-	SerialOutput() *boundedJailerOutput
 }
 
 // Start launches only the Jailer executable, argument vector, cgroup path, and jail namespace bound in request.
@@ -92,14 +86,10 @@ func (starter LinuxJailerStarter) Start(ctx context.Context, request JailerStart
 	if command == nil {
 		return nil, fmt.Errorf("%w: Jailer command factory is required", ErrSmokeUnavailable)
 	}
-	serialCommand, ok := command.(jailerSerialOutputCommand)
-	if !ok || serialCommand.SerialOutput() == nil {
-		return nil, fmt.Errorf("%w: bounded non-daemonized Jailer serial output is required", ErrSmokeUnavailable)
-	}
 	if err := command.Start(); err != nil {
 		return nil, fmt.Errorf("start authority-bound Jailer: %w", err)
 	}
-	process := newLinuxJailerProcess(command, serialCommand.SerialOutput(), request.Authority.CgroupPath(), filepath.Dir(request.Stage.JailRoot), starter.namespaceRemover(), starter.cgroupRemover())
+	process := newLinuxJailerProcess(command, request.Authority.CgroupPath(), filepath.Dir(request.Stage.JailRoot), starter.namespaceRemover(), starter.cgroupRemover())
 	if err := contextError(ctx); err != nil {
 		cleanupContext, cancel := context.WithTimeout(context.Background(), maximumCleanupTimeout)
 		defer cancel()
@@ -279,7 +269,6 @@ func validUnsignedCgroup(value, prefix string) bool {
 
 type linuxJailerProcess struct {
 	command         jailerCommand
-	serial          *boundedJailerOutput
 	cgroupPath      string
 	namespacePath   string
 	removeNamespace func(string) error
@@ -294,25 +283,16 @@ type linuxJailerProcess struct {
 	waitErr      error
 }
 
-func newLinuxJailerProcess(command jailerCommand, serial *boundedJailerOutput, cgroupPath, namespacePath string, removeNamespace, removeCgroup func(string) error) *linuxJailerProcess {
-	process := &linuxJailerProcess{command: command, serial: serial, cgroupPath: filepath.Join(jailerCgroupRoot, cgroupPath), namespacePath: namespacePath, removeNamespace: removeNamespace, removeCgroup: removeCgroup, waitDone: make(chan struct{})}
+func newLinuxJailerProcess(command jailerCommand, cgroupPath, namespacePath string, removeNamespace, removeCgroup func(string) error) *linuxJailerProcess {
+	process := &linuxJailerProcess{command: command, cgroupPath: filepath.Join(jailerCgroupRoot, cgroupPath), namespacePath: namespacePath, removeNamespace: removeNamespace, removeCgroup: removeCgroup, waitDone: make(chan struct{})}
 	go func() {
 		waitErr := command.Wait()
-		serial.Close()
 		process.mu.Lock()
 		process.waitErr = waitErr
 		close(process.waitDone)
 		process.mu.Unlock()
 	}()
 	return process
-}
-
-// AwaitSerial observes the exact marker emitted on this process's bounded non-daemonized stdout stream.
-func (process *linuxJailerProcess) AwaitSerial(ctx context.Context, marker string) error {
-	if process == nil || process.serial == nil {
-		return fmt.Errorf("%w: Jailer serial output is required", ErrSmokeUnavailable)
-	}
-	return process.serial.AwaitSerial(ctx, marker)
 }
 
 // Terminate sends SIGTERM to the one authority-bound Jailer process and waits only until ctx expires.
@@ -392,44 +372,29 @@ func (process *linuxJailerProcess) Cleanup(ctx context.Context) (CleanupProof, e
 }
 
 type osJailerCommand struct {
-	command     *exec.Cmd
-	serial      *boundedJailerOutput
-	diagnostics *boundedJailerOutput
+	command *exec.Cmd
+	output  *boundedJailerOutput
 }
 
 func newOSJailerCommand(path string, arguments []string, directory string) jailerCommand {
-	serial := newBoundedJailerOutput(maximumJailerOutputSize)
-	diagnostics := newBoundedJailerOutput(maximumJailerOutputSize)
+	output := &boundedJailerOutput{remaining: maximumJailerOutputSize}
 	command := exec.Command(path, arguments...)
 	command.Dir = directory
-	command.Stdout = serial
-	command.Stderr = diagnostics
-	return &osJailerCommand{command: command, serial: serial, diagnostics: diagnostics}
+	command.Stdout = output
+	command.Stderr = output
+	return &osJailerCommand{command: command, output: output}
 }
 
 func (command *osJailerCommand) Start() error { return command.command.Start() }
-func (command *osJailerCommand) Wait() error {
-	err := command.command.Wait()
-	command.serial.Close()
-	command.diagnostics.Close()
-	return err
-}
+func (command *osJailerCommand) Wait() error  { return command.command.Wait() }
 func (command *osJailerCommand) Signal(signal os.Signal) error {
 	return command.command.Process.Signal(signal)
 }
-
-func (command *osJailerCommand) SerialOutput() *boundedJailerOutput { return command.serial }
 
 type boundedJailerOutput struct {
 	mu        sync.Mutex
 	remaining int
 	data      []byte
-	notify    chan struct{}
-	closed    bool
-}
-
-func newBoundedJailerOutput(limit int) *boundedJailerOutput {
-	return &boundedJailerOutput{remaining: limit, notify: make(chan struct{})}
 }
 
 func (output *boundedJailerOutput) Write(value []byte) (int, error) {
@@ -443,79 +408,7 @@ func (output *boundedJailerOutput) Write(value []byte) (int, error) {
 		output.data = append(output.data, value[:count]...)
 		output.remaining -= count
 	}
-	output.signalLocked()
 	return len(value), nil
-}
-
-// AwaitSerial waits for one exact, CRLF-tolerant guest serial marker line within the bounded process output.
-func (output *boundedJailerOutput) AwaitSerial(ctx context.Context, marker string) error {
-	if err := contextError(ctx); err != nil {
-		return err
-	}
-	if output == nil || !validGuestSerialMarker(marker) {
-		return fmt.Errorf("%w: exact guest serial marker is required", ErrSmokeUnavailable)
-	}
-	for {
-		output.mu.Lock()
-		if containsGuestSerialMarker(output.data, marker) {
-			output.mu.Unlock()
-			return nil
-		}
-		if output.remaining == 0 {
-			output.mu.Unlock()
-			return fmt.Errorf("%w: bounded Jailer serial output exhausted before marker", ErrSmokeUnavailable)
-		}
-		if output.closed {
-			output.mu.Unlock()
-			return fmt.Errorf("%w: Jailer serial output closed before marker", ErrSmokeUnavailable)
-		}
-		notify := output.notify
-		output.mu.Unlock()
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-notify:
-		}
-	}
-}
-
-// Close marks the Jailer/Firecracker output stream terminal and wakes pending serial observers.
-func (output *boundedJailerOutput) Close() {
-	if output == nil {
-		return
-	}
-	output.mu.Lock()
-	defer output.mu.Unlock()
-	if output.closed {
-		return
-	}
-	output.closed = true
-	output.signalLocked()
-}
-
-func (output *boundedJailerOutput) signalLocked() {
-	close(output.notify)
-	output.notify = make(chan struct{})
-}
-
-func containsGuestSerialMarker(data []byte, marker string) bool {
-	for len(data) > 0 {
-		lineEnd := bytes.IndexByte(data, '\n')
-		if lineEnd < 0 {
-			return false
-		}
-		line := data[:lineEnd]
-		if bytes.Equal(bytes.TrimSuffix(line, []byte{'\r'}), []byte(marker)) {
-			return true
-		}
-		data = data[lineEnd+1:]
-	}
-	return false
-}
-
-func validGuestSerialMarker(marker string) bool {
-	fields := strings.Fields(marker)
-	return len(fields) == 4 && fields[0] == "AGENT_RUNTIME_FC_SMOKE" && validVMID(fields[1]) && validFixtureVersion(fields[2]) && fields[3] == "agent-runtime-firecracker-guest/v1" && strings.Join(fields, " ") == marker
 }
 
 var _ io.Writer = (*boundedJailerOutput)(nil)

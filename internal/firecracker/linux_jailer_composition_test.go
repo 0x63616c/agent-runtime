@@ -12,12 +12,14 @@ func TestNewLinuxJailerHostComposesOnlyReviewedJailerAndUnixPorts(t *testing.T) 
 	plan := mustCompile(t, validProfile())
 	authority := mustCompileJailerExecutionAuthority(t, plan)
 	dialer := &recordingUnixDialer{}
+	guest := &recordingGuestChannel{}
 	host, err := NewLinuxJailerHost(LinuxJailerHostConfig{
 		Plan:           plan,
 		PreflightState: validKVMPreflight(),
 		RootFSCopyPath: "/run/agent-runtime/sandbox-001/rootfs.ext4",
 		Authority:      authority,
 		UnixDialer:     dialer,
+		Guest:          guest,
 	})
 	if err != nil {
 		t.Fatalf("NewLinuxJailerHost() error = %v", err)
@@ -32,8 +34,8 @@ func TestNewLinuxJailerHostComposesOnlyReviewedJailerAndUnixPorts(t *testing.T) 
 	if !ok || http.socketPath != filepath.Join(expectedJailRoot(plan), "run", "firecracker.socket") || http.dialer != dialer {
 		t.Fatalf("HTTP = %#v, want fixed private Unix REST port", host.HTTP)
 	}
-	if host.Guest != nil {
-		t.Fatalf("Guest = %#v, want deferred control port", host.Guest)
+	if host.Guest != guest {
+		t.Fatalf("Guest = %#v, want exact injected guest channel", host.Guest)
 	}
 	authority.arguments[0] = "--mutated"
 	if got, want := host.Authority.Arguments()[0], "--id"; got != want {
@@ -53,8 +55,10 @@ func TestNewLinuxJailerHostRefusesIncompleteOrWidenedCompositionBeforeHostIO(t *
 		RootFSCopyPath: "/run/agent-runtime/sandbox-001/rootfs.ext4",
 		Authority:      authority,
 		UnixDialer:     &recordingUnixDialer{},
+		Guest:          &recordingGuestChannel{},
 	}
 	for name, mutate := range map[string]func(*LinuxJailerHostConfig){
+		"missing guest":       func(config *LinuxJailerHostConfig) { config.Guest = nil },
 		"missing unix dialer": func(config *LinuxJailerHostConfig) { config.UnixDialer = nil },
 		"unsafe rootfs path":  func(config *LinuxJailerHostConfig) { config.RootFSCopyPath = "relative-rootfs" },
 		"incomplete preflight": func(config *LinuxJailerHostConfig) {
@@ -84,6 +88,7 @@ func TestNewLinuxJailerHostKeepsTheAuthorityBoundUnixSocketBeforeAnyDial(t *test
 		RootFSCopyPath: "/run/agent-runtime/sandbox-001/rootfs.ext4",
 		Authority:      mustCompileJailerExecutionAuthority(t, plan),
 		UnixDialer:     dialer,
+		Guest:          &recordingGuestChannel{},
 	})
 	if err != nil {
 		t.Fatalf("NewLinuxJailerHost() error = %v", err)
@@ -111,6 +116,7 @@ func TestNewLinuxJailerHostRefusesAnArtifactOnlyPlanSubstitutionBeforeStagingOrP
 		RootFSCopyPath: "/run/agent-runtime/sandbox-001/rootfs.ext4",
 		Authority:      mustCompileJailerExecutionAuthority(t, plan),
 		UnixDialer:     dialer,
+		Guest:          &recordingGuestChannel{},
 	})
 	if err != nil {
 		t.Fatalf("NewLinuxJailerHost() error = %v", err)
@@ -139,6 +145,7 @@ func TestNewLinuxJailerHostRefusesAnArtifactOnlyPlanSubstitutionAtPrepareBeforeS
 		RootFSCopyPath: "/run/agent-runtime/sandbox-001/rootfs.ext4",
 		Authority:      mustCompileJailerExecutionAuthority(t, plan),
 		UnixDialer:     &recordingUnixDialer{},
+		Guest:          &recordingGuestChannel{},
 	})
 	if err != nil {
 		t.Fatalf("NewLinuxJailerHost() error = %v", err)
@@ -168,6 +175,7 @@ func TestNewLinuxJailerHostRefusesAChangedFixtureBindingAtPrepareBeforeStaging(t
 		RootFSCopyPath: "/run/agent-runtime/sandbox-001/rootfs.ext4",
 		Authority:      mustCompileJailerExecutionAuthority(t, plan),
 		UnixDialer:     &recordingUnixDialer{},
+		Guest:          &recordingGuestChannel{},
 	})
 	if err != nil {
 		t.Fatalf("NewLinuxJailerHost() error = %v", err)

@@ -45,10 +45,6 @@ func TestLinuxJailerHostOrdersTheNoNICRESTLaunchAndGuestControlPorts(t *testing.
 	if err := host.Launch(context.Background(), request); err != nil {
 		t.Fatalf("Launch() error = %v", err)
 	}
-	processes.process.serial = newBoundedJailerOutput(1024)
-	if _, err := processes.process.serial.Write([]byte(request.SerialMarker + "\n")); err != nil {
-		t.Fatalf("write serial marker: %v", err)
-	}
 	if err := host.AwaitSerial(context.Background(), request.SerialMarker); err != nil {
 		t.Fatalf("AwaitSerial() error = %v", err)
 	}
@@ -77,7 +73,7 @@ func TestLinuxJailerHostOrdersTheNoNICRESTLaunchAndGuestControlPorts(t *testing.
 	if got, want := http.binds, []string{hostJailedPath(stage.JailRoot, stage.APISocketPath)}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("HTTP binds = %v, want %v", got, want)
 	}
-	if got, want := guest.steps, []string{"bind:" + hostJailedPath(stage.JailRoot, stage.VSockUDSPath), "ping:" + request.Boot.VMID, "close"}; !reflect.DeepEqual(got, want) {
+	if got, want := guest.steps, []string{"bind:" + hostJailedPath(stage.JailRoot, stage.VSockUDSPath), "marker:" + request.SerialMarker, "ping:" + request.Boot.VMID, "close"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("guest steps = %v, want %v", got, want)
 	}
 	if got, want := processes.process.steps, []string{"terminate", "wait", "cleanup"}; !reflect.DeepEqual(got, want) {
@@ -132,62 +128,6 @@ func TestLinuxJailerHostCarriesItsPreflightBoundAuthorityIntoTheConcreteStarter(
 	}
 	if got, want := command.signals, []os.Signal{syscall.SIGTERM}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("signals = %#v, want %#v", got, want)
-	}
-}
-
-func TestLinuxJailerHostObservesStarterSerialWhileGuestControlRemainsDeferred(t *testing.T) {
-	plan := mustCompile(t, validProfile())
-	fixtures := verifiedPlanFixtures(plan)
-	processes := &recordingJailerStarter{}
-	processes.process.serial = newBoundedJailerOutput(1024)
-	host := newLinuxJailerHost(plan, fixtures, processes, &recordingFirecrackerHTTP{}, nil)
-	if err := host.Preflight(context.Background(), plan, fixtures); err != nil {
-		t.Fatalf("Preflight() error = %v", err)
-	}
-	request, err := host.Prepare(context.Background(), plan, fixtures)
-	if err != nil {
-		t.Fatalf("Prepare() error = %v", err)
-	}
-	if err := host.Launch(context.Background(), request); err != nil {
-		t.Fatalf("Launch() error = %v", err)
-	}
-	if _, err := processes.process.serial.Write([]byte(request.SerialMarker + "\n")); err != nil {
-		t.Fatalf("write serial marker: %v", err)
-	}
-	if err := host.AwaitSerial(context.Background(), request.SerialMarker); err != nil {
-		t.Fatalf("AwaitSerial() error = %v", err)
-	}
-	if err := host.Control(context.Background()); !errors.Is(err, ErrSmokeUnavailable) {
-		t.Fatalf("Control() error = %v, want deferred guest-control refusal", err)
-	}
-	if _, err := host.Cleanup(context.Background()); err != nil {
-		t.Fatalf("Cleanup() error = %v", err)
-	}
-}
-
-func TestLinuxJailerHostCleansAfterSerialObservationCancellation(t *testing.T) {
-	plan := mustCompile(t, validProfile())
-	fixtures := verifiedPlanFixtures(plan)
-	processes := &recordingJailerStarter{}
-	processes.process.serial = newBoundedJailerOutput(1024)
-	host := newLinuxJailerHost(plan, fixtures, processes, &recordingFirecrackerHTTP{}, nil)
-	if err := host.Preflight(context.Background(), plan, fixtures); err != nil {
-		t.Fatalf("Preflight() error = %v", err)
-	}
-	request, err := host.Prepare(context.Background(), plan, fixtures)
-	if err != nil {
-		t.Fatalf("Prepare() error = %v", err)
-	}
-	if err := host.Launch(context.Background(), request); err != nil {
-		t.Fatalf("Launch() error = %v", err)
-	}
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-	if err := host.AwaitSerial(ctx, request.SerialMarker); !errors.Is(err, context.Canceled) {
-		t.Fatalf("AwaitSerial() error = %v, want preserved cancellation", err)
-	}
-	if got, want := processes.process.steps, []string{"terminate", "wait", "cleanup"}; !reflect.DeepEqual(got, want) {
-		t.Fatalf("process cleanup steps = %v, want %v", got, want)
 	}
 }
 
@@ -516,10 +456,7 @@ func (starter *recordingJailerStarter) Start(_ context.Context, request JailerSt
 	return &starter.process, starter.startErr
 }
 
-type recordingJailerProcess struct {
-	steps  []string
-	serial *boundedJailerOutput
-}
+type recordingJailerProcess struct{ steps []string }
 
 func (process *recordingJailerProcess) Terminate(context.Context) error {
 	process.steps = append(process.steps, "terminate")
@@ -532,12 +469,6 @@ func (process *recordingJailerProcess) Wait(context.Context) error {
 func (process *recordingJailerProcess) Cleanup(context.Context) (CleanupProof, error) {
 	process.steps = append(process.steps, "cleanup")
 	return CleanupProof{Proved: true, Removed: []string{"jailer-cgroup", "jailer-chroot"}}, nil
-}
-func (process *recordingJailerProcess) AwaitSerial(ctx context.Context, marker string) error {
-	if process.serial == nil {
-		return ErrSmokeUnavailable
-	}
-	return process.serial.AwaitSerial(ctx, marker)
 }
 
 type firecrackerRESTCall struct {
@@ -595,7 +526,7 @@ func (stager *recordingResourceStager) Stage(context.Context, Plan, FixtureSet, 
 	return stager.stage, nil
 }
 
-func newLinuxJailerHost(plan Plan, fixtures FixtureSet, processes JailerStarter, http FirecrackerHTTPPort, guest GuestControlChannel) *LinuxJailerHost {
+func newLinuxJailerHost(plan Plan, fixtures FixtureSet, processes JailerStarter, http FirecrackerHTTPPort, guest GuestChannel) *LinuxJailerHost {
 	return &LinuxJailerHost{
 		PreflightState: validKVMPreflight(),
 		RootFSCopyPath: "/run/agent-runtime/sandbox-001/rootfs.ext4",
