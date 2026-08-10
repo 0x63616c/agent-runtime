@@ -92,17 +92,16 @@ type Controller struct {
 	statuses StatusStore
 	reader   agentspecbackfill.FrozenLegacyReader
 	verifier agentspecbackfill.ImmutableContentVerifier
-	archives agentspecbackfill.ConditionalArchive
 	clock    clock.Clock
 	wait     Wait
 }
 
 // New constructs a Controller from every required explicit process dependency.
-func New(config Config, source Source, statuses StatusStore, reader agentspecbackfill.FrozenLegacyReader, verifier agentspecbackfill.ImmutableContentVerifier, archives agentspecbackfill.ConditionalArchive, sourceClock clock.Clock, wait Wait) (*Controller, error) {
-	if err := config.validate(); err != nil || source == nil || statuses == nil || reader == nil || verifier == nil || archives == nil || sourceClock == nil || wait == nil {
+func New(config Config, source Source, statuses StatusStore, reader agentspecbackfill.FrozenLegacyReader, verifier agentspecbackfill.ImmutableContentVerifier, sourceClock clock.Clock, wait Wait) (*Controller, error) {
+	if err := config.validate(); err != nil || source == nil || statuses == nil || reader == nil || verifier == nil || sourceClock == nil || wait == nil {
 		return nil, errors.New("create agent spec backfill controller: explicit valid configuration and ports are required")
 	}
-	return &Controller{config: config, source: source, statuses: statuses, reader: reader, verifier: verifier, archives: archives, clock: sourceClock, wait: wait}, nil
+	return &Controller{config: config, source: source, statuses: statuses, reader: reader, verifier: verifier, clock: sourceClock, wait: wait}, nil
 }
 
 // Run reconciles listed requests, then recovers a cancellable watch until the caller cancels it.
@@ -180,7 +179,7 @@ func (controller *Controller) ReconcileWire(ctx context.Context, wire []byte) (a
 	}
 	now := controller.clock.Now().UTC()
 	statuses := crTerminalStatuses{store: controller.statuses, request: request, now: now}
-	reconciler, err := agentspecbackfill.NewReconciler(&statuses, controller.archives)
+	reconciler, err := agentspecbackfill.NewReconciler(&statuses)
 	if err != nil {
 		return agentspecbackfill.Status{}, errors.Wrap(err, "construct agent spec backfill reconciler")
 	}

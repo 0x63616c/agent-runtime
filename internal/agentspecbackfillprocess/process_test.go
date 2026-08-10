@@ -25,7 +25,6 @@ func TestControllerRecoversWatchAndWritesTerminalStatusOnce(t *testing.T) {
 	second := &recordingWatch{next: func(context.Context) ([]byte, error) { cancel(); return nil, context.Canceled }}
 	source := &recordingSource{lists: [][][]byte{{wire, wire}, {}}, watches: []agentspecbackfillprocess.Watch{first, second}}
 	statuses := &recordingStatuses{}
-	archives := &recordingArchives{}
 	fakeClock, err := clock.NewFake(now)
 	if err != nil {
 		t.Fatal(err)
@@ -33,7 +32,7 @@ func TestControllerRecoversWatchAndWritesTerminalStatusOnce(t *testing.T) {
 	var waits []time.Duration
 	controller, err := agentspecbackfillprocess.New(
 		agentspecbackfillprocess.Config{ControllerImageDigest: request.Spec.ControllerImageDigest, WatchRetry: 25 * time.Millisecond},
-		source, statuses, testReader{request: request.Spec}, passingVerifier{}, archives, fakeClock,
+		source, statuses, testReader{request: request.Spec}, passingVerifier{}, fakeClock,
 		func(context.Context, time.Duration) error { waits = append(waits, 25*time.Millisecond); return nil },
 	)
 	if err != nil {
@@ -42,8 +41,8 @@ func TestControllerRecoversWatchAndWritesTerminalStatusOnce(t *testing.T) {
 	if err := controller.Run(ctx); err != nil {
 		t.Fatalf("run controller: %v", err)
 	}
-	if source.listCalls != 2 || source.watchCalls != 2 || len(waits) != 1 || waits[0] != 25*time.Millisecond || statuses.creates != 1 || len(archives.bundles) != 2 || !first.closed || !second.closed {
-		t.Fatalf("expected one terminal write and recovered watch, got lists=%d watches=%d waits=%v creates=%d archives=%d closed=%t/%t", source.listCalls, source.watchCalls, waits, statuses.creates, len(archives.bundles), first.closed, second.closed)
+	if source.listCalls != 2 || source.watchCalls != 2 || len(waits) != 1 || waits[0] != 25*time.Millisecond || statuses.creates != 1 || !first.closed || !second.closed {
+		t.Fatalf("expected one terminal write and recovered watch, got lists=%d watches=%d waits=%v creates=%d closed=%t/%t", source.listCalls, source.watchCalls, waits, statuses.creates, first.closed, second.closed)
 	}
 }
 
@@ -52,14 +51,13 @@ func TestControllerRefusesNonCanonicalWireBeforeDurablePorts(t *testing.T) {
 	now := time.Date(2026, 8, 9, 12, 0, 0, 0, time.UTC)
 	request, wire := testRequest(t, now)
 	statuses := &recordingStatuses{}
-	archives := &recordingArchives{}
 	fakeClock, err := clock.NewFake(now)
 	if err != nil {
 		t.Fatal(err)
 	}
 	controller, err := agentspecbackfillprocess.New(
 		agentspecbackfillprocess.Config{ControllerImageDigest: request.Spec.ControllerImageDigest, WatchRetry: time.Millisecond},
-		&recordingSource{}, statuses, testReader{request: request.Spec}, passingVerifier{}, archives, fakeClock, func(context.Context, time.Duration) error { return nil },
+		&recordingSource{}, statuses, testReader{request: request.Spec}, passingVerifier{}, fakeClock, func(context.Context, time.Duration) error { return nil },
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -67,8 +65,8 @@ func TestControllerRefusesNonCanonicalWireBeforeDurablePorts(t *testing.T) {
 	if _, err := controller.ReconcileWire(context.Background(), append(wire, '\n')); err == nil {
 		t.Fatal("expected noncanonical request wire to be refused")
 	}
-	if statuses.reads != 0 || statuses.creates != 0 || len(archives.bundles) != 0 {
-		t.Fatalf("expected no durable ports for noncanonical wire, got reads=%d creates=%d archives=%d", statuses.reads, statuses.creates, len(archives.bundles))
+	if statuses.reads != 0 || statuses.creates != 0 {
+		t.Fatalf("expected no status ports for noncanonical wire, got reads=%d creates=%d", statuses.reads, statuses.creates)
 	}
 }
 
@@ -77,10 +75,9 @@ func TestControllerUsesOneInstantForTerminalStatusValidation(t *testing.T) {
 	now := time.Date(2026, 8, 9, 12, 0, 0, 0, time.UTC)
 	request, wire := testRequest(t, now)
 	statuses := &recordingStatuses{}
-	archives := &recordingArchives{}
 	controller, err := agentspecbackfillprocess.New(
 		agentspecbackfillprocess.Config{ControllerImageDigest: request.Spec.ControllerImageDigest, WatchRetry: time.Millisecond},
-		&recordingSource{}, statuses, testReader{request: request.Spec}, passingVerifier{}, archives, &advancingClock{now: now}, func(context.Context, time.Duration) error { return nil },
+		&recordingSource{}, statuses, testReader{request: request.Spec}, passingVerifier{}, &advancingClock{now: now}, func(context.Context, time.Duration) error { return nil },
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -105,7 +102,7 @@ func TestControllerTreatsCallerCancellationDuringListAsNormalExit(t *testing.T) 
 	}
 	controller, err := agentspecbackfillprocess.New(
 		agentspecbackfillprocess.Config{ControllerImageDigest: "sha256:4444444444444444444444444444444444444444444444444444444444444444", WatchRetry: time.Millisecond},
-		source, &recordingStatuses{}, testReader{}, passingVerifier{}, &recordingArchives{}, fakeClock, func(context.Context, time.Duration) error { return nil },
+		source, &recordingStatuses{}, testReader{}, passingVerifier{}, fakeClock, func(context.Context, time.Duration) error { return nil },
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -196,15 +193,6 @@ func (store *recordingStatuses) CreateTerminal(_ context.Context, _ agentspecbac
 		store.status, store.found = status, true
 	}
 	return store.status, created, nil
-}
-
-type recordingArchives struct {
-	bundles []agentspecbackfill.ArchiveBundle
-}
-
-func (archives *recordingArchives) PutIfAbsent(_ context.Context, bundle agentspecbackfill.ArchiveBundle, expected string) (agentspecbackfill.ArchiveWrite, error) {
-	archives.bundles = append(archives.bundles, bundle)
-	return agentspecbackfill.ArchiveWrite{Created: len(archives.bundles) == 1, CanonicalDigest: expected}, nil
 }
 
 type testReader struct{ request agentspecbackfill.Request }

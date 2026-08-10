@@ -11,7 +11,7 @@ import (
 	"github.com/0x63616c/agent-runtime/internal/agentspecbackfillprocess"
 )
 
-var errNoDeclaredPorts = errors.New("no declared CR, status, archive, legacy, and content ports are linked")
+var errNoDeclaredPorts = errors.New("no declared CR, status, legacy, and content ports are linked")
 
 func main() {
 	if err := run(os.Args[1:], func(path string) (io.ReadCloser, error) { return os.Open(path) }); err != nil {

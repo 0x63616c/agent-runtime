@@ -11,11 +11,10 @@ import (
 
 var errTransient = errors.New("transient verification failure")
 
-func TestReconcilerRecordsAndArchivesVerifiedTerminalStatus(t *testing.T) {
+func TestReconcilerRecordsVerifiedTerminalStatus(t *testing.T) {
 	request := validRequest()
 	statuses := &recordingTerminalStatuses{}
-	archives := &recordingArchives{}
-	reconciler, err := agentspecbackfill.NewReconciler(statuses, archives)
+	reconciler, err := agentspecbackfill.NewReconciler(statuses)
 	if err != nil {
 		t.Fatalf("new reconciler: %v", err)
 	}
@@ -30,18 +29,12 @@ func TestReconcilerRecordsAndArchivesVerifiedTerminalStatus(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reconcile verified request: %v", err)
 	}
-	if status.Phase != agentspecbackfill.PhaseVerified || statuses.creates != 1 || len(archives.bundles) != 1 {
-		t.Fatalf("reconciled status = %#v, creates=%d, archives=%d", status, statuses.creates, len(archives.bundles))
-	}
-	if archives.bundles[0].CertificatePresent() {
-		t.Fatal("pre-certificate controller archive unexpectedly has a certificate")
-	}
-	if _, err := archives.bundles[0].Canonical(); err != nil {
-		t.Fatalf("canonical archive: %v", err)
+	if status.Phase != agentspecbackfill.PhaseVerified || statuses.creates != 1 {
+		t.Fatalf("reconciled status = %#v, creates=%d", status, statuses.creates)
 	}
 }
 
-func TestReconcilerRecordsAndArchivesEveryTerminalRefusal(t *testing.T) {
+func TestReconcilerRecordsEveryTerminalRefusal(t *testing.T) {
 	now := time.Date(2026, 8, 9, 0, 1, 0, 0, time.UTC)
 	for _, test := range []struct {
 		name     string
@@ -99,8 +92,7 @@ func TestReconcilerRecordsAndArchivesEveryTerminalRefusal(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			request := test.request(validRequest())
 			statuses := &recordingTerminalStatuses{}
-			archives := &recordingArchives{}
-			reconciler, err := agentspecbackfill.NewReconciler(statuses, archives)
+			reconciler, err := agentspecbackfill.NewReconciler(statuses)
 			if err != nil {
 				t.Fatalf("new reconciler: %v", err)
 			}
@@ -109,11 +101,8 @@ func TestReconcilerRecordsAndArchivesEveryTerminalRefusal(t *testing.T) {
 			if err != nil {
 				t.Fatalf("reconcile refusal: %v", err)
 			}
-			if status.Phase != agentspecbackfill.PhaseRefused || status.Reason != test.reason || statuses.creates != 1 || len(archives.bundles) != 1 {
-				t.Fatalf("reconciled status = %#v, creates=%d, archives=%d", status, statuses.creates, len(archives.bundles))
-			}
-			if archives.bundles[0].CertificatePresent() {
-				t.Fatal("refused terminal result has a certificate")
+			if status.Phase != agentspecbackfill.PhaseRefused || status.Reason != test.reason || statuses.creates != 1 {
+				t.Fatalf("reconciled status = %#v, creates=%d", status, statuses.creates)
 			}
 		})
 	}
@@ -144,8 +133,7 @@ func TestReconcilerLeavesTransientAndCancelledVerificationForFreshRetry(t *testi
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			statuses := &recordingTerminalStatuses{}
-			archives := &recordingArchives{}
-			reconciler, err := agentspecbackfill.NewReconciler(statuses, archives)
+			reconciler, err := agentspecbackfill.NewReconciler(statuses)
 			if err != nil {
 				t.Fatalf("new reconciler: %v", err)
 			}
@@ -153,13 +141,13 @@ func TestReconcilerLeavesTransientAndCancelledVerificationForFreshRetry(t *testi
 			if _, err := reconciler.Reconcile(test.ctx(), request, test.read, passingVerifier{}, now); err == nil {
 				t.Fatal("retryable verification was recorded as terminal")
 			}
-			if statuses.creates != 0 || len(archives.bundles) != 0 {
-				t.Fatalf("retryable verification writes = creates=%d archives=%d", statuses.creates, len(archives.bundles))
+			if statuses.creates != 0 {
+				t.Fatalf("retryable verification writes = creates=%d", statuses.creates)
 			}
 
 			status, err := reconciler.Reconcile(context.Background(), request, fixedReader{set: validFrozenSet(request)}, passingVerifier{}, now)
-			if err != nil || status.Phase != agentspecbackfill.PhaseVerified || statuses.creates != 1 || len(archives.bundles) != 1 {
-				t.Fatalf("fresh retry = %#v, %v, creates=%d archives=%d", status, err, statuses.creates, len(archives.bundles))
+			if err != nil || status.Phase != agentspecbackfill.PhaseVerified || statuses.creates != 1 {
+				t.Fatalf("fresh retry = %#v, %v, creates=%d", status, err, statuses.creates)
 			}
 		})
 	}
@@ -176,19 +164,18 @@ func TestReconcilerReturnsExistingTerminalWinnerWithoutOverwrite(t *testing.T) {
 		CompletedAt:         time.Date(2026, 8, 9, 0, 1, 0, 0, time.UTC),
 	}
 	statuses := &recordingTerminalStatuses{winner: &winner}
-	archives := &recordingArchives{}
-	reconciler, err := agentspecbackfill.NewReconciler(statuses, archives)
+	reconciler, err := agentspecbackfill.NewReconciler(statuses)
 	if err != nil {
 		t.Fatalf("new reconciler: %v", err)
 	}
 
 	status, err := reconciler.Reconcile(context.Background(), request, fixedReader{set: validFrozenSet(request)}, passingVerifier{}, winner.CompletedAt)
-	if err != nil || status != winner || statuses.creates != 1 || len(archives.bundles) != 1 {
-		t.Fatalf("conflict winner = %#v, %v, creates=%d archives=%d", status, err, statuses.creates, len(archives.bundles))
+	if err != nil || status != winner || statuses.creates != 1 {
+		t.Fatalf("conflict winner = %#v, %v, creates=%d", status, err, statuses.creates)
 	}
 	status, err = reconciler.Reconcile(context.Background(), request, fixedReader{set: validFrozenSet(request)}, passingVerifier{}, winner.CompletedAt)
-	if err != nil || status != winner || statuses.creates != 1 || archives.calls != 2 || len(archives.bundles) != 1 {
-		t.Fatalf("idempotent winner = %#v, %v, creates=%d archive-calls=%d archives=%d", status, err, statuses.creates, archives.calls, len(archives.bundles))
+	if err != nil || status != winner || statuses.creates != 1 {
+		t.Fatalf("idempotent winner = %#v, %v, creates=%d", status, err, statuses.creates)
 	}
 }
 
@@ -196,25 +183,23 @@ func TestReconcilerRefusesStaleRequestWithoutVerification(t *testing.T) {
 	request := validRequest()
 	now := request.ExpiresAt
 	statuses := &recordingTerminalStatuses{}
-	archives := &recordingArchives{}
 	reader := &countingReader{set: validFrozenSet(request)}
-	reconciler, err := agentspecbackfill.NewReconciler(statuses, archives)
+	reconciler, err := agentspecbackfill.NewReconciler(statuses)
 	if err != nil {
 		t.Fatalf("new reconciler: %v", err)
 	}
 
 	status, err := reconciler.Reconcile(context.Background(), request, reader, passingVerifier{}, now)
-	if err != nil || status.Phase != agentspecbackfill.PhaseRefused || status.Reason != agentspecbackfill.RefusalExpired || reader.calls != 0 || statuses.creates != 1 || len(archives.bundles) != 1 {
-		t.Fatalf("stale request = %#v, %v, reader=%d creates=%d archives=%d", status, err, reader.calls, statuses.creates, len(archives.bundles))
+	if err != nil || status.Phase != agentspecbackfill.PhaseRefused || status.Reason != agentspecbackfill.RefusalExpired || reader.calls != 0 || statuses.creates != 1 {
+		t.Fatalf("stale request = %#v, %v, reader=%d creates=%d", status, err, reader.calls, statuses.creates)
 	}
 }
 
-func TestReconcilerCancellationPreventsExistingTerminalArchiveIO(t *testing.T) {
+func TestReconcilerCancellationPreventsExistingTerminalStatusIO(t *testing.T) {
 	request := validRequest()
 	status := agentbackfillVerifiedStatus(t, request)
 	statuses := &recordingTerminalStatuses{status: status, found: true}
-	archives := &recordingArchives{}
-	reconciler, err := agentspecbackfill.NewReconciler(statuses, archives)
+	reconciler, err := agentspecbackfill.NewReconciler(statuses)
 	if err != nil {
 		t.Fatalf("new reconciler: %v", err)
 	}
@@ -222,57 +207,40 @@ func TestReconcilerCancellationPreventsExistingTerminalArchiveIO(t *testing.T) {
 	cancel()
 
 	_, err = reconciler.Reconcile(ctx, request, fixedReader{set: validFrozenSet(request)}, passingVerifier{}, status.CompletedAt)
-	if !errors.Is(err, context.Canceled) || statuses.reads != 0 || len(archives.bundles) != 0 {
-		t.Fatalf("cancelled existing terminal reconciliation = %v, reads=%d archives=%d", err, statuses.reads, len(archives.bundles))
+	if !errors.Is(err, context.Canceled) || statuses.reads != 0 {
+		t.Fatalf("cancelled existing terminal reconciliation = %v, reads=%d", err, statuses.reads)
 	}
 }
 
 func TestReconcilerFencesCancellationBetweenVerificationAndTerminalWrite(t *testing.T) {
 	request := validRequest()
 	statuses := &recordingTerminalStatuses{}
-	archives := &recordingArchives{}
-	reconciler, err := agentspecbackfill.NewReconciler(statuses, archives)
+	reconciler, err := agentspecbackfill.NewReconciler(statuses)
 	if err != nil {
 		t.Fatalf("new reconciler: %v", err)
 	}
 	ctx := newCancellationFenceContext(3)
 
 	_, err = reconciler.Reconcile(ctx, request, fixedReader{set: validFrozenSet(request)}, passingVerifier{}, request.ExpiresAt)
-	if !errors.Is(err, context.Canceled) || statuses.creates != 0 || archives.calls != 0 {
-		t.Fatalf("cancelled terminal write = %v, creates=%d archives=%d", err, statuses.creates, archives.calls)
+	if !errors.Is(err, context.Canceled) || statuses.creates != 0 {
+		t.Fatalf("cancelled terminal write = %v, creates=%d", err, statuses.creates)
 	}
 }
 
-func TestReconcilerRefusesFutureStoredStatusBeforeArchiveIO(t *testing.T) {
+func TestReconcilerRefusesFutureStoredStatus(t *testing.T) {
 	request := validRequest()
 	now := request.CreatedAt.Add(time.Second)
 	status := agentbackfillVerifiedStatus(t, request)
 	status.CompletedAt = now.Add(time.Second)
 	statuses := &recordingTerminalStatuses{status: status, found: true}
-	archives := &recordingArchives{}
-	reconciler, err := agentspecbackfill.NewReconciler(statuses, archives)
+	reconciler, err := agentspecbackfill.NewReconciler(statuses)
 	if err != nil {
 		t.Fatalf("new reconciler: %v", err)
 	}
 
 	_, err = reconciler.Reconcile(context.Background(), request, fixedReader{set: validFrozenSet(request)}, passingVerifier{}, now)
-	if err == nil || archives.calls != 0 {
-		t.Fatalf("future stored status = %v, archives=%d", err, archives.calls)
-	}
-}
-
-func TestReconcilerRefusesExistingArchiveWithDifferentCanonicalDigest(t *testing.T) {
-	request := validRequest()
-	statuses := &recordingTerminalStatuses{}
-	archives := &recordingArchives{existingDigest: "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}
-	reconciler, err := agentspecbackfill.NewReconciler(statuses, archives)
-	if err != nil {
-		t.Fatalf("new reconciler: %v", err)
-	}
-
-	_, err = reconciler.Reconcile(context.Background(), request, fixedReader{set: validFrozenSet(request)}, passingVerifier{}, request.CreatedAt.Add(time.Second))
-	if !errors.Is(err, agentspecbackfill.ErrArchiveConflict) || statuses.creates != 1 || archives.calls != 1 {
-		t.Fatalf("archive conflict = %v, creates=%d calls=%d", err, statuses.creates, archives.calls)
+	if err == nil {
+		t.Fatalf("future stored status = %v", err)
 	}
 }
 
@@ -313,33 +281,6 @@ func (store *recordingTerminalStatuses) CreateTerminal(_ context.Context, _ agen
 	}
 	store.status, store.found = status, true
 	return status, true, nil
-}
-
-type recordingArchives struct {
-	bundles        []agentspecbackfill.ArchiveBundle
-	keys           map[string]string
-	existingDigest string
-	calls          int
-}
-
-func (archives *recordingArchives) PutIfAbsent(_ context.Context, bundle agentspecbackfill.ArchiveBundle, expectedDigest string) (agentspecbackfill.ArchiveWrite, error) {
-	archives.calls++
-	canonical, err := bundle.Canonical()
-	if err != nil {
-		return agentspecbackfill.ArchiveWrite{}, err
-	}
-	if archives.existingDigest != "" {
-		return agentspecbackfill.ArchiveWrite{CanonicalDigest: archives.existingDigest}, nil
-	}
-	if archives.keys == nil {
-		archives.keys = make(map[string]string)
-	}
-	if digest, found := archives.keys[string(canonical)]; found {
-		return agentspecbackfill.ArchiveWrite{CanonicalDigest: digest}, nil
-	}
-	archives.keys[string(canonical)] = expectedDigest
-	archives.bundles = append(archives.bundles, bundle)
-	return agentspecbackfill.ArchiveWrite{Created: true, CanonicalDigest: expectedDigest}, nil
 }
 
 type cancellationFenceContext struct {
