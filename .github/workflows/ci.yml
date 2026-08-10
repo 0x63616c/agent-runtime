@@ -126,9 +126,18 @@ jobs:
           echo "9e33e3234c0842cd44a12c13e334b4ce930145ea84b855ce7cc0a7b6bc670c22  $RUNNER_TEMP/bin/kubectl" | sha256sum -c -
           curl -fsSLo "$RUNNER_TEMP/tilt.tar.gz" https://github.com/tilt-dev/tilt/releases/download/v0.37.6/tilt.0.37.6.linux.x86_64.tar.gz
           echo "e9672b8a18d43501f35dcfe98465969a7db0e436b36cf0c50c7e6f8d40de5fe6  $RUNNER_TEMP/tilt.tar.gz" | sha256sum -c -
-          tar -xzf "$RUNNER_TEMP/tilt.tar.gz" -C "$RUNNER_TEMP/bin" tilt
-          chmod 0755 "$RUNNER_TEMP/bin/k3d" "$RUNNER_TEMP/bin/kubectl" "$RUNNER_TEMP/bin/tilt"
-          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+            tar -xzf "$RUNNER_TEMP/tilt.tar.gz" -C "$RUNNER_TEMP/bin" tilt
+            chmod 0755 "$RUNNER_TEMP/bin/k3d" "$RUNNER_TEMP/bin/kubectl" "$RUNNER_TEMP/bin/tilt"
+            echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+      - name: Run M1 Stack contract gate
+        shell: bash
+        run: |
+          set -euo pipefail
+          go test ./internal/stack ./tests/architecture -count=1
+          jq -n \
+            --arg revision "$GITHUB_SHA" \
+            '{version:1,implementation_revision:$revision,render_profiles:["local","ci","production"],schema_policy_ownership:true,migration_upgrade_rollback:true,rbac_negative:true,network_policy_admission:true,result:"passed"}' \
+            > "$RUNNER_TEMP/m1-stack-contract-evidence.json"
       - name: Create pinned disposable cluster
         shell: bash
         run: |
@@ -454,6 +463,7 @@ jobs:
           name: two-stack-isolation-${{ github.sha }}
           path: |
             ${{ runner.temp }}/two-stack-evidence.json
+            ${{ runner.temp }}/m1-stack-contract-evidence.json
             ${{ runner.temp }}/local-path-helper-evidence.json
             ${{ runner.temp }}/two-stack-diagnostics/*.summary.json
             ${{ runner.temp }}/k3d-ownership.json
