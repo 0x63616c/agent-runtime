@@ -101,4 +101,30 @@ var _ = Describe("public documentation foundation", func() {
 		Expect(justfile).To(MatchRegexp(`(?m)^docs-check:`))
 		Expect(justfile).To(MatchRegexp(`(?m)^docs:`))
 	})
+
+	It("publishes the private host-control boundary through the reference navigation and refresh inventory", func() {
+		sidebar := read("website/sidebars.ts")
+		manifestContents := read("skills/refresh-agent-runtime-docs/source-manifest.json")
+		page := read("website/docs/reference/sandbox-host-control.mdx")
+		inventory := read("website/docs/reference/generated/source-inventory.mdx")
+		var manifest struct {
+			Generated []struct {
+				Output string   `json:"output"`
+				Inputs []string `json:"inputs"`
+			} `json:"generated"`
+		}
+
+		Expect(json.Unmarshal([]byte(manifestContents), &manifest)).To(Succeed())
+		var inventoryInputs []string
+		for _, artifact := range manifest.Generated {
+			if artifact.Output == "website/docs/reference/generated/source-inventory.mdx" {
+				inventoryInputs = artifact.Inputs
+			}
+		}
+
+		Expect(sidebar).To(ContainSubstring("'reference/sandbox-host-control'"))
+		Expect(inventoryInputs).To(ContainElement("website/docs/reference/sandbox-host-control.mdx"))
+		Expect(inventory).To(ContainSubstring("`website/docs/reference/sandbox-host-control.mdx`"))
+		Expect(page).To(ContainSubstring("host topology out of its public Go and HTTP contracts"))
+	})
 })
