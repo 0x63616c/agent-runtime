@@ -20,8 +20,9 @@ type prepareRequest struct {
 	HostInstanceSessionID string `json:"host_instance_session_id"`
 }
 
-// Prepare requests one distinct persisted v2 launch authorization over the
-// already-mutually-authenticated control transport.
+// Prepare requests one distinct persisted v2 prepared-session snapshot over
+// the already-mutually-authenticated control transport. M4 owns post-stage
+// authorization, journal, launch-started, and terminal-ACK recovery.
 func Prepare(ctx context.Context, client *http.Client, origin, principal, operationID, instanceID string) (firecrackerbootprobev2.Snapshot, error) {
 	return request(ctx, client, origin+preparePath, prepareRequest{protocolVersion, principal, operationID, instanceID})
 }

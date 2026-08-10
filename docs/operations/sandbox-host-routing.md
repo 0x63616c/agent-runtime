@@ -155,11 +155,14 @@ host restart after journal commit, stable single-execution receipt recovery,
 restart after receipt with result recovery, signed completion, rogue signing
 key quarantine, explicit cleanup, reassignment to a newly enrolled generation,
 and final public success. A separate private-v2 test starts the actual control
-and host binaries to prove prepare, fsynced intent, launch-started CAS,
-lost-ACK restart recovery, competing host-process refusal, revocation,
-cleanup/reassignment, and idempotent quarantine. It does not exercise a
-certificate rotation or control-trust rotation/reload. The harness removes its
-temporary binaries, network, database container, and volume.
+and host binaries to prove a durable prepared session/snapshot, exact
+same-host-instance prepare recovery after a lost response, tenant refusal,
+revocation, cleanup/reassignment, and idempotent quarantine. The journal,
+authorization, launch-started transition, and lost terminal-ACK recovery are
+M4-owned post-stage behavior and are deliberately not claimed by this M3 test.
+It does not exercise a certificate rotation or control-trust rotation/reload.
+The harness removes its temporary binaries, network, database container, and
+volume.
 
 This test uses a reference effect marker. It is not Linux/KVM execution or a
 hostile-tenant isolation test; those claims remain M4-gated.
