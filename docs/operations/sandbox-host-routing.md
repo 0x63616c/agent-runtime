@@ -23,6 +23,12 @@ assignment replacement, stale renewals and stale snapshots are refused; M4
 must fsync its separate host-instance intent journal before reporting launch
 started. This is durable M3 control evidence only, not Firecracker execution.
 
+When a reference host declares the optional private `boot_probe` block, it
+uses only the v2 `prepare` and `launch-started` endpoints. On restart it first
+loads the fsynced host-instance intent and retries the same CAS version; it
+does not issue a new prepare request. This route remains operator-only and is
+not a public sandbox API or a Firecracker execution claim.
+
 ## Deployment declarations
 
 Apply every ordered `deploy/sandboxcontrol/migrations/*.up.sql` before starting
