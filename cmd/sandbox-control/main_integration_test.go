@@ -144,8 +144,8 @@ func (process *controlProcess) awaitReady(t *testing.T) controlReady {
 	case <-process.done:
 		t.Fatalf("sandbox-control exited before readiness: %v; diagnostics=%s", process.wait(), process.diagnostics())
 	case <-timeout.Done():
-		if process.command.ProcessState == nil {
-			_ = process.command.Process.Signal(syscall.SIGTERM)
+		if err := process.terminate(); err != nil {
+			t.Fatalf("signal sandbox-control after readiness timeout: %v", err)
 		}
 		_ = process.wait()
 		t.Fatalf("sandbox-control did not report readiness: diagnostics=%s", process.diagnostics())
@@ -155,10 +155,8 @@ func (process *controlProcess) awaitReady(t *testing.T) controlReady {
 
 func (process *controlProcess) stop(t *testing.T, secrets ...string) {
 	t.Helper()
-	if process.command.ProcessState == nil {
-		if err := process.command.Process.Signal(syscall.SIGTERM); err != nil {
-			t.Fatalf("signal sandbox-control: %v", err)
-		}
+	if err := process.terminate(); err != nil {
+		t.Fatalf("signal sandbox-control: %v", err)
 	}
 	if err := process.wait(); err != nil {
 		t.Fatalf("wait sandbox-control: %v; diagnostics=%s", err, process.diagnostics(secrets...))
@@ -168,6 +166,23 @@ func (process *controlProcess) stop(t *testing.T, secrets ...string) {
 			t.Fatalf("sandbox-control output disclosed a secret: %s", process.diagnostics(secrets...))
 		}
 	}
+}
+
+func (process *controlProcess) terminate() error {
+	select {
+	case <-process.done:
+		return nil
+	default:
+	}
+	if err := process.command.Process.Signal(syscall.SIGTERM); err != nil {
+		select {
+		case <-process.done:
+			return nil
+		default:
+			return err
+		}
+	}
+	return nil
 }
 
 func (process *controlProcess) wait() error {

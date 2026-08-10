@@ -290,8 +290,8 @@ func awaitReady[T any](t *testing.T, process *process, ready <-chan T, role stri
 	case <-process.done:
 		t.Fatalf("%s exited before readiness: %v; diagnostics=%s", role, process.wait(), process.diagnostics())
 	case <-timeout.Done():
-		if process.command.ProcessState == nil {
-			_ = process.command.Process.Signal(syscall.SIGTERM)
+		if err := process.terminate(); err != nil {
+			t.Fatalf("signal %s after readiness timeout: %v", role, err)
 		}
 		_ = process.wait()
 		t.Fatalf("%s did not report readiness: diagnostics=%s", role, process.diagnostics())
@@ -306,8 +306,8 @@ func hostArguments(config string) []string {
 
 func (process *process) stop(t *testing.T, expectSuccess bool, secrets ...string) {
 	t.Helper()
-	if expectSuccess && process.command.ProcessState == nil {
-		if err := process.command.Process.Signal(syscall.SIGTERM); err != nil {
+	if expectSuccess {
+		if err := process.terminate(); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -323,6 +323,23 @@ func (process *process) stop(t *testing.T, expectSuccess bool, secrets ...string
 			t.Fatalf("process disclosed secret: %s", process.diagnostics(secrets...))
 		}
 	}
+}
+
+func (process *process) terminate() error {
+	select {
+	case <-process.done:
+		return nil
+	default:
+	}
+	if err := process.command.Process.Signal(syscall.SIGTERM); err != nil {
+		select {
+		case <-process.done:
+			return nil
+		default:
+			return err
+		}
+	}
+	return nil
 }
 
 func (process *process) wait() error {
