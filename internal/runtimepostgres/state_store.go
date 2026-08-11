@@ -393,7 +393,7 @@ func (store *RuntimeStateStore) ListOutboxTenants(ctx context.Context) ([]runtim
 	if _, err := tx.Exec(ctx, `SET LOCAL ROLE runtime_state_operator`); err != nil {
 		return nil, runtimestate.ErrUnavailable
 	}
-	rows, err := tx.Query(ctx, `SELECT tenant_id FROM runtime.runtime_state_snapshots ORDER BY tenant_id`)
+	rows, err := tx.Query(ctx, `SELECT tenant_id FROM runtime.runtime_state_tenant_partitions ORDER BY tenant_id`)
 	if err != nil {
 		return nil, runtimestate.ErrUnavailable
 	}

@@ -182,34 +182,79 @@ func TestRuntimeV5PartitionsAndRLSRejectUnboundOrCrossTenantStateAccess(t *testi
 	applyRuntimeMigrations(t, ctx, pool)
 
 	transaction, err := pool.Begin(ctx)
-	if err != nil { t.Fatalf("begin app-role transaction: %v", err) }
-	defer func() { _ = transaction.Rollback(ctx) }()
-	if _, err := transaction.Exec(ctx, `SET LOCAL ROLE runtime_state_app`); err != nil { t.Fatalf("set app role: %v", err) }
-	var unbound int
-	if err := transaction.QueryRow(ctx, `SELECT count(*) FROM runtime.runtime_state_snapshots`).Scan(&unbound); err != nil { t.Fatalf("query unbound state: %v", err) }
-	if unbound != 0 { t.Fatalf("unbound app state rows = %d, want 0", unbound) }
-	for _, tenant := range []string{"tenant_isolation_a", "tenant_isolation_b"} {
-		if _, err := transaction.Exec(ctx, `SELECT set_config('runtime.tenant_id', $1, true)`, tenant); err != nil { t.Fatalf("bind tenant %s: %v", tenant, err) }
-		if _, err := transaction.Exec(ctx, `INSERT INTO runtime.tenants (tenant_id, created_at) VALUES ($1, now())`, tenant); err != nil { t.Fatalf("insert tenant %s: %v", tenant, err) }
-		if _, err := transaction.Exec(ctx, `INSERT INTO runtime.runtime_state_snapshots (tenant_id, generation, state, updated_at) VALUES ($1, 1, '{}'::jsonb, now())`, tenant); err != nil { t.Fatalf("insert state %s: %v", tenant, err) }
+	if err != nil {
+		t.Fatalf("begin app-role transaction: %v", err)
 	}
-	if _, err := transaction.Exec(ctx, `SELECT set_config('runtime.tenant_id', 'tenant_isolation_a', true)`); err != nil { t.Fatalf("rebind tenant A: %v", err) }
+	defer func() { _ = transaction.Rollback(ctx) }()
+	if _, err := transaction.Exec(ctx, `SET LOCAL ROLE runtime_state_app`); err != nil {
+		t.Fatalf("set app role: %v", err)
+	}
+	var unbound int
+	if err := transaction.QueryRow(ctx, `SELECT count(*) FROM runtime.runtime_state_snapshots`).Scan(&unbound); err != nil {
+		t.Fatalf("query unbound state: %v", err)
+	}
+	if unbound != 0 {
+		t.Fatalf("unbound app state rows = %d, want 0", unbound)
+	}
+	for _, tenant := range []string{"tenant_isolation_a", "tenant_isolation_b"} {
+		if _, err := transaction.Exec(ctx, `SELECT set_config('runtime.tenant_id', $1, true)`, tenant); err != nil {
+			t.Fatalf("bind tenant %s: %v", tenant, err)
+		}
+		if _, err := transaction.Exec(ctx, `INSERT INTO runtime.tenants (tenant_id, created_at) VALUES ($1, now())`, tenant); err != nil {
+			t.Fatalf("insert tenant %s: %v", tenant, err)
+		}
+		if _, err := transaction.Exec(ctx, `INSERT INTO runtime.runtime_state_snapshots (tenant_id, generation, state, updated_at) VALUES ($1, 1, '{}'::jsonb, now())`, tenant); err != nil {
+			t.Fatalf("insert state %s: %v", tenant, err)
+		}
+	}
+	if _, err := transaction.Exec(ctx, `SELECT set_config('runtime.tenant_id', 'tenant_isolation_a', true)`); err != nil {
+		t.Fatalf("rebind tenant A: %v", err)
+	}
 	var own, foreign int
-	if err := transaction.QueryRow(ctx, `SELECT count(*) FROM runtime.runtime_state_snapshots WHERE tenant_id = 'tenant_isolation_a'`).Scan(&own); err != nil { t.Fatalf("query own state: %v", err) }
-	if err := transaction.QueryRow(ctx, `SELECT count(*) FROM runtime.runtime_state_snapshots WHERE tenant_id = 'tenant_isolation_b'`).Scan(&foreign); err != nil { t.Fatalf("query cross-tenant state: %v", err) }
-	if own != 1 || foreign != 0 { t.Fatalf("app RLS own=%d foreign=%d, want 1/0", own, foreign) }
-	if err := transaction.Commit(ctx); err != nil { t.Fatalf("commit app-role transaction: %v", err) }
+	if err := transaction.QueryRow(ctx, `SELECT count(*) FROM runtime.runtime_state_snapshots WHERE tenant_id = 'tenant_isolation_a'`).Scan(&own); err != nil {
+		t.Fatalf("query own state: %v", err)
+	}
+	if err := transaction.QueryRow(ctx, `SELECT count(*) FROM runtime.runtime_state_snapshots WHERE tenant_id = 'tenant_isolation_b'`).Scan(&foreign); err != nil {
+		t.Fatalf("query cross-tenant state: %v", err)
+	}
+	if own != 1 || foreign != 0 {
+		t.Fatalf("app RLS own=%d foreign=%d, want 1/0", own, foreign)
+	}
+	if err := transaction.Commit(ctx); err != nil {
+		t.Fatalf("commit app-role transaction: %v", err)
+	}
 
 	operator, err := pool.Begin(ctx)
-	if err != nil { t.Fatalf("begin operator transaction: %v", err) }
+	if err != nil {
+		t.Fatalf("begin operator transaction: %v", err)
+	}
 	defer func() { _ = operator.Rollback(ctx) }()
-	if _, err := operator.Exec(ctx, `SET LOCAL ROLE runtime_state_operator`); err != nil { t.Fatalf("set operator role: %v", err) }
+	if _, err := operator.Exec(ctx, `SET LOCAL ROLE runtime_state_operator`); err != nil {
+		t.Fatalf("set operator role: %v", err)
+	}
 	var all int
-	if err := operator.QueryRow(ctx, `SELECT count(*) FROM runtime.runtime_state_snapshots`).Scan(&all); err != nil { t.Fatalf("query operator state: %v", err) }
-	if all != 2 { t.Fatalf("operator state rows = %d, want 2", all) }
+	if err := operator.QueryRow(ctx, `SELECT count(*) FROM runtime.runtime_state_tenant_partitions`).Scan(&all); err != nil {
+		t.Fatalf("query operator tenant projection: %v", err)
+	}
+	if all != 2 {
+		t.Fatalf("operator tenant projection rows = %d, want 2", all)
+	}
+	if _, err := operator.Exec(ctx, `SAVEPOINT operator_full_state_read`); err != nil {
+		t.Fatalf("save operator projection transaction: %v", err)
+	}
+	if err := operator.QueryRow(ctx, `SELECT state FROM runtime.runtime_state_snapshots LIMIT 1`).Scan(new(string)); err == nil {
+		t.Fatal("operator can read full runtime state, want projection-only access")
+	}
+	if _, err := operator.Exec(ctx, `ROLLBACK TO SAVEPOINT operator_full_state_read`); err != nil {
+		t.Fatalf("recover denied operator full-state read: %v", err)
+	}
 	var partitions int
-	if err := operator.QueryRow(ctx, `SELECT count(*) FROM pg_inherits JOIN pg_class ON inhrelid = pg_class.oid JOIN pg_namespace ON pg_class.relnamespace = pg_namespace.oid JOIN pg_class parent ON inhparent = parent.oid WHERE pg_namespace.nspname = 'runtime' AND parent.relname = 'runtime_state_snapshots'`).Scan(&partitions); err != nil { t.Fatalf("count native partitions: %v", err) }
-	if partitions != 4 { t.Fatalf("runtime state partitions = %d, want 4", partitions) }
+	if err := operator.QueryRow(ctx, `SELECT count(*) FROM pg_inherits JOIN pg_class ON inhrelid = pg_class.oid JOIN pg_namespace ON pg_class.relnamespace = pg_namespace.oid JOIN pg_class parent ON inhparent = parent.oid WHERE pg_namespace.nspname = 'runtime' AND parent.relname = 'runtime_state_snapshots'`).Scan(&partitions); err != nil {
+		t.Fatalf("count native partitions: %v", err)
+	}
+	if partitions != 4 {
+		t.Fatalf("runtime state partitions = %d, want 4", partitions)
+	}
 }
 
 func TestRuntimeV5PreservesExistingStateAndBackfillsTenantRetentionSchedule(t *testing.T) {

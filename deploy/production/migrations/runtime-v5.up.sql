@@ -66,7 +66,10 @@ CREATE POLICY runtime_state_tenant_isolation ON runtime.runtime_state_snapshots
   USING (current_user = 'runtime_state_operator' OR tenant_id = current_setting('runtime.tenant_id', true))
   WITH CHECK (tenant_id = current_setting('runtime.tenant_id', true));
 GRANT SELECT, INSERT, UPDATE, DELETE ON runtime.runtime_state_snapshots TO runtime_state_app;
-GRANT SELECT ON runtime.runtime_state_snapshots TO runtime_state_operator;
+CREATE VIEW runtime.runtime_state_tenant_partitions
+  WITH (security_barrier = true)
+  AS SELECT tenant_id FROM runtime.runtime_state_snapshots;
+GRANT SELECT ON runtime.runtime_state_tenant_partitions TO runtime_state_operator;
 
 -- Retention is bounded, tenant-scoped scheduling metadata. The runtime worker
 -- cannot enqueue cross-tenant work because the same RLS policy applies.
