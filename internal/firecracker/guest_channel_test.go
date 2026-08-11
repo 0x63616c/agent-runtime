@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/0x63616c/agent-runtime/internal/clock"
 	"github.com/0x63616c/agent-runtime/internal/sandboxauthority"
 	"github.com/0x63616c/agent-runtime/internal/sandboxhostprotocol"
 )
@@ -376,6 +377,215 @@ func TestUnixGuestControlChannelReaperClosesTheBoundProxySession(t *testing.T) {
 		t.Fatal("reaper left the outbound proxy connection open")
 	}
 	dialer.wait()
+}
+
+func TestUnixGuestControlChannelDeliversOneExactSecretSessionThenRedactsAfterReap(t *testing.T) {
+	now := time.Date(2026, 8, 10, 0, 0, 0, 0, time.UTC)
+	request := sandboxauthority.SecretRequest{Principal: "principal-001", SandboxID: "sandbox-001", ProcessID: "process-001", OperationID: "operation-001", Binding: "binding-001", Purpose: "command", ExpiresAt: now.Add(time.Minute)}
+	payload, err := json.Marshal(GuestSecretCommand{Version: GuestSecretCommandOperationKind, Command: json.RawMessage(`{"version":"agent-runtime.guest-command/v1"}`), Secret: request})
+	if err != nil {
+		t.Fatal(err)
+	}
+	envelope := sandboxhostprotocol.Envelope{EnvelopeID: "envelope-001", DeliveryID: "delivery-001", FencingToken: 9, Principal: request.Principal, SandboxID: request.SandboxID, ProcessID: request.ProcessID, OperationID: request.OperationID, OperationKind: GuestSecretCommandOperationKind, ExpiresAt: request.ExpiresAt, Payload: payload}
+	envelope.PayloadDigest = sandboxhostprotocol.Digest(payload)
+	audit := &guestSecretAudit{}
+	manager, err := sandboxauthority.NewManager(secretAuthorityResolver{value: []byte("secret-value")}, secretAuthoritySink{}, audit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	source, _ := clock.NewFake(now)
+	authority, err := NewSecretExecutionAuthority(manager, source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dialer := &guestChannelDialer{handler: func(connection net.Conn) {
+		defer connection.Close()
+		reader := bufio.NewReader(connection)
+		if line := guestChannelTestReadLine(t, reader); line != "CONNECT sandbox-001 fixture-v1" {
+			t.Errorf("CONNECT = %q", line)
+			return
+		}
+		_, _ = connection.Write([]byte("OK sandbox-001 fixture-v1\n"))
+		fields := strings.Fields(guestChannelTestReadLine(t, reader))
+		if len(fields) != 2 || fields[0] != "SECRET_DISPATCH" {
+			t.Errorf("secret operation = %v", fields)
+			return
+		}
+		frame, decodeErr := base64.RawURLEncoding.DecodeString(fields[1])
+		gotEnvelope, _, decodeErr := DecodeAuthenticatedGuestDispatch(frame)
+		if decodeErr != nil || gotEnvelope.EnvelopeID != envelope.EnvelopeID {
+			t.Errorf("DecodeAuthenticatedGuestDispatch() = %#v, %v", gotEnvelope, decodeErr)
+			return
+		}
+		encodedRequest, encodeErr := EncodeGuestSecretRequest(request)
+		if encodeErr != nil {
+			t.Errorf("EncodeGuestSecretRequest() error = %v", encodeErr)
+			return
+		}
+		_, _ = fmt.Fprintf(connection, "SECRET_REQUEST %s %s\n", envelope.EnvelopeID, base64.RawURLEncoding.EncodeToString(encodedRequest))
+		value := strings.Fields(guestChannelTestReadLine(t, reader))
+		if len(value) != 3 || value[0] != "SECRET_VALUE" || value[1] != envelope.EnvelopeID {
+			t.Errorf("secret value frame = %v", value)
+			return
+		}
+		secret, decodeErr := base64.RawURLEncoding.DecodeString(value[2])
+		if decodeErr != nil || string(secret) != "secret-value" {
+			t.Errorf("decoded secret = %q, %v", secret, decodeErr)
+			return
+		}
+		_, _ = fmt.Fprintf(connection, "SECRET_READY %s\n", envelope.EnvelopeID)
+		if line := guestChannelTestReadLine(t, reader); line != "SECRET_START "+envelope.EnvelopeID {
+			t.Errorf("secret start = %q", line)
+			return
+		}
+		output := []byte("before secret-value after")
+		_, _ = fmt.Fprintf(connection, "OUTPUT %s stdout 0 %s %s\n", envelope.EnvelopeID, sandboxhostprotocol.Digest(output), base64.RawURLEncoding.EncodeToString(output))
+		_, _ = fmt.Fprintf(connection, "SECRET_TREE_REAPED %s\n", envelope.EnvelopeID)
+		if line := guestChannelTestReadLine(t, reader); line != "SECRET_REVOKE "+envelope.EnvelopeID {
+			t.Errorf("secret revoke = %q", line)
+			return
+		}
+		_, _ = fmt.Fprintf(connection, "SECRET_REVOKED %s\n", envelope.EnvelopeID)
+		_, _ = fmt.Fprintf(connection, "RESULT SUCCEEDED %s\n", envelope.EnvelopeID)
+	}}
+	channel := newBoundGuestChannel(t, dialer)
+	var outputs []sandboxhostprotocol.GuestOutput
+	if err := channel.DispatchAuthenticatedSecret(context.Background(), envelope, mustMarshalGuestChannel(t, envelope), authority, func(_ context.Context, output sandboxhostprotocol.GuestOutput) error {
+		outputs = append(outputs, output)
+		return nil
+	}); err != nil {
+		t.Fatalf("DispatchAuthenticatedSecret() error = %v", err)
+	}
+	if len(outputs) != 1 || string(outputs[0].Data) != "before [REDACTED] after" {
+		t.Fatalf("durable outputs = %#v, want one redacted output", outputs)
+	}
+	if got := audit.events(); strings.Join(got, "|") != "delivered|revoked-after-tree-reap" {
+		t.Fatalf("audit events = %v", got)
+	}
+	dialer.wait()
+}
+
+func TestUnixGuestControlChannelRefusesSubstitutedSecretRequestBeforeResolution(t *testing.T) {
+	now := time.Date(2026, 8, 10, 0, 0, 0, 0, time.UTC)
+	request := sandboxauthority.SecretRequest{Principal: "principal-001", SandboxID: "sandbox-001", ProcessID: "process-001", OperationID: "operation-001", Binding: "binding-001", Purpose: "command", ExpiresAt: now.Add(time.Minute)}
+	payload, _ := json.Marshal(GuestSecretCommand{Version: GuestSecretCommandOperationKind, Command: json.RawMessage(`{"version":"agent-runtime.guest-command/v1"}`), Secret: request})
+	envelope := sandboxhostprotocol.Envelope{EnvelopeID: "envelope-001", DeliveryID: "delivery-001", FencingToken: 9, Principal: request.Principal, SandboxID: request.SandboxID, ProcessID: request.ProcessID, OperationID: request.OperationID, OperationKind: GuestSecretCommandOperationKind, ExpiresAt: request.ExpiresAt, Payload: payload}
+	envelope.PayloadDigest = sandboxhostprotocol.Digest(payload)
+	resolver := &secretAuthorityCountingResolver{}
+	manager, _ := sandboxauthority.NewManager(resolver, secretAuthoritySink{}, secretAuthorityAudit{})
+	source, _ := clock.NewFake(now)
+	authority, _ := NewSecretExecutionAuthority(manager, source)
+	dialer := &guestChannelDialer{handler: func(connection net.Conn) {
+		defer connection.Close()
+		reader := bufio.NewReader(connection)
+		_ = guestChannelTestReadLine(t, reader)
+		_, _ = connection.Write([]byte("OK sandbox-001 fixture-v1\n"))
+		_ = guestChannelTestReadLine(t, reader)
+		request.ProcessID = "other-process"
+		encoded, _ := EncodeGuestSecretRequest(request)
+		_, _ = fmt.Fprintf(connection, "SECRET_REQUEST envelope-001 %s\n", base64.RawURLEncoding.EncodeToString(encoded))
+	}}
+	channel := newBoundGuestChannel(t, dialer)
+	err := channel.DispatchAuthenticatedSecret(context.Background(), envelope, mustMarshalGuestChannel(t, envelope), authority, func(context.Context, sandboxhostprotocol.GuestOutput) error { return nil })
+	if !errors.Is(err, ErrCapabilityUnavailable) {
+		t.Fatalf("DispatchAuthenticatedSecret() error = %v, want unavailable", err)
+	}
+	if resolver.calls != 0 {
+		t.Fatalf("resolver calls = %d, want no secret resolution", resolver.calls)
+	}
+	dialer.wait()
+}
+
+func TestUnixGuestControlChannelLostSecretAcknowledgementZerosHostCopyAndRequiresReaper(t *testing.T) {
+	now := time.Date(2026, 8, 10, 0, 0, 0, 0, time.UTC)
+	request := sandboxauthority.SecretRequest{Principal: "principal-001", SandboxID: "sandbox-001", ProcessID: "process-001", OperationID: "operation-001", Binding: "binding-001", Purpose: "command", ExpiresAt: now.Add(time.Minute)}
+	payload, _ := json.Marshal(GuestSecretCommand{Version: GuestSecretCommandOperationKind, Command: json.RawMessage(`{"version":"agent-runtime.guest-command/v1"}`), Secret: request})
+	envelope := sandboxhostprotocol.Envelope{EnvelopeID: "envelope-001", DeliveryID: "delivery-001", FencingToken: 9, Principal: request.Principal, SandboxID: request.SandboxID, ProcessID: request.ProcessID, OperationID: request.OperationID, OperationKind: GuestSecretCommandOperationKind, ExpiresAt: request.ExpiresAt, Payload: payload}
+	envelope.PayloadDigest = sandboxhostprotocol.Digest(payload)
+	audit := &guestSecretAudit{}
+	manager, _ := sandboxauthority.NewManager(secretAuthorityResolver{value: []byte("secret-value")}, secretAuthoritySink{}, audit)
+	source, _ := clock.NewFake(now)
+	authority, _ := NewSecretExecutionAuthority(manager, source)
+	started := make(chan struct{})
+	peerClosed := make(chan struct{})
+	dialer := &guestChannelDialer{handler: func(connection net.Conn) {
+		defer connection.Close()
+		defer close(peerClosed)
+		reader := bufio.NewReader(connection)
+		_ = guestChannelTestReadLine(t, reader)
+		_, _ = connection.Write([]byte("OK sandbox-001 fixture-v1\n"))
+		_ = guestChannelTestReadLine(t, reader)
+		encoded, _ := EncodeGuestSecretRequest(request)
+		_, _ = fmt.Fprintf(connection, "SECRET_REQUEST envelope-001 %s\n", base64.RawURLEncoding.EncodeToString(encoded))
+		_ = guestChannelTestReadLine(t, reader)
+		_, _ = connection.Write([]byte("SECRET_READY envelope-001\n"))
+		if line := guestChannelTestReadLine(t, reader); line == "SECRET_START envelope-001" {
+			close(started)
+		}
+		_, _ = reader.ReadByte()
+	}}
+	channel := newBoundGuestChannel(t, dialer)
+	ctx, cancel := context.WithCancel(context.Background())
+	result := make(chan error, 1)
+	go func() {
+		result <- channel.DispatchAuthenticatedSecret(ctx, envelope, mustMarshalGuestChannel(t, envelope), authority, func(context.Context, sandboxhostprotocol.GuestOutput) error { return nil })
+	}()
+	<-started
+	cancel()
+	if err := <-result; err == nil {
+		t.Fatal("DispatchAuthenticatedSecret() completed after lost acknowledgement")
+	}
+	<-peerClosed
+	if got := audit.events(); strings.Join(got, "|") != "delivered|lost-contact-reaper-required" {
+		t.Fatalf("audit events = %v", got)
+	}
+	dialer.wait()
+}
+
+func newBoundGuestChannel(t *testing.T, dialer *guestChannelDialer) *UnixGuestControlChannel {
+	t.Helper()
+	channel, err := NewUnixGuestControlChannel(dialer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := channel.BindGuestIdentity(context.Background(), "sandbox-001", "fixture-v1"); err != nil {
+		t.Fatal(err)
+	}
+	if err := channel.Bind(context.Background(), "/srv/jailer/sandbox-001/root/run/firecracker.vsock"); err != nil {
+		t.Fatal(err)
+	}
+	return channel
+}
+
+func mustMarshalGuestChannel(t *testing.T, envelope sandboxhostprotocol.Envelope) []byte {
+	t.Helper()
+	payload, err := json.Marshal(envelope)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return payload
+}
+
+type guestSecretAudit struct {
+	mu    sync.Mutex
+	facts []sandboxauthority.SecretAuditFact
+}
+
+func (audit *guestSecretAudit) RecordSecretDelivery(_ context.Context, fact sandboxauthority.SecretAuditFact) error {
+	audit.mu.Lock()
+	defer audit.mu.Unlock()
+	audit.facts = append(audit.facts, fact)
+	return nil
+}
+
+func (audit *guestSecretAudit) events() []string {
+	audit.mu.Lock()
+	defer audit.mu.Unlock()
+	events := make([]string, 0, len(audit.facts))
+	for _, fact := range audit.facts {
+		events = append(events, fact.Event)
+	}
+	return events
 }
 
 type guestChannelDialer struct {

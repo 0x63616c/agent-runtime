@@ -47,6 +47,42 @@ func DecodeGuestSecretCommand(payload []byte) (GuestSecretCommand, error) {
 	return command, nil
 }
 
+// EncodeGuestSecretRequest produces the only canonical, secret-free request
+// echo a guest may send before the host resolves a value for its sealed sink.
+func EncodeGuestSecretRequest(request sandboxauthority.SecretRequest) ([]byte, error) {
+	if !validSecretRequestShape(request) {
+		return nil, fmt.Errorf("encode guest secret request: %w", ErrCapabilityUnavailable)
+	}
+	payload, err := json.Marshal(request)
+	if err != nil || len(payload) == 0 || len(payload) > maximumGuestDispatchBytes {
+		return nil, fmt.Errorf("encode guest secret request: %w", ErrCapabilityUnavailable)
+	}
+	return payload, nil
+}
+
+// DecodeGuestSecretRequest accepts one canonical secret-free request echo.
+// It cannot carry a secret value or a caller-selected transport address.
+func DecodeGuestSecretRequest(payload []byte) (sandboxauthority.SecretRequest, error) {
+	if len(payload) == 0 || len(payload) > maximumGuestDispatchBytes {
+		return sandboxauthority.SecretRequest{}, fmt.Errorf("decode guest secret request: %w", ErrCapabilityUnavailable)
+	}
+	decoder := json.NewDecoder(bytes.NewReader(payload))
+	decoder.DisallowUnknownFields()
+	var request sandboxauthority.SecretRequest
+	if err := decoder.Decode(&request); err != nil {
+		return sandboxauthority.SecretRequest{}, fmt.Errorf("decode guest secret request: %w", ErrCapabilityUnavailable)
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); err == nil {
+		return sandboxauthority.SecretRequest{}, fmt.Errorf("decode guest secret request: %w", ErrCapabilityUnavailable)
+	}
+	canonical, err := json.Marshal(request)
+	if err != nil || !bytes.Equal(canonical, payload) || !validSecretRequestShape(request) {
+		return sandboxauthority.SecretRequest{}, fmt.Errorf("decode guest secret request: %w", ErrCapabilityUnavailable)
+	}
+	return request, nil
+}
+
 // SecretExecutionAuthority binds one Manager to host-control time. It owns no
 // route or envelope verification and never stores secret bytes itself.
 type SecretExecutionAuthority struct {
@@ -79,6 +115,20 @@ func (authority *SecretExecutionAuthority) Begin(ctx context.Context, envelope s
 	return command, nil
 }
 
+// BindSink creates an isolated secret lifecycle for one authenticated guest
+// exchange. It shares only the resolver, audit boundary, and deterministic
+// clock; redaction bytes and process state remain command-local.
+func (authority *SecretExecutionAuthority) BindSink(sink sandboxauthority.SecretSink) (*SecretExecutionAuthority, error) {
+	if authority == nil || sink == nil {
+		return nil, fmt.Errorf("bind guest secret sink: %w", ErrCapabilityUnavailable)
+	}
+	manager, err := authority.manager.WithSink(sink)
+	if err != nil {
+		return nil, fmt.Errorf("bind guest secret sink: %w", err)
+	}
+	return NewSecretExecutionAuthority(manager, authority.clock)
+}
+
 // AbortBeforeStart closes a delivered secret only while the guest has proved
 // that command launch never bound it to a recipient process.
 func (authority *SecretExecutionAuthority) AbortBeforeStart(ctx context.Context, processID string) error {
@@ -95,6 +145,16 @@ func (authority *SecretExecutionAuthority) RevokeAfterTreeReap(ctx context.Conte
 		return fmt.Errorf("revoke guest secret authority: %w", ErrCapabilityUnavailable)
 	}
 	return authority.manager.RevokeAfterTreeReap(ctx, processID)
+}
+
+// AbandonAfterLostContact overwrites the host copy after a started guest has
+// lost the authenticated session. The audit event intentionally requires the
+// Jailer reaper to prove the remote process tree's eventual cleanup.
+func (authority *SecretExecutionAuthority) AbandonAfterLostContact(ctx context.Context, processID string) error {
+	if authority == nil {
+		return fmt.Errorf("abandon guest secret authority: %w", ErrCapabilityUnavailable)
+	}
+	return authority.manager.AbandonAfterLostContact(ctx, processID)
 }
 
 // RedactOutput returns a copied literal-redacted chunk while the command

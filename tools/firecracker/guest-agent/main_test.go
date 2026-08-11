@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/base64"
@@ -169,6 +170,80 @@ func TestServeGuestControlReturnsBoundedUnavailableResultForAnAuthenticatedDispa
 	if got, want := connection.String(), "OK sandbox-001 fixture-v1\nOUTPUT envelope-001 control 0 "+sandboxhostprotocol.Digest(marker)+" "+base64.RawURLEncoding.EncodeToString(marker)+"\nRESULT UNAVAILABLE envelope-001\n"; got != want {
 		t.Fatalf("guest control response = %q, want %q", got, want)
 	}
+}
+
+func TestServeGuestControlRefusesSecretDispatchBeforeRequestingAnyValue(t *testing.T) {
+	var serial bytes.Buffer
+	now := time.Date(2026, 8, 10, 0, 0, 0, 0, time.UTC)
+	request := sandboxauthority.SecretRequest{Principal: "principal-001", SandboxID: "sandbox-001", ProcessID: "process-001", OperationID: "operation-001", Binding: "binding-001", Purpose: "command", ExpiresAt: now.Add(time.Minute)}
+	payload, err := json.Marshal(firecracker.GuestSecretCommand{Version: firecracker.GuestSecretCommandOperationKind, Command: json.RawMessage(`{"version":"agent-runtime.guest-command/v1"}`), Secret: request})
+	if err != nil {
+		t.Fatal(err)
+	}
+	envelope := sandboxhostprotocol.Envelope{EnvelopeID: "envelope-001", DeliveryID: "delivery-001", FencingToken: 1, Principal: request.Principal, SandboxID: request.SandboxID, ProcessID: request.ProcessID, OperationID: request.OperationID, OperationKind: firecracker.GuestSecretCommandOperationKind, ExpiresAt: request.ExpiresAt, Payload: payload}
+	envelope.PayloadDigest = sandboxhostprotocol.Digest(payload)
+	authenticatedEnvelope, err := json.Marshal(envelope)
+	if err != nil {
+		t.Fatal(err)
+	}
+	frame, err := firecracker.EncodeAuthenticatedGuestDispatch(envelope, authenticatedEnvelope)
+	if err != nil {
+		t.Fatal(err)
+	}
+	connection := &recordingGuestConnection{requests: strings.NewReader("CONNECT sandbox-001 fixture-v1\nSECRET_DISPATCH " + base64.RawURLEncoding.EncodeToString(frame) + "\n")}
+	listener := &recordingGuestListener{connection: connection}
+	if err := serveGuestControl("sandbox-001", "fixture-v1", &serial, func() (guestControlListener, error) { return listener, nil }, func(context.Context) error { return nil }); err != nil {
+		t.Fatalf("serveGuestControl() error = %v", err)
+	}
+	if got, want := connection.String(), "OK sandbox-001 fixture-v1\nRESULT UNAVAILABLE envelope-001\n"; got != want {
+		t.Fatalf("guest secret response = %q, want %q", got, want)
+	}
+}
+
+func TestServeGuestSecretOperationRequiresValueStartReapAndRevokeInOrder(t *testing.T) {
+	now := time.Date(2026, 8, 10, 0, 0, 0, 0, time.UTC)
+	request := sandboxauthority.SecretRequest{Principal: "principal-001", SandboxID: "sandbox-001", ProcessID: "process-001", OperationID: "operation-001", Binding: "binding-001", Purpose: "command", ExpiresAt: now.Add(time.Minute)}
+	command := firecracker.GuestSecretCommand{Version: firecracker.GuestSecretCommandOperationKind, Command: json.RawMessage(`{"version":"agent-runtime.guest-command/v1"}`), Secret: request}
+	envelope := sandboxhostprotocol.Envelope{EnvelopeID: "envelope-001"}
+	connection := &recordingGuestConnection{requests: strings.NewReader("SECRET_VALUE envelope-001 c2VjcmV0LXZhbHVl\nSECRET_START envelope-001\nSECRET_REVOKE envelope-001\n")}
+	executor := &recordingGuestSecretExecutor{}
+	if err := serveGuestSecretOperation(connection, bufio.NewReader(connection), envelope, command, executor); err != nil {
+		t.Fatalf("serveGuestSecretOperation() error = %v", err)
+	}
+	output := []byte("before secret-value after")
+	if got, want := connection.String(), "SECRET_REQUEST envelope-001 "+base64.RawURLEncoding.EncodeToString(mustEncodeGuestSecretRequest(t, request))+"\nSECRET_READY envelope-001\nOUTPUT envelope-001 stdout 0 "+sandboxhostprotocol.Digest(output)+" "+base64.RawURLEncoding.EncodeToString(output)+"\nSECRET_TREE_REAPED envelope-001\nSECRET_REVOKED envelope-001\nRESULT SUCCEEDED envelope-001\n"; got != want {
+		t.Fatalf("secret exchange = %q, want %q", got, want)
+	}
+	if got := string(executor.value); got != "secret-value" || !executor.revoked {
+		t.Fatalf("executor lifecycle = value %q revoked %t", got, executor.revoked)
+	}
+}
+
+func mustEncodeGuestSecretRequest(t *testing.T, request sandboxauthority.SecretRequest) []byte {
+	t.Helper()
+	payload, err := firecracker.EncodeGuestSecretRequest(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return payload
+}
+
+type recordingGuestSecretExecutor struct {
+	value   []byte
+	revoked bool
+}
+
+func (*recordingGuestSecretExecutor) Available() bool { return true }
+func (executor *recordingGuestSecretExecutor) Deliver(_ context.Context, value []byte) error {
+	executor.value = append([]byte(nil), value...)
+	return nil
+}
+func (*recordingGuestSecretExecutor) Run(context.Context, json.RawMessage) (guestCommandResult, error) {
+	return guestCommandResult{stdout: []byte("before secret-value after")}, nil
+}
+func (executor *recordingGuestSecretExecutor) RevokeAfterTreeReap(context.Context) error {
+	executor.revoked = true
+	return nil
 }
 
 func TestServeGuestControlAcknowledgesABoundedCancellationWithoutStartingWork(t *testing.T) {
