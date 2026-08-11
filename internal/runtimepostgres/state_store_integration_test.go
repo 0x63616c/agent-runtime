@@ -14,6 +14,7 @@ import (
 	"github.com/0x63616c/agent-runtime/internal/runtimecontent"
 	"github.com/0x63616c/agent-runtime/internal/runtimepostgres"
 	"github.com/0x63616c/agent-runtime/internal/runtimestate"
+	agentruntime "github.com/0x63616c/agent-runtime/sdk/go"
 )
 
 func TestPostgresRuntimeStateStorePersistsASealedPlanAndRejectsItsStaleBase(t *testing.T) {
@@ -93,6 +94,84 @@ func TestPostgresRuntimeStateStorePersistsASealedPlanAndRejectsItsStaleBase(t *t
 	}
 	if err := store.PersistTransitionPlan(ctx, plan); !errors.Is(err, runtimestate.ErrConflict) {
 		t.Fatalf("persist stale plan error = %v, want conflict", err)
+	}
+}
+
+func TestPostgresRuntimeStateStoreBackfillsUnambiguousLegacyGrantScopeOnRestart(t *testing.T) {
+	ctx := context.Background()
+	pool := openRuntimePool(t)
+	resetRuntimeV2(t, ctx, pool)
+	applyRuntimeMigrations(t, ctx, pool)
+	now := time.Date(2026, 8, 11, 12, 0, 0, 0, time.UTC)
+	tenant, _ := runtimecontent.ParseTenantID("legacy-grant-tenant")
+	principal, _ := runtimecontent.ParsePrincipalID("legacy-grant-owner")
+	session, turn := agentruntime.SessionID("sess_0000000000000001"), agentruntime.TurnID("turn_0000000000000002")
+	legacy := runtimestate.RuntimeState{
+		Sessions:    []runtimestate.SessionRecord{{Tenant: tenant, Principal: principal, SessionID: session, State: agentruntime.SessionOpen, Version: 1, CreatedAt: now, UpdatedAt: now}},
+		Turns:       []runtimestate.TurnRecord{{Tenant: tenant, Principal: principal, SessionID: session, TurnID: turn, State: agentruntime.TurnRunning}},
+		ToolIntents: []runtimestate.ToolIntentRecord{{Tenant: tenant, Principal: principal, SessionID: session, TurnID: turn, ToolCallID: "tcall_1234567890ABCDEF"}},
+		Grants:      []runtimestate.CapabilityGrantRecord{{Tenant: tenant, Principal: principal, GrantID: "grant_1234567890ABCDE", ToolCallID: "tcall_1234567890ABCDEF", MaximumUses: 1, ExpiresAt: now.Add(time.Hour)}},
+	}
+	encoded, err := json.Marshal(legacy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if _, err = tx.Exec(ctx, `SELECT set_config('runtime.tenant_id', $1, true)`, string(tenant)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = tx.Exec(ctx, `INSERT INTO runtime.tenants (tenant_id, created_at) VALUES ($1, now())`, string(tenant)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = tx.Exec(ctx, `INSERT INTO runtime.runtime_state_snapshots (tenant_id, generation, state, updated_at) VALUES ($1, 1, $2::jsonb, now())`, string(tenant), encoded); err != nil {
+		t.Fatal(err)
+	}
+	if err = tx.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	store, err := runtimepostgres.NewRuntimeStateStore(pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ownerScope := runtimestate.MutationScope{Tenant: tenant, Principal: principal, Authority: runtimestate.AuthoritySessionOwner}
+	loaded, err := store.LoadRuntimeState(ctx, ownerScope)
+	if err != nil || len(loaded.Grants) != 1 || loaded.Grants[0].SessionID != session || loaded.Grants[0].TurnID != turn {
+		t.Fatalf("backfilled legacy grant = %#v, %v", loaded.Grants, err)
+	}
+	content, err := runtimecontent.New("legacy-grant-content", &stateStoreObjects{values: map[string][]byte{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	compiler, err := runtimestate.NewCompiler(content)
+	if err != nil {
+		t.Fatal(err)
+	}
+	planner, err := runtimestate.NewRuntimeStatePlanner(stateStoreClock{now: now}, &stateStoreIDs{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cancel, err := compiler.CompileCancelTurn(runtimestate.CancelTurnCommand{Scope: ownerScope, IdempotencyKey: "cancel-backfilled-grant", SessionID: session, TurnID: turn})
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan, err := planner.Plan(ctx, loaded, cancel)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = store.PersistTransitionPlan(ctx, plan); err != nil {
+		t.Fatalf("persist transactionally backfilled snapshot: %v", err)
+	}
+	restarted, err := runtimepostgres.NewRuntimeStateStore(pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	loaded, err = restarted.LoadRuntimeState(ctx, ownerScope)
+	if err != nil || len(loaded.Grants) != 1 || loaded.Grants[0].SessionID != session || loaded.Grants[0].TurnID != turn || loaded.Grants[0].RevokedAt == nil {
+		t.Fatalf("restarted upgraded grant = %#v, %v", loaded.Grants, err)
 	}
 }
 
@@ -286,9 +365,9 @@ func (ids *stateStoreIDs) NextIdentifier(kind runtimestate.IdentifierKind) (stri
 	case runtimestate.IdentifierInvocation:
 		return "invoke_" + value, nil
 	case runtimestate.IdentifierEvent:
-		return "event_" + value, nil
+		return "evt_" + value, nil
 	case runtimestate.IdentifierCursor:
-		return "cursor_" + value, nil
+		return "cur_" + value, nil
 	case runtimestate.IdentifierAudit:
 		return "audit_" + value, nil
 	case runtimestate.IdentifierOutbox:
