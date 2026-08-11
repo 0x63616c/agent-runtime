@@ -70,6 +70,9 @@ func (store *RuntimeStateStore) CollectExpiredAndContent(ctx context.Context, au
 		return RetentionCollectionReceipt{}, runtimestate.ErrUnavailable
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
+	if err := bindTenant(ctx, tx, request.Tenant); err != nil {
+		return RetentionCollectionReceipt{}, runtimestate.ErrUnavailable
+	}
 	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, string(request.Tenant)); err != nil {
 		return RetentionCollectionReceipt{}, runtimestate.ErrUnavailable
 	}
@@ -96,6 +99,11 @@ func (store *RuntimeStateStore) CollectExpiredAndContent(ctx context.Context, au
 		return result, runtimestate.ErrIntegrity
 	}
 	if _, err := tx.Exec(ctx, `UPDATE runtime.runtime_state_snapshots SET generation = generation + 1, state = $2::jsonb, updated_at = now() WHERE tenant_id = $1`, string(request.Tenant), encoded); err != nil {
+		return result, runtimestate.ErrUnavailable
+	}
+	if _, err := tx.Exec(ctx, `UPDATE runtime.tenant_retention_jobs
+		SET last_collection_at = $2, last_authorization_id = $3, next_collection_at = $2 + interval '24 hours'
+		WHERE tenant_id = $1`, string(request.Tenant), request.EvaluatedAt.UTC(), request.AuthorizationID); err != nil {
 		return result, runtimestate.ErrUnavailable
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -214,6 +222,9 @@ func (store *RuntimeStateStore) EraseTenantAndContent(ctx context.Context, autho
 		return CoordinatedErasureReceipt{}, runtimestate.ErrUnavailable
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
+	if err := bindTenant(ctx, tx, request.Tenant); err != nil {
+		return CoordinatedErasureReceipt{}, runtimestate.ErrUnavailable
+	}
 	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, string(request.Tenant)); err != nil {
 		return CoordinatedErasureReceipt{}, runtimestate.ErrUnavailable
 	}
@@ -289,6 +300,9 @@ func (store *RuntimeStateStore) EraseTenant(ctx context.Context, authorizer Life
 		return runtimestate.ErrUnavailable
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
+	if err := bindTenant(ctx, tx, request.Tenant); err != nil {
+		return runtimestate.ErrUnavailable
+	}
 	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, string(request.Tenant)); err != nil {
 		return runtimestate.ErrUnavailable
 	}

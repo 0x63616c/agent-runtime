@@ -130,8 +130,8 @@ func TestPublisherDerivesTemporalRoutesOnlyFromClaimedDurableOutbox(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	if effects := decisionPlan.Effects(); len(effects.Events) != 1 || effects.Events[0].Kind != agentruntime.EventApprovalResolved || len(effects.Outbox) != 1 {
-		t.Fatalf("approval decision effects = %#v, want one durable safe approval route", effects)
+	if effects := decisionPlan.Effects(); len(effects.Events) != 1 || effects.Events[0].Kind != agentruntime.EventApprovalResolved || len(effects.Outbox) != 4 || len(effects.Audit) != 4 {
+		t.Fatalf("approval decision effects = %#v, want one semantic route plus durable audit lifecycle routes", effects)
 	}
 	state = decisionPlan.State()
 	begin, err := compiler.CompileBeginInvocationAttempt(runtimestate.BeginInvocationAttemptCommand{

@@ -641,7 +641,7 @@ func (planner *RuntimeStatePlanner) approvalEffects(state *RuntimeState, binding
 		return EffectSet{}, ErrNotFoundOrDenied
 	}
 	effects, err := planner.effects(state, binding, state.Sessions[sessionIndex], state.Turns[turnIndex], InvocationRecord{}, []agentruntime.EventKind{agentruntime.EventApprovalResolved}, now)
-	if err != nil || len(effects.Audit) != 1 || len(state.Audit) == 0 {
+	if err != nil || len(effects.Audit) == 0 || len(state.Audit) == 0 {
 		return effects, err
 	}
 	kind := "approval." + approval.State
@@ -908,6 +908,12 @@ func (planner *RuntimeStatePlanner) claim(state *RuntimeState, binding ReceiptBi
 	}
 	record.State, record.ClaimedBy, record.ClaimUntil, record.Version = OutboxClaimed, command.Claimer, &command.ClaimUntil, record.Version+1
 	state.Outbox[index] = record
+	// Audit-export routes are already lifecycle facts. Auditing their own claim
+	// would create an unbounded audit-outbox recursion, so they are the one
+	// deliberately terminal bookkeeping exception.
+	if record.Aggregate == "audit_fact" {
+		return PlanResult{Outbox: record}, EffectSet{}, nil
+	}
 	effects, err := planner.auditOnly(state, binding, "outbox.claimed", record.SessionID, record.TurnID, now)
 	return PlanResult{Outbox: record}, effects, err
 }
@@ -922,6 +928,9 @@ func (planner *RuntimeStatePlanner) acknowledge(state *RuntimeState, binding Rec
 	}
 	record.State, record.Version, record.ClaimUntil = OutboxPublished, record.Version+1, nil
 	state.Outbox[index] = record
+	if record.Aggregate == "audit_fact" {
+		return PlanResult{Outbox: record}, EffectSet{}, nil
+	}
 	effects, err := planner.auditOnly(state, binding, "outbox.published", record.SessionID, record.TurnID, now)
 	return PlanResult{Outbox: record}, effects, err
 }
@@ -964,9 +973,11 @@ func (planner *RuntimeStatePlanner) effects(state *RuntimeState, binding Receipt
 	}
 	state.Audit = append(state.Audit, fact)
 	effects.Audit = append(effects.Audit, fact)
-	for index := range effects.Outbox {
-		effects.Outbox[index].AuditFactID = fact.AuditFactID
-		state.Outbox[len(state.Outbox)-len(effects.Outbox)+index].AuditFactID = fact.AuditFactID
+	// One semantic route carries the compatibility fact. Additional semantic
+	// events must not redeliver it; every phase below has its own audit route.
+	if len(effects.Outbox) > 0 {
+		effects.Outbox[0].AuditFactID = fact.AuditFactID
+		state.Outbox[len(state.Outbox)-len(effects.Outbox)].AuditFactID = fact.AuditFactID
 	}
 	if len(kinds) == 0 {
 		outbox, err := planner.outbox(session, turn, invocation, agentruntime.EventID(""), "", 0, now, planner.retain(now, DataClassOutbox))
@@ -977,6 +988,9 @@ func (planner *RuntimeStatePlanner) effects(state *RuntimeState, binding Receipt
 		state.Outbox = append(state.Outbox, outbox)
 		effects.Outbox = append(effects.Outbox, outbox)
 	}
+	if err := planner.appendAuditLifecycle(state, &effects, binding, session.SessionID, turn.TurnID, now); err != nil {
+		return EffectSet{}, err
+	}
 	return effects, nil
 }
 func (planner *RuntimeStatePlanner) auditOnly(state *RuntimeState, binding ReceiptBinding, kind string, sessionID agentruntime.SessionID, turnID agentruntime.TurnID, now time.Time) (EffectSet, error) {
@@ -986,19 +1000,55 @@ func (planner *RuntimeStatePlanner) auditOnly(state *RuntimeState, binding Recei
 	}
 	state.Audit = append(state.Audit, fact)
 	effects := EffectSet{Audit: []AuditFactRecord{fact}}
-	// Claim and acknowledgement facts describe this publisher's own durable
-	// export bookkeeping. Routing them again would create an infinite audit
-	// outbox chain; they remain locally append-only and queryable instead.
-	if binding.Scope.Authority == AuthorityOutboxPublisher {
-		return effects, nil
-	}
 	outbox, err := planner.auditOutbox(fact, now, planner.retain(now, DataClassOutbox))
 	if err != nil {
 		return EffectSet{}, err
 	}
 	state.Outbox = append(state.Outbox, outbox)
 	effects.Outbox = append(effects.Outbox, outbox)
+	if err := planner.appendAuditLifecycle(state, &effects, binding, sessionID, turnID, now); err != nil {
+		return EffectSet{}, err
+	}
 	return effects, nil
+}
+
+// appendAuditLifecycle persists the redacted audit phases alongside a mutation
+// and gives every phase an independent durable-export route. Compilation has
+// already sealed authorization when this runs; all facts become visible only
+// with the same committed state replacement. Terminal and reconciliation
+// phases are emitted only for the closed mutation vocabulary that owns them.
+func (planner *RuntimeStatePlanner) appendAuditLifecycle(state *RuntimeState, effects *EffectSet, binding ReceiptBinding, sessionID agentruntime.SessionID, turnID agentruntime.TurnID, now time.Time) error {
+	if effects == nil {
+		return ErrIntegrity
+	}
+	for _, kind := range auditLifecycleKinds(binding.Command) {
+		fact, err := planner.factKind(binding, kind, sessionID, turnID, now, planner.retain(now, DataClassAudit))
+		if err != nil {
+			return err
+		}
+		state.Audit = append(state.Audit, fact)
+		effects.Audit = append(effects.Audit, fact)
+		outbox, err := planner.auditOutbox(fact, now, planner.retain(now, DataClassOutbox))
+		if err != nil {
+			return err
+		}
+		state.Outbox = append(state.Outbox, outbox)
+		effects.Outbox = append(effects.Outbox, outbox)
+	}
+	return nil
+}
+
+func auditLifecycleKinds(command CommandKind) []string {
+	prefix := string(command)
+	kinds := []string{prefix + ".attempted", prefix + ".authorized", prefix + ".committed"}
+	switch command {
+	case CommandRecordToolOutcome, CommandRecordOutcome, CommandSettleTurn, CommandCancelTurn, CommandCloseSession:
+		return append(kinds, prefix+".terminal")
+	case CommandClaimOutbox, CommandAcknowledgeOutbox:
+		return append(kinds, prefix+".reconciled")
+	default:
+		return kinds
+	}
 }
 func (planner *RuntimeStatePlanner) event(state *RuntimeState, session SessionRecord, turn TurnRecord, invocation InvocationRecord, binding ReceiptBinding, kind agentruntime.EventKind, now, until time.Time) (ProductEventRecord, error) {
 	sequence := uint64(1)

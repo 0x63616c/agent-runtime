@@ -127,21 +127,29 @@ Before a production rollout, the platform operator must define and test:
   drill must restore into an isolated target, select a documented recovery
   point from the platform-managed WAL archive, verify tenant isolation and the
   exact recovered durable row set, then destroy only that isolated target. The
-  checked-in Stack does not declare a WAL archive, recovery target, or native
-  partition maintenance job, so this remains an explicit external
-  production-run evidence blocker rather than an implied capability. The upgrade uses a transaction
+  checked-in Stack does not declare a WAL archive or recovery target, so this
+  remains an explicit external production-run evidence blocker rather than an
+  implied capability. The upgrade uses a transaction
   advisory lock plus migration fingerprint and physical-schema checks, then
   declares normalized tenant, Agent revision, Session,
   content-reference Input, Turn, Product-event, audit, and outbox tables. It
   intentionally contains no raw prompt or event-body columns; the blob
-  authority owns content bytes. The runtime v3 forward-only migration follows
-  and raises only the bounded immutable Input-reference metadata size limit. A
+  authority owns content bytes. The v4 and v5 forward-only artifacts are also
+  recorded in every checked-in Stack profile. V5 replaces the active snapshot
+  table with native tenant hash partitions, enables forced tenant RLS, and
+  creates `runtime_state_app`/read-only `runtime_state_operator` capability
+  groups. The migration must run under a database administrator; before a live
+  rollout that administrator grants the API/worker database login only the
+  appropriate group role (never a superuser) and records the tested grant.
+  Runtime transactions bind `runtime.tenant_id` with `SET LOCAL`, while only
+  the outbox scanner uses the separate operator read projection. A
   M5 `agent-runtime-api` accepts an explicit PostgreSQL plus immutable-content
   configuration and composes the complete public lifecycle through that state
   authority; `memory-unsafe` remains an explicitly labelled local-only mode.
   The `orchestration-codec` role publishes only durable outbox routes with
-  lease recovery and no runtime-content credential. This foundation does not
-  yet provide tenant RLS or least-privilege database-role enforcement.
+  lease recovery and no runtime-content credential. The checked-in migration
+  and disposable RLS matrix are not a live production role-grant or retention
+  scheduler run; those operator records remain required.
 - An optional `orchestration-codec.worker.audit_sink` may point only to an
   explicit HTTPS endpoint with a 1–60 second timeout. It exports committed,
   redacted facts through the durable outbox and never turns audit delivery into

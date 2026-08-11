@@ -104,3 +104,17 @@ func TestRuntimeV4MigrationDeclaresPlansOnlyLifecycleMetadata(t *testing.T) {
 		if strings.Contains(statement, prohibited) { t.Errorf("runtime v4 migration must not persist raw content %q", prohibited) }
 	}
 }
+
+func TestRuntimeV5MigrationDeclaresNativeTenantPartitionsAndLeastPrivilegeBoundary(t *testing.T) {
+	contents, err := os.ReadFile(filepath.Join("..", "..", "deploy", "production", "migrations", "runtime-v5.up.sql"))
+	if err != nil { t.Fatalf("read runtime v5 migration: %v", err) }
+	statement := string(contents)
+	for _, required := range []string{
+		"runtime-v5", "PARTITION BY HASH (tenant_id)", "runtime_state_snapshots_p0",
+		"runtime_state_app", "runtime_state_operator", "ENABLE ROW LEVEL SECURITY",
+		"FORCE ROW LEVEL SECURITY", "current_setting('runtime.tenant_id', true)",
+		"tenant_retention_jobs", "runtime_tenant_catalog_isolation", "REVOKE ALL ON SCHEMA runtime FROM PUBLIC",
+	} {
+		if !strings.Contains(statement, required) { t.Errorf("runtime v5 migration missing %q", required) }
+	}
+}

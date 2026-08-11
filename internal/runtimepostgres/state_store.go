@@ -38,7 +38,22 @@ func (store *RuntimeStateStore) LoadRuntimeState(ctx context.Context, scope runt
 	if store == nil || store.pool == nil || scope.Tenant == "" {
 		return runtimestate.RuntimeState{}, runtimestate.ErrNotFoundOrDenied
 	}
-	return store.load(ctx, store.pool, scope.Tenant)
+	tx, err := store.pool.Begin(ctx)
+	if err != nil {
+		return runtimestate.RuntimeState{}, runtimestate.ErrUnavailable
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if err := bindTenant(ctx, tx, scope.Tenant); err != nil {
+		return runtimestate.RuntimeState{}, runtimestate.ErrUnavailable
+	}
+	state, err := store.load(ctx, tx, scope.Tenant)
+	if err != nil {
+		return runtimestate.RuntimeState{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return runtimestate.RuntimeState{}, runtimestate.ErrUnavailable
+	}
+	return state, nil
 }
 
 // PersistTransitionPlan atomically applies a validated planner result when its exact base is current.
@@ -55,6 +70,9 @@ func (store *RuntimeStateStore) PersistTransitionPlan(ctx context.Context, plan 
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 	tenant := plan.Result().Receipt.Scope.Tenant
+	if err := bindTenant(ctx, tx, tenant); err != nil {
+		return runtimestate.ErrUnavailable
+	}
 	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, string(tenant)); err != nil {
 		return runtimestate.ErrUnavailable
 	}
@@ -72,6 +90,10 @@ func (store *RuntimeStateStore) PersistTransitionPlan(ctx context.Context, plan 
 	if _, err := tx.Exec(ctx, `INSERT INTO runtime.tenants (tenant_id, created_at) VALUES ($1, now()) ON CONFLICT (tenant_id) DO NOTHING`, string(tenant)); err != nil {
 		return runtimestate.ErrUnavailable
 	}
+	if _, err := tx.Exec(ctx, `INSERT INTO runtime.tenant_retention_jobs (tenant_id, next_collection_at)
+		VALUES ($1, now() + interval '24 hours') ON CONFLICT (tenant_id) DO NOTHING`, string(tenant)); err != nil {
+		return runtimestate.ErrUnavailable
+	}
 	if _, err := tx.Exec(ctx, `INSERT INTO runtime.runtime_state_snapshots (tenant_id, generation, state, updated_at)
 		VALUES ($1, 1, $2::jsonb, now())
 		ON CONFLICT (tenant_id) DO UPDATE SET generation = runtime.runtime_state_snapshots.generation + 1, state = EXCLUDED.state, updated_at = EXCLUDED.updated_at`, string(tenant), encoded); err != nil {
@@ -81,6 +103,17 @@ func (store *RuntimeStateStore) PersistTransitionPlan(ctx context.Context, plan 
 		return runtimestate.ErrUnavailable
 	}
 	return nil
+}
+
+// bindTenant establishes the only database-side tenant selector. It is local
+// to the transaction so a pooled connection can never carry one tenant into a
+// later caller. Native RLS rejects reads and writes if this is absent.
+func bindTenant(ctx context.Context, tx pgx.Tx, tenant runtimecontent.TenantID) error {
+	if tenant == "" {
+		return errors.New("bind PostgreSQL runtime tenant: tenant is required")
+	}
+	_, err := tx.Exec(ctx, `SELECT set_config('runtime.tenant_id', $1, true)`, string(tenant))
+	return err
 }
 
 type stateLoader interface {
@@ -343,7 +376,18 @@ func (store *RuntimeStateStore) ListOutboxTenants(ctx context.Context) ([]runtim
 	if store == nil || store.pool == nil {
 		return nil, runtimestate.ErrUnavailable
 	}
-	rows, err := store.pool.Query(ctx, `SELECT tenant_id FROM runtime.runtime_state_snapshots ORDER BY tenant_id`)
+	// The publisher scans tenant identifiers but cannot read a snapshot unless
+	// it begins a separate tenant-bound transaction. The operator group has
+	// only this projection; no state mutation grant is made here.
+	tx, err := store.pool.Begin(ctx)
+	if err != nil {
+		return nil, runtimestate.ErrUnavailable
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if _, err := tx.Exec(ctx, `SET LOCAL ROLE runtime_state_operator`); err != nil {
+		return nil, runtimestate.ErrUnavailable
+	}
+	rows, err := tx.Query(ctx, `SELECT tenant_id FROM runtime.runtime_state_snapshots ORDER BY tenant_id`)
 	if err != nil {
 		return nil, runtimestate.ErrUnavailable
 	}
@@ -357,6 +401,9 @@ func (store *RuntimeStateStore) ListOutboxTenants(ctx context.Context) ([]runtim
 		tenants = append(tenants, runtimecontent.TenantID(tenant))
 	}
 	if rows.Err() != nil {
+		return nil, runtimestate.ErrUnavailable
+	}
+	if err := tx.Commit(ctx); err != nil {
 		return nil, runtimestate.ErrUnavailable
 	}
 	return tenants, nil

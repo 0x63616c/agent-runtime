@@ -109,7 +109,7 @@ func TestCompilerCreatesTheOnlyReceiptBoundMutationAndPlannerCreatesRevision(t *
 	if result.Revision.Revision != 1 || result.Revision.Name != "planner" || result.Receipt.RequestDigest != compiled.ReceiptBinding().RequestDigest {
 		t.Fatalf("plan result = %#v, want compiled revision metadata and receipt", result)
 	}
-	if len(plan.State().Revisions) != 1 || len(plan.Effects().Audit) != 1 || len(plan.Effects().Outbox) != 2 || plan.Effects().Outbox[0].AuditFactID != plan.Effects().Audit[0].AuditFactID {
+	if len(plan.State().Revisions) != 1 || len(plan.Effects().Audit) != 4 || len(plan.Effects().Outbox) != 5 || plan.Effects().Outbox[0].AuditFactID != plan.Effects().Audit[0].AuditFactID || !hasLifecyclePhases(plan.Effects(), "register_agent_revision", "attempted", "authorized", "committed") {
 		t.Fatalf("plan failed to atomically derive revision/effects: %#v", plan)
 	}
 	if len(plan.BaseState().Revisions) != 0 {
@@ -418,7 +418,7 @@ func TestPlannerRegistersWorkerArtifactWithAuthorizationAuditOutboxAndReplay(t *
 		t.Fatalf("plan artifact: %v", err)
 	}
 	result := plan.Result()
-	if result.Artifact.ArtifactID == "" || result.Artifact.Reference.Digest == "" || len(plan.Effects().Audit) != 1 || len(plan.Effects().Outbox) != 2 || plan.Effects().Outbox[0].AuditFactID != plan.Effects().Audit[0].AuditFactID {
+	if result.Artifact.ArtifactID == "" || result.Artifact.Reference.Digest == "" || len(plan.Effects().Audit) != 4 || len(plan.Effects().Outbox) != 5 || plan.Effects().Outbox[0].AuditFactID != plan.Effects().Audit[0].AuditFactID || !hasLifecyclePhases(plan.Effects(), "register_artifact", "attempted", "authorized", "committed") {
 		t.Fatalf("artifact plan = %#v / %#v, want metadata plus audit/outbox", result, plan.Effects())
 	}
 	replay, err := planner.Plan(context.Background(), plan.State(), command)
@@ -463,7 +463,7 @@ func TestPlannerAppendsConversationOnlyAtExpectedVersionAndReplaysIdempotently(t
 	if err != nil {
 		t.Fatalf("plan conversation: %v", err)
 	}
-	if result := plan.Result(); result.Conversation.Version != 1 || len(plan.Effects().Audit) != 1 || len(plan.Effects().Outbox) != 2 || plan.Effects().Outbox[0].AuditFactID != plan.Effects().Audit[0].AuditFactID {
+	if result := plan.Result(); result.Conversation.Version != 1 || len(plan.Effects().Audit) != 4 || len(plan.Effects().Outbox) != 5 || plan.Effects().Outbox[0].AuditFactID != plan.Effects().Audit[0].AuditFactID || !hasLifecyclePhases(plan.Effects(), "append_conversation", "attempted", "authorized", "committed") {
 		t.Fatalf("conversation plan = %#v / %#v", result, plan.Effects())
 	}
 	if replay, err := planner.Plan(context.Background(), plan.State(), command); err != nil || replay.Result().Conversation != plan.Result().Conversation {
@@ -516,7 +516,7 @@ func TestPlannerPersistsToolIntentBeforeApprovalDecision(t *testing.T) {
 		t.Fatal(err)
 	}
 	plan, err = planner.Plan(context.Background(), plan.State(), decision)
-	if err != nil || plan.State().Approvals[0].State != "approved" || len(plan.Effects().Audit) != 1 || len(plan.Effects().Events) != 1 || plan.Effects().Events[0].Kind != agentruntime.EventApprovalResolved || len(plan.Effects().Outbox) != 1 {
+	if err != nil || plan.State().Approvals[0].State != "approved" || len(plan.Effects().Audit) != 4 || len(plan.Effects().Events) != 1 || plan.Effects().Events[0].Kind != agentruntime.EventApprovalResolved || len(plan.Effects().Outbox) != 4 || !hasLifecyclePhases(plan.Effects(), "decide_approval", "attempted", "authorized", "committed") {
 		t.Fatalf("decision=%v %#v", err, plan.State().Approvals)
 	}
 	if len(plan.State().Grants) != 1 {
@@ -547,7 +547,7 @@ func TestPlannerConsumesApprovedCapabilityOnlyWithinItsPolicyAndExpiry(t *testin
 		t.Fatal(err)
 	}
 	plan, err := planner.Plan(context.Background(), state, consume)
-	if err != nil || plan.State().Grants[0].Uses != 1 || len(plan.Effects().Audit) != 1 {
+	if err != nil || plan.State().Grants[0].Uses != 1 || len(plan.Effects().Audit) != 4 || !hasLifecyclePhases(plan.Effects(), "consume_capability_grant", "attempted", "authorized", "committed") {
 		t.Fatalf("consume approved capability = %#v, %v", plan.State().Grants, err)
 	}
 	begin, err := compiler.CompileBeginToolExecution(runtimestate.BeginToolExecutionCommand{Scope: workerScope(tenant, principal), IdempotencyKey: "begin-tool", SessionID: session, TurnID: turn, ToolCallID: "tcall_1234567890ABCDEF", GrantID: "grant_1234567890ABCDE", OperationID: "tool-operation-1"})
@@ -555,7 +555,7 @@ func TestPlannerConsumesApprovedCapabilityOnlyWithinItsPolicyAndExpiry(t *testin
 		t.Fatal(err)
 	}
 	toolPlan, err := planner.Plan(context.Background(), plan.State(), begin)
-	if err != nil || len(toolPlan.State().ToolExecutions) != 1 || toolPlan.State().ToolExecutions[0].State != runtimestate.ToolExecutionIntent || len(toolPlan.Effects().Outbox) != 2 || toolPlan.Effects().Outbox[0].AuditFactID != toolPlan.Effects().Audit[0].AuditFactID || toolPlan.Effects().Outbox[1].ToolCallID != "tcall_1234567890ABCDEF" {
+	if err != nil || len(toolPlan.State().ToolExecutions) != 1 || toolPlan.State().ToolExecutions[0].State != runtimestate.ToolExecutionIntent || len(toolPlan.Effects().Outbox) != 5 || toolPlan.Effects().Outbox[0].AuditFactID != toolPlan.Effects().Audit[0].AuditFactID || toolPlan.Effects().Outbox[4].ToolCallID != "tcall_1234567890ABCDEF" || !hasLifecyclePhases(toolPlan.Effects(), "begin_tool_execution", "attempted", "authorized", "committed") {
 		t.Fatalf("tool execution intent = %#v / %#v, %v", toolPlan.State().ToolExecutions, toolPlan.Effects(), err)
 	}
 	if _, err := planner.Plan(context.Background(), plan.State(), consume); err != nil {
@@ -597,6 +597,34 @@ func TestCompilerRejectsForgedScopeAndCompilesOnlyStateScopedContentReaders(t *t
 	if session, input := inputReader.Input(); session != validSessionID(t) || input != inputID {
 		t.Fatalf("Input reader target = %s/%s", session, input)
 	}
+}
+
+func hasLifecyclePhases(effects runtimestate.EffectSet, command string, phases ...string) bool {
+	seen := map[string]bool{}
+	for _, fact := range effects.Audit {
+		seen[fact.Kind] = true
+	}
+	for _, phase := range phases {
+		if !seen[command+"."+phase] {
+			return false
+		}
+	}
+	for _, route := range effects.Outbox {
+		if route.Aggregate != "audit_fact" || route.AuditFactID == "" {
+			continue
+		}
+		for _, fact := range effects.Audit {
+			if fact.AuditFactID == route.AuditFactID {
+				seen["route:"+fact.Kind] = true
+			}
+		}
+	}
+	for _, phase := range phases {
+		if !seen["route:"+command+"."+phase] {
+			return false
+		}
+	}
+	return true
 }
 
 type fixedPlannerClock struct{ now time.Time }

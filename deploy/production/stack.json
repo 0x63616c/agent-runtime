@@ -2425,6 +2425,20 @@
                 "rollback_digest": "sha256:762c88efc5d85fdb44b756ec35fa4a03b13409b5cf9710804c4b4d436e5fe245",
                 "upgrade_artifact": "migrations/runtime-v3.up.sql",
                 "rollback_artifact": "migrations/runtime-v3.down.sql"
+              },
+              {
+                "version": 4,
+                "upgrade_digest": "sha256:2226a68ebbffa6acdaa27db48d7266e604a8442ad2f4a6dd8a3e77a10f14e09b",
+                "rollback_digest": "sha256:21bb137ebc668170c9345120c9e0560976d2409f1b29a2723b2530280f419c41",
+                "upgrade_artifact": "migrations/runtime-v4.up.sql",
+                "rollback_artifact": "migrations/runtime-v4.down.sql"
+              },
+              {
+                "version": 5,
+                "upgrade_digest": "sha256:5e240499ad8cb6cab979920d68f87579d01cf05f37216689e12561db6d07d843",
+                "rollback_digest": "sha256:213650fd200459cf2ac0e4d77903498668fa263afb82e6e32eb74b90c52f706d",
+                "upgrade_artifact": "migrations/runtime-v5.up.sql",
+                "rollback_artifact": "migrations/runtime-v5.down.sql"
               }
             ]
           }
@@ -5285,6 +5299,20 @@
                 "rollback_digest": "sha256:762c88efc5d85fdb44b756ec35fa4a03b13409b5cf9710804c4b4d436e5fe245",
                 "upgrade_artifact": "migrations/runtime-v3.up.sql",
                 "rollback_artifact": "migrations/runtime-v3.down.sql"
+              },
+              {
+                "version": 4,
+                "upgrade_digest": "sha256:2226a68ebbffa6acdaa27db48d7266e604a8442ad2f4a6dd8a3e77a10f14e09b",
+                "rollback_digest": "sha256:21bb137ebc668170c9345120c9e0560976d2409f1b29a2723b2530280f419c41",
+                "upgrade_artifact": "migrations/runtime-v4.up.sql",
+                "rollback_artifact": "migrations/runtime-v4.down.sql"
+              },
+              {
+                "version": 5,
+                "upgrade_digest": "sha256:5e240499ad8cb6cab979920d68f87579d01cf05f37216689e12561db6d07d843",
+                "rollback_digest": "sha256:213650fd200459cf2ac0e4d77903498668fa263afb82e6e32eb74b90c52f706d",
+                "upgrade_artifact": "migrations/runtime-v5.up.sql",
+                "rollback_artifact": "migrations/runtime-v5.down.sql"
               }
             ]
           }
@@ -8145,6 +8173,20 @@
                 "rollback_digest": "sha256:762c88efc5d85fdb44b756ec35fa4a03b13409b5cf9710804c4b4d436e5fe245",
                 "upgrade_artifact": "migrations/runtime-v3.up.sql",
                 "rollback_artifact": "migrations/runtime-v3.down.sql"
+              },
+              {
+                "version": 4,
+                "upgrade_digest": "sha256:2226a68ebbffa6acdaa27db48d7266e604a8442ad2f4a6dd8a3e77a10f14e09b",
+                "rollback_digest": "sha256:21bb137ebc668170c9345120c9e0560976d2409f1b29a2723b2530280f419c41",
+                "upgrade_artifact": "migrations/runtime-v4.up.sql",
+                "rollback_artifact": "migrations/runtime-v4.down.sql"
+              },
+              {
+                "version": 5,
+                "upgrade_digest": "sha256:5e240499ad8cb6cab979920d68f87579d01cf05f37216689e12561db6d07d843",
+                "rollback_digest": "sha256:213650fd200459cf2ac0e4d77903498668fa263afb82e6e32eb74b90c52f706d",
+                "upgrade_artifact": "migrations/runtime-v5.up.sql",
+                "rollback_artifact": "migrations/runtime-v5.down.sql"
               }
             ]
           }

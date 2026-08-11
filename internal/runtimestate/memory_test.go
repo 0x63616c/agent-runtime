@@ -51,7 +51,7 @@ func TestMemoryRuntimeStateStoreAtomicallyAppliesASealedPlanAndRejectsAStalePlan
 	if err != nil {
 		t.Fatalf("load after persist: %v", err)
 	}
-	if len(loaded.Revisions) != 1 || len(loaded.Receipts) != 1 || len(loaded.Outbox) != 2 || loaded.Outbox[0].AuditFactID != loaded.Audit[0].AuditFactID {
+	if len(loaded.Revisions) != 1 || len(loaded.Receipts) != 1 || len(loaded.Audit) != 4 || len(loaded.Outbox) != 5 || loaded.Outbox[0].AuditFactID != loaded.Audit[0].AuditFactID {
 		t.Fatalf("persisted state = %#v, want full atomic plan", loaded)
 	}
 }
