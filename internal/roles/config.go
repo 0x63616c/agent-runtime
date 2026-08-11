@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/url"
 	"regexp"
 	"slices"
 	"sort"
@@ -30,6 +31,8 @@ const (
 	RoleAPI Role = "api"
 	// RoleOrchestration coordinates state and Temporal work without model or tool credentials.
 	RoleOrchestration Role = "orchestration"
+	// RoleOrchestrationCodec runs private Session workflows with a payload-codec-only blob capability.
+	RoleOrchestrationCodec Role = "orchestration-codec"
 	// RoleModel invokes a configured model with only model and conversation authority.
 	RoleModel Role = "model"
 	// RoleTool executes policy-authorized tools with narrow tool and sandbox authority.
@@ -67,6 +70,7 @@ type Config struct {
 	namespace     string
 	listenAddress string
 	dependencies  []dependency
+	worker        *WorkerConfig
 }
 
 // Role returns the one trust boundary selected by this Config.
@@ -77,6 +81,51 @@ func (config Config) Namespace() string { return config.namespace }
 
 // ListenAddress returns the explicit health endpoint bind address.
 func (config Config) ListenAddress() string { return config.listenAddress }
+
+// Worker returns the private orchestration worker declaration when the role is codec-enabled.
+func (config Config) Worker() *WorkerConfig {
+	if config.worker == nil {
+		return nil
+	}
+	clone := *config.worker
+	if config.worker.AuditSink != nil {
+		sink := *config.worker.AuditSink
+		clone.AuditSink = &sink
+	}
+	return &clone
+}
+
+// DependencyEndpoint returns one already-validated, non-secret endpoint for
+// private composition. It deliberately does not reveal secret values.
+func (config Config) DependencyEndpoint(name string) (string, bool) {
+	for _, dependency := range config.dependencies {
+		if dependency.name == name {
+			return dependency.endpoint, true
+		}
+	}
+	return "", false
+}
+
+// WorkerConfig declares the non-secret payload-codec capability and finite task queue of one private worker.
+type WorkerConfig struct {
+	TaskQueue                   string `json:"task_queue"`
+	PayloadBlobEndpoint         string `json:"payload_blob_endpoint"`
+	PayloadBlobBucket           string `json:"payload_blob_bucket"`
+	PayloadBlobPrefix           string `json:"payload_blob_prefix"`
+	PayloadAccessKeyEnvironment string `json:"payload_access_key_environment"`
+	PayloadSecretKeyEnvironment string `json:"payload_secret_key_environment"`
+	// AuditSink is an optional operator-owned HTTPS delivery endpoint for
+	// already-committed audit facts. Leaving it absent preserves the base
+	// worker's no-mandatory-external-sink behavior.
+	AuditSink *AuditSinkConfig `json:"audit_sink,omitempty"`
+}
+
+// AuditSinkConfig declares one bounded HTTPS audit-delivery capability. It
+// contains no credentials; transport authorization is operator-owned.
+type AuditSinkConfig struct {
+	Endpoint       string `json:"endpoint"`
+	TimeoutSeconds int    `json:"timeout_seconds"`
+}
 
 // Dependency describes one role-visible operator endpoint and optional secret environment reference.
 type Dependency struct {
@@ -89,11 +138,12 @@ type Dependency struct {
 }
 
 type document struct {
-	Version       int          `json:"version"`
-	Role          Role         `json:"role"`
-	Namespace     string       `json:"namespace"`
-	ListenAddress string       `json:"listen_address"`
-	Dependencies  []Dependency `json:"dependencies"`
+	Version       int           `json:"version"`
+	Role          Role          `json:"role"`
+	Namespace     string        `json:"namespace"`
+	ListenAddress string        `json:"listen_address"`
+	Dependencies  []Dependency  `json:"dependencies"`
+	Worker        *WorkerConfig `json:"worker,omitempty"`
 }
 
 type dependency struct {
@@ -113,6 +163,9 @@ var roleRequirements = map[Role][]requirement{
 	},
 	RoleOrchestration: {
 		{name: "state", secretEnvironment: "STATE_DATABASE_DSN"}, {name: "telemetry"}, {name: "temporal", secretEnvironment: "TEMPORAL_AUTH_TOKEN"},
+	},
+	RoleOrchestrationCodec: {
+		{name: "state", secretEnvironment: "STATE_DATABASE_DSN"}, {name: "telemetry"}, {name: "temporal", secretEnvironment: "TEMPORAL_AUTH_TOKEN"}, {name: "payload-blob", secretEnvironment: "ORCHESTRATION_PAYLOAD_BLOB_ACCESS_KEY"}, {name: "payload-blob-secret", secretEnvironment: "ORCHESTRATION_PAYLOAD_BLOB_SECRET_KEY"},
 	},
 	RoleModel: {
 		{name: "conversation", secretEnvironment: "CONVERSATION_ACCESS_TOKEN"}, {name: "egress-proxy"}, {name: "model", secretEnvironment: "MODEL_API_KEY"}, {name: "telemetry"},
@@ -190,7 +243,39 @@ func Parse(input io.Reader) (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
-	return Config{role: decoded.Role, namespace: decoded.Namespace, listenAddress: decoded.ListenAddress, dependencies: dependencies}, nil
+	if err := validateWorker(decoded.Role, decoded.Worker); err != nil {
+		return Config{}, err
+	}
+	return Config{role: decoded.Role, namespace: decoded.Namespace, listenAddress: decoded.ListenAddress, dependencies: dependencies, worker: decoded.Worker}, nil
+}
+
+func validateWorker(role Role, worker *WorkerConfig) error {
+	if role != RoleOrchestrationCodec {
+		if worker != nil {
+			return errors.New("validate runtime role configuration: worker is only allowed for orchestration-codec")
+		}
+		return nil
+	}
+	if worker == nil || !validWorkerSegment(worker.TaskQueue) || !validEndpoint(worker.PayloadBlobEndpoint) || !validWorkerSegment(worker.PayloadBlobBucket) || !validWorkerPrefix(worker.PayloadBlobPrefix) || worker.PayloadAccessKeyEnvironment != "ORCHESTRATION_PAYLOAD_BLOB_ACCESS_KEY" || worker.PayloadSecretKeyEnvironment != "ORCHESTRATION_PAYLOAD_BLOB_SECRET_KEY" || !validAuditSink(worker.AuditSink) {
+		return errors.New("validate runtime role configuration: orchestration-codec worker capability is incomplete")
+	}
+	return nil
+}
+
+func validAuditSink(sink *AuditSinkConfig) bool {
+	if sink == nil {
+		return true
+	}
+	endpoint, err := url.Parse(sink.Endpoint)
+	return err == nil && endpoint.Scheme == "https" && endpoint.Host != "" && endpoint.User == nil && endpoint.RawQuery == "" && !endpoint.ForceQuery && endpoint.Fragment == "" && sink.TimeoutSeconds >= 1 && sink.TimeoutSeconds <= 60
+}
+
+func validWorkerSegment(value string) bool {
+	return value != "" && len(value) <= 128 && strings.TrimSpace(value) == value && !strings.ContainsAny(value, "/\\\n\r\t")
+}
+
+func validWorkerPrefix(value string) bool {
+	return validWorkerSegment(value) && !strings.Contains(value, "..")
 }
 
 func requireEnd(decoder *json.Decoder) error {

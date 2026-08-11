@@ -12,5 +12,8 @@ clean external-consumer check once public packages exist, and include the
 change in release notes. Deprecations remain supported for a documented
 window; removals require the next allowed semantic-version boundary. The
 `sdk/go` contract and `temporalpayload` package both have clean
-external-consumer compile tests. No stable release has been cut yet, so those
-tests prove module independence rather than a semver compatibility guarantee.
+external-consumer compile tests. The SDK test uses a temporary consumer module,
+sets `GOWORK=off`, and typechecks retained and additive public capability
+interfaces against the candidate root module. No stable release has been cut
+yet, so those tests prove module independence rather than a semver
+compatibility guarantee.

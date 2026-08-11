@@ -12,14 +12,12 @@ import (
 	agentruntime "github.com/0x63616c/agent-runtime/sdk/go"
 )
 
-func TestRuntimeStateStoreDefinesTheCompleteInitialLifecycle(t *testing.T) {
+func TestRuntimeStateStorePersistsOnlyCompilerPlannerOutput(t *testing.T) {
 	store := reflect.TypeOf((*runtimestate.RuntimeStateStore)(nil)).Elem()
 	for _, name := range []string{
-		"RegisterAgentRevision", "CreateSession", "AdmitInput",
-		"BeginInvocationAttempt", "RecordInvocationOutcome", "SettleTurn",
-		"CancelTurn", "CloseSession", "GetAgentRevision", "GetSessionView",
+		"LoadRuntimeState", "PersistTransitionPlan", "GetAgentRevision", "GetSessionView",
 		"GetTurn", "GetInvocation", "ReadEvents", "GetMutationReceipt", "ReadAudit",
-		"ReadOutbox", "ClaimOutbox", "AcknowledgeOutbox",
+		"ReadOutbox", "AuthorizeAgentSpecificationBodyRead", "AuthorizeInputEnvelopeRead",
 	} {
 		if _, ok := store.MethodByName(name); !ok {
 			t.Fatalf("RuntimeStateStore missing %s", name)
@@ -44,24 +42,16 @@ func TestOutboxRecoveryCarriesTheExactFencedInvocationRoute(t *testing.T) {
 	}
 }
 
-func TestOutboxMutationsCarryReplaySafeMutationReceipts(t *testing.T) {
-	type command interface {
-		CommandScope() runtimestate.MutationScope
-		CanonicalRequestDigest() runtimestate.RequestDigest
-	}
-	for _, mutation := range []command{runtimestate.ClaimOutboxCommand{}, runtimestate.AcknowledgeOutboxCommand{}} {
-		if mutation.CommandScope() != (runtimestate.MutationScope{}) || mutation.CanonicalRequestDigest() != "" {
-			t.Fatalf("zero outbox mutation unexpectedly carries replay identity: %#v", mutation)
+func TestOutboxMutationsDoNotExposeCallerForgedRequestDigests(t *testing.T) {
+	for _, command := range []reflect.Type{reflect.TypeOf(runtimestate.ClaimOutboxCommand{}), reflect.TypeOf(runtimestate.AcknowledgeOutboxCommand{})} {
+		if _, found := command.FieldByName("RequestDigest"); found {
+			t.Fatalf("%s exposes a caller-forgeable request digest", command)
 		}
 	}
 	store := reflect.TypeOf((*runtimestate.RuntimeStateStore)(nil)).Elem()
 	for _, methodName := range []string{"ClaimOutbox", "AcknowledgeOutbox"} {
-		method, ok := store.MethodByName(methodName)
-		if !ok || method.Type.Out(0).Kind() != reflect.Struct {
-			t.Fatalf("%s result = %v, want result with receipt", methodName, method.Type)
-		}
-		if _, ok := method.Type.Out(0).FieldByName("Receipt"); !ok {
-			t.Fatalf("%s result lacks idempotency receipt", methodName)
+		if _, ok := store.MethodByName(methodName); ok {
+			t.Fatalf("%s lets an adapter accept a raw command", methodName)
 		}
 	}
 }
@@ -170,20 +160,22 @@ func TestEveryMutationCommandOffersOwnedNormalization(t *testing.T) {
 	}
 }
 
-func TestScopeAndRequestDigestAreExplicitOnEveryMutation(t *testing.T) {
-	type command interface {
-		CommandScope() runtimestate.MutationScope
-		CanonicalRequestDigest() runtimestate.RequestDigest
-	}
-	commands := []command{
-		runtimestate.RegisterAgentRevisionCommand{}, runtimestate.CreateSessionCommand{},
-		runtimestate.AdmitInputCommand{}, runtimestate.BeginInvocationAttemptCommand{},
-		runtimestate.RecordInvocationOutcomeCommand{}, runtimestate.SettleTurnCommand{},
-		runtimestate.CancelTurnCommand{}, runtimestate.CloseSessionCommand{},
-	}
-	for _, mutation := range commands {
-		if mutation.CommandScope().Tenant != "" || mutation.CanonicalRequestDigest() != "" {
-			t.Fatalf("zero mutation unexpectedly carries scope/digest: %#v", mutation)
+func TestScopeAndIdempotencyKeyAreExplicitButReceiptDigestIsCompilerOnly(t *testing.T) {
+	for _, command := range []reflect.Type{
+		reflect.TypeOf(runtimestate.RegisterAgentRevisionCommand{}), reflect.TypeOf(runtimestate.CreateSessionCommand{}),
+		reflect.TypeOf(runtimestate.AdmitInputCommand{}), reflect.TypeOf(runtimestate.BeginInvocationAttemptCommand{}),
+		reflect.TypeOf(runtimestate.RecordInvocationOutcomeCommand{}), reflect.TypeOf(runtimestate.SettleTurnCommand{}),
+		reflect.TypeOf(runtimestate.CancelTurnCommand{}), reflect.TypeOf(runtimestate.CloseSessionCommand{}),
+		reflect.TypeOf(runtimestate.ClaimOutboxCommand{}), reflect.TypeOf(runtimestate.AcknowledgeOutboxCommand{}),
+	} {
+		if _, found := command.FieldByName("Scope"); !found {
+			t.Fatalf("%s lacks authenticated scope", command)
+		}
+		if _, found := command.FieldByName("IdempotencyKey"); !found {
+			t.Fatalf("%s lacks idempotency key", command)
+		}
+		if _, found := command.FieldByName("RequestDigest"); found {
+			t.Fatalf("%s exposes compiler-only receipt digest", command)
 		}
 	}
 }

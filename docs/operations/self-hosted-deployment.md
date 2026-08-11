@@ -1,11 +1,19 @@
 # Self-hosted deployment contract
 
-Status: the v1 declarative role-composition and configuration-validation slice
-is implemented. A signed, digest-pinned production role image is published to
-GHCR. The public agent API, Temporal workflow implementation, and Firecracker
-host-agent implementation remain future milestones. Do not treat a rendered
-reference Stack or published role image as a completed production rollout;
-live Kubernetes/Temporal/blob evidence is retained separately.
+Status: the v1 declarative role-composition and configuration-validation slice,
+M5 state-backed public API process, and private Session Temporal worker are
+implemented. A signed, digest-pinned production role image is published to
+GHCR. Model/tool/approval execution and Firecracker host-agent production
+operation remain later milestones. Do not treat a rendered reference Stack or
+published role image as a completed production rollout; live
+Kubernetes/Temporal/blob evidence is retained separately.
+
+The checked-in Stack's `runtime serve --role api` deployment remains the
+health-only role-composition fixture. The separately runnable
+`agent-runtime-api` has an explicit durable PostgreSQL/content configuration
+and named disposable-dependency integration evidence, but a production API
+credential/configuration rollout is operator work and is not inferred from the
+health-only Stack role.
 
 Agent Runtime is self-hosted as explicit, separately deployable processes. An
 operator applies a reviewed typed Stack with `stackctl`; no runtime binary,
@@ -33,6 +41,7 @@ credentials would destroy the trust boundary.
 | --- | --- | --- | --- |
 | `api` | state, telemetry | none in this early composition slice | Temporal, model, tool, blob, sandbox secrets |
 | `orchestration` | state, telemetry, Temporal | `STATE_DATABASE_DSN`, `TEMPORAL_AUTH_TOKEN` | Model, tool, blob, sandbox-host secrets |
+| `orchestration-codec` | state metadata, telemetry, Temporal, dedicated temporal-payload bucket/prefix and task queue; optional HTTPS audit sink | `STATE_DATABASE_DSN`, `TEMPORAL_AUTH_TOKEN`, `ORCHESTRATION_PAYLOAD_BLOB_ACCESS_KEY`, `ORCHESTRATION_PAYLOAD_BLOB_SECRET_KEY` | Public/API credentials, runtime-content bucket/prefix, model, tool, sandbox-host secrets |
 | `model` | conversation, egress proxy, model, telemetry | `CONVERSATION_ACCESS_TOKEN`, `MODEL_API_KEY` | Temporal, state DB, tool, storage, host secrets |
 | `tool` | sandbox control, telemetry, tool broker | `SANDBOX_CONTROL_TOKEN`, `TOOL_BROKER_TOKEN` | Temporal, model, state DB, blob credentials |
 | `blob` | storage, telemetry | `BLOB_STORAGE_CREDENTIAL` | Temporal, model, tool and sandbox credentials |
@@ -85,10 +94,12 @@ CA material remain external Secret references; they are not proxy arguments.
 Temporal remains a private runtime implementation detail for callers. It is an
 operator dependency with an explicit endpoint, namespace, authentication
 reference, task-queue prefix, history retention, worker role, scaling policy,
-and capacity review in the Stack. The orchestration role is the only runtime
-role that receives Temporal endpoint/authentication configuration. The UI
-codec is only an inspection adapter: it uses the same payload pipeline, but it
-does not become a worker or gain Temporal client credentials.
+and capacity review in the Stack. The generic orchestration and dedicated
+`orchestration-codec` worker roles receive Temporal endpoint/authentication
+configuration. Only `orchestration-codec` has the separate,
+prefix-restricted temporal-payload blob capability required by the local
+worker codec. The UI codec remains an inspection adapter: it does not become
+a worker or gain Temporal client credentials.
 
 The pinned Temporal auto-setup image is explicitly configured with
 `BIND_ON_IP=0.0.0.0`; its entrypoint otherwise derives a pod address that may
@@ -107,20 +118,86 @@ Before a production rollout, the platform operator must define and test:
   Job readiness, and recovery authority. The runtime v2 base migration is
   deliberately forward-only: its declared rollback artifact refuses before any
   destructive action, so recovery requires an operator-approved PostgreSQL
-  backup/PITR procedure rather than automatic schema deletion. No backup/PITR
-  runbook or restore drill has been implemented or retained yet. The upgrade uses a transaction
+  backup/PITR procedure rather than automatic schema deletion. The owned
+  `deploy/runtimeapi/run-durable-integration.sh` harness proves a disposable
+  PostgreSQL backup/restore drill: it backs up a tenant row, removes it from
+  the source, restores into a fresh database, and verifies recovery. This is
+  not a production PITR procedure; the platform operator must retain and
+  authorize the production backup/PITR runbook and its evidence. A production
+  drill must restore into an isolated target, select a documented recovery
+  point from the platform-managed WAL archive, verify tenant isolation and the
+  exact recovered durable row set, then destroy only that isolated target. The
+  checked-in Stack does not declare a WAL archive or recovery target, so this
+  remains an explicit external production-run evidence blocker rather than an
+  implied capability. The upgrade uses a transaction
   advisory lock plus migration fingerprint and physical-schema checks, then
   declares normalized tenant, Agent revision, Session,
   content-reference Input, Turn, Product-event, audit, and outbox tables. It
   intentionally contains no raw prompt or event-body columns; the blob
-  authority owns content bytes. The runtime v3 forward-only migration follows
-  and raises only the bounded immutable Input-reference metadata size limit. A
-  narrow internal first-admission repository
-  seam exists for real PostgreSQL integration tests, but it is not wired to
-  the standalone API, its deterministic in-memory content store is not a blob
-  authorization plane, and its recorded outbox has no publisher or recovery
-  guarantee. The standalone API remains `memory-unsafe`; this foundation does
-  not yet provide tenant RLS or least-privilege database-role enforcement.
+  authority owns content bytes. The v4 and v5 forward-only artifacts are also
+  recorded in every checked-in Stack profile. V5 replaces the active snapshot
+  table with native tenant hash partitions, enables forced tenant RLS, and
+  creates `runtime_state_app`/read-only `runtime_state_operator` capability
+  groups. The migration must run under a database administrator; before a live
+  rollout that administrator grants the API/worker database login only the
+  appropriate group role (never a superuser) and records the tested grant.
+  Runtime transactions bind `runtime.tenant_id` with `SET LOCAL`, while only
+  the outbox scanner uses the separate operator read projection. A
+  M5 `agent-runtime-api` accepts an explicit PostgreSQL plus immutable-content
+  configuration and composes the complete public lifecycle through that state
+  authority; `memory-unsafe` remains an explicitly labelled local-only mode.
+  The `orchestration-codec` role publishes only durable outbox routes with
+  lease recovery and no runtime-content credential. The checked-in migration
+  and disposable RLS matrix are not a live production role-grant or retention
+  scheduler run; those operator records remain required.
+- An optional `orchestration-codec.worker.audit_sink` may point only to an
+  explicit HTTPS endpoint with a 1–60 second timeout. It exports committed,
+  redacted facts through the durable outbox and never turns audit delivery into
+  a transactionally fail-closed runtime mutation. No reference Stack enables
+  it: a platform/security operator must provision the transport identity,
+  sink retention, outage alert, access control, and a live delivery/recovery
+  record before declaring an operational audit sink.
+
+## Protected operations drill
+
+`runtime-operations-drill` is the one deliberately fail-closed path for
+retaining operational evidence that crosses the database/audit/PITR boundary.
+It runs only through the manually dispatched `runtime-operations-drill`
+workflow in the protected `runtime-operations` GitHub Environment. The runner
+must provide the exact `protected-runtime-operations-v1` contract and all
+operator-owned environment capabilities; a local invocation, missing secret,
+missing authorization, unavailable endpoint, or incomplete observation exits
+non-zero and creates no report.
+
+The protected environment supplies two database DSNs: a source authority and
+a separately named, isolated PITR restore target; it also supplies the
+designated retention/PITR tenant, distinct current authorization identifiers,
+the authorized RFC3339 recovery point, and the expected restored snapshot
+generation. The drill verifies the source's `runtime_state_app` and
+`runtime_state_operator` memberships, assumes each narrow role, verifies an
+actual authorized completed retention collection plus a later next-collection
+schedule, and checks the four native snapshot partitions. A future schedule
+without a completed collection is not retention-execution evidence. It refuses
+unless source WAL
+archiving is active and the source is primary; it then reads only the bound
+tenant's expected generation from the isolated restore target.
+
+The configured audit sink must expose the operator-approved drill protocol:
+an HTTPS `POST` to its configured sink endpoint with
+`X-Agent-Runtime-Drill-Mode: outage` returns a 5xx response, the same redacted
+request with `recovery` returns 2xx, and the separate HTTPS retention endpoint
+returns exactly
+`{"schema_version":"agent-runtime.audit-sink-retention/v1","retention_seconds":positive}`.
+Those requests prove only an operator-enabled outage/recovery/retention drill;
+they do not turn ordinary delivery into fail-closed behavior.
+
+Only after every check passes does the command write a new, mode-`0600`, strict
+`agent-runtime.operations-evidence/v1` JSON artifact. The artifact is then
+parsed again before GitHub uploads it for 90 days. It records bounded statuses,
+partition count, retention outcome, recovery point, restored generation, and
+revision—but never a DSN, endpoint, tenant ID, credential, or authorization
+identifier. A retained successful artifact is evidence of that exact protected
+run, not a perpetual production guarantee.
 - Blob bucket/prefix lifecycle, retention, backup/restore, encryption and
   credential rotation.
 - Codec ingress hosts and CORS origins. Routing hosts are Stack Ingress rules;
@@ -152,9 +229,11 @@ go run ./cmd/runtime serve --config-env RUNTIME_ROLE_CONFIG \
 
 The command verifies strict schema, the role allowlist, endpoint shape,
 namespace, and presence of only the declared credentials. It makes no
-infrastructure mutation. Running without `--check` serves only role health and
-readiness in this early composition slice; it does not claim that the future
-agent API, workers, or sandbox implementation have started.
+infrastructure mutation. Without `--check`, `orchestration-codec` starts the
+M5 private worker after startup codec compatibility succeeds; other roles in
+this slice serve health and readiness only. Its S3 policy must be separately
+restricted to the declared temporal-payload bucket/prefix and must not include
+runtime-content.
 
 `deploy/production/stack.json` is the checked-in typed reference Stack. Its
 role/Secret/replica/ingress/NetworkPolicy/migration topology is parsed and

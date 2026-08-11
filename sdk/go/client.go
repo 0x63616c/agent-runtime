@@ -3,8 +3,11 @@ package agentruntime
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"hash"
 	"io"
 	"mime"
 	"net"
@@ -27,6 +30,20 @@ type RuntimeClient interface {
 	ReviseAgent(context.Context, ReviseAgentRequest) (AgentSpecification, error)
 	// GetAgentRevision reads one immutable Agent revision through the admin surface.
 	GetAgentRevision(context.Context, AgentID, AgentRevisionID) (AgentSpecification, error)
+	// CreatePolicy creates the first immutable revision of a tenant Policy.
+	CreatePolicy(context.Context, CreatePolicyRequest) (Policy, error)
+	// RevisePolicy creates the next immutable revision of a tenant Policy.
+	RevisePolicy(context.Context, RevisePolicyRequest) (Policy, error)
+	// GetPolicy reads one immutable Policy revision through the admin surface.
+	GetPolicy(context.Context, string, uint64) (Policy, error)
+	// ReadArtifact downloads one caller-authorized immutable artifact.
+	ReadArtifact(context.Context, ArtifactID) (ArtifactDownload, error)
+	// InspectApproval returns the caller-authorized state of one Approval.
+	InspectApproval(context.Context, ApprovalID) (Approval, error)
+	// DecideApproval records one idempotent owner decision for a pending Approval.
+	DecideApproval(context.Context, DecideApprovalRequest) (Approval, error)
+	// IdempotencyStatus reads one retained receipt without re-executing work.
+	IdempotencyStatus(context.Context, string) (IdempotencyStatus, error)
 	// CreateSession creates a principal-owned Session pinned to one Agent revision.
 	CreateSession(context.Context, CreateSessionRequest) (Session, error)
 	// SendInput idempotently admits bounded Input into a Session.
@@ -41,6 +58,20 @@ type RuntimeClient interface {
 	CancelTurn(context.Context, CancelTurnRequest) (Turn, error)
 	// CloseSession closes Input admission and drains accepted work.
 	CloseSession(context.Context, CloseSessionRequest) (Session, error)
+}
+
+// ArtifactStreamer is the additive streaming Artifact capability. It remains
+// separate from RuntimeClient so existing RuntimeClient implementations keep
+// their v1 source compatibility.
+type ArtifactStreamer interface {
+	// OpenArtifact opens a caller-authorized Artifact without buffering it.
+	OpenArtifact(context.Context, ArtifactID) (ArtifactStream, error)
+}
+
+// ToolCallInspector is the additive public capability for owner-scoped Tool-call inspection.
+type ToolCallInspector interface {
+	// InspectToolCalls returns bounded safe Tool intent, approval, grant, and execution projections.
+	InspectToolCalls(context.Context, SessionID, TurnID) (ToolCallPage, error)
 }
 
 // RequestIDSource creates a fresh opaque correlation ID for each HTTP attempt.
@@ -166,6 +197,188 @@ func (client *Client) GetAgentRevision(ctx context.Context, agentID AgentID, rev
 	return doJSON[AgentSpecification](client, ctx, openAPIMethodGetAgentRevision, path, "", nil)
 }
 
+// CreatePolicy creates the first immutable revision of a tenant Policy.
+func (client *Client) CreatePolicy(ctx context.Context, request CreatePolicyRequest) (Policy, error) {
+	body := struct {
+		Name  string       `json:"name"`
+		Rules []PolicyRule `json:"rules"`
+	}{Name: request.Name, Rules: request.Rules}
+	return doJSON[Policy](client, ctx, openAPIMethodCreatePolicy, openAPIPathCreatePolicy, request.IdempotencyKey, body)
+}
+
+// RevisePolicy creates the next immutable revision of a tenant Policy.
+func (client *Client) RevisePolicy(ctx context.Context, request RevisePolicyRequest) (Policy, error) {
+	body := struct {
+		ExpectedRevision uint64       `json:"expected_revision"`
+		Rules            []PolicyRule `json:"rules"`
+	}{ExpectedRevision: request.ExpectedRevision, Rules: request.Rules}
+	path := replacePath(openAPIPathRevisePolicy, "policy_name", request.Name)
+	return doJSON[Policy](client, ctx, openAPIMethodRevisePolicy, path, request.IdempotencyKey, body)
+}
+
+// GetPolicy reads one immutable Policy revision through the admin surface.
+func (client *Client) GetPolicy(ctx context.Context, name string, revision uint64) (Policy, error) {
+	path := replacePath(replacePath(openAPIPathGetPolicy, "policy_name", name), "revision", strconv.FormatUint(revision, 10))
+	return doJSON[Policy](client, ctx, openAPIMethodGetPolicy, path, "", nil)
+}
+
+// ReadArtifact downloads bounded immutable content only after the server has
+// authorized the exact tenant/principal/artifact tuple.
+func (client *Client) ReadArtifact(ctx context.Context, artifactID ArtifactID) (ArtifactDownload, error) {
+	if _, err := ParseArtifactID(artifactID.String()); err != nil {
+		return ArtifactDownload{}, errors.New("read Artifact: invalid artifact ID")
+	}
+	return doArtifact(client, ctx, replacePath(openAPIPathReadArtifact, "artifact_id", artifactID.String()), artifactID)
+}
+
+// OpenArtifact opens a bounded Artifact response. Reaching EOF verifies its
+// declared Digest trailer; Close permits cancellation before completion.
+func (client *Client) OpenArtifact(ctx context.Context, artifactID ArtifactID) (ArtifactStream, error) {
+	if client == nil {
+		return ArtifactStream{}, errors.New("open Artifact: client is nil")
+	}
+	if _, err := ParseArtifactID(artifactID.String()); err != nil {
+		return ArtifactStream{}, errors.New("open Artifact: invalid artifact ID")
+	}
+	if err := contextError(ctx); err != nil {
+		return ArtifactStream{}, err
+	}
+	requestID, err := client.requestIDs.NextRequestID()
+	if err != nil {
+		return ArtifactStream{}, errors.Wrap(err, "open Artifact: allocate request ID")
+	}
+	req, err := http.NewRequestWithContext(ctx, openAPIMethodReadArtifact, client.baseURL.String()+replacePath(openAPIPathReadArtifact, "artifact_id", artifactID.String()), nil)
+	if err != nil {
+		return ArtifactStream{}, errors.Wrap(err, "open Artifact")
+	}
+	req.Header.Set("X-Request-ID", requestID.String())
+	req.Header.Set("Accept", "application/octet-stream")
+	sink := &requestAuthorizationSink{header: req.Header}
+	if err := client.credentials.Authorize(ctx, sink); err != nil {
+		return ArtifactStream{}, errors.Wrap(err, "open Artifact")
+	}
+	resp, err := client.httpClient.Do(req)
+	req.Header.Del("Authorization")
+	if err != nil || resp == nil {
+		if err == nil {
+			return ArtifactStream{}, errors.New("open Artifact: transport returned no response")
+		}
+		return ArtifactStream{}, errors.Wrap(err, "open Artifact")
+	}
+	if resp.Header.Get("X-Request-ID") != requestID.String() {
+		resp.Body.Close()
+		return ArtifactStream{}, errors.New("open Artifact: request ID mismatch")
+	}
+	if resp.StatusCode != http.StatusOK {
+		defer resp.Body.Close()
+		return ArtifactStream{}, artifactResponseFailure(resp, requestID, client.maxResponseBytes, "open Artifact")
+	}
+	sizeHeader := resp.Header.Get("X-Agent-Runtime-Artifact-Size")
+	if sizeHeader == "" {
+		sizeHeader = resp.Header.Get("Content-Length")
+	}
+	size, err := strconv.ParseInt(sizeHeader, 10, 64)
+	if err != nil || size < 1 || size > client.maxResponseBytes {
+		resp.Body.Close()
+		return ArtifactStream{}, errors.New("open Artifact: invalid Artifact size")
+	}
+	media, _, err := mime.ParseMediaType(resp.Header.Get("Content-Type"))
+	if err != nil || media == "" || media == "application/json" {
+		resp.Body.Close()
+		return ArtifactStream{}, errors.New("open Artifact: invalid media type")
+	}
+	streamingDigest := resp.Header.Get("X-Agent-Runtime-Artifact-SHA256")
+	digest := strings.TrimPrefix(streamingDigest, "sha-256=")
+	if digest == "" {
+		digest = strings.TrimPrefix(resp.Header.Get("Digest"), "sha-256=")
+	}
+	if !validSHA256(digest) {
+		resp.Body.Close()
+		return ArtifactStream{}, errors.New("open Artifact: invalid Artifact digest")
+	}
+	return ArtifactStream{Artifact: ArtifactReference{ID: artifactID, MediaType: media, SizeBytes: size, SHA256: digest}, Body: &verifiedArtifactBody{ReadCloser: resp.Body, response: resp, remaining: size, expectedDigest: digest, requireTrailer: streamingDigest != "", digester: sha256.New()}}, nil
+}
+
+type verifiedArtifactBody struct {
+	io.ReadCloser
+	response       *http.Response
+	remaining      int64
+	expectedDigest string
+	requireTrailer bool
+	digester       hash.Hash
+}
+
+func (body *verifiedArtifactBody) Read(p []byte) (int, error) {
+	n, err := body.ReadCloser.Read(p)
+	if n > 0 {
+		_, _ = body.digester.Write(p[:n])
+		body.remaining -= int64(n)
+		if body.remaining < 0 {
+			return n, errors.New("Artifact stream exceeds declared size")
+		}
+	}
+	if err == io.EOF {
+		digest := strings.TrimPrefix(body.response.Trailer.Get("Digest"), "sha-256=")
+		if digest == "" && !body.requireTrailer {
+			digest = body.expectedDigest
+		}
+		if body.remaining != 0 || !validSHA256(digest) || digest != body.expectedDigest || hex.EncodeToString(body.digester.Sum(nil)) != digest {
+			return n, errors.New("Artifact stream digest mismatch")
+		}
+	}
+	return n, err
+}
+
+func artifactResponseFailure(response *http.Response, requestID RequestID, maximum int64, operation string) error {
+	limited := io.LimitReader(response.Body, maximum+1)
+	body, err := io.ReadAll(limited)
+	if err != nil {
+		return errors.Wrap(err, operation)
+	}
+	if int64(len(body)) > maximum {
+		return errors.New(operation + ": failure body exceeds configured limit")
+	}
+	var envelope struct {
+		RequestID RequestID `json:"request_id"`
+		Error     Failure   `json:"error"`
+	}
+	if decodeStrict(body, &envelope) != nil || envelope.RequestID != requestID || !validSafeFailure(envelope.Error) {
+		return errors.New(operation + ": invalid safe failure envelope")
+	}
+	return &Error{Failure: *envelope.Error.Clone()}
+}
+
+func validSHA256(value string) bool {
+	return len(value) == 64 && strings.Trim(value, "0123456789abcdef") == ""
+}
+
+// InspectApproval returns the caller-authorized state of one Approval.
+func (client *Client) InspectApproval(ctx context.Context, approvalID ApprovalID) (Approval, error) {
+	if _, err := ParseApprovalID(approvalID.String()); err != nil {
+		return Approval{}, errors.New("inspect Approval: invalid approval ID")
+	}
+	return doJSON[Approval](client, ctx, openAPIMethodInspectApproval, replacePath(openAPIPathInspectApproval, "approval_id", approvalID.String()), "", nil)
+}
+
+// DecideApproval records one idempotent owner decision for a pending Approval.
+func (client *Client) DecideApproval(ctx context.Context, request DecideApprovalRequest) (Approval, error) {
+	if _, err := ParseApprovalID(request.ApprovalID.String()); err != nil || (request.Decision != ApprovalApproved && request.Decision != ApprovalDenied) {
+		return Approval{}, errors.New("decide Approval: request is invalid")
+	}
+	path := replacePath(openAPIPathDecideApproval, "approval_id", request.ApprovalID.String())
+	return doJSON[Approval](client, ctx, openAPIMethodDecideApproval, path, request.IdempotencyKey, struct {
+		Decision ApprovalState `json:"decision"`
+	}{Decision: request.Decision})
+}
+
+// IdempotencyStatus reads the caller-scoped durable status of one mutation key.
+func (client *Client) IdempotencyStatus(ctx context.Context, key string) (IdempotencyStatus, error) {
+	if key == "" || len(key) > MaxIdempotencyKeyBytes {
+		return IdempotencyStatus{}, errors.New("read idempotency status: invalid idempotency key")
+	}
+	return doJSON[IdempotencyStatus](client, ctx, openAPIMethodIdempotencyStatus, openAPIPathIdempotencyStatus, key, nil)
+}
+
 // CreateSession creates a principal-owned Session pinned to one Agent revision.
 func (client *Client) CreateSession(ctx context.Context, request CreateSessionRequest) (Session, error) {
 	body := struct {
@@ -193,6 +406,12 @@ func (client *Client) InspectSession(ctx context.Context, sessionID SessionID) (
 func (client *Client) InspectTurn(ctx context.Context, sessionID SessionID, turnID TurnID) (Turn, error) {
 	path := replacePath(replacePath(openAPIPathInspectTurn, "session_id", sessionID.String()), "turn_id", turnID.String())
 	return doJSON[Turn](client, ctx, openAPIMethodInspectTurn, path, "", nil)
+}
+
+// InspectToolCalls returns bounded owner-scoped Tool-call lifecycle projections.
+func (client *Client) InspectToolCalls(ctx context.Context, sessionID SessionID, turnID TurnID) (ToolCallPage, error) {
+	path := replacePath(replacePath(openAPIPathInspectToolCalls, "session_id", sessionID.String()), "turn_id", turnID.String())
+	return doJSON[ToolCallPage](client, ctx, openAPIMethodInspectToolCalls, path, "", nil)
 }
 
 // Events resumes bounded Product-event observation after an opaque Cursor.
@@ -294,6 +513,72 @@ func doJSON[Response any](client *Client, ctx context.Context, method, path, ide
 		return zero, errors.Wrap(err, "read Agent Runtime response: decode body")
 	}
 	return zero, nil
+}
+
+func doArtifact(client *Client, ctx context.Context, path string, artifactID ArtifactID) (ArtifactDownload, error) {
+	if client == nil {
+		return ArtifactDownload{}, errors.New("read Artifact: client is nil")
+	}
+	if err := contextError(ctx); err != nil {
+		return ArtifactDownload{}, err
+	}
+	requestID, err := client.requestIDs.NextRequestID()
+	if err != nil {
+		return ArtifactDownload{}, errors.Wrap(err, "read Artifact: allocate request ID")
+	}
+	request, err := http.NewRequestWithContext(ctx, openAPIMethodReadArtifact, client.baseURL.String()+path, nil)
+	if err != nil {
+		return ArtifactDownload{}, errors.Wrap(err, "read Artifact: construct request")
+	}
+	request.Header.Set("Accept", "application/octet-stream")
+	request.Header.Set("X-Request-ID", requestID.String())
+	sink := &requestAuthorizationSink{header: request.Header}
+	if err := client.credentials.Authorize(ctx, sink); err != nil {
+		return ArtifactDownload{}, errors.Wrap(err, "read Artifact: authorize")
+	}
+	response, err := client.httpClient.Do(request)
+	request.Header.Del("Authorization")
+	if err != nil || response == nil {
+		if err != nil {
+			return ArtifactDownload{}, errors.Wrap(err, "read Artifact")
+		}
+		return ArtifactDownload{}, errors.New("read Artifact: transport returned no response")
+	}
+	defer func() { _ = response.Body.Close() }()
+	if response.Header.Get("X-Request-ID") != requestID.String() {
+		return ArtifactDownload{}, errors.New("read Artifact: request ID mismatch")
+	}
+	limited := io.LimitReader(response.Body, client.maxResponseBytes+1)
+	body, err := io.ReadAll(limited)
+	if err != nil {
+		return ArtifactDownload{}, errors.Wrap(err, "read Artifact")
+	}
+	if int64(len(body)) > client.maxResponseBytes {
+		return ArtifactDownload{}, errors.New("read Artifact: body exceeds configured limit")
+	}
+	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		var envelope struct {
+			RequestID RequestID `json:"request_id"`
+			Error     Failure   `json:"error"`
+		}
+		if decodeStrict(body, &envelope) != nil || envelope.RequestID != requestID || !validSafeFailure(envelope.Error) {
+			return ArtifactDownload{}, errors.New("read Artifact: invalid safe failure envelope")
+		}
+		return ArtifactDownload{}, &Error{Failure: *envelope.Error.Clone()}
+	}
+	mediaType, _, err := mime.ParseMediaType(response.Header.Get("Content-Type"))
+	if err != nil || mediaType == "application/json" || mediaType == "" {
+		return ArtifactDownload{}, errors.New("read Artifact: invalid media type")
+	}
+	size, err := strconv.ParseInt(response.Header.Get("Content-Length"), 10, 64)
+	if err != nil || size != int64(len(body)) {
+		return ArtifactDownload{}, errors.New("read Artifact: invalid content length")
+	}
+	digest := response.Header.Get("Digest")
+	if !strings.HasPrefix(digest, "sha-256=") || len(strings.TrimPrefix(digest, "sha-256=")) != 64 {
+		return ArtifactDownload{}, errors.New("read Artifact: invalid digest")
+	}
+	return ArtifactDownload{Artifact: ArtifactReference{ID: artifactID, MediaType: mediaType, SizeBytes: size, SHA256: strings.TrimPrefix(digest, "sha-256=")}, Body: body}, nil
 }
 
 func validSafeFailure(failure Failure) bool {

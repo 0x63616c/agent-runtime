@@ -2,22 +2,66 @@
 
 [`api/openapi/openapi.yaml`](../../api/openapi/openapi.yaml) is the canonical
 versioned public transport contract. Generated route constants used by the Go
-SDK and HTTP adapter are checked against its ten operations by `just check`.
+SDK and HTTP adapter are checked against its fourteen operations by `just check`.
 Neither surface exposes Temporal workflow IDs, task queues, payloads, database
 positions, or backend configuration.
 
 The implemented `/v1` routes create and read immutable Agent revisions, create
 and inspect Sessions, idempotently send Input, inspect Turns, page Product
 events after an opaque Cursor, explicitly cancel a Turn, and drain-close a
-Session. Agent catalog operations require a tenant administrator. Sessions are
+Session, download caller-authorized immutable Artifacts, and inspect or decide
+owner-authorized Approvals. Approval decisions are idempotent and accept only
+`approved` or `denied`; an approved response does not expose any capability or
+credential material. Agent catalog operations require a tenant administrator. Sessions are
 owned by the authenticated tenant and principal; absent and unauthorized
 resources return the same safe `not_found` classification.
+
+`GET /v1/sessions/{session_id}/turns/{turn_id}/tools` returns at most 64
+owner-scoped Tool-call projections. A projection distinguishes model intent
+from execution, reports only Approval state, bounded grant use counters and
+expiry, and a safe terminal failure. It never exposes a descriptor, capability
+or policy digest, grant identity, raw result, backend handle, or credential.
+
+An inspected terminal Turn can additionally include provider-neutral token
+usage from its latest recorded model invocation. Omitted usage fields mean the
+provider did not report them; they never mean zero. Provider error payloads and
+provider-specific diagnostics remain private, while the public Turn exposes
+only the runtime-owned safe Failure contract. A successful normalized model
+stream is finalized before the Turn reaches `succeeded`; the Turn's optional
+`output` field is an owner-readable immutable Artifact reference. Reconnecting
+callers inspect the Turn and use the existing Artifact route, never a live
+provider stream. A missing `output` remains distinct from an empty response
+and from a provider failure.
+
+`GET /v1/idempotency` requires an `Idempotency-Key` header and returns only the
+caller-scoped retained receipt status. It never replays a command or exposes
+the canonical request body. Receipt retention is configured at the durable
+state authority. Once it expires, both a replay using that key and status
+lookup fail with the same safe `conflict` classification; callers must submit
+a fresh mutation key and must not infer whether expired work was re-executed.
 
 Every `/v1` request is authenticated with a bearer credential and correlated by a
 typed `X-Request-ID`. Mutations require `Idempotency-Key`. Request and response
 JSON is strict and size-bounded. Cursor pagination is the current reconnect
 mechanism: connection loss affects the read only, and the caller resumes after
 the last accepted Cursor.
+
+## Artifact streaming
+
+`GET /v1/artifacts/{artifact_id}` authorizes the exact tenant, principal, and
+immutable Artifact metadata before opening content storage. The streaming form
+returns the media type plus `X-Agent-Runtime-Artifact-Size` and
+`X-Agent-Runtime-Artifact-SHA256` headers, streams no more than that declared
+size, and emits `Digest: sha-256=...` only as an HTTP trailer after the copied
+bytes match the authorized digest. A caller must treat a missing, mismatched,
+short, or overlong stream as failed and must close an unfinished response to
+cancel its observation. Storage keys and credentials never cross this boundary.
+
+The Go SDK keeps `ReadArtifact` for the bounded buffered v1 read and adds the
+separate `ArtifactStreamer` capability implemented by `Client.OpenArtifact`.
+It does not add a method to `RuntimeClient`, preserving existing interface
+implementations. `OpenArtifact` verifies the exact byte count and trailing
+digest only when the caller reaches EOF; callers must always close the body.
 
 `GET /healthz` and `GET /readyz` are deliberately unauthenticated, contain only
 the role and readiness state, and expose no runtime resource data.
@@ -31,9 +75,12 @@ go run ./cmd/agent-runtime-api --config "$PWD/deploy/runtimeapi/api.example.json
 ```
 
 The checked-in example names credential environment sources but contains no
-credential values. Its storage declaration must literally be
-`{"mode":"memory-unsafe"}`. State is lost on process exit; this role is for
-local transport integration until issue #24 supplies PostgreSQL authority.
+credential values. It deliberately uses `{"mode":"memory-unsafe"}`, so state
+is lost on process exit and it is suitable only for local transport work. A
+durable operator configuration instead selects `postgres` and explicitly names
+the PostgreSQL DSN and immutable-content endpoint, bucket, and credential
+environment keys; the integration harness exercises that process path against
+PostgreSQL and MinIO.
 `max_request_bytes` must be between 3 MiB and 16 MiB so every request allowed
 by the canonical content limits remains transport-admissible; the example uses
 4 MiB.

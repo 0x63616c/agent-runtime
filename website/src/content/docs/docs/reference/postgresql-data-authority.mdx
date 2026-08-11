@@ -17,6 +17,10 @@ Input-body, or Product-event body columns. The declared blob authority owns
 content bytes; PostgreSQL owns authorization-scoped indexes, state, order, and
 retention metadata.
 
+The repository's [data lifecycle reference](https://github.com/0x63616c/agent-runtime/blob/main/docs/reference/data-lifecycle.md)
+defines the independently configurable retention classes for state metadata,
+events, audit facts, outbox, receipts, payload blobs, and sandbox records.
+
 Its database constraints establish the initial mechanical guards:
 
 - every runtime row is scoped by its tenant, and Session records are additionally
@@ -45,33 +49,48 @@ integration tests execute the artifacts and prove the declared constraints.
 
 M5 currently contains an internal first-admission adapter used only by direct
 application composition and real PostgreSQL integration tests. It accepts an
-already-authorized, pre-existing Session; validates artifact references for
-that exact owner before staging; persists immutable content references rather
-than raw Input parts; and atomically records the Input, Turn, bounded facts,
-audit record, and outbox record. The first Turn for an idle Session is marked
-`running`; later Turns are marked `queued`. Its narrow transaction also
-serializes identical owner/idempotency-key admissions so a conflicting Session
-is refused rather than surfacing a database uniqueness failure.
+already-authorized, pre-existing Session; validates each Artifact reference
+against that owner's exact state-recorded ID, digest, media type, and size
+before staging; persists immutable content references rather than raw Input
+parts; and atomically records the Input, Turn, bounded facts, audit record,
+and outbox record. The disposable PostgreSQL/MinIO proof restarts this
+composition before admitting the reference and rejects both forged metadata
+and a different principal with the same safe `not_found` result. The first
+Turn for an idle Session is marked `running`; later Turns are marked `queued`.
+Its narrow transaction also serializes identical owner/idempotency-key
+admissions so a conflicting Session is refused rather than surfacing a
+database uniqueness failure.
 
 This is not a public HTTP or Go SDK route, and it does not change the public
-runtime's `memory-unsafe` store. The current content store in this seam is a
-deterministic in-memory test implementation, not a production blob
+runtime's `memory-unsafe` store. The composition test uses a real immutable
+object-store adapter, but it is not yet Artifact transfer/streaming evidence
+or a production blob
 authorization plane. The outbox is transactionally recorded only: publication,
-retry/reconciliation, and restart recovery have not been implemented or
-proven.
+retry/reconciliation, and restart recovery are not responsibilities of this
+first-admission adapter.
 
-The current schema is not yet an RLS or database-role authorization boundary. The
-future production adapter must add tenant RLS policy, role grants, and a
+Separate private M5 integration evidence exercises two recovery paths against
+disposable PostgreSQL, MinIO, and Temporal dependencies. The outbox publisher
+reclaims a lease when its acknowledgement is lost only after Temporal accepts
+the same route. The model-effect worker recreates its PostgreSQL composition
+after a lost claimed producer intent, reconciles the original operation rather
+than invoking it again, records an ordered `producer.gap` and `turn.failed`,
+and replays those Product events from the durable public cursor. Neither test
+adds a public provider streaming API, a provider-specific adapter, or a
+production blob authorization plane.
+
+The current schema is not yet an RLS or database-role authorization boundary.
+The future production adapter must add tenant RLS policy, role grants, and a
 least-privilege migration/runtime credential split before it uses these tables
 for public requests.
 
 :::caution Foundation, not completed runtime durability
 
 The currently runnable public API remains explicitly configured with
-`memory-unsafe` storage. The internal adapter does not by itself prove
-process-restart recovery, event replay/expiry, audit publication recovery,
-blob authorization, tenant erasure, backup/restore, or the private Temporal
-adapter. No M5 requirement is complete on the strength of this schema and
-first-admission slice.
+`memory-unsafe` storage. The internal adapter does not by itself prove public
+durable API composition, safe Artifact transfer/streaming, complete event
+expiry, audit publication recovery, production blob authorization, production
+tenant erasure/backup/PITR, or provider streaming. No M5 requirement is
+complete on the strength of this schema and first-admission slice.
 
 :::

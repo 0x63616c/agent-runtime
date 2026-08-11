@@ -56,6 +56,17 @@ func TestConfigurationIsStrictAndRequiresExplicitUnsafeMemoryStorage(t *testing.
 	}
 }
 
+func TestConfigurationAcceptsOnlyCompleteDurablePostgresAndMinIOStorage(t *testing.T) {
+	durable := strings.Replace(validConfig, `"storage": {"mode":"memory-unsafe"}`, `"storage":{"mode":"postgres","database_dsn_environment":"STATE_DATABASE_DSN","content":{"endpoint":"minio.runtime.svc:9000","access_key_environment":"CONTENT_ACCESS_KEY","secret_key_environment":"CONTENT_SECRET_KEY","bucket":"agent-runtime-content"}}`, 1)
+	if _, err := runtimeapiprocess.Parse(strings.NewReader(durable)); err != nil {
+		t.Fatalf("Parse(durable): %v", err)
+	}
+	incomplete := strings.Replace(durable, `,"bucket":"agent-runtime-content"`, "", 1)
+	if _, err := runtimeapiprocess.Parse(strings.NewReader(incomplete)); err == nil {
+		t.Fatal("Parse(incomplete durable) error = nil")
+	}
+}
+
 func TestRunnableRoleServesPublicSDKWithoutInternalTypes(t *testing.T) {
 	config, err := runtimeapiprocess.Parse(strings.NewReader(validConfig))
 	if err != nil {

@@ -14,8 +14,14 @@ import (
 
 	"github.com/0x63616c/agent-runtime/internal/runtime/kernel"
 	"github.com/0x63616c/agent-runtime/internal/runtimeapi"
+	"github.com/0x63616c/agent-runtime/internal/runtimecontent"
+	"github.com/0x63616c/agent-runtime/internal/runtimepostgres"
+	"github.com/0x63616c/agent-runtime/internal/runtimestate"
 	agentruntime "github.com/0x63616c/agent-runtime/sdk/go"
 	"github.com/cockroachdb/errors"
+	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/minio/minio-go/v7"
+	"github.com/minio/minio-go/v7/pkg/credentials"
 )
 
 // SecretLookup resolves only explicitly named, injected environment values at composition time.
@@ -57,14 +63,11 @@ func Serve(ctx context.Context, config Config, lookup SecretLookup, listener net
 		authenticator.identities[digest] = configured.identity
 	}
 	ids := &cryptoIDs{}
-	service, err := kernel.New(systemClock{}, ids, kernel.NewMemoryRepository(), config.modelProfiles)
+	runtime, closeRuntime, err := composeRuntime(ctx, config, lookup, ids)
 	if err != nil {
 		return err
 	}
-	runtime, err := runtimeapi.NewKernelRuntime(service)
-	if err != nil {
-		return err
-	}
+	defer closeRuntime()
 	handler, err := runtimeapi.NewHandler(runtimeapi.Config{Runtime: runtime, Authenticator: authenticator, RequestIDs: ids, MaxRequestBytes: config.maxRequestBytes, Observability: observability})
 	if err != nil {
 		return err
@@ -94,6 +97,88 @@ func Serve(ctx context.Context, config Config, lookup SecretLookup, listener net
 		}
 		return errors.Wrap(err, "stop runtime API process")
 	}
+}
+
+func composeRuntime(ctx context.Context, config Config, lookup SecretLookup, ids *cryptoIDs) (runtimeapi.Runtime, func(), error) {
+	if ids == nil {
+		return nil, nil, errors.New("compose runtime API process: identifier source is required")
+	}
+	if config.storage.mode == "memory-unsafe" {
+		service, err := kernel.New(systemClock{}, ids, kernel.NewMemoryRepository(), config.modelProfiles)
+		if err != nil {
+			return nil, nil, err
+		}
+		runtime, err := runtimeapi.NewKernelRuntime(service)
+		if err != nil {
+			return nil, nil, err
+		}
+		return runtime, func() {}, nil
+	}
+	if config.storage.mode != "postgres" {
+		return nil, nil, errors.New("compose runtime API process: storage mode is unsupported")
+	}
+	dsn, found := lookup(config.storage.databaseDSNEnvironment)
+	if !found || dsn == "" {
+		return nil, nil, errors.New("compose runtime API process: required PostgreSQL DSN is missing")
+	}
+	accessKey, found := lookup(config.storage.content.AccessKeyEnvironment)
+	if !found || accessKey == "" {
+		return nil, nil, errors.New("compose runtime API process: required content access key is missing")
+	}
+	secretKey, found := lookup(config.storage.content.SecretKeyEnvironment)
+	if !found || secretKey == "" {
+		return nil, nil, errors.New("compose runtime API process: required content secret key is missing")
+	}
+	pool, err := pgxpool.New(ctx, dsn)
+	if err != nil {
+		return nil, nil, errors.Wrap(err, "compose runtime API process: open PostgreSQL")
+	}
+	cleanup := func() { pool.Close() }
+	if err := pool.Ping(ctx); err != nil {
+		cleanup()
+		return nil, nil, errors.Wrap(err, "compose runtime API process: ping PostgreSQL")
+	}
+	state, err := runtimepostgres.NewRuntimeStateStore(pool)
+	if err != nil {
+		cleanup()
+		return nil, nil, err
+	}
+	client, err := minio.New(config.storage.content.Endpoint, &minio.Options{Creds: credentials.NewStaticV4(accessKey, secretKey, ""), Secure: false})
+	if err != nil {
+		cleanup()
+		return nil, nil, errors.Wrap(err, "compose runtime API process: create MinIO client")
+	}
+	immutable, err := runtimecontent.NewMinIOImmutableClient(client)
+	if err != nil {
+		cleanup()
+		return nil, nil, err
+	}
+	objects, err := runtimecontent.NewS3ImmutableObjects(immutable, config.storage.content.Bucket)
+	if err != nil {
+		cleanup()
+		return nil, nil, err
+	}
+	content, err := runtimecontent.New("runtime-content", objects)
+	if err != nil {
+		cleanup()
+		return nil, nil, err
+	}
+	compiler, err := runtimestate.NewCompiler(content)
+	if err != nil {
+		cleanup()
+		return nil, nil, err
+	}
+	planner, err := runtimestate.NewRuntimeStatePlanner(systemClock{}, ids)
+	if err != nil {
+		cleanup()
+		return nil, nil, err
+	}
+	runtime, err := runtimeapi.NewStateRuntime(runtimeapi.StateRuntimeConfig{Content: content, Compiler: compiler, Planner: planner, Store: state, ModelProfiles: config.modelProfiles})
+	if err != nil {
+		cleanup()
+		return nil, nil, err
+	}
+	return runtime, cleanup, nil
 }
 
 type digestAuthenticator struct {
@@ -144,6 +229,14 @@ func randomPayload() (string, error) {
 type systemClock struct{}
 
 func (systemClock) Now() time.Time { return time.Now().UTC() }
+
+func (ids *cryptoIDs) NextIdentifier(kind runtimestate.IdentifierKind) (string, error) {
+	payload, err := ids.Next()
+	if err != nil {
+		return "", err
+	}
+	return string(kind) + "_" + payload, nil
+}
 
 func ready(writer http.ResponseWriter, _ *http.Request) {
 	writer.Header().Set("Content-Type", "application/json")

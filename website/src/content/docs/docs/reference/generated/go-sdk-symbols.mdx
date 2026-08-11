@@ -25,6 +25,21 @@ This index is derived only from the declared public `sdk/go` source files. It li
 | `method` | `AgentRevisionID.UnmarshalJSON` | UnmarshalJSON decodes and validates an Agent revision ID. |
 | `type` | `AgentSpecification` | AgentSpecification is one immutable, versioned definition of Agent behavior. |
 | `method` | `AgentSpecification.Clone` | Clone returns an independent Agent specification snapshot. |
+| `type` | `Approval` | Approval is a caller-safe immutable projection of a pending or terminal human decision. |
+| `method` | `Approval.Clone` | Clone returns an independent Approval snapshot. |
+| `const` | `ApprovalApproved` | ApprovalApproved records an owner decision that created a bounded internal grant. |
+| `const` | `ApprovalDenied` | ApprovalDenied records an owner decision that forbids the requested effect. |
+| `const` | `ApprovalExpired` | ApprovalExpired records that the decision window elapsed before a decision. |
+| `type` | `ApprovalID` | ApprovalID identifies one owner-actionable Approval request. |
+| `method` | `ApprovalID.LogValue` | LogValue returns a redacted Approval ID for structured logs. |
+| `method` | `ApprovalID.MarshalJSON` | MarshalJSON encodes a validated Approval ID. |
+| `method` | `ApprovalID.Redacted` | Redacted returns a safe diagnostic Approval ID. |
+| `method` | `ApprovalID.String` | String returns the canonical Approval ID. |
+| `method` | `ApprovalID.UnmarshalJSON` | UnmarshalJSON decodes and validates an Approval ID. |
+| `const` | `ApprovalPending` | ApprovalPending awaits an owner decision before any tool execution may be authorized. |
+| `type` | `ApprovalState` | ApprovalState is the public lifecycle state of one human decision request. |
+| `type` | `ArtifactDownload` | ArtifactDownload is one authorized immutable artifact read. It contains metadata chosen by runtime state and bounded bytes, never a storage URL. |
+| `method` | `ArtifactDownload.Clone` | Clone returns an independent authorized artifact read. |
 | `type` | `ArtifactID` | ArtifactID identifies an authorized immutable Artifact reference. |
 | `method` | `ArtifactID.LogValue` | LogValue returns a redacted Artifact ID for structured logs. |
 | `method` | `ArtifactID.MarshalJSON` | MarshalJSON encodes a validated Artifact ID. |
@@ -32,19 +47,32 @@ This index is derived only from the declared public `sdk/go` source files. It li
 | `method` | `ArtifactID.String` | String returns the canonical Artifact ID. |
 | `method` | `ArtifactID.UnmarshalJSON` | UnmarshalJSON decodes and validates an Artifact ID. |
 | `type` | `ArtifactReference` | ArtifactReference identifies immutable content without exposing a storage URL. |
+| `type` | `ArtifactStream` | ArtifactStream is an authorized immutable Artifact transfer. Callers must Close it; reading to EOF verifies the HTTP Digest trailer and exact size. |
+| `type` | `ArtifactStreamer` | ArtifactStreamer is the additive streaming Artifact capability. It remains separate from RuntimeClient so existing RuntimeClient implementations keep their v1 source compatibility. |
+| `method` | `ArtifactStreamer.OpenArtifact` | OpenArtifact opens a caller-authorized Artifact without buffering it. |
 | `type` | `AuthorizationSink` | AuthorizationSink accepts one request-scoped bearer credential. |
 | `method` | `AuthorizationSink.SetBearerToken` | SetBearerToken accepts one request-scoped bearer credential. |
 | `type` | `CancelTurnRequest` | CancelTurnRequest explicitly cancels one active or queued Turn. |
+| `type` | `CapabilityGrant` | CapabilityGrant is a caller-safe projection of bounded grant consumption. It deliberately omits capability bytes, policy digests, and grant identity. |
 | `type` | `Client` | Client is the concrete HTTP implementation of RuntimeClient. |
 | `method` | `Client.CancelTurn` | CancelTurn explicitly requests durable Turn cancellation. |
 | `method` | `Client.CloseSession` | CloseSession closes Input admission and drains accepted work. |
 | `method` | `Client.CreateAgent` | CreateAgent creates the first immutable Agent revision through the admin surface. |
+| `method` | `Client.CreatePolicy` | CreatePolicy creates the first immutable revision of a tenant Policy. |
 | `method` | `Client.CreateSession` | CreateSession creates a principal-owned Session pinned to one Agent revision. |
+| `method` | `Client.DecideApproval` | DecideApproval records one idempotent owner decision for a pending Approval. |
 | `method` | `Client.Events` | Events resumes bounded Product-event observation after an opaque Cursor. |
 | `method` | `Client.GetAgentRevision` | GetAgentRevision reads one immutable Agent revision through the admin surface. |
+| `method` | `Client.GetPolicy` | GetPolicy reads one immutable Policy revision through the admin surface. |
+| `method` | `Client.IdempotencyStatus` | IdempotencyStatus reads the caller-scoped durable status of one mutation key. |
+| `method` | `Client.InspectApproval` | InspectApproval returns the caller-authorized state of one Approval. |
 | `method` | `Client.InspectSession` | InspectSession returns caller-safe Session state without backend identifiers. |
+| `method` | `Client.InspectToolCalls` | InspectToolCalls returns bounded owner-scoped Tool-call lifecycle projections. |
 | `method` | `Client.InspectTurn` | InspectTurn returns one caller-safe Turn snapshot. |
+| `method` | `Client.OpenArtifact` | OpenArtifact opens a bounded Artifact response. Reaching EOF verifies its declared Digest trailer; Close permits cancellation before completion. |
+| `method` | `Client.ReadArtifact` | ReadArtifact downloads bounded immutable content only after the server has authorized the exact tenant/principal/artifact tuple. |
 | `method` | `Client.ReviseAgent` | ReviseAgent creates another immutable Agent revision through the admin surface. |
+| `method` | `Client.RevisePolicy` | RevisePolicy creates the next immutable revision of a tenant Policy. |
 | `method` | `Client.SendInput` | SendInput idempotently admits bounded Input into a Session. |
 | `type` | `ClientConfig` | ClientConfig contains every dependency and finite bound required by Client. |
 | `type` | `CloseSessionRequest` | CloseSessionRequest stops new admission and drains already accepted Input. |
@@ -54,6 +82,7 @@ This index is derived only from the declared public `sdk/go` source files. It li
 | `type` | `ContentPartKind` | ContentPartKind identifies one bounded Input content representation. |
 | `const` | `ContentText` | ContentText contains bounded UTF-8 text. |
 | `type` | `CreateAgentRequest` | CreateAgentRequest registers the first immutable revision of an Agent specification. |
+| `type` | `CreatePolicyRequest` | CreatePolicyRequest creates the first immutable revision of a named Policy. |
 | `type` | `CreateSessionRequest` | CreateSessionRequest creates a Session pinned to one exact Agent revision. |
 | `type` | `CredentialSource` | CredentialSource authorizes one request without exposing credential bytes to Client diagnostics. |
 | `method` | `CredentialSource.Authorize` | Authorize applies one request-scoped credential without exposing it to Client diagnostics. |
@@ -63,9 +92,11 @@ This index is derived only from the declared public `sdk/go` source files. It li
 | `method` | `Cursor.Redacted` | Redacted returns a safe diagnostic Product-event Cursor. |
 | `method` | `Cursor.String` | String returns the canonical Product-event Cursor. |
 | `method` | `Cursor.UnmarshalJSON` | UnmarshalJSON decodes and validates a Product-event Cursor. |
+| `type` | `DecideApprovalRequest` | DecideApprovalRequest idempotently records one owner decision for a pending Approval. |
 | `type` | `Error` | Error is a safe runtime-owned command failure suitable for errors.As. |
 | `method` | `Error.Error` | Error returns only the stable code and safe bounded message. |
 | `type` | `Event` | Event is a bounded, ordered, caller-safe Product event. |
+| `const` | `EventApprovalResolved` | EventApprovalResolved reports a terminal approved, denied, or expired approval without exposing an action or capability value. |
 | `type` | `EventGap` | EventGap explicitly says a requested replay position is no longer available. |
 | `type` | `EventID` | EventID identifies one Product event. |
 | `method` | `EventID.LogValue` | LogValue returns a redacted Product-event ID for structured logs. |
@@ -76,6 +107,8 @@ This index is derived only from the declared public `sdk/go` source files. It li
 | `const` | `EventInputAccepted` | EventInputAccepted reports durable idempotent Input admission. |
 | `type` | `EventKind` | EventKind identifies a stable Product-event vocabulary entry. |
 | `type` | `EventPage` | EventPage is one bounded replay page and its next opaque position. |
+| `const` | `EventProducerGap` | EventProducerGap reports that a producer outcome could not be recovered and the following terminal event is the durable finalization boundary. |
+| `const` | `EventSandboxOperationFinalized` | EventSandboxOperationFinalized reports that a sandbox-backed operation reached a durable terminal outcome. Backend handles remain private. |
 | `const` | `EventSessionClosing` | EventSessionClosing reports that no new Input is accepted while queued work drains. |
 | `const` | `EventSessionCompleted` | EventSessionCompleted reports a terminal drained Session. |
 | `const` | `EventSessionCreated` | EventSessionCreated reports durable Session creation. |
@@ -92,6 +125,7 @@ This index is derived only from the declared public `sdk/go` source files. It li
 | `const` | `FailureInvalidInput` | FailureInvalidInput means a request violated the public contract. |
 | `const` | `FailureNotFound` | FailureNotFound safely covers absent or unauthorized resources. |
 | `const` | `FailureUnavailable` | FailureUnavailable means durable progress may be retried later. |
+| `type` | `IdempotencyStatus` | IdempotencyStatus is the safe durable outcome lookup for one exact caller scope and idempotency key. It never exposes request bytes or backend IDs. |
 | `type` | `Input` | Input is an immutable accepted Input snapshot. |
 | `method` | `Input.Clone` | Clone returns an independent Input snapshot. |
 | `type` | `InputID` | InputID identifies one accepted Input. |
@@ -104,10 +138,14 @@ This index is derived only from the declared public `sdk/go` source files. It li
 | `const` | `MaxInputParts` | MaxInputParts bounds the number of public Input parts accepted in one request. |
 | `const` | `MaxSessionViewQueuedTurns` | MaxSessionViewQueuedTurns bounds the queued Turns included in one Session inspection. |
 | `const` | `MaxTextPartBytes` | MaxTextPartBytes bounds one public text Input part. |
+| `const` | `MaxToolCallsPerTurn` | MaxToolCallsPerTurn bounds one public Tool-call inspection response. |
+| `type` | `ModelUsage` | ModelUsage retains provider-neutral token accounting for the latest recorded model invocation. Nil values remain unknown; they are never coerced to zero. |
+| `method` | `ModelUsage.Clone` | Clone returns an independent ModelUsage snapshot. |
 | `func` | `NewClient` | NewClient validates a bounded, explicit public HTTP client configuration. |
 | `func` | `NewStaticBearerCredential` | NewStaticBearerCredential validates and owns a copy of one bearer token. |
 | `func` | `ParseAgentID` | ParseAgentID validates an externally supplied Agent ID. |
 | `func` | `ParseAgentRevisionID` | ParseAgentRevisionID validates an externally supplied Agent revision ID. |
+| `func` | `ParseApprovalID` | ParseApprovalID validates an externally supplied Approval ID. |
 | `func` | `ParseArtifactID` | ParseArtifactID validates an externally supplied Artifact ID. |
 | `func` | `ParseCursor` | ParseCursor validates an externally supplied Product-event Cursor. |
 | `func` | `ParseEventID` | ParseEventID validates an externally supplied Product-event ID. |
@@ -115,6 +153,12 @@ This index is derived only from the declared public `sdk/go` source files. It li
 | `func` | `ParseRequestID` | ParseRequestID validates an externally supplied request correlation ID. |
 | `func` | `ParseSessionID` | ParseSessionID validates an externally supplied Session ID. |
 | `func` | `ParseTurnID` | ParseTurnID validates an externally supplied Turn ID. |
+| `type` | `Policy` | Policy is one immutable, versioned tenant authorization policy. Tool execution consumes its durable revision digest; it never receives policy administration authority. |
+| `method` | `Policy.Clone` | Clone returns an independent immutable Policy snapshot. |
+| `type` | `PolicyDecision` | PolicyDecision is the closed disposition an immutable Policy revision gives one named Tool. It conveys no credential or executable capability. |
+| `const` | `PolicyDenied` | PolicyDenied prevents the named Tool from receiving execution authority. |
+| `const` | `PolicyRequiresApproval` | PolicyRequiresApproval requires a later durable human decision before the named Tool can receive a bounded capability grant. |
+| `type` | `PolicyRule` | PolicyRule is one bounded, model-independent authorization rule for a named Tool. |
 | `type` | `RequestID` | RequestID correlates one HTTP attempt without identifying durable work. |
 | `method` | `RequestID.LogValue` | LogValue returns a redacted request correlation ID for structured logs. |
 | `method` | `RequestID.MarshalJSON` | MarshalJSON encodes a validated request correlation ID. |
@@ -124,16 +168,24 @@ This index is derived only from the declared public `sdk/go` source files. It li
 | `type` | `RequestIDSource` | RequestIDSource creates a fresh opaque correlation ID for each HTTP attempt. |
 | `method` | `RequestIDSource.NextRequestID` | NextRequestID creates one fresh opaque correlation ID. |
 | `type` | `ReviseAgentRequest` | ReviseAgentRequest creates another immutable revision of an existing Agent. |
+| `type` | `RevisePolicyRequest` | RevisePolicyRequest creates the next immutable revision of one named Policy. |
 | `type` | `RuntimeClient` | RuntimeClient is the Temporal-free application contract for durable Agent Runtime commands. |
 | `method` | `RuntimeClient.CancelTurn` | CancelTurn explicitly requests durable Turn cancellation. |
 | `method` | `RuntimeClient.CloseSession` | CloseSession closes Input admission and drains accepted work. |
 | `method` | `RuntimeClient.CreateAgent` | CreateAgent creates the first immutable Agent revision through the admin surface. |
+| `method` | `RuntimeClient.CreatePolicy` | CreatePolicy creates the first immutable revision of a tenant Policy. |
 | `method` | `RuntimeClient.CreateSession` | CreateSession creates a principal-owned Session pinned to one Agent revision. |
+| `method` | `RuntimeClient.DecideApproval` | DecideApproval records one idempotent owner decision for a pending Approval. |
 | `method` | `RuntimeClient.Events` | Events resumes bounded Product-event observation after an opaque Cursor. |
 | `method` | `RuntimeClient.GetAgentRevision` | GetAgentRevision reads one immutable Agent revision through the admin surface. |
+| `method` | `RuntimeClient.GetPolicy` | GetPolicy reads one immutable Policy revision through the admin surface. |
+| `method` | `RuntimeClient.IdempotencyStatus` | IdempotencyStatus reads one retained receipt without re-executing work. |
+| `method` | `RuntimeClient.InspectApproval` | InspectApproval returns the caller-authorized state of one Approval. |
 | `method` | `RuntimeClient.InspectSession` | InspectSession returns caller-safe Session state without backend identifiers. |
 | `method` | `RuntimeClient.InspectTurn` | InspectTurn returns one caller-safe Turn snapshot. |
+| `method` | `RuntimeClient.ReadArtifact` | ReadArtifact downloads one caller-authorized immutable artifact. |
 | `method` | `RuntimeClient.ReviseAgent` | ReviseAgent creates another immutable Agent revision through the admin surface. |
+| `method` | `RuntimeClient.RevisePolicy` | RevisePolicy creates the next immutable revision of a tenant Policy. |
 | `method` | `RuntimeClient.SendInput` | SendInput idempotently admits bounded Input into a Session. |
 | `type` | `SendInputRequest` | SendInputRequest idempotently submits bounded content to a Session. |
 | `type` | `SendInputResult` | SendInputResult identifies both the accepted Input and its exactly-one Turn. |
@@ -156,7 +208,23 @@ This index is derived only from the declared public `sdk/go` source files. It li
 | `method` | `StaticBearerCredential.Authorize` | Authorize applies the credential to one request-scoped sink. |
 | `method` | `StaticBearerCredential.GoString` | GoString keeps detailed formatter diagnostics secret-safe. |
 | `method` | `StaticBearerCredential.String` | String returns a secret-safe credential diagnostic. |
+| `type` | `ToolCall` | ToolCall is a caller-safe model intent and its derived authorization/execution state. |
+| `method` | `ToolCall.Clone` | Clone returns an independent ToolCall snapshot. |
+| `const` | `ToolCallAuthorized` | ToolCallAuthorized has a bounded capability grant but no execution outcome. |
+| `const` | `ToolCallAwaitingApproval` | ToolCallAwaitingApproval awaits a permitted human decision. |
+| `const` | `ToolCallExecuting` | ToolCallExecuting has committed a capability-bound execution intent. |
+| `const` | `ToolCallFailed` | ToolCallFailed has a durable terminal safe failure. |
+| `type` | `ToolCallInspector` | ToolCallInspector is the additive public capability for owner-scoped Tool-call inspection. |
+| `method` | `ToolCallInspector.InspectToolCalls` | InspectToolCalls returns bounded safe Tool intent, approval, grant, and execution projections. |
+| `const` | `ToolCallIntent` | ToolCallIntent records model intent without execution authority. |
+| `type` | `ToolCallPage` | ToolCallPage is one bounded owner-scoped Tool-call inspection result. |
+| `method` | `ToolCallPage.Clone` | Clone returns an independent ToolCallPage snapshot. |
+| `type` | `ToolCallState` | ToolCallState is the safe public lifecycle of one model Tool intent. |
+| `const` | `ToolCallSucceeded` | ToolCallSucceeded has a durable terminal successful observation. |
+| `const` | `ToolCallUncertain` | ToolCallUncertain has an unresolved external-effect outcome. |
 | `type` | `ToolDefinition` | ToolDefinition describes model-visible intent without granting execution authority. |
+| `type` | `ToolExecution` | ToolExecution is a caller-safe terminal or in-progress tool observation. |
+| `method` | `ToolExecution.Clone` | Clone returns an independent ToolExecution snapshot. |
 | `type` | `Turn` | Turn is an immutable snapshot of one durable progression from Input to outcome. |
 | `method` | `Turn.Clone` | Clone returns an independent Turn snapshot. |
 | `const` | `TurnCancelled` | TurnCancelled completed after explicit cancellation. |

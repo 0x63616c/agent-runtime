@@ -13,7 +13,7 @@ authority: it stores and reads bounded Agent specification and Input bytes by
 authorized capability, while the runtime state store retains only their
 integrity-checked references and bounded metadata.
 
-The public HTTP API, Go SDK, and future Temporal adapter use the same runtime
+The public HTTP API, Go SDK, and private Temporal adapter use the same runtime
 state command/query boundary. They do not receive a Temporal identifier,
 database row, object key, or storage configuration. The state store records
 the atomic metadata/event/audit/outbox portion of an effect; storing an
@@ -36,12 +36,11 @@ metadata authority and violate the declared data boundary. It also cannot be
 implemented in a separate PostgreSQL adapter without exposing kernel internals
 or importing database dependencies into the deterministic kernel.
 
-The existing PostgreSQL admission seam remains a foundation only. It accepts
-an already-existing Session, but cannot authoritatively create or revise Agent
-metadata, create Sessions, read public views and event pages, or settle and
-close Turns. It must therefore not be independently wired to a public route.
-The standalone API remains explicitly `memory-unsafe` until one composed
-runtime state store implements the complete command/query slice.
+The legacy PostgreSQL admission seam remains a foundation only and is not used
+by the M5 API composition. The composed `RuntimeStateStore` owns the complete
+initial public command/query slice: Agent metadata, Sessions, Inputs, Turns,
+events, audit, receipts, and outbox. The standalone `memory-unsafe` mode
+remains explicitly local-only; it is not a durable fallback.
 
 The implementation replaces the closure repository with typed internal
 commands and queries that preserve the kernel's domain-transition rules while

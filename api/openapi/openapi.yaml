@@ -17,6 +17,27 @@
     "/v1/admin/agents/{agent_id}/revisions/{revision_id}": {
       "get": {"operationId": "getAgentRevision", "parameters": [{"$ref": "#/components/parameters/AgentID"}, {"$ref": "#/components/parameters/RevisionID"}, {"$ref": "#/components/parameters/RequestID"}], "responses": {"200": {"$ref": "#/components/responses/AgentRevision"}, "default": {"$ref": "#/components/responses/Failure"}}}
     },
+    "/v1/admin/policies": {
+      "post": {"operationId": "createPolicy", "parameters": [{"$ref": "#/components/parameters/RequestID"}, {"$ref": "#/components/parameters/IdempotencyKey"}], "requestBody": {"$ref": "#/components/requestBodies/CreatePolicy"}, "responses": {"201": {"$ref": "#/components/responses/Policy"}, "default": {"$ref": "#/components/responses/Failure"}}}
+    },
+    "/v1/admin/policies/{policy_name}/revisions": {
+      "post": {"operationId": "revisePolicy", "parameters": [{"$ref": "#/components/parameters/PolicyName"}, {"$ref": "#/components/parameters/RequestID"}, {"$ref": "#/components/parameters/IdempotencyKey"}], "requestBody": {"$ref": "#/components/requestBodies/RevisePolicy"}, "responses": {"201": {"$ref": "#/components/responses/Policy"}, "default": {"$ref": "#/components/responses/Failure"}}}
+    },
+    "/v1/admin/policies/{policy_name}/revisions/{revision}": {
+      "get": {"operationId": "getPolicy", "parameters": [{"$ref": "#/components/parameters/PolicyName"}, {"$ref": "#/components/parameters/PolicyRevision"}, {"$ref": "#/components/parameters/RequestID"}], "responses": {"200": {"$ref": "#/components/responses/Policy"}, "default": {"$ref": "#/components/responses/Failure"}}}
+    },
+    "/v1/artifacts/{artifact_id}": {
+      "get": {"operationId": "readArtifact", "parameters": [{"$ref": "#/components/parameters/ArtifactID"}, {"$ref": "#/components/parameters/RequestID"}], "responses": {"200": {"$ref": "#/components/responses/ArtifactDownload"}, "default": {"$ref": "#/components/responses/Failure"}}}
+    },
+    "/v1/approvals/{approval_id}": {
+      "get": {"operationId": "inspectApproval", "parameters": [{"$ref": "#/components/parameters/ApprovalID"}, {"$ref": "#/components/parameters/RequestID"}], "responses": {"200": {"$ref": "#/components/responses/Approval"}, "default": {"$ref": "#/components/responses/Failure"}}}
+    },
+    "/v1/approvals/{approval_id}/decide": {
+      "post": {"operationId": "decideApproval", "parameters": [{"$ref": "#/components/parameters/ApprovalID"}, {"$ref": "#/components/parameters/RequestID"}, {"$ref": "#/components/parameters/IdempotencyKey"}], "requestBody": {"$ref": "#/components/requestBodies/DecideApproval"}, "responses": {"200": {"$ref": "#/components/responses/Approval"}, "default": {"$ref": "#/components/responses/Failure"}}}
+    },
+    "/v1/idempotency": {
+      "get": {"operationId": "idempotencyStatus", "parameters": [{"$ref": "#/components/parameters/RequestID"}, {"$ref": "#/components/parameters/IdempotencyKey"}], "responses": {"200": {"$ref": "#/components/responses/IdempotencyStatus"}, "default": {"$ref": "#/components/responses/Failure"}}}
+    },
     "/v1/sessions": {
       "post": {"operationId": "createSession", "parameters": [{"$ref": "#/components/parameters/RequestID"}, {"$ref": "#/components/parameters/IdempotencyKey"}], "requestBody": {"$ref": "#/components/requestBodies/CreateSession"}, "responses": {"201": {"$ref": "#/components/responses/Session"}, "default": {"$ref": "#/components/responses/Failure"}}}
     },
@@ -28,6 +49,9 @@
     },
     "/v1/sessions/{session_id}/turns/{turn_id}": {
       "get": {"operationId": "inspectTurn", "parameters": [{"$ref": "#/components/parameters/SessionID"}, {"$ref": "#/components/parameters/TurnID"}, {"$ref": "#/components/parameters/RequestID"}], "responses": {"200": {"$ref": "#/components/responses/Turn"}, "default": {"$ref": "#/components/responses/Failure"}}}
+    },
+    "/v1/sessions/{session_id}/turns/{turn_id}/tools": {
+      "get": {"operationId": "inspectToolCalls", "parameters": [{"$ref": "#/components/parameters/SessionID"}, {"$ref": "#/components/parameters/TurnID"}, {"$ref": "#/components/parameters/RequestID"}], "responses": {"200": {"$ref": "#/components/responses/ToolCallPage"}, "default": {"$ref": "#/components/responses/Failure"}}}
     },
     "/v1/sessions/{session_id}/events": {
       "get": {"operationId": "listEvents", "parameters": [{"$ref": "#/components/parameters/SessionID"}, {"$ref": "#/components/parameters/RequestID"}, {"name": "after", "in": "query", "required": false, "schema": {"$ref": "#/components/schemas/Cursor"}}, {"name": "limit", "in": "query", "required": true, "schema": {"type": "integer", "minimum": 1, "maximum": 1000}}], "responses": {"200": {"$ref": "#/components/responses/EventPage"}, "default": {"$ref": "#/components/responses/Failure"}}}
@@ -49,6 +73,10 @@
       "RevisionID": {"name": "revision_id", "in": "path", "required": true, "schema": {"$ref": "#/components/schemas/AgentRevisionID"}},
       "SessionID": {"name": "session_id", "in": "path", "required": true, "schema": {"$ref": "#/components/schemas/SessionID"}},
       "TurnID": {"name": "turn_id", "in": "path", "required": true, "schema": {"$ref": "#/components/schemas/TurnID"}}
+      ,"ArtifactID": {"name": "artifact_id", "in": "path", "required": true, "schema": {"$ref": "#/components/schemas/ArtifactID"}}
+      ,"ApprovalID": {"name": "approval_id", "in": "path", "required": true, "schema": {"$ref": "#/components/schemas/ApprovalID"}}
+      ,"PolicyName": {"name": "policy_name", "in": "path", "required": true, "schema": {"$ref": "#/components/schemas/SafeName"}}
+      ,"PolicyRevision": {"name": "revision", "in": "path", "required": true, "schema": {"type": "integer", "minimum": 1}}
     },
     "schemas": {
       "RequestID": {"type": "string", "pattern": "^req_[A-Za-z0-9]{16}$"},
@@ -60,18 +88,28 @@
       "EventID": {"type": "string", "pattern": "^evt_[A-Za-z0-9]{16}$"},
       "Cursor": {"type": "string", "pattern": "^cur_[A-Za-z0-9]{16}$"},
       "ArtifactID": {"type": "string", "pattern": "^art_[A-Za-z0-9]{16}$"},
+      "ApprovalID": {"type": "string", "pattern": "^appr_[A-Za-z0-9]{16}$"},
       "SafeName": {"type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[A-Za-z0-9._-]+$"},
       "ToolDefinition": {"type": "object", "additionalProperties": false, "required": ["name", "description"], "properties": {"name": {"$ref": "#/components/schemas/SafeName"}, "description": {"type": "string", "minLength": 1, "maxLength": 4096}}},
+      "PolicyRule": {"type": "object", "additionalProperties": false, "required": ["tool_name", "decision"], "properties": {"tool_name": {"$ref": "#/components/schemas/SafeName"}, "decision": {"type": "string", "enum": ["denied", "requires_approval"]}}},
+      "Policy": {"type": "object", "additionalProperties": false, "required": ["name", "revision", "digest", "rules", "created_at"], "properties": {"name": {"$ref": "#/components/schemas/SafeName"}, "revision": {"type": "integer", "minimum": 1}, "digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}, "rules": {"type": "array", "minItems": 1, "maxItems": 64, "items": {"$ref": "#/components/schemas/PolicyRule"}}, "created_at": {"type": "string", "format": "date-time"}}},
       "AgentSpecification": {"type": "object", "additionalProperties": false, "required": ["id", "revision_id", "revision", "name", "model_profile", "instructions", "created_at"], "properties": {"id": {"$ref": "#/components/schemas/AgentID"}, "revision_id": {"$ref": "#/components/schemas/AgentRevisionID"}, "revision": {"type": "integer", "minimum": 1}, "name": {"$ref": "#/components/schemas/SafeName"}, "model_profile": {"$ref": "#/components/schemas/SafeName"}, "instructions": {"type": "string", "minLength": 1, "maxLength": 262144}, "tools": {"type": "array", "maxItems": 64, "items": {"$ref": "#/components/schemas/ToolDefinition"}}, "created_at": {"type": "string", "format": "date-time"}}},
       "Session": {"type": "object", "additionalProperties": false, "required": ["id", "agent_id", "agent_revision_id", "state", "created_at", "updated_at"], "properties": {"id": {"$ref": "#/components/schemas/SessionID"}, "agent_id": {"$ref": "#/components/schemas/AgentID"}, "agent_revision_id": {"$ref": "#/components/schemas/AgentRevisionID"}, "state": {"type": "string", "enum": ["open", "closing", "completed", "cancelled", "failed"]}, "created_at": {"type": "string", "format": "date-time"}, "updated_at": {"type": "string", "format": "date-time"}}},
       "ArtifactReference": {"type": "object", "additionalProperties": false, "required": ["id", "media_type", "size_bytes", "sha256"], "properties": {"id": {"$ref": "#/components/schemas/ArtifactID"}, "media_type": {"type": "string", "minLength": 1, "maxLength": 255}, "size_bytes": {"type": "integer", "minimum": 0}, "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}}},
+      "IdempotencyStatus": {"type": "object", "additionalProperties": false, "required": ["operation_id", "command", "accepted_at"], "properties": {"operation_id": {"type": "string", "minLength": 1, "maxLength": 128}, "command": {"type": "string", "minLength": 1, "maxLength": 128}, "session_id": {"$ref": "#/components/schemas/SessionID"}, "turn_id": {"$ref": "#/components/schemas/TurnID"}, "artifact_id": {"$ref": "#/components/schemas/ArtifactID"}, "accepted_at": {"type": "string", "format": "date-time"}}},
+      "Approval": {"type": "object", "additionalProperties": false, "required": ["id", "session_id", "turn_id", "state", "expires_at"], "properties": {"id": {"$ref": "#/components/schemas/ApprovalID"}, "session_id": {"$ref": "#/components/schemas/SessionID"}, "turn_id": {"$ref": "#/components/schemas/TurnID"}, "state": {"type": "string", "enum": ["pending", "approved", "denied", "expired"]}, "expires_at": {"type": "string", "format": "date-time"}, "decided_at": {"type": "string", "format": "date-time"}}},
       "TextContentPart": {"type": "object", "additionalProperties": false, "required": ["kind", "text"], "properties": {"kind": {"const": "text"}, "text": {"type": "string", "minLength": 1, "maxLength": 65536}}},
       "ArtifactContentPart": {"type": "object", "additionalProperties": false, "required": ["kind", "artifact"], "properties": {"kind": {"const": "artifact"}, "artifact": {"$ref": "#/components/schemas/ArtifactReference"}}},
       "ContentPart": {"oneOf": [{"$ref": "#/components/schemas/TextContentPart"}, {"$ref": "#/components/schemas/ArtifactContentPart"}], "discriminator": {"propertyName": "kind"}},
       "Input": {"type": "object", "additionalProperties": false, "required": ["id", "parts", "accepted_at"], "properties": {"id": {"$ref": "#/components/schemas/InputID"}, "parts": {"type": "array", "minItems": 1, "maxItems": 32, "items": {"$ref": "#/components/schemas/ContentPart"}}, "accepted_at": {"type": "string", "format": "date-time"}}},
       "Failure": {"type": "object", "additionalProperties": false, "required": ["code", "message", "retryable"], "properties": {"code": {"type": "string", "enum": ["invalid_input", "conflict", "not_found", "unavailable", "internal"]}, "message": {"type": "string", "minLength": 1, "maxLength": 1024}, "retryable": {"type": "boolean"}, "details": {"type": "object", "maxProperties": 16, "propertyNames": {"$ref": "#/components/schemas/SafeName"}, "additionalProperties": {"type": "string", "maxLength": 1024}}}},
-      "Turn": {"type": "object", "additionalProperties": false, "required": ["id", "input_id", "position", "state"], "properties": {"id": {"$ref": "#/components/schemas/TurnID"}, "input_id": {"$ref": "#/components/schemas/InputID"}, "position": {"type": "integer", "minimum": 1}, "state": {"type": "string", "enum": ["queued", "running", "succeeded", "failed", "cancelled"]}, "started_at": {"type": "string", "format": "date-time"}, "completed_at": {"type": "string", "format": "date-time"}, "failure": {"$ref": "#/components/schemas/Failure"}}},
-      "Event": {"type": "object", "additionalProperties": false, "required": ["id", "cursor", "sequence", "kind", "session_id", "occurred_at"], "properties": {"id": {"$ref": "#/components/schemas/EventID"}, "cursor": {"$ref": "#/components/schemas/Cursor"}, "sequence": {"type": "integer", "minimum": 1}, "kind": {"type": "string", "enum": ["session.created", "input.accepted", "turn.queued", "turn.started", "turn.succeeded", "turn.failed", "turn.cancelled", "session.closing", "session.completed"]}, "session_id": {"$ref": "#/components/schemas/SessionID"}, "input_id": {"$ref": "#/components/schemas/InputID"}, "turn_id": {"$ref": "#/components/schemas/TurnID"}, "occurred_at": {"type": "string", "format": "date-time"}}},
+      "ModelUsage": {"type": "object", "additionalProperties": false, "properties": {"input_tokens": {"type": "integer", "minimum": 0}, "output_tokens": {"type": "integer", "minimum": 0}}},
+      "CapabilityGrant": {"type": "object", "additionalProperties": false, "required": ["maximum_uses", "uses", "expires_at"], "properties": {"maximum_uses": {"type": "integer", "minimum": 1, "maximum": 32}, "uses": {"type": "integer", "minimum": 0, "maximum": 32}, "expires_at": {"type": "string", "format": "date-time"}}},
+      "ToolExecution": {"type": "object", "additionalProperties": false, "required": ["state", "created_at"], "properties": {"state": {"type": "string", "enum": ["executing", "succeeded", "failed", "uncertain"]}, "failure": {"$ref": "#/components/schemas/Failure"}, "created_at": {"type": "string", "format": "date-time"}, "completed_at": {"type": "string", "format": "date-time"}}},
+      "ToolCall": {"type": "object", "additionalProperties": false, "required": ["id", "name", "state", "created_at"], "properties": {"id": {"type": "string", "minLength": 1, "maxLength": 128}, "name": {"$ref": "#/components/schemas/SafeName"}, "state": {"type": "string", "enum": ["intent", "awaiting_approval", "authorized", "executing", "succeeded", "failed", "uncertain"]}, "approval": {"$ref": "#/components/schemas/Approval"}, "grant": {"$ref": "#/components/schemas/CapabilityGrant"}, "execution": {"$ref": "#/components/schemas/ToolExecution"}, "created_at": {"type": "string", "format": "date-time"}}},
+      "ToolCallPage": {"type": "object", "additionalProperties": false, "required": ["calls", "truncated"], "properties": {"calls": {"type": "array", "maxItems": 64, "items": {"$ref": "#/components/schemas/ToolCall"}}, "truncated": {"type": "boolean"}}},
+      "Turn": {"type": "object", "additionalProperties": false, "required": ["id", "input_id", "position", "state"], "properties": {"id": {"$ref": "#/components/schemas/TurnID"}, "input_id": {"$ref": "#/components/schemas/InputID"}, "position": {"type": "integer", "minimum": 1}, "state": {"type": "string", "enum": ["queued", "running", "succeeded", "failed", "cancelled"]}, "started_at": {"type": "string", "format": "date-time"}, "completed_at": {"type": "string", "format": "date-time"}, "failure": {"$ref": "#/components/schemas/Failure"}, "usage": {"$ref": "#/components/schemas/ModelUsage"}, "output": {"$ref": "#/components/schemas/ArtifactReference", "description": "Owner-readable immutable output finalized from a normalized model stream."}}},
+      "Event": {"type": "object", "additionalProperties": false, "required": ["id", "cursor", "sequence", "kind", "session_id", "occurred_at"], "properties": {"id": {"$ref": "#/components/schemas/EventID"}, "cursor": {"$ref": "#/components/schemas/Cursor"}, "sequence": {"type": "integer", "minimum": 1}, "kind": {"type": "string", "enum": ["session.created", "input.accepted", "turn.queued", "turn.started", "turn.succeeded", "turn.failed", "turn.cancelled", "producer.gap", "approval.resolved", "sandbox_operation.finalized", "session.closing", "session.completed"]}, "session_id": {"$ref": "#/components/schemas/SessionID"}, "input_id": {"$ref": "#/components/schemas/InputID"}, "turn_id": {"$ref": "#/components/schemas/TurnID"}, "occurred_at": {"type": "string", "format": "date-time"}}},
       "EventGap": {"type": "object", "additionalProperties": false, "required": ["requested_after", "inspect_session"], "properties": {"requested_after": {"$ref": "#/components/schemas/Cursor"}, "earliest_available": {"$ref": "#/components/schemas/Cursor"}, "inspect_session": {"type": "boolean"}}},
       "EventPage": {"type": "object", "additionalProperties": false, "required": ["events"], "properties": {"events": {"type": "array", "maxItems": 1000, "items": {"$ref": "#/components/schemas/Event"}}, "next_cursor": {"$ref": "#/components/schemas/Cursor"}, "gap": {"$ref": "#/components/schemas/EventGap"}}},
       "SessionView": {"type": "object", "additionalProperties": false, "required": ["session", "queued_turn_count", "queued_turns_truncated"], "properties": {"session": {"$ref": "#/components/schemas/Session"}, "active_turn": {"$ref": "#/components/schemas/Turn"}, "queued_turns": {"type": "array", "maxItems": 100, "items": {"$ref": "#/components/schemas/Turn"}}, "queued_turn_count": {"type": "integer", "minimum": 0}, "queued_turns_truncated": {"type": "boolean"}, "recent_events": {"type": "array", "maxItems": 20, "items": {"$ref": "#/components/schemas/Event"}}},
@@ -103,6 +141,8 @@
           }
         }}}
       },
+      "CreatePolicy": {"required": true, "content": {"application/json": {"schema": {"type": "object", "additionalProperties": false, "required": ["name", "rules"], "properties": {"name": {"$ref": "#/components/schemas/SafeName"}, "rules": {"type": "array", "minItems": 1, "maxItems": 64, "items": {"$ref": "#/components/schemas/PolicyRule"}}}}}}},
+      "RevisePolicy": {"required": true, "content": {"application/json": {"schema": {"type": "object", "additionalProperties": false, "required": ["expected_revision", "rules"], "properties": {"expected_revision": {"type": "integer", "minimum": 1}, "rules": {"type": "array", "minItems": 1, "maxItems": 64, "items": {"$ref": "#/components/schemas/PolicyRule"}}}}}}},
       "CreateSession": {
         "required": true,
         "content": {"application/json": {"schema": {
@@ -118,15 +158,21 @@
           "required": ["parts"],
           "properties": {"parts": {"type": "array", "minItems": 1, "maxItems": 32, "items": {"$ref": "#/components/schemas/ContentPart"}}}
         }}}
-      }
+      },
+      "DecideApproval": {"required": true, "content": {"application/json": {"schema": {"type": "object", "additionalProperties": false, "required": ["decision"], "properties": {"decision": {"type": "string", "enum": ["approved", "denied"]}}}}}}
     },
     "responses": {
       "AgentRevision": {"description": "Agent revision", "headers": {"X-Request-ID": {"$ref": "#/components/headers/RequestID"}}, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/AgentSpecification"}}}},
+      "Policy": {"description": "Immutable policy revision", "headers": {"X-Request-ID": {"$ref": "#/components/headers/RequestID"}}, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Policy"}}}},
       "Session": {"description": "Session", "headers": {"X-Request-ID": {"$ref": "#/components/headers/RequestID"}}, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Session"}}}},
       "SessionView": {"description": "Session inspection", "headers": {"X-Request-ID": {"$ref": "#/components/headers/RequestID"}}, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/SessionView"}}}},
       "SendInput": {"description": "Accepted Input and Turn", "headers": {"X-Request-ID": {"$ref": "#/components/headers/RequestID"}}, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/SendInputResult"}}}},
       "Turn": {"description": "Turn", "headers": {"X-Request-ID": {"$ref": "#/components/headers/RequestID"}}, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Turn"}}}},
+      "ToolCallPage": {"description": "Owner-scoped Tool intent and execution inspection", "headers": {"X-Request-ID": {"$ref": "#/components/headers/RequestID"}}, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ToolCallPage"}}}},
       "EventPage": {"description": "Ordered Product events", "headers": {"X-Request-ID": {"$ref": "#/components/headers/RequestID"}}, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/EventPage"}}}},
+      "ArtifactDownload": {"description": "Authorized immutable artifact bytes. Streaming responses declare immutable metadata before the body and emit the Digest value as an HTTP trailer after exact bounded transfer verification.", "headers": {"X-Request-ID": {"$ref": "#/components/headers/RequestID"}, "X-Agent-Runtime-Artifact-Size": {"required": true, "description": "Exact immutable byte size for a streaming response.", "schema": {"type": "integer", "minimum": 1}}, "X-Agent-Runtime-Artifact-SHA256": {"required": true, "description": "Exact immutable lowercase SHA-256 hex digest for a streaming response.", "schema": {"type": "string", "pattern": "^[0-9a-f]{64}$"}}, "Digest": {"required": true, "description": "sha-256 digest; emitted as a trailer by the streaming response.", "schema": {"type": "string", "pattern": "^sha-256=[0-9a-f]{64}$"}}}, "content": {"application/octet-stream": {"schema": {"type": "string", "format": "binary"}}, "text/plain": {"schema": {"type": "string"}}}},
+      "IdempotencyStatus": {"description": "Safe retained idempotency receipt", "headers": {"X-Request-ID": {"$ref": "#/components/headers/RequestID"}}, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/IdempotencyStatus"}}}},
+      "Approval": {"description": "Caller-authorized approval state", "headers": {"X-Request-ID": {"$ref": "#/components/headers/RequestID"}}, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Approval"}}}},
       "Failure": {"description": "Safe runtime failure", "headers": {"X-Request-ID": {"$ref": "#/components/headers/RequestID"}}, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorEnvelope"}}}}
     }
   }

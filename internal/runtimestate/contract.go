@@ -52,7 +52,7 @@ type MutationScope struct {
 	Authority Authority
 }
 
-// RequestDigest commits the canonical, identity-free command request used for idempotency.
+// RequestDigest commits the compiler-canonical, identity-free command request used for idempotency.
 type RequestDigest string
 
 // OperationID is the durable external-effect key owned by the runtime.
@@ -67,34 +67,36 @@ type AuditFactID string
 // OutboxID identifies one durable publication/reconciliation work record.
 type OutboxID string
 
-// Mutation is shared by every lifecycle command. Implementations resolve its
-// idempotency receipt before allocating identifiers, sequence positions, or effects.
-type Mutation struct {
-	Scope          MutationScope
-	IdempotencyKey string
-	RequestDigest  RequestDigest
-}
-
-// CommandScope returns the authenticated ownership scope of the mutation.
-func (mutation Mutation) CommandScope() MutationScope { return mutation.Scope }
-
-// CanonicalRequestDigest returns the request commitment used for replay-safe idempotency.
-func (mutation Mutation) CanonicalRequestDigest() RequestDigest { return mutation.RequestDigest }
-
-// Owned returns the value-owned mutation envelope accepted by a state adapter.
-func (mutation Mutation) Owned() Mutation { return mutation }
-
 // AgentRevisionRecord is persisted revision metadata; the behavior body remains in runtimecontent.
 type AgentRevisionRecord struct {
 	Tenant        runtimecontent.TenantID
-	AgentID       agentruntime.AgentID
-	RevisionID    agentruntime.AgentRevisionID
+	AgentID       agentruntime.AgentID         `json:",omitempty"`
+	RevisionID    agentruntime.AgentRevisionID `json:",omitempty"`
 	Revision      uint64
 	Name          string
 	ModelProfile  string
 	Specification runtimecontent.Reference
 	CreatedAt     time.Time
 	RetainUntil   time.Time
+}
+
+// PolicyRevisionRecord is immutable tenant authorization metadata. Rules are
+// bounded public vocabulary; no raw secret, credential, or executable action
+// is retained in state.
+type PolicyRevisionRecord struct {
+	Tenant      runtimecontent.TenantID
+	Name        string
+	Revision    uint64
+	Digest      string
+	Rules       []agentruntime.PolicyRule
+	CreatedAt   time.Time
+	RetainUntil time.Time
+}
+
+// Clone returns an independent Policy revision snapshot.
+func (record PolicyRevisionRecord) Clone() PolicyRevisionRecord {
+	record.Rules = append([]agentruntime.PolicyRule(nil), record.Rules...)
+	return record
 }
 
 // Clone returns an independent Agent revision metadata snapshot.
@@ -104,9 +106,9 @@ func (record AgentRevisionRecord) Clone() AgentRevisionRecord { return record }
 type SessionRecord struct {
 	Tenant      runtimecontent.TenantID
 	Principal   runtimecontent.PrincipalID
-	SessionID   agentruntime.SessionID
-	AgentID     agentruntime.AgentID
-	RevisionID  agentruntime.AgentRevisionID
+	SessionID   agentruntime.SessionID       `json:",omitempty"`
+	AgentID     agentruntime.AgentID         `json:",omitempty"`
+	RevisionID  agentruntime.AgentRevisionID `json:",omitempty"`
 	State       agentruntime.SessionState
 	Version     uint64
 	CreatedAt   time.Time
@@ -121,8 +123,8 @@ func (record SessionRecord) Clone() SessionRecord { return record }
 type InputRecord struct {
 	Tenant         runtimecontent.TenantID
 	Principal      runtimecontent.PrincipalID
-	SessionID      agentruntime.SessionID
-	InputID        agentruntime.InputID
+	SessionID      agentruntime.SessionID `json:",omitempty"`
+	InputID        agentruntime.InputID   `json:",omitempty"`
 	Content        runtimecontent.Reference
 	AcceptedAt     time.Time
 	RetentionUntil time.Time
@@ -131,13 +133,149 @@ type InputRecord struct {
 // Clone returns an independent Input metadata snapshot.
 func (record InputRecord) Clone() InputRecord { return record }
 
+// ArtifactRecord is immutable state metadata for one principal-readable blob.
+// Its reference never contains a bucket/key or content bytes.
+type ArtifactRecord struct {
+	Tenant      runtimecontent.TenantID
+	Principal   runtimecontent.PrincipalID
+	ArtifactID  agentruntime.ArtifactID `json:",omitempty"`
+	SessionID   agentruntime.SessionID  `json:",omitempty"`
+	TurnID      agentruntime.TurnID     `json:",omitempty"`
+	Reference   runtimecontent.Reference
+	CreatedAt   time.Time
+	RetainUntil time.Time
+}
+
+// Clone returns an independent Artifact metadata snapshot.
+func (record ArtifactRecord) Clone() ArtifactRecord { return record }
+
+// ConversationRecord is one immutable semantic-context entry in a
+// session-owned, optimistic-versioned sequence.
+type ConversationRecord struct {
+	Tenant      runtimecontent.TenantID
+	Principal   runtimecontent.PrincipalID
+	SessionID   agentruntime.SessionID `json:",omitempty"`
+	Version     uint64
+	Reference   runtimecontent.Reference
+	CreatedAt   time.Time
+	RetainUntil time.Time
+}
+
+// Clone returns an independent conversation metadata snapshot.
+func (record ConversationRecord) Clone() ConversationRecord { return record }
+
+// ToolIntentRecord separates a model request from any execution authority.
+type ToolIntentRecord struct {
+	Tenant               runtimecontent.TenantID
+	Principal            runtimecontent.PrincipalID
+	SessionID            agentruntime.SessionID `json:",omitempty"`
+	TurnID               agentruntime.TurnID    `json:",omitempty"`
+	ToolCallID           string
+	ToolName             string
+	ActionDigest         string
+	ActionDescriptor     runtimecontent.Reference
+	PolicyRevisionDigest string
+	CreatedAt            time.Time
+	RetainUntil          time.Time
+}
+
+func (record ToolIntentRecord) Clone() ToolIntentRecord { return record }
+
+// CapabilityGrantRecord is bounded metadata only; secret capability material is never persisted.
+type CapabilityGrantRecord struct {
+	Tenant               runtimecontent.TenantID
+	Principal            runtimecontent.PrincipalID
+	GrantID              string
+	ToolCallID           string
+	CapabilityDigest     string
+	MaximumUses          uint32
+	Uses                 uint32
+	ExpiresAt            time.Time
+	PolicyRevisionDigest string
+	CreatedAt            time.Time
+	RetainUntil          time.Time
+}
+
+func (record CapabilityGrantRecord) Clone() CapabilityGrantRecord { return record }
+
+// ToolExecutionState is the durable lifecycle of one externally visible tool
+// operation. It is deliberately distinct from model intent and Approval.
+type ToolExecutionState string
+
+const (
+	// ToolExecutionIntent means the capability-bound execution intent committed before dispatch.
+	ToolExecutionIntent ToolExecutionState = "intent"
+	// ToolExecutionSucceeded means the exact operation produced a safe result reference.
+	ToolExecutionSucceeded ToolExecutionState = "succeeded"
+	// ToolExecutionFailed means the exact operation produced a safe terminal failure.
+	ToolExecutionFailed ToolExecutionState = "failed"
+	// ToolExecutionUncertain means recovery could not prove the external operation outcome.
+	ToolExecutionUncertain ToolExecutionState = "uncertain"
+)
+
+// ToolExecutionRecord retains a capability-bound external operation without
+// persisting an executable command, credential, or adapter handle.
+type ToolExecutionRecord struct {
+	Tenant               runtimecontent.TenantID
+	Principal            runtimecontent.PrincipalID
+	SessionID            agentruntime.SessionID `json:",omitempty"`
+	TurnID               agentruntime.TurnID    `json:",omitempty"`
+	ToolCallID, GrantID  string
+	OperationID          OperationID
+	State                ToolExecutionState
+	Result               *runtimecontent.Reference
+	Failure              *agentruntime.Failure
+	CreatedAt, UpdatedAt time.Time
+	RetentionUntil       time.Time
+}
+
+// Clone returns an independent tool-execution snapshot.
+func (record ToolExecutionRecord) Clone() ToolExecutionRecord {
+	clone := record
+	clone.Failure = record.Failure.Clone()
+	if record.Result != nil {
+		value := *record.Result
+		clone.Result = &value
+	}
+	return clone
+}
+
+// ApprovalRecord is durable bounded approval metadata governed by a Session/Turn.
+type ApprovalRecord struct {
+	Tenant               runtimecontent.TenantID
+	Principal            runtimecontent.PrincipalID
+	ApprovalID           string
+	SessionID            agentruntime.SessionID `json:",omitempty"`
+	TurnID               agentruntime.TurnID    `json:",omitempty"`
+	ToolCallID           string
+	ActionDigest         string
+	PolicyRevisionDigest string
+	State                string
+	CapabilityDigest     string
+	MaximumUses          uint32
+	ExpiresAt            time.Time
+	Decision             string
+	DecidedAt            *time.Time
+	CreatedAt            time.Time
+	RetainUntil          time.Time
+}
+
+func (record ApprovalRecord) Clone() ApprovalRecord {
+	clone := record
+	if record.DecidedAt != nil {
+		value := *record.DecidedAt
+		clone.DecidedAt = &value
+	}
+	return clone
+}
+
 // TurnRecord is the bounded execution state for one accepted Input.
 type TurnRecord struct {
 	Tenant         runtimecontent.TenantID
 	Principal      runtimecontent.PrincipalID
-	SessionID      agentruntime.SessionID
-	TurnID         agentruntime.TurnID
-	InputID        agentruntime.InputID
+	SessionID      agentruntime.SessionID `json:",omitempty"`
+	TurnID         agentruntime.TurnID    `json:",omitempty"`
+	InputID        agentruntime.InputID   `json:",omitempty"`
 	Position       uint64
 	State          agentruntime.TurnState
 	Version        uint64
@@ -178,12 +316,36 @@ const (
 	InvocationCancelled InvocationState = "cancelled"
 )
 
+// ModelUsage retains provider-neutral token accounting. Nil fields mean the
+// provider did not report that value; unknown is never coerced to zero.
+type ModelUsage struct {
+	InputTokens  *uint64
+	OutputTokens *uint64
+}
+
+// Clone returns an independent usage snapshot.
+func (usage *ModelUsage) Clone() *ModelUsage {
+	if usage == nil {
+		return nil
+	}
+	clone := *usage
+	if usage.InputTokens != nil {
+		value := *usage.InputTokens
+		clone.InputTokens = &value
+	}
+	if usage.OutputTokens != nil {
+		value := *usage.OutputTokens
+		clone.OutputTokens = &value
+	}
+	return &clone
+}
+
 // InvocationRecord retains only the external-effect identity, fence, safe references and outcome metadata.
 type InvocationRecord struct {
 	Tenant         runtimecontent.TenantID
 	Principal      runtimecontent.PrincipalID
-	SessionID      agentruntime.SessionID
-	TurnID         agentruntime.TurnID
+	SessionID      agentruntime.SessionID `json:",omitempty"`
+	TurnID         agentruntime.TurnID    `json:",omitempty"`
 	InvocationID   InvocationID
 	OperationID    OperationID
 	Ordinal        uint64
@@ -191,6 +353,7 @@ type InvocationRecord struct {
 	State          InvocationState
 	Result         *runtimecontent.Reference
 	Failure        *agentruntime.Failure
+	Usage          *ModelUsage
 	CreatedAt      time.Time
 	UpdatedAt      time.Time
 	RetentionUntil time.Time
@@ -200,6 +363,7 @@ type InvocationRecord struct {
 func (record InvocationRecord) Clone() InvocationRecord {
 	clone := record
 	clone.Failure = record.Failure.Clone()
+	clone.Usage = record.Usage.Clone()
 	if record.Result != nil {
 		result := *record.Result
 		clone.Result = &result
@@ -211,13 +375,13 @@ func (record InvocationRecord) Clone() InvocationRecord {
 type ProductEventRecord struct {
 	Tenant         runtimecontent.TenantID
 	Principal      runtimecontent.PrincipalID
-	SessionID      agentruntime.SessionID
+	SessionID      agentruntime.SessionID `json:",omitempty"`
 	Sequence       uint64
-	Cursor         agentruntime.Cursor
-	EventID        agentruntime.EventID
+	Cursor         agentruntime.Cursor  `json:",omitempty"`
+	EventID        agentruntime.EventID `json:",omitempty"`
 	Kind           agentruntime.EventKind
-	InputID        agentruntime.InputID
-	TurnID         agentruntime.TurnID
+	InputID        agentruntime.InputID `json:",omitempty"`
+	TurnID         agentruntime.TurnID  `json:",omitempty"`
 	OperationID    OperationID
 	OccurredAt     time.Time
 	RetentionUntil time.Time
@@ -233,8 +397,8 @@ type AuditFactRecord struct {
 	OperationID    OperationID
 	Actor          runtimecontent.PrincipalID
 	Kind           string
-	SessionID      agentruntime.SessionID
-	TurnID         agentruntime.TurnID
+	SessionID      agentruntime.SessionID `json:",omitempty"`
+	TurnID         agentruntime.TurnID    `json:",omitempty"`
 	OccurredAt     time.Time
 	RetentionUntil time.Time
 }
@@ -258,16 +422,25 @@ const (
 
 // OutboxRecord refers to a committed aggregate effect without copying its event payload.
 type OutboxRecord struct {
-	Tenant            runtimecontent.TenantID
-	Principal         runtimecontent.PrincipalID
-	OutboxID          OutboxID
-	Aggregate         string
-	AggregateVersion  uint64
-	Version           uint64
-	EventID           agentruntime.EventID
+	Tenant           runtimecontent.TenantID
+	Principal        runtimecontent.PrincipalID
+	OutboxID         OutboxID
+	Aggregate        string
+	AggregateVersion uint64
+	Version          uint64
+	EventID          agentruntime.EventID `json:",omitempty"`
+	// EventKind is the closed product-event route. It lets a private publisher
+	// select work from durable state without loading an event payload or a
+	// runtime-content object.
+	EventKind     agentruntime.EventKind `json:",omitempty"`
+	EventSequence uint64                 `json:",omitempty"`
+	// AuditFactID binds this route to the exact concurrently committed audit
+	// fact when the route has an external audit-delivery obligation.
+	AuditFactID       AuditFactID `json:",omitempty"`
 	OperationID       OperationID
-	SessionID         agentruntime.SessionID
-	TurnID            agentruntime.TurnID
+	ToolCallID        string
+	SessionID         agentruntime.SessionID `json:",omitempty"`
+	TurnID            agentruntime.TurnID    `json:",omitempty"`
 	InvocationID      InvocationID
 	InvocationOrdinal uint64
 	InvocationFence   uint64
@@ -292,18 +465,22 @@ func (record OutboxRecord) Clone() OutboxRecord {
 
 // MutationReceipt records exact idempotency resolution without retaining a raw request.
 type MutationReceipt struct {
-	Scope          MutationScope
-	IdempotencyKey string
-	OperationID    OperationID
-	Command        string
-	RequestDigest  RequestDigest
-	AgentID        agentruntime.AgentID
-	RevisionID     agentruntime.AgentRevisionID
-	SessionID      agentruntime.SessionID
-	InputID        agentruntime.InputID
-	TurnID         agentruntime.TurnID
-	AcceptedAt     time.Time
-	RetentionUntil time.Time
+	Scope               MutationScope
+	IdempotencyKey      string
+	OperationID         OperationID
+	Command             string
+	RequestDigest       RequestDigest
+	AgentID             agentruntime.AgentID         `json:",omitempty"`
+	RevisionID          agentruntime.AgentRevisionID `json:",omitempty"`
+	SessionID           agentruntime.SessionID       `json:",omitempty"`
+	InputID             agentruntime.InputID         `json:",omitempty"`
+	TurnID              agentruntime.TurnID          `json:",omitempty"`
+	ArtifactID          agentruntime.ArtifactID      `json:",omitempty"`
+	PolicyName          string
+	PolicyRevision      uint64
+	ConversationVersion uint64
+	AcceptedAt          time.Time
+	RetentionUntil      time.Time
 }
 
 // Clone returns an independent mutation receipt snapshot.
@@ -331,46 +508,177 @@ func (effects EffectSet) Clone() EffectSet {
 
 // RegisterAgentRevisionCommand allocates an initial Agent or next immutable revision from an opaque body handoff.
 type RegisterAgentRevisionCommand struct {
-	Mutation
+	Scope            MutationScope
+	IdempotencyKey   string
 	AgentID          agentruntime.AgentID // empty allocates a new Agent
 	ExpectedRevision uint64               // zero only when AgentID is empty
 	Specification    runtimecontent.ContentHandoff
 }
 
+// RegisterPolicyRevisionCommand creates an initial or next immutable policy
+// revision. It is tenant-administrator-only and is deliberately independent
+// from ordinary Session commands.
+type RegisterPolicyRevisionCommand struct {
+	Scope            MutationScope
+	IdempotencyKey   string
+	Name             string
+	ExpectedRevision uint64
+	Rules            []agentruntime.PolicyRule
+}
+
+// Owned returns an independent policy-revision command snapshot.
+func (command RegisterPolicyRevisionCommand) Owned() RegisterPolicyRevisionCommand {
+	command.Rules = append([]agentruntime.PolicyRule(nil), command.Rules...)
+	return command
+}
+
 // Owned returns a value-owned command. ContentHandoff is opaque and immutable to callers.
 func (command RegisterAgentRevisionCommand) Owned() RegisterAgentRevisionCommand {
-	command.Mutation = command.Mutation.Owned()
 	return command
 }
 
 // CreateSessionCommand pins a principal-owned Session to one exact immutable revision.
 type CreateSessionCommand struct {
-	Mutation
-	RevisionID agentruntime.AgentRevisionID
+	Scope          MutationScope
+	IdempotencyKey string
+	RevisionID     agentruntime.AgentRevisionID
 }
 
 // Owned returns a value-owned command.
 func (command CreateSessionCommand) Owned() CreateSessionCommand {
-	command.Mutation = command.Mutation.Owned()
 	return command
 }
 
 // AdmitInputCommand creates exactly one Input and ordered Turn from an opaque Input-envelope handoff.
 type AdmitInputCommand struct {
-	Mutation
-	SessionID agentruntime.SessionID
-	Input     runtimecontent.ContentHandoff
+	Scope          MutationScope
+	IdempotencyKey string
+	SessionID      agentruntime.SessionID
+	Input          runtimecontent.ContentHandoff
+}
+
+// RegisterArtifactCommand records a worker-produced immutable artifact only
+// after the content store issued an opaque staged handoff for the same owner.
+type RegisterArtifactCommand struct {
+	Scope          MutationScope
+	IdempotencyKey string
+	SessionID      agentruntime.SessionID
+	TurnID         agentruntime.TurnID
+	Artifact       runtimecontent.ContentHandoff
+}
+
+// Owned returns a value-owned artifact command.
+func (command RegisterArtifactCommand) Owned() RegisterArtifactCommand { return command }
+
+// AppendConversationCommand appends one immutable entry under expected-version
+// concurrency. It is worker-owned because providers/tools, not public clients,
+// establish semantic context.
+type AppendConversationCommand struct {
+	Scope           MutationScope
+	IdempotencyKey  string
+	SessionID       agentruntime.SessionID
+	ExpectedVersion uint64
+	Entry           runtimecontent.ContentHandoff
+}
+
+// Owned returns a value-owned conversation append command.
+func (command AppendConversationCommand) Owned() AppendConversationCommand { return command }
+
+// RecordToolIntentCommand records model intent; it grants no execution authority.
+type RecordToolIntentCommand struct {
+	Scope                                                    MutationScope
+	IdempotencyKey                                           string
+	SessionID                                                agentruntime.SessionID
+	TurnID                                                   agentruntime.TurnID
+	ToolCallID, ToolName, ActionDigest, PolicyRevisionDigest string
+	Descriptor                                               runtimecontent.ContentHandoff
+}
+
+func (command RecordToolIntentCommand) Owned() RecordToolIntentCommand { return command }
+
+// RequestApprovalCommand creates bounded pending approval metadata for a recorded intent.
+type RequestApprovalCommand struct {
+	Scope                                                                        MutationScope
+	IdempotencyKey                                                               string
+	SessionID                                                                    agentruntime.SessionID
+	TurnID                                                                       agentruntime.TurnID
+	ToolCallID, ApprovalID, ActionDigest, PolicyRevisionDigest, CapabilityDigest string
+	MaximumUses                                                                  uint32
+	ExpiresAt                                                                    time.Time
+}
+
+func (command RequestApprovalCommand) Owned() RequestApprovalCommand {
+	command.ExpiresAt = normalizeTime(command.ExpiresAt)
+	return command
+}
+
+// DecideApprovalCommand is a principal-authorized, idempotent terminal decision.
+type DecideApprovalCommand struct {
+	Scope                                MutationScope
+	IdempotencyKey, ApprovalID, Decision string
+}
+
+func (command DecideApprovalCommand) Owned() DecideApprovalCommand { return command }
+
+// ConsumeCapabilityGrantCommand records one worker-owned use of an approved
+// grant before the associated external tool execution may begin.
+type ConsumeCapabilityGrantCommand struct {
+	Scope                               MutationScope
+	IdempotencyKey, GrantID, ToolCallID string
+	PolicyRevisionDigest                string
+	SessionID                           agentruntime.SessionID
+	TurnID                              agentruntime.TurnID
+}
+
+// Owned returns a value-owned capability grant consumption command.
+func (command ConsumeCapabilityGrantCommand) Owned() ConsumeCapabilityGrantCommand { return command }
+
+// BeginToolExecutionCommand records one granted external tool operation before
+// an adapter receives its runtime-owned idempotency key.
+type BeginToolExecutionCommand struct {
+	Scope                               MutationScope
+	IdempotencyKey, ToolCallID, GrantID string
+	SessionID                           agentruntime.SessionID
+	TurnID                              agentruntime.TurnID
+	OperationID                         OperationID
+}
+
+// Owned returns a value-owned tool execution intent command.
+func (command BeginToolExecutionCommand) Owned() BeginToolExecutionCommand { return command }
+
+// RecordToolExecutionOutcomeCommand records one exact terminal observation for
+// a capability-bound external tool operation.
+type RecordToolExecutionOutcomeCommand struct {
+	Scope          MutationScope
+	IdempotencyKey string
+	SessionID      agentruntime.SessionID
+	TurnID         agentruntime.TurnID
+	ToolCallID     string
+	OperationID    OperationID
+	Outcome        ToolExecutionState
+	Result         *runtimecontent.Reference
+	Failure        *agentruntime.Failure
+}
+
+// Owned returns a value-owned tool execution outcome command.
+func (command RecordToolExecutionOutcomeCommand) Owned() RecordToolExecutionOutcomeCommand {
+	command.Failure = command.Failure.Clone()
+	if command.Result != nil {
+		value := *command.Result
+		command.Result = &value
+	}
+	return command
 }
 
 // Owned returns a value-owned command. ContentHandoff is opaque and immutable to callers.
 func (command AdmitInputCommand) Owned() AdmitInputCommand {
-	command.Mutation = command.Mutation.Owned()
 	return command
 }
 
 // BeginInvocationAttempt records intent before an external model effect may be dispatched.
 type BeginInvocationAttemptCommand struct {
-	Mutation
+	Scope                  MutationScope
+	IdempotencyKey         string
 	SessionID              agentruntime.SessionID
 	TurnID                 agentruntime.TurnID
 	OperationID            OperationID
@@ -381,13 +689,13 @@ type BeginInvocationAttemptCommand struct {
 
 // Owned returns a value-owned command.
 func (command BeginInvocationAttemptCommand) Owned() BeginInvocationAttemptCommand {
-	command.Mutation = command.Mutation.Owned()
 	return command
 }
 
 // RecordInvocationOutcomeCommand records a fenced safe outcome for one exact operation.
 type RecordInvocationOutcomeCommand struct {
-	Mutation
+	Scope                  MutationScope
+	IdempotencyKey         string
 	SessionID              agentruntime.SessionID
 	TurnID                 agentruntime.TurnID
 	OperationID            OperationID
@@ -396,14 +704,15 @@ type RecordInvocationOutcomeCommand struct {
 	Outcome                InvocationState
 	Result                 *runtimecontent.Reference
 	Failure                *agentruntime.Failure
+	Usage                  *ModelUsage
 	ExpectedSessionVersion uint64
 	ExpectedTurnVersion    uint64
 }
 
 // Owned returns a value-owned command and clones all caller-owned pointer metadata.
 func (command RecordInvocationOutcomeCommand) Owned() RecordInvocationOutcomeCommand {
-	command.Mutation = command.Mutation.Owned()
 	command.Failure = command.Failure.Clone()
+	command.Usage = command.Usage.Clone()
 	if command.Result != nil {
 		result := *command.Result
 		command.Result = &result
@@ -432,7 +741,8 @@ func (outcome TerminalOutcome) Owned() TerminalOutcome { return outcome.Clone() 
 
 // SettleTurnCommand terminally settles a current running Turn and may promote one queued Turn.
 type SettleTurnCommand struct {
-	Mutation
+	Scope                  MutationScope
+	IdempotencyKey         string
 	SessionID              agentruntime.SessionID
 	TurnID                 agentruntime.TurnID
 	ExpectedSessionVersion uint64
@@ -442,33 +752,32 @@ type SettleTurnCommand struct {
 
 // Owned returns a value-owned command and terminal outcome.
 func (command SettleTurnCommand) Owned() SettleTurnCommand {
-	command.Mutation = command.Mutation.Owned()
 	command.Outcome = command.Outcome.Owned()
 	return command
 }
 
 // CancelTurnCommand terminally cancels a running or queued Turn.
 type CancelTurnCommand struct {
-	Mutation
-	SessionID agentruntime.SessionID
-	TurnID    agentruntime.TurnID
+	Scope          MutationScope
+	IdempotencyKey string
+	SessionID      agentruntime.SessionID
+	TurnID         agentruntime.TurnID
 }
 
 // Owned returns a value-owned command.
 func (command CancelTurnCommand) Owned() CancelTurnCommand {
-	command.Mutation = command.Mutation.Owned()
 	return command
 }
 
 // CloseSessionCommand rejects future admission and completes only after accepted work drains.
 type CloseSessionCommand struct {
-	Mutation
-	SessionID agentruntime.SessionID
+	Scope          MutationScope
+	IdempotencyKey string
+	SessionID      agentruntime.SessionID
 }
 
 // Owned returns a value-owned command.
 func (command CloseSessionCommand) Owned() CloseSessionCommand {
-	command.Mutation = command.Mutation.Owned()
 	return command
 }
 
@@ -477,6 +786,13 @@ type RegisterAgentRevisionResult struct {
 	Revision AgentRevisionRecord
 	Receipt  MutationReceipt
 	Effects  EffectSet
+}
+
+// RegisterPolicyRevisionResult returns one committed immutable policy revision.
+type RegisterPolicyRevisionResult struct {
+	Policy  PolicyRevisionRecord
+	Receipt MutationReceipt
+	Effects EffectSet
 }
 
 // CreateSessionResult returns the committed revision-pinned Session and its declared effects.
@@ -493,6 +809,20 @@ type AdmitInputResult struct {
 	Session SessionRecord
 	Receipt MutationReceipt
 	Effects EffectSet
+}
+
+// RegisterArtifactResult returns one immutable artifact and its audit/outbox effects.
+type RegisterArtifactResult struct {
+	Artifact ArtifactRecord
+	Receipt  MutationReceipt
+	Effects  EffectSet
+}
+
+// AppendConversationResult returns one immutable sequence entry and derived effects.
+type AppendConversationResult struct {
+	Conversation ConversationRecord
+	Receipt      MutationReceipt
+	Effects      EffectSet
 }
 
 // BeginInvocationAttemptResult returns the committed fenced invocation intent and declared effects.
@@ -554,6 +884,12 @@ func (result RegisterAgentRevisionResult) Clone() RegisterAgentRevisionResult {
 	return result
 }
 
+// Clone returns an independent policy-revision result.
+func (result RegisterPolicyRevisionResult) Clone() RegisterPolicyRevisionResult {
+	result.Policy, result.Receipt, result.Effects = result.Policy.Clone(), result.Receipt.Clone(), result.Effects.Clone()
+	return result
+}
+
 // Clone returns an independent CreateSession result.
 func (result CreateSessionResult) Clone() CreateSessionResult {
 	result.Session, result.Receipt, result.Effects = result.Session.Clone(), result.Receipt.Clone(), result.Effects.Clone()
@@ -564,6 +900,18 @@ func (result CreateSessionResult) Clone() CreateSessionResult {
 func (result AdmitInputResult) Clone() AdmitInputResult {
 	result.Input, result.Turn, result.Session = result.Input.Clone(), result.Turn.Clone(), result.Session.Clone()
 	result.Receipt, result.Effects = result.Receipt.Clone(), result.Effects.Clone()
+	return result
+}
+
+// Clone returns an independent artifact registration result.
+func (result RegisterArtifactResult) Clone() RegisterArtifactResult {
+	result.Artifact, result.Receipt, result.Effects = result.Artifact.Clone(), result.Receipt.Clone(), result.Effects.Clone()
+	return result
+}
+
+// Clone returns an independent conversation append result.
+func (result AppendConversationResult) Clone() AppendConversationResult {
+	result.Conversation, result.Receipt, result.Effects = result.Conversation.Clone(), result.Receipt.Clone(), result.Effects.Clone()
 	return result
 }
 
@@ -627,6 +975,13 @@ type AgentRevisionQuery struct {
 	RevisionID agentruntime.AgentRevisionID
 }
 
+// PolicyRevisionQuery is a tenant-administrator scoped immutable policy query.
+type PolicyRevisionQuery struct {
+	Scope    MutationScope
+	Name     string
+	Revision uint64
+}
+
 // SessionViewQuery requests one bounded principal-scoped Session projection.
 type SessionViewQuery struct {
 	Scope            MutationScope
@@ -640,6 +995,12 @@ type TurnQuery struct {
 	Scope     MutationScope
 	SessionID agentruntime.SessionID
 	TurnID    agentruntime.TurnID
+}
+
+// ArtifactQuery requests one principal-authorized artifact metadata projection.
+type ArtifactQuery struct {
+	Scope      MutationScope
+	ArtifactID agentruntime.ArtifactID
 }
 
 // InvocationQuery resolves one exact principal-scoped operation for recovery without a provider handle.
@@ -750,7 +1111,8 @@ func (page OutboxPage) Clone() OutboxPage {
 
 // ClaimOutboxCommand atomically leases one Outbox record under ownership-scoped idempotency.
 type ClaimOutboxCommand struct {
-	Mutation
+	Scope           MutationScope
+	IdempotencyKey  string
 	OutboxID        OutboxID
 	ExpectedVersion uint64
 	Claimer         string
@@ -759,14 +1121,14 @@ type ClaimOutboxCommand struct {
 
 // Owned returns a value-owned command with a UTC-normalized claim expiry.
 func (command ClaimOutboxCommand) Owned() ClaimOutboxCommand {
-	command.Mutation = command.Mutation.Owned()
 	command.ClaimUntil = normalizeTime(command.ClaimUntil)
 	return command
 }
 
 // AcknowledgeOutboxCommand atomically acknowledges one owned Outbox lease under idempotency.
 type AcknowledgeOutboxCommand struct {
-	Mutation
+	Scope           MutationScope
+	IdempotencyKey  string
 	OutboxID        OutboxID
 	ExpectedVersion uint64
 	Claimer         string
@@ -775,34 +1137,39 @@ type AcknowledgeOutboxCommand struct {
 
 // Owned returns a value-owned command with a UTC-normalized publication time.
 func (command AcknowledgeOutboxCommand) Owned() AcknowledgeOutboxCommand {
-	command.Mutation = command.Mutation.Owned()
 	command.PublishedAt = normalizeTime(command.PublishedAt)
 	return command
 }
 
-// RuntimeStateStore is the closed internal lifecycle authority. Implementations must take an Owned snapshot of
-// every command before interpreting it, validate ContentHandoff through the configured ContentHandoffValidator,
-// and return owned result snapshots. Its production implementation is PostgreSQL; neither this contract nor a
-// memory conformance adapter claims durable public composition.
+// RuntimeStateStore is the plans-only internal lifecycle persistence authority.
+// Command construction belongs exclusively to Compiler and lifecycle decisions
+// exclusively to RuntimeStatePlanner; an adapter may read authorized metadata
+// state and atomically persist a validated TransitionPlan, but it cannot accept
+// a caller command or manufacture a MutationReceipt.
 type RuntimeStateStore interface {
-	RegisterAgentRevision(context.Context, RegisterAgentRevisionCommand) (RegisterAgentRevisionResult, error)
-	CreateSession(context.Context, CreateSessionCommand) (CreateSessionResult, error)
-	AdmitInput(context.Context, AdmitInputCommand) (AdmitInputResult, error)
-	BeginInvocationAttempt(context.Context, BeginInvocationAttemptCommand) (BeginInvocationAttemptResult, error)
-	RecordInvocationOutcome(context.Context, RecordInvocationOutcomeCommand) (RecordInvocationOutcomeResult, error)
-	SettleTurn(context.Context, SettleTurnCommand) (SettleTurnResult, error)
-	CancelTurn(context.Context, CancelTurnCommand) (CancelTurnResult, error)
-	CloseSession(context.Context, CloseSessionCommand) (CloseSessionResult, error)
+	LoadRuntimeState(context.Context, MutationScope) (RuntimeState, error)
+	PersistTransitionPlan(context.Context, TransitionPlan) error
 	GetAgentRevision(context.Context, AgentRevisionQuery) (AgentRevisionRecord, error)
+	GetPolicyRevision(context.Context, PolicyRevisionQuery) (PolicyRevisionRecord, error)
 	GetSessionView(context.Context, SessionViewQuery) (SessionView, error)
 	GetTurn(context.Context, TurnQuery) (TurnRecord, error)
+	GetArtifact(context.Context, ArtifactQuery) (ArtifactRecord, error)
 	GetInvocation(context.Context, InvocationQuery) (InvocationRecord, error)
 	ReadEvents(context.Context, EventsQuery) (EventPage, error)
 	GetMutationReceipt(context.Context, MutationReceiptQuery) (MutationReceipt, error)
 	ReadAudit(context.Context, AuditQuery) (AuditPage, error)
 	ReadOutbox(context.Context, OutboxQuery) (OutboxPage, error)
-	ClaimOutbox(context.Context, ClaimOutboxCommand) (ClaimOutboxResult, error)
-	AcknowledgeOutbox(context.Context, AcknowledgeOutboxCommand) (AcknowledgeOutboxResult, error)
+	AuthorizeAgentSpecificationBodyRead(context.Context, CompiledReadAuthorization) (runtimecontent.AgentSpecificationBodyRecord, error)
+	AuthorizeInputEnvelopeRead(context.Context, CompiledReadAuthorization) (runtimecontent.InputEnvelopeRecord, error)
+	AuthorizeArtifactRead(context.Context, CompiledReadAuthorization) (runtimecontent.ArtifactRecord, error)
+	AuthorizeToolActionDescriptorRead(context.Context, CompiledReadAuthorization) (runtimecontent.ToolActionDescriptorCommitment, error)
+}
+
+// OutboxTenantSource is the deliberately narrow discovery capability used by
+// a private outbox publisher. It exposes tenant identifiers only; it is not a
+// public runtime query and it never grants content-read authority.
+type OutboxTenantSource interface {
+	ListOutboxTenants(context.Context) ([]runtimecontent.TenantID, error)
 }
 
 // ContentHandoffValidator is supplied to a state-store composition so a command cannot persist a forgeable reference.

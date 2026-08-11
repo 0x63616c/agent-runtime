@@ -49,6 +49,41 @@ var _ = Describe("Operator role configuration", func() {
 		Expect(err).To(MatchError(ContainSubstring("role all is not a deployable trust boundary")))
 	})
 
+	It("admits only the isolated codec-enabled worker capability", func() {
+		config, err := roles.Parse(strings.NewReader(orchestrationCodecConfig))
+		Expect(err).NotTo(HaveOccurred())
+		_, contentDeclared := config.DependencyEndpoint("runtime-content")
+		Expect(contentDeclared).To(BeFalse())
+		worker := config.Worker()
+		Expect(worker).NotTo(BeNil())
+		Expect(worker.PayloadBlobBucket).To(Equal("temporal-payload"))
+
+		_, err = roles.Parse(strings.NewReader(strings.Replace(orchestrationCodecConfig, `"payload_blob_prefix":"temporal-payload"`, `"payload_blob_prefix":"../runtime-content"`, 1)))
+		Expect(err).To(MatchError(ContainSubstring("worker capability is incomplete")))
+		_, err = roles.Parse(strings.NewReader(strings.Replace(orchestrationCodecConfig, `"payload_access_key_environment":"ORCHESTRATION_PAYLOAD_BLOB_ACCESS_KEY"`, `"payload_access_key_environment":"BLOB_STORAGE_CREDENTIAL"`, 1)))
+		Expect(err).To(MatchError(ContainSubstring("worker capability is incomplete")))
+	})
+
+	It("permits only a bounded HTTPS optional audit sink on the codec worker", func() {
+		withSink := strings.Replace(orchestrationCodecConfig, `"payload_secret_key_environment":"ORCHESTRATION_PAYLOAD_BLOB_SECRET_KEY"`, `"payload_secret_key_environment":"ORCHESTRATION_PAYLOAD_BLOB_SECRET_KEY","audit_sink":{"endpoint":"https://audit.example.invalid/v1/facts","timeout_seconds":5}`, 1)
+		config, err := roles.Parse(strings.NewReader(withSink))
+		Expect(err).NotTo(HaveOccurred())
+		worker := config.Worker()
+		Expect(worker.AuditSink).NotTo(BeNil())
+		Expect(worker.AuditSink.Endpoint).To(Equal("https://audit.example.invalid/v1/facts"))
+		worker.AuditSink.Endpoint = "https://mutated.example.invalid"
+		Expect(config.Worker().AuditSink.Endpoint).To(Equal("https://audit.example.invalid/v1/facts"))
+
+		for _, invalid := range []string{
+			strings.Replace(withSink, `https://audit.example.invalid/v1/facts`, `http://audit.example.invalid/v1/facts`, 1),
+			strings.Replace(withSink, `"timeout_seconds":5`, `"timeout_seconds":0`, 1),
+			strings.Replace(withSink, `https://audit.example.invalid/v1/facts`, `https://audit.example.invalid/v1/facts?token=forbidden`, 1),
+		} {
+			_, err := roles.Parse(strings.NewReader(invalid))
+			Expect(err).To(MatchError(ContainSubstring("worker capability is incomplete")))
+		}
+	})
+
 	It("refuses application configuration and reports missing secrets without their values", func() {
 		_, err := roles.Parse(strings.NewReader(strings.Replace(orchestrationConfig, `"role": "orchestration",`, `"role": "orchestration", "agents":[{"name":"not-an-operator-setting"}],`, 1)))
 		Expect(err).To(HaveOccurred())
@@ -113,6 +148,7 @@ type roleFixture struct {
 var roleFixtures = []roleFixture{
 	{roles.RoleAPI, roleConfig(roles.RoleAPI, 8080, `[{"name":"state","endpoint":"http://state:8080"},{"name":"telemetry","endpoint":"http://telemetry:4318"}]`), nil},
 	{roles.RoleOrchestration, orchestrationConfig, []string{"STATE_DATABASE_DSN", "TEMPORAL_AUTH_TOKEN"}},
+	{roles.RoleOrchestrationCodec, orchestrationCodecConfig, []string{"ORCHESTRATION_PAYLOAD_BLOB_ACCESS_KEY", "ORCHESTRATION_PAYLOAD_BLOB_SECRET_KEY", "STATE_DATABASE_DSN", "TEMPORAL_AUTH_TOKEN"}},
 	{roles.RoleModel, roleConfig(roles.RoleModel, 8082, `[{"name":"conversation","endpoint":"http://api:8080","secret_environment":"CONVERSATION_ACCESS_TOKEN"},{"name":"egress-proxy","endpoint":"http://egress-proxy:8088"},{"name":"model","endpoint":"https://model.example.invalid","secret_environment":"MODEL_API_KEY"},{"name":"telemetry","endpoint":"http://telemetry:4318"}]`), []string{"CONVERSATION_ACCESS_TOKEN", "MODEL_API_KEY"}},
 	{roles.RoleTool, roleConfig(roles.RoleTool, 8083, `[{"name":"sandbox-control","endpoint":"https://sandbox-control:8443","secret_environment":"SANDBOX_CONTROL_TOKEN"},{"name":"telemetry","endpoint":"http://telemetry:4318"},{"name":"tool-broker","endpoint":"http://api:8080","secret_environment":"TOOL_BROKER_TOKEN"}]`), []string{"SANDBOX_CONTROL_TOKEN", "TOOL_BROKER_TOKEN"}},
 	{roles.RoleBlob, roleConfig(roles.RoleBlob, 8084, `[{"name":"storage","endpoint":"http://blob:9000","secret_environment":"BLOB_STORAGE_CREDENTIAL"},{"name":"telemetry","endpoint":"http://telemetry:4318"}]`), []string{"BLOB_STORAGE_CREDENTIAL"}},
@@ -135,4 +171,26 @@ const orchestrationConfig = `{
     {"name":"telemetry","endpoint":"http://telemetry.agent-runtime.svc:4318"},
     {"name":"temporal","endpoint":"temporal.agent-runtime.svc:7233","secret_environment":"TEMPORAL_AUTH_TOKEN"}
   ]
+}`
+
+const orchestrationCodecConfig = `{
+  "version": 1,
+  "role": "orchestration-codec",
+  "namespace": "agent-runtime",
+  "listen_address": "127.0.0.1:8088",
+  "dependencies": [
+    {"name":"state","endpoint":"postgres://state.agent-runtime.svc:5432/agent_runtime","secret_environment":"STATE_DATABASE_DSN"},
+    {"name":"telemetry","endpoint":"http://telemetry.agent-runtime.svc:4318"},
+    {"name":"temporal","endpoint":"temporal.agent-runtime.svc:7233","secret_environment":"TEMPORAL_AUTH_TOKEN"},
+    {"name":"payload-blob","endpoint":"http://temporal-payload.minio.svc:9000","secret_environment":"ORCHESTRATION_PAYLOAD_BLOB_ACCESS_KEY"},
+    {"name":"payload-blob-secret","endpoint":"http://temporal-payload.minio.svc:9000","secret_environment":"ORCHESTRATION_PAYLOAD_BLOB_SECRET_KEY"}
+  ],
+  "worker": {
+    "task_queue":"agent-runtime-session-v1",
+    "payload_blob_endpoint":"http://temporal-payload.minio.svc:9000",
+    "payload_blob_bucket":"temporal-payload",
+    "payload_blob_prefix":"temporal-payload",
+    "payload_access_key_environment":"ORCHESTRATION_PAYLOAD_BLOB_ACCESS_KEY",
+    "payload_secret_key_environment":"ORCHESTRATION_PAYLOAD_BLOB_SECRET_KEY"
+  }
 }`

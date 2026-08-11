@@ -92,3 +92,29 @@ func TestRuntimeV3MigrationRaisesInputReferenceBoundWithoutRawContent(t *testing
 		}
 	}
 }
+
+func TestRuntimeV4MigrationDeclaresPlansOnlyLifecycleMetadata(t *testing.T) {
+	contents, err := os.ReadFile(filepath.Join("..", "..", "deploy", "production", "migrations", "runtime-v4.up.sql"))
+	if err != nil { t.Fatalf("read runtime v4 migration: %v", err) }
+	statement := string(contents)
+	for _, required := range []string{"runtime-v4", "runtime.invocations", "runtime.mutation_receipts", "runtime.outbox_leases", "invocation_fence", "request_digest", "content_media_type"} {
+		if !strings.Contains(statement, required) { t.Errorf("runtime v4 migration missing %q", required) }
+	}
+	for _, prohibited := range []string{"raw_prompt", "prompt_text", "content_text", "event_payload"} {
+		if strings.Contains(statement, prohibited) { t.Errorf("runtime v4 migration must not persist raw content %q", prohibited) }
+	}
+}
+
+func TestRuntimeV5MigrationDeclaresNativeTenantPartitionsAndLeastPrivilegeBoundary(t *testing.T) {
+	contents, err := os.ReadFile(filepath.Join("..", "..", "deploy", "production", "migrations", "runtime-v5.up.sql"))
+	if err != nil { t.Fatalf("read runtime v5 migration: %v", err) }
+	statement := string(contents)
+	for _, required := range []string{
+		"runtime-v5", "PARTITION BY HASH (tenant_id)", "runtime_state_snapshots_p0",
+		"runtime_state_app", "runtime_state_operator", "ENABLE ROW LEVEL SECURITY",
+		"FORCE ROW LEVEL SECURITY", "current_setting('runtime.tenant_id', true)",
+		"tenant_retention_jobs", "runtime_tenant_catalog_isolation", "REVOKE ALL ON SCHEMA runtime FROM PUBLIC",
+	} {
+		if !strings.Contains(statement, required) { t.Errorf("runtime v5 migration missing %q", required) }
+	}
+}

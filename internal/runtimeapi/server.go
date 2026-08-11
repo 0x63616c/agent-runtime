@@ -4,6 +4,8 @@ package runtimeapi
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"io"
 	"mime"
@@ -14,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/0x63616c/agent-runtime/internal/runtimecontent"
 	agentruntime "github.com/0x63616c/agent-runtime/sdk/go"
 	"github.com/cockroachdb/errors"
 )
@@ -69,10 +72,18 @@ func NewHandler(config Config) (http.Handler, error) {
 	mux.HandleFunc(openAPIMethodCreateAgent+" "+openAPIPathCreateAgent, server.createAgent)
 	mux.HandleFunc(openAPIMethodReviseAgent+" "+openAPIPathReviseAgent, server.reviseAgent)
 	mux.HandleFunc(openAPIMethodGetAgentRevision+" "+openAPIPathGetAgentRevision, server.getAgentRevision)
+	mux.HandleFunc(openAPIMethodCreatePolicy+" "+openAPIPathCreatePolicy, server.createPolicy)
+	mux.HandleFunc(openAPIMethodRevisePolicy+" "+openAPIPathRevisePolicy, server.revisePolicy)
+	mux.HandleFunc(openAPIMethodGetPolicy+" "+openAPIPathGetPolicy, server.getPolicy)
+	mux.HandleFunc(openAPIMethodReadArtifact+" "+openAPIPathReadArtifact, server.readArtifact)
+	mux.HandleFunc(openAPIMethodInspectApproval+" "+openAPIPathInspectApproval, server.inspectApproval)
+	mux.HandleFunc(openAPIMethodDecideApproval+" "+openAPIPathDecideApproval, server.decideApproval)
+	mux.HandleFunc(openAPIMethodIdempotencyStatus+" "+openAPIPathIdempotencyStatus, server.idempotencyStatus)
 	mux.HandleFunc(openAPIMethodCreateSession+" "+openAPIPathCreateSession, server.createSession)
 	mux.HandleFunc(openAPIMethodSendInput+" "+openAPIPathSendInput, server.sendInput)
 	mux.HandleFunc(openAPIMethodInspectSession+" "+openAPIPathInspectSession, server.inspectSession)
 	mux.HandleFunc(openAPIMethodInspectTurn+" "+openAPIPathInspectTurn, server.inspectTurn)
+	mux.HandleFunc(openAPIMethodInspectToolCalls+" "+openAPIPathInspectToolCalls, server.inspectToolCalls)
 	mux.HandleFunc(openAPIMethodListEvents+" "+openAPIPathListEvents, server.events)
 	mux.HandleFunc(openAPIMethodCancelTurn+" "+openAPIPathCancelTurn, server.cancelTurn)
 	mux.HandleFunc(openAPIMethodCloseSession+" "+openAPIPathCloseSession, server.closeSession)
@@ -233,6 +244,168 @@ func (server *server) getAgentRevision(writer http.ResponseWriter, request *http
 		return
 	}
 	result, err := server.runtime.GetAgentRevision(request.Context(), contextValue.identity, agentID, revisionID)
+	server.writeResult(writer, contextValue.requestID, http.StatusOK, result, err)
+}
+
+func (server *server) createPolicy(writer http.ResponseWriter, request *http.Request) {
+	contextValue := request.Context().Value(requestContextKey{}).(requestContext)
+	if !contextValue.identity.Admin {
+		server.writeFailure(writer, contextValue.requestID, http.StatusNotFound, agentruntime.Failure{Code: agentruntime.FailureNotFound, Message: "resource not found"})
+		return
+	}
+	var body struct {
+		Name  string                    `json:"name"`
+		Rules []agentruntime.PolicyRule `json:"rules"`
+	}
+	if !server.decodeMutation(writer, request, contextValue.requestID, &body) {
+		return
+	}
+	result, err := server.runtime.CreatePolicy(request.Context(), contextValue.identity, agentruntime.CreatePolicyRequest{IdempotencyKey: request.Header.Get("Idempotency-Key"), Name: body.Name, Rules: body.Rules})
+	server.writeResult(writer, contextValue.requestID, http.StatusCreated, result, err)
+}
+
+func (server *server) revisePolicy(writer http.ResponseWriter, request *http.Request) {
+	contextValue := request.Context().Value(requestContextKey{}).(requestContext)
+	if !contextValue.identity.Admin {
+		server.writeFailure(writer, contextValue.requestID, http.StatusNotFound, agentruntime.Failure{Code: agentruntime.FailureNotFound, Message: "resource not found"})
+		return
+	}
+	var body struct {
+		ExpectedRevision uint64                    `json:"expected_revision"`
+		Rules            []agentruntime.PolicyRule `json:"rules"`
+	}
+	if !server.decodeMutation(writer, request, contextValue.requestID, &body) {
+		return
+	}
+	result, err := server.runtime.RevisePolicy(request.Context(), contextValue.identity, agentruntime.RevisePolicyRequest{IdempotencyKey: request.Header.Get("Idempotency-Key"), Name: request.PathValue("policy_name"), ExpectedRevision: body.ExpectedRevision, Rules: body.Rules})
+	server.writeResult(writer, contextValue.requestID, http.StatusCreated, result, err)
+}
+
+func (server *server) getPolicy(writer http.ResponseWriter, request *http.Request) {
+	contextValue := request.Context().Value(requestContextKey{}).(requestContext)
+	if !contextValue.identity.Admin {
+		server.writeFailure(writer, contextValue.requestID, http.StatusNotFound, agentruntime.Failure{Code: agentruntime.FailureNotFound, Message: "resource not found"})
+		return
+	}
+	revision, err := strconv.ParseUint(request.PathValue("revision"), 10, 64)
+	if err != nil || revision == 0 {
+		server.writeInvalid(writer, contextValue.requestID)
+		return
+	}
+	result, callErr := server.runtime.GetPolicy(request.Context(), contextValue.identity, request.PathValue("policy_name"), revision)
+	server.writeResult(writer, contextValue.requestID, http.StatusOK, result, callErr)
+}
+
+func (server *server) readArtifact(writer http.ResponseWriter, request *http.Request) {
+	contextValue := request.Context().Value(requestContextKey{}).(requestContext)
+	artifactID, err := agentruntime.ParseArtifactID(request.PathValue("artifact_id"))
+	if err != nil {
+		server.writeInvalid(writer, contextValue.requestID)
+		return
+	}
+	if opener, ok := server.runtime.(interface {
+		OpenArtifact(context.Context, Identity, agentruntime.ArtifactID) (runtimecontent.ArtifactStream, error)
+	}); ok {
+		stream, err := opener.OpenArtifact(request.Context(), contextValue.identity, artifactID)
+		if err != nil {
+			server.writeResult(writer, contextValue.requestID, http.StatusOK, nil, err)
+			return
+		}
+		if stream.Body == nil {
+			server.writeFailure(writer, contextValue.requestID, http.StatusInternalServerError, agentruntime.Failure{Code: agentruntime.FailureInternal, Message: "request failed"})
+			return
+		}
+		defer stream.Body.Close()
+		if !validArtifactStreamReference(stream.Reference) {
+			_ = stream.Body.Close()
+			server.writeFailure(writer, contextValue.requestID, http.StatusInternalServerError, agentruntime.Failure{Code: agentruntime.FailureInternal, Message: "request failed"})
+			return
+		}
+		writer.Header().Set("Content-Type", stream.Reference.MediaType)
+		writer.Header().Set("X-Agent-Runtime-Artifact-Size", strconv.FormatInt(stream.Reference.SizeBytes, 10))
+		writer.Header().Set("X-Agent-Runtime-Artifact-SHA256", strings.TrimPrefix(stream.Reference.Digest, "sha256:"))
+		writer.Header().Set("Trailer", "Digest")
+		writer.WriteHeader(http.StatusOK)
+		hash := sha256.New()
+		written, copyErr := io.Copy(io.MultiWriter(writer, hash), io.LimitReader(stream.Body, stream.Reference.SizeBytes))
+		var probe [1]byte
+		extraBytes, probeErr := stream.Body.Read(probe[:])
+		if copyErr == nil && written == stream.Reference.SizeBytes && extraBytes == 0 && probeErr == io.EOF && hex.EncodeToString(hash.Sum(nil)) == strings.TrimPrefix(stream.Reference.Digest, "sha256:") {
+			writer.Header().Set(http.TrailerPrefix+"Digest", "sha-256="+strings.TrimPrefix(stream.Reference.Digest, "sha256:"))
+		}
+		return
+	}
+	result, err := server.runtime.ReadArtifact(request.Context(), contextValue.identity, artifactID)
+	if err != nil {
+		server.writeResult(writer, contextValue.requestID, http.StatusOK, nil, err)
+		return
+	}
+	if result.Artifact.ID != artifactID || result.Artifact.SizeBytes != int64(len(result.Body)) || result.Artifact.MediaType == "" || len(result.Artifact.SHA256) != 64 {
+		server.writeFailure(writer, contextValue.requestID, http.StatusInternalServerError, agentruntime.Failure{Code: agentruntime.FailureInternal, Message: "request failed"})
+		return
+	}
+	writer.Header().Set("Content-Type", result.Artifact.MediaType)
+	writer.Header().Set("Content-Length", strconv.FormatInt(result.Artifact.SizeBytes, 10))
+	writer.Header().Set("Digest", "sha-256="+result.Artifact.SHA256)
+	writer.WriteHeader(http.StatusOK)
+	_, _ = writer.Write(result.Body)
+}
+
+func validArtifactStreamReference(reference runtimecontent.Reference) bool {
+	mediaType, _, err := mime.ParseMediaType(reference.MediaType)
+	return err == nil && mediaType != "" && mediaType != "application/json" && reference.SizeBytes > 0 && len(reference.Digest) == len("sha256:")+64 && strings.HasPrefix(reference.Digest, "sha256:") && strings.Trim(strings.TrimPrefix(reference.Digest, "sha256:"), "0123456789abcdef") == ""
+}
+
+func (server *server) inspectApproval(writer http.ResponseWriter, request *http.Request) {
+	contextValue := request.Context().Value(requestContextKey{}).(requestContext)
+	approvalID, err := agentruntime.ParseApprovalID(request.PathValue("approval_id"))
+	if err != nil {
+		server.writeInvalid(writer, contextValue.requestID)
+		return
+	}
+	result, callErr := server.runtime.InspectApproval(request.Context(), contextValue.identity, approvalID)
+	server.writeResult(writer, contextValue.requestID, http.StatusOK, result, callErr)
+}
+
+func (server *server) inspectToolCalls(writer http.ResponseWriter, request *http.Request) {
+	contextValue := request.Context().Value(requestContextKey{}).(requestContext)
+	sessionID, sessionErr := agentruntime.ParseSessionID(request.PathValue("session_id"))
+	turnID, turnErr := agentruntime.ParseTurnID(request.PathValue("turn_id"))
+	inspector, ok := server.runtime.(interface {
+		InspectToolCalls(context.Context, Identity, agentruntime.SessionID, agentruntime.TurnID) (agentruntime.ToolCallPage, error)
+	})
+	if sessionErr != nil || turnErr != nil || !ok {
+		server.writeInvalid(writer, contextValue.requestID)
+		return
+	}
+	result, err := inspector.InspectToolCalls(request.Context(), contextValue.identity, sessionID, turnID)
+	server.writeResult(writer, contextValue.requestID, http.StatusOK, result, err)
+}
+
+func (server *server) decideApproval(writer http.ResponseWriter, request *http.Request) {
+	contextValue := request.Context().Value(requestContextKey{}).(requestContext)
+	approvalID, err := agentruntime.ParseApprovalID(request.PathValue("approval_id"))
+	var body struct {
+		Decision agentruntime.ApprovalState `json:"decision"`
+	}
+	if err != nil || !server.decodeMutation(writer, request, contextValue.requestID, &body) {
+		if err != nil {
+			server.writeInvalid(writer, contextValue.requestID)
+		}
+		return
+	}
+	result, callErr := server.runtime.DecideApproval(request.Context(), contextValue.identity, agentruntime.DecideApprovalRequest{ApprovalID: approvalID, Decision: body.Decision, IdempotencyKey: request.Header.Get("Idempotency-Key")})
+	server.writeResult(writer, contextValue.requestID, http.StatusOK, result, callErr)
+}
+
+func (server *server) idempotencyStatus(writer http.ResponseWriter, request *http.Request) {
+	contextValue := request.Context().Value(requestContextKey{}).(requestContext)
+	keys := request.Header.Values("Idempotency-Key")
+	if len(keys) != 1 || keys[0] == "" {
+		server.writeInvalid(writer, contextValue.requestID)
+		return
+	}
+	result, err := server.runtime.IdempotencyStatus(request.Context(), contextValue.identity, keys[0])
 	server.writeResult(writer, contextValue.requestID, http.StatusOK, result, err)
 }
 

@@ -31,6 +31,9 @@ type Cursor string
 // ArtifactID identifies an authorized immutable Artifact reference.
 type ArtifactID string
 
+// ApprovalID identifies one owner-actionable Approval request.
+type ApprovalID string
+
 // RequestID correlates one HTTP attempt without identifying durable work.
 type RequestID string
 
@@ -43,6 +46,7 @@ const (
 	eventPrefix         = "evt_"
 	cursorPrefix        = "cur_"
 	artifactPrefix      = "art_"
+	approvalPrefix      = "appr_"
 	requestPrefix       = "req_"
 )
 
@@ -72,6 +76,11 @@ func ParseCursor(value string) (Cursor, error) { return parseID[Cursor](value, c
 // ParseArtifactID validates an externally supplied Artifact ID.
 func ParseArtifactID(value string) (ArtifactID, error) {
 	return parseID[ArtifactID](value, artifactPrefix)
+}
+
+// ParseApprovalID validates an externally supplied Approval ID.
+func ParseApprovalID(value string) (ApprovalID, error) {
+	return parseID[ApprovalID](value, approvalPrefix)
 }
 
 // ParseRequestID validates an externally supplied request correlation ID.
@@ -255,6 +264,21 @@ func (id ArtifactID) MarshalJSON() ([]byte, error) { return marshalID(id, artifa
 
 // UnmarshalJSON decodes and validates an Artifact ID.
 func (id *ArtifactID) UnmarshalJSON(data []byte) error { return unmarshalID(data, id, artifactPrefix) }
+
+// String returns the canonical Approval ID.
+func (id ApprovalID) String() string { return string(id) }
+
+// Redacted returns a safe diagnostic Approval ID.
+func (id ApprovalID) Redacted() string { return redactID(id, approvalPrefix) }
+
+// LogValue returns a redacted Approval ID for structured logs.
+func (id ApprovalID) LogValue() slog.Value { return slog.StringValue(id.Redacted()) }
+
+// MarshalJSON encodes a validated Approval ID.
+func (id ApprovalID) MarshalJSON() ([]byte, error) { return marshalID(id, approvalPrefix) }
+
+// UnmarshalJSON decodes and validates an Approval ID.
+func (id *ApprovalID) UnmarshalJSON(data []byte) error { return unmarshalID(data, id, approvalPrefix) }
 
 // String returns the canonical request correlation ID.
 func (id RequestID) String() string { return string(id) }

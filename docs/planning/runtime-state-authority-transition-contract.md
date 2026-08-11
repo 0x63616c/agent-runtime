@@ -1,11 +1,10 @@
 # Runtime state-authority transition contract
 
-Status: accepted implementation design under
+Status: accepted M5 implementation contract under
 [ADR-0011](../adr/0011-runtime-state-authority-and-content-boundary.md).
-This document specifies the internal S2/S7 contract required before a
-PostgreSQL-backed public runtime can replace the explicitly labelled
-`memory-unsafe` composition. It is a design, not implementation or acceptance
-evidence.
+The complete initial command/query slice is now composed by the durable public
+runtime. This document remains a contract and design explanation, not terminal
+requirement-acceptance or production-rollout evidence.
 
 ## Scope and authority
 
@@ -155,10 +154,12 @@ responses remain reference-only and bounded.
 
 `RegisterAgentRevision`, `CreateSession`, `AdmitInput`,
 `BeginInvocationAttempt`, `RecordInvocationOutcome`, `SettleTurn`,
-`CancelTurn`, and `CloseSession` are the first complete Agent/Session/Turn
-lifecycle command set. Conversation, Artifact, Tool, and Approval commands
-must extend the same closed interface; they may not bypass it with direct
-tables or event writes. This first set is not a claim that DOM-008–013,
+`CancelTurn`, `CloseSession`, `RegisterArtifact`, and `AppendConversation`
+share the closed compiler/planner interface. The latter two retain only
+immutable content references, receipts, audit facts and outbox work;
+conversation appends additionally require the current durable version. Tool
+and Approval commands must use the same interface rather than bypassing it
+with direct tables or event writes. This remains not a claim that DOM-008–013,
 HITL-001–006, DAT-001–002, or the complete DAT-003–013 release evidence is
 implemented or satisfied.
 
@@ -172,20 +173,19 @@ implemented or satisfied.
    writer/read capability and tenant-bound verified `ContentHandoff` tests.
    Conditional write, read-back integrity, cancellation, tenant isolation, and
    descriptor mismatch are required before a state command accepts either.
-3. Replace `kernel.Repository` aggregate closures in one migration with the
-   pure transition interpreter plus complete deterministic
-   `MemoryRuntimeStateStore`. All listed commands and queries move together;
-   delete the legacy aggregate rather than retaining a fallback.
-4. Implement `PostgresRuntimeStateStore` against that full contract and the
-   declared migrations. Its transaction writes normalized metadata, events,
-   Audit, and Outbox rows together; it never stores or fetches content bytes.
-   Run shared adapter conformance plus named real PostgreSQL tests.
-5. Add content-GC/reconciliation, Outbox publisher/recovery, RLS/role grants,
-   retention/erasure, migration, and backup/restore evidence before accepting
-   durable public process configuration.
-6. Switch API and Temporal composition roots together. Remove `memory-unsafe`
-   only after every public command/query route uses this authority and
-   real-path evidence is retained.
+3. M5 replaced the aggregate closure in the durable composition with the pure
+   transition interpreter and complete deterministic `MemoryRuntimeStateStore`.
+   The legacy kernel remains only as the explicit local `memory-unsafe` mode.
+4. M5 implements `RuntimeStateStore` against the declared PostgreSQL
+   migrations. Its transaction writes normalized metadata, events, Audit, and
+   Outbox rows together; it never stores or fetches content bytes. Named real
+   PostgreSQL tests and the durable API process exercise that path.
+5. M5 adds state-outbox publication/recovery for the private Session workflow.
+   Content GC/reconciliation, RLS/role grants, full retention/erasure, and a
+   backup/PITR drill remain separate operator/release work.
+6. The durable API and Temporal composition roots now use this authority.
+   `memory-unsafe` remains available only as an explicitly labelled local
+   configuration, never as a durable fallback.
 
 No intermediate public configuration may send one route to PostgreSQL or read
 Events from another authority. A PostgreSQL table, content object, or
@@ -194,22 +194,21 @@ adapter-level test is not public-command proof by itself.
 ### Contract implementation checkpoint
 
 `internal/runtimestate` declares this complete initial lifecycle command/query
-matrix and its metadata-only records. It intentionally supplies no memory or
-PostgreSQL adapter and is not wired to a public route. Its boundary tests keep
-raw Agent/Input content out of runtime-state records, require the opaque
-`runtimecontent.ContentHandoff` at the two current content-entry commands, and
+matrix and its metadata-only records. Its deterministic memory and PostgreSQL
+adapters are wired through the M5 state runtime; boundary tests keep raw
+Agent/Input content out of state records, require opaque
+`runtimecontent.ContentHandoff` values at the two content-entry commands, and
 require every listed lifecycle and Outbox operation to remain in the closed
-interface. The next migration step is a complete deterministic memory
-conformance implementation, not an incremental route migration.
+interface.
 
-### Required planner replacement split
+### Implemented planner replacement split
 
-The existing aggregate kernel cannot be adapted incrementally: it owns raw
-Agent/Input bytes and exposes closure transactions, while the new authority
-needs typed canonical commands and metadata-only plans. The next coherent
-vertical is therefore one replacement, with these non-separable stages:
+The aggregate kernel cannot be adapted incrementally: it owns raw Agent/Input
+bytes and exposes closure transactions, while the durable authority needs typed
+canonical commands and metadata-only plans. M5 implemented the following
+non-separable replacement:
 
-1. Replace the current draft with one complete internal contract: ten typed
+1. One complete internal contract: ten typed
    canonical command inputs—`RegisterAgentRevision`, `CreateSession`,
    `AdmitInput`, `BeginInvocationAttempt`, `RecordInvocationOutcome`,
    `SettleTurn`, `CancelTurn`, `CloseSession`, `ClaimOutbox`, and
@@ -220,28 +219,34 @@ vertical is therefore one replacement, with these non-separable stages:
    references, and is the only component that creates a `Mutation` receipt
    binding. No adapter may accept, construct, or use a generic `Mutation` in
    parallel with this compiler; it persists only compiler-produced plans.
-2. Implement one concrete pure lifecycle planner for all ten mutations. Its
+2. One concrete pure lifecycle planner for all ten mutations. Its
    prior state includes Agent revision series, Session, ordered active/queued
    Turns, invocation/fence, receipt, cursor/sequence and Outbox lease state.
    Its plan contains every allocated ID, atomic session/turn/invocation write,
    promotion/terminal write, and ordered Product-event/Audit/Outbox effect.
    The plan is opaque or centrally validated before an adapter can persist it.
-3. Replace `kernel.Repository` in one cutover with a complete deterministic
+3. The durable composition replaces `kernel.Repository` with a complete deterministic
    MemoryRuntimeStateStore that supplies that prior state and persists only
    planner output. The same conformance suite then becomes the PostgreSQL
-   adapter target. No public route may use either authority until this cutover.
+   adapter target. The explicit local `memory-unsafe` mode remains isolated
+   from this durable composition.
 
-This is deliberately not an adapter ABI. The in-progress contract draft is
-not committed until stage 1 and the complete stage-2 planner are coherent.
+This is deliberately not an adapter ABI. The M5 compiler and planner are in
+`internal/runtimestate`: command
+callers cannot supply a digest or receipt, content handoffs are validated
+before a sealed command is produced, and adapters receive only a centrally
+validated transition plan. Focused lifecycle/race tests exercise all ten
+commands; durable API and Temporal worker integration are separately retained
+evidence rather than a claim of broader model, tool, approval, or sandbox
+execution.
 
 ## First executable vertical
 
-Implement the `runtimecontent` identity-free Agent-specification body and
-tenant-bound verified `ContentHandoff` first, then use that same capability for
-the canonical Input envelope. This is production-aligned and testable without
-PostgreSQL: conditional immutable write, exact read-back, descriptor binding,
-digest/size verification, cancellation fencing, tenant isolation, and
-unreferenced-object reconciliation classification. It remains internal and
-unused by public `SendInput` until the complete `RuntimeStateStore` migration
-can switch the lifecycle together. This creates the mandatory content-reference
-handoff without a second Session/Turn authority.
+M5 implements the `runtimecontent` identity-free Agent-specification body and
+tenant-bound verified `ContentHandoff`, then uses the same capability for the
+canonical Input envelope. Conditional immutable write, exact read-back,
+descriptor binding, digest/size verification, cancellation fencing, tenant
+isolation, and unreferenced-object reconciliation classification are exercised
+at that boundary. The durable public `SendInput` now uses this handoff before
+the complete `RuntimeStateStore` transition; this creates the mandatory
+content-reference boundary without a second Session/Turn authority.

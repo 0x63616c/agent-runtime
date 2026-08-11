@@ -19,9 +19,19 @@ when local development would find a convenience all-in-one process useful.
 
 The configuration schema is version `1`. `--check` runs startup validation and
 credential-presence validation but does not listen or mutate infrastructure.
-Without `--check`, the currently implemented composition slice exposes
-`GET /healthz` and `GET /readyz`; their response contains only `role`,
-`namespace`, and `status`.
+Without `--check`, ordinary roles expose `GET /healthz` and `GET /readyz`;
+their response contains only `role`, `namespace`, and `status`.
+`orchestration-codec` additionally starts the private state/outbox-derived
+Temporal Session worker from its explicit task queue and dedicated payload
+bucket/prefix. It receives no public API or runtime-content credential.
+
+An `orchestration-codec` worker may additionally declare an `audit_sink` with
+an explicit `https` endpoint and a `timeout_seconds` value from 1 through 60.
+It delivers only an already-committed, bounded audit fact through the durable
+outbox. The field contains no credential and cannot make the state transition
+fail closed: a sink outage leaves the route lease-reclaimable for at-least-once
+delivery. Omitting the field leaves external audit export disabled; no current
+reference Stack declares a production sink.
 
 `egress-proxy` is a separately deployed infrastructure process, not a runtime
 role. It takes an explicit bind address and one or more exact

@@ -2,6 +2,9 @@ package agentruntime_test
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -96,6 +99,120 @@ func TestHTTPClientRequiresMatchingRequestIDOnSafeFailure(t *testing.T) {
 	sessionID, _ := agentruntime.ParseSessionID("sess_1234567890ABCDEF")
 	if _, err := client.InspectSession(context.Background(), sessionID); err == nil || !strings.Contains(err.Error(), "request ID mismatch") {
 		t.Fatalf("InspectSession error = %v", err)
+	}
+}
+
+func TestHTTPClientOpensArtifactWithoutBufferingAndVerifiesTheTrailer(t *testing.T) {
+	credential, _ := agentruntime.NewStaticBearerCredential("test-token-000000")
+	body := []byte("streamed artifact bytes")
+	sum := sha256.Sum256(body)
+	reader := &countingReadCloser{Reader: strings.NewReader(string(body))}
+	var observed *http.Request
+	client, err := agentruntime.NewClient(agentruntime.ClientConfig{BaseURL: "https://runtime.example", HTTPClient: &http.Client{Transport: roundTripperFunc(func(request *http.Request) (*http.Response, error) {
+		observed = request.Clone(context.Background())
+		header := make(http.Header)
+		header.Set("X-Request-ID", request.Header.Get("X-Request-ID"))
+		header.Set("Content-Type", "text/plain")
+		header.Set("X-Agent-Runtime-Artifact-Size", fmt.Sprintf("%d", len(body)))
+		header.Set("X-Agent-Runtime-Artifact-SHA256", hex.EncodeToString(sum[:]))
+		return &http.Response{StatusCode: http.StatusOK, Header: header, Trailer: http.Header{"Digest": []string{"sha-256=" + hex.EncodeToString(sum[:])}}, Body: reader}, nil
+	})}, Credentials: credential, RequestIDs: fixedRequestIDs{}})
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	stream, err := client.OpenArtifact(context.Background(), "art_0000000000000001")
+	if err != nil {
+		t.Fatalf("open Artifact: %v", err)
+	}
+	if reader.reads != 0 {
+		t.Fatalf("open Artifact buffered %d reads before returning", reader.reads)
+	}
+	got, err := io.ReadAll(stream.Body)
+	if err != nil || string(got) != string(body) {
+		t.Fatalf("read Artifact stream = %q, %v", got, err)
+	}
+	if err := stream.Body.Close(); err != nil {
+		t.Fatalf("close completed Artifact stream: %v", err)
+	}
+	if !reader.closed || stream.Artifact.SHA256 != hex.EncodeToString(sum[:]) || stream.Artifact.SizeBytes != int64(len(body)) {
+		t.Fatalf("stream = %#v closed=%v, want verified immutable metadata and closed body", stream.Artifact, reader.closed)
+	}
+	if observed.Method != http.MethodGet || observed.URL.Path != "/v1/artifacts/art_0000000000000001" || observed.Header.Get("Accept") != "application/octet-stream" || observed.Header.Get("Authorization") != "Bearer test-token-000000" {
+		t.Fatalf("open Artifact request = %#v", observed)
+	}
+}
+
+func TestHTTPClientRejectsArtifactStreamDigestMismatchAndSupportsCancellationClose(t *testing.T) {
+	credential, _ := agentruntime.NewStaticBearerCredential("test-token-000000")
+	body := []byte("streamed artifact bytes")
+	sum := sha256.Sum256(body)
+	for name, trailer := range map[string]string{"mismatch": "sha-256=" + strings.Repeat("0", 64), "missing": ""} {
+		t.Run(name, func(t *testing.T) {
+			reader := &countingReadCloser{Reader: strings.NewReader(string(body))}
+			client, err := agentruntime.NewClient(agentruntime.ClientConfig{BaseURL: "https://runtime.example", HTTPClient: &http.Client{Transport: roundTripperFunc(func(request *http.Request) (*http.Response, error) {
+				header := make(http.Header)
+				header.Set("X-Request-ID", request.Header.Get("X-Request-ID"))
+				header.Set("Content-Type", "text/plain")
+				header.Set("X-Agent-Runtime-Artifact-Size", fmt.Sprintf("%d", len(body)))
+				header.Set("X-Agent-Runtime-Artifact-SHA256", hex.EncodeToString(sum[:]))
+				trailers := make(http.Header)
+				if trailer != "" {
+					trailers.Set("Digest", trailer)
+				}
+				return &http.Response{StatusCode: http.StatusOK, Header: header, Trailer: trailers, Body: reader}, nil
+			})}, Credentials: credential, RequestIDs: fixedRequestIDs{}})
+			if err != nil {
+				t.Fatalf("NewClient: %v", err)
+			}
+			stream, err := client.OpenArtifact(context.Background(), "art_0000000000000001")
+			if err != nil {
+				t.Fatalf("open Artifact: %v", err)
+			}
+			if _, err := io.ReadAll(stream.Body); err == nil {
+				t.Fatal("read mismatched Artifact stream error = nil")
+			}
+			if err := stream.Body.Close(); err != nil {
+				t.Fatalf("close mismatched Artifact stream: %v", err)
+			}
+			if !reader.closed {
+				t.Fatal("stream reader was not closed after read completion")
+			}
+		})
+	}
+	reader := &countingReadCloser{Reader: strings.NewReader(string(body))}
+	client, err := agentruntime.NewClient(agentruntime.ClientConfig{BaseURL: "https://runtime.example", HTTPClient: &http.Client{Transport: roundTripperFunc(func(request *http.Request) (*http.Response, error) {
+		header := make(http.Header)
+		header.Set("X-Request-ID", request.Header.Get("X-Request-ID"))
+		header.Set("Content-Type", "text/plain")
+		header.Set("X-Agent-Runtime-Artifact-Size", fmt.Sprintf("%d", len(body)))
+		header.Set("X-Agent-Runtime-Artifact-SHA256", hex.EncodeToString(sum[:]))
+		return &http.Response{StatusCode: http.StatusOK, Header: header, Trailer: http.Header{"Digest": []string{"sha-256=" + hex.EncodeToString(sum[:])}}, Body: reader}, nil
+	})}, Credentials: credential, RequestIDs: fixedRequestIDs{}})
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	stream, err := client.OpenArtifact(context.Background(), "art_0000000000000001")
+	if err != nil {
+		t.Fatalf("open Artifact: %v", err)
+	}
+	if err := stream.Body.Close(); err != nil || !reader.closed {
+		t.Fatalf("close early stream = %v closed=%v", err, reader.closed)
+	}
+}
+
+func TestHTTPClientPreservesSafeArtifactStreamFailures(t *testing.T) {
+	credential, _ := agentruntime.NewStaticBearerCredential("test-token-000000")
+	client, err := agentruntime.NewClient(agentruntime.ClientConfig{BaseURL: "https://runtime.example", HTTPClient: &http.Client{Transport: roundTripperFunc(func(request *http.Request) (*http.Response, error) {
+		body := `{"request_id":"` + request.Header.Get("X-Request-ID") + `","error":{"code":"not_found","message":"resource not found","retryable":false}}`
+		return response(http.StatusNotFound, request.Header.Get("X-Request-ID"), body), nil
+	})}, Credentials: credential, RequestIDs: fixedRequestIDs{}})
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	_, err = client.OpenArtifact(context.Background(), "art_0000000000000001")
+	var runtimeError *agentruntime.Error
+	if !errors.As(err, &runtimeError) || runtimeError.Failure.Code != agentruntime.FailureNotFound {
+		t.Fatalf("open Artifact failure = %v, want safe not-found", err)
 	}
 }
 
@@ -208,4 +325,20 @@ func response(status int, requestID, body string) *http.Response {
 	header.Set("X-Request-ID", requestID)
 	header.Set("Content-Type", "application/json")
 	return &http.Response{StatusCode: status, Header: header, Body: io.NopCloser(strings.NewReader(body))}
+}
+
+type countingReadCloser struct {
+	io.Reader
+	reads  int
+	closed bool
+}
+
+func (reader *countingReadCloser) Read(value []byte) (int, error) {
+	reader.reads++
+	return reader.Reader.Read(value)
+}
+
+func (reader *countingReadCloser) Close() error {
+	reader.closed = true
+	return nil
 }

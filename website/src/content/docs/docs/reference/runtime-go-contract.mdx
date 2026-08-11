@@ -13,7 +13,9 @@ or telemetry implementation.
 
 ## What exists
 
-The package defines strict opaque IDs; immutable Agent revision and
+The package defines strict opaque IDs; immutable Agent and Policy revisions;
+Policy revisions have a canonical digest and only bounded named-Tool
+dispositions, never credentials or executable authority. It also defines
 revision-pinned Session snapshots; bounded text and Artifact-reference Input;
 serialized Turn states; stable safe Failure codes; ordered bounded Product
 events; opaque Cursors and explicit Gaps; and a narrow `RuntimeClient`
@@ -44,8 +46,16 @@ bound dependencies. It performs no hidden retries and rejects unknown or
 trailing JSON, oversized responses, unsafe failure envelopes, and request-ID
 mismatches.
 
+`ArtifactStreamer` is an additive capability separate from `RuntimeClient`.
+`Client.OpenArtifact` returns a closable, non-buffering immutable Artifact
+stream with metadata authorized before content storage opens. It verifies the
+exact byte count and `Digest` trailer only at EOF; closing an unfinished body
+cancels observation without changing durable work.
+
 The standalone API role still uses explicitly labelled `memory-unsafe`
 storage. It does not prove restart durability. PostgreSQL/outbox authority,
-Temporal workflow execution, model/tool/approval execution, Artifact transfer,
-and live push streaming remain unimplemented. No M5 milestone requirement is
-complete on the strength of this slice alone.
+Temporal workflow execution, model/tool/approval execution, and live push
+streaming are independently tracked implementation paths. Artifact transfer
+has a bounded authorized HTTP/SDK path; lifecycle/retention and production
+rollout remain separate evidence requirements. No M5
+milestone requirement is complete on the strength of this slice alone.
