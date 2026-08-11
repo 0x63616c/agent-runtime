@@ -395,6 +395,12 @@ const (
 	EventTurnFailed EventKind = "turn.failed"
 	// EventTurnCancelled reports one terminal cancelled outcome.
 	EventTurnCancelled EventKind = "turn.cancelled"
+	// EventApprovalResolved reports a terminal approved, denied, or expired
+	// approval without exposing an action or capability value.
+	EventApprovalResolved EventKind = "approval.resolved"
+	// EventSandboxOperationFinalized reports that a sandbox-backed operation
+	// reached a durable terminal outcome. Backend handles remain private.
+	EventSandboxOperationFinalized EventKind = "sandbox_operation.finalized"
 	// EventSessionClosing reports that no new Input is accepted while queued work drains.
 	EventSessionClosing EventKind = "session.closing"
 	// EventSessionCompleted reports a terminal drained Session.

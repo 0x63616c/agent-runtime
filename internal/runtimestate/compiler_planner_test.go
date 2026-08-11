@@ -512,7 +512,7 @@ func TestPlannerPersistsToolIntentBeforeApprovalDecision(t *testing.T) {
 		t.Fatal(err)
 	}
 	plan, err = planner.Plan(context.Background(), plan.State(), decision)
-	if err != nil || plan.State().Approvals[0].State != "approved" || len(plan.Effects().Audit) != 1 {
+	if err != nil || plan.State().Approvals[0].State != "approved" || len(plan.Effects().Audit) != 1 || len(plan.Effects().Events) != 1 || plan.Effects().Events[0].Kind != agentruntime.EventApprovalResolved || len(plan.Effects().Outbox) != 1 {
 		t.Fatalf("decision=%v %#v", err, plan.State().Approvals)
 	}
 	if len(plan.State().Grants) != 1 {

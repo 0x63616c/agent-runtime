@@ -90,6 +90,7 @@ This index is derived only from the declared public `sdk/go` source files. It li
 | `type` | `Error` | Error is a safe runtime-owned command failure suitable for errors.As. |
 | `method` | `Error.Error` | Error returns only the stable code and safe bounded message. |
 | `type` | `Event` | Event is a bounded, ordered, caller-safe Product event. |
+| `const` | `EventApprovalResolved` | EventApprovalResolved reports a terminal approved, denied, or expired approval without exposing an action or capability value. |
 | `type` | `EventGap` | EventGap explicitly says a requested replay position is no longer available. |
 | `type` | `EventID` | EventID identifies one Product event. |
 | `method` | `EventID.LogValue` | LogValue returns a redacted Product-event ID for structured logs. |
@@ -100,6 +101,7 @@ This index is derived only from the declared public `sdk/go` source files. It li
 | `const` | `EventInputAccepted` | EventInputAccepted reports durable idempotent Input admission. |
 | `type` | `EventKind` | EventKind identifies a stable Product-event vocabulary entry. |
 | `type` | `EventPage` | EventPage is one bounded replay page and its next opaque position. |
+| `const` | `EventSandboxOperationFinalized` | EventSandboxOperationFinalized reports that a sandbox-backed operation reached a durable terminal outcome. Backend handles remain private. |
 | `const` | `EventSessionClosing` | EventSessionClosing reports that no new Input is accepted while queued work drains. |
 | `const` | `EventSessionCompleted` | EventSessionCompleted reports a terminal drained Session. |
 | `const` | `EventSessionCreated` | EventSessionCreated reports durable Session creation. |

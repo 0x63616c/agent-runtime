@@ -593,7 +593,7 @@ func (planner *RuntimeStatePlanner) decideApproval(state *RuntimeState, binding 
 		if !now.Before(a.ExpiresAt) {
 			a.State = "expired"
 			state.Approvals[n] = a
-			effects, err := planner.auditOnly(state, binding, "approval.expired", a.SessionID, a.TurnID, now)
+			effects, err := planner.approvalEffects(state, binding, a, now)
 			return PlanResult{}, effects, err
 		}
 		a.State = c.Decision
@@ -618,10 +618,26 @@ func (planner *RuntimeStatePlanner) decideApproval(state *RuntimeState, binding 
 				RetainUntil:          a.RetainUntil,
 			})
 		}
-		e, err := planner.auditOnly(state, binding, "approval."+c.Decision, a.SessionID, a.TurnID, now)
+		e, err := planner.approvalEffects(state, binding, a, now)
 		return PlanResult{}, e, err
 	}
 	return PlanResult{}, EffectSet{}, ErrNotFoundOrDenied
+}
+
+func (planner *RuntimeStatePlanner) approvalEffects(state *RuntimeState, binding ReceiptBinding, approval ApprovalRecord, now time.Time) (EffectSet, error) {
+	sessionIndex := findSession(state, binding.Scope, approval.SessionID)
+	turnIndex := findTurn(state, binding.Scope, approval.SessionID, approval.TurnID)
+	if sessionIndex < 0 || turnIndex < 0 {
+		return EffectSet{}, ErrNotFoundOrDenied
+	}
+	effects, err := planner.effects(state, binding, state.Sessions[sessionIndex], state.Turns[turnIndex], InvocationRecord{}, []agentruntime.EventKind{agentruntime.EventApprovalResolved}, now)
+	if err != nil || len(effects.Audit) != 1 || len(state.Audit) == 0 {
+		return effects, err
+	}
+	kind := "approval." + approval.State
+	effects.Audit[0].Kind = kind
+	state.Audit[len(state.Audit)-1].Kind = kind
+	return effects, nil
 }
 
 func (planner *RuntimeStatePlanner) consumeCapabilityGrant(state *RuntimeState, binding ReceiptBinding, c ConsumeCapabilityGrantCommand, now time.Time) (PlanResult, EffectSet, error) {

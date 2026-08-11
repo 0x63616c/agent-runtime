@@ -44,10 +44,14 @@ retry decision is deliberately closed and covered by
 
 The current dispatcher has no model, tool, approval service, or sandbox
 credential, so the latter two cases are classification guards rather than a
-claim that the dispatcher executes those effects. TMP-010 remains terminal
-work for retained Temporal-environment approval, sandbox-operation, and event
-finalization scenarios; M6/M7 consume those foundations later but do not own
-their acceptance rows.
+claim that the dispatcher executes those effects. Approval resolution now
+produces a safe `approval.resolved` event/outbox route; terminal operation
+routes include `turn.succeeded`, `turn.failed`, and the safe
+`sandbox_operation.finalized` vocabulary. The Temporal test environment
+retains an ordered Input → Approval → sandbox-finalization → Session-complete
+scenario. TMP-010 still needs its full durable-state and retained-history
+evidence bundle; M6/M7 consume these foundations later but do not own their
+acceptance rows.
 
 Required retained evidence:
 

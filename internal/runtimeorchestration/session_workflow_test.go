@@ -82,6 +82,40 @@ func TestSessionWorkflowFinalizesAfterDurableSessionCompletedRoute(t *testing.T)
 	}
 }
 
+func TestSessionWorkflowKeepsApprovalSandboxAndEventFinalizationOrdered(t *testing.T) {
+	var suite testsuite.WorkflowTestSuite
+	environment := suite.NewTestWorkflowEnvironment()
+	var dispatched []runtimeorchestration.Command
+	environment.RegisterActivityWithOptions(func(_ context.Context, command runtimeorchestration.Command) error {
+		dispatched = append(dispatched, command)
+		return nil
+	}, activity.RegisterOptions{Name: runtimeorchestration.DispatchStateCommandActivity})
+	commands := []runtimeorchestration.Command{
+		{Tenant: "tenant-a", OutboxID: "outbox-input", SessionID: "sess_1234567890ABCDEF", Kind: runtimeorchestration.CommandInputAccepted, Sequence: 1},
+		{Tenant: "tenant-a", OutboxID: "outbox-approval", SessionID: "sess_1234567890ABCDEF", Kind: runtimeorchestration.CommandApprovalResolved, Sequence: 2},
+		{Tenant: "tenant-a", OutboxID: "outbox-sandbox", SessionID: "sess_1234567890ABCDEF", Kind: runtimeorchestration.CommandSandboxOperationFinalized, Sequence: 3},
+		{Tenant: "tenant-a", OutboxID: "outbox-complete", SessionID: "sess_1234567890ABCDEF", Kind: runtimeorchestration.CommandSessionCompleted, Sequence: 4},
+	}
+	for _, command := range commands {
+		command := command
+		environment.RegisterDelayedCallback(func() {
+			environment.SignalWorkflow(runtimeorchestration.SessionCommandSignal, command)
+		}, 0)
+	}
+	environment.ExecuteWorkflow(runtimeorchestration.SessionWorkflow, runtimeorchestration.WorkflowInput{SessionID: "sess_1234567890ABCDEF", ContinueAfter: 100})
+	if err := environment.GetWorkflowError(); err != nil {
+		t.Fatalf("workflow error = %v, want terminal completion", err)
+	}
+	if len(dispatched) != len(commands) {
+		t.Fatalf("dispatched = %#v, want every durable lifecycle route", dispatched)
+	}
+	for index, command := range commands {
+		if dispatched[index] != command {
+			t.Fatalf("dispatched[%d] = %#v, want %#v", index, dispatched[index], command)
+		}
+	}
+}
+
 func TestDispatchStateCommandClassifiesRetrySafetyWithoutRepeatingUnknownEffects(t *testing.T) {
 	command := runtimeorchestration.Command{Tenant: "tenant-a", OutboxID: "outbox-1", SessionID: "sess_1234567890ABCDEF", Kind: runtimeorchestration.CommandInputAccepted, Sequence: 1}
 	for _, scenario := range []struct {

@@ -36,8 +36,10 @@ documentation:
   producer-loss finalization, lifecycle/GC classification, production
   PostgreSQL retention/partition/erasure/backup-restore evidence, and
   process-kill outbox recovery.
-- TMP-010: retained Temporal test-environment approval, sandbox-operation,
-  and event-finalization lifecycle scenarios. TMP-009 has a closed retry
+- TMP-010: full durable-state and retained-history evidence for the approval,
+  sandbox-operation, and event-finalization lifecycle. The Temporal test
+  environment now retains the ordered lifecycle vocabulary, but it still needs
+  state-backed/external-effect completion proof. TMP-009 has a closed retry
   decision table and focused classification proof, but remains part of the
   final M5 evidence bundle.
 

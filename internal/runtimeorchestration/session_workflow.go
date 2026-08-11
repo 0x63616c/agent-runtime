@@ -43,6 +43,14 @@ const (
 	CommandInputAccepted CommandKind = "input_accepted"
 	// CommandTurnCancelled represents an already persisted cancellation route.
 	CommandTurnCancelled CommandKind = "turn_cancelled"
+	// CommandTurnSucceeded represents an already persisted terminal operation route.
+	CommandTurnSucceeded CommandKind = "turn_succeeded"
+	// CommandTurnFailed represents an already persisted failed terminal operation route.
+	CommandTurnFailed CommandKind = "turn_failed"
+	// CommandApprovalResolved represents an already persisted terminal approval route.
+	CommandApprovalResolved CommandKind = "approval_resolved"
+	// CommandSandboxOperationFinalized represents an already persisted sandbox finalization route.
+	CommandSandboxOperationFinalized CommandKind = "sandbox_operation_finalized"
 	// CommandSessionClosing reports that durable state stopped accepting Inputs
 	// while work already admitted is allowed to drain.
 	CommandSessionClosing CommandKind = "session_closing"
@@ -230,10 +238,14 @@ func validateCommand(command Command) error {
 func matchesCommand(event agentruntime.EventKind, command CommandKind) bool {
 	return event == agentruntime.EventInputAccepted && command == CommandInputAccepted ||
 		event == agentruntime.EventTurnCancelled && command == CommandTurnCancelled ||
+		event == agentruntime.EventTurnSucceeded && command == CommandTurnSucceeded ||
+		event == agentruntime.EventTurnFailed && command == CommandTurnFailed ||
+		event == agentruntime.EventApprovalResolved && command == CommandApprovalResolved ||
+		event == agentruntime.EventSandboxOperationFinalized && command == CommandSandboxOperationFinalized ||
 		event == agentruntime.EventSessionClosing && command == CommandSessionClosing ||
 		event == agentruntime.EventSessionCompleted && command == CommandSessionCompleted
 }
 
 func knownCommandKind(kind CommandKind) bool {
-	return kind == CommandInputAccepted || kind == CommandTurnCancelled || kind == CommandSessionClosing || kind == CommandSessionCompleted
+	return kind == CommandInputAccepted || kind == CommandTurnCancelled || kind == CommandTurnSucceeded || kind == CommandTurnFailed || kind == CommandApprovalResolved || kind == CommandSandboxOperationFinalized || kind == CommandSessionClosing || kind == CommandSessionCompleted
 }
