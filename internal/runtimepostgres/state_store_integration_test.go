@@ -96,6 +96,83 @@ func TestPostgresRuntimeStateStorePersistsASealedPlanAndRejectsItsStaleBase(t *t
 	}
 }
 
+func TestPostgresTenantErasureDeletesOnlyAuthorizedStateReferencedContent(t *testing.T) {
+	ctx := context.Background()
+	pool := openRuntimePool(t)
+	resetRuntimeV2(t, ctx, pool)
+	applyRuntimeMigrations(t, ctx, pool)
+
+	tenant, err := runtimecontent.ParseTenantID("erasure-tenant")
+	if err != nil {
+		t.Fatalf("parse tenant: %v", err)
+	}
+	objects := &stateStoreObjects{values: map[string][]byte{}}
+	content, err := runtimecontent.New("erasure-content", objects)
+	if err != nil {
+		t.Fatalf("new content store: %v", err)
+	}
+	handoff, err := content.StageAgentSpecificationBody(ctx, tenant, runtimecontent.AgentSpecificationBody{Name: "erasable", ModelProfile: "balanced", Instructions: "delete through explicit operator authority"})
+	if err != nil {
+		t.Fatalf("stage Agent specification: %v", err)
+	}
+	compiler, err := runtimestate.NewCompiler(content)
+	if err != nil {
+		t.Fatalf("new compiler: %v", err)
+	}
+	mutation, err := compiler.CompileRegisterAgentRevision(runtimestate.RegisterAgentRevisionCommand{Scope: runtimestate.MutationScope{Tenant: tenant, Authority: runtimestate.AuthorityTenantAdministrator}, IdempotencyKey: "register-erasable", Specification: handoff})
+	if err != nil {
+		t.Fatalf("compile registration: %v", err)
+	}
+	planner, err := runtimestate.NewRuntimeStatePlanner(stateStoreClock{now: time.Date(2026, 8, 10, 17, 0, 0, 0, time.UTC)}, &stateStoreIDs{})
+	if err != nil {
+		t.Fatalf("new planner: %v", err)
+	}
+	plan, err := planner.Plan(ctx, runtimestate.RuntimeState{}, mutation)
+	if err != nil {
+		t.Fatalf("plan registration: %v", err)
+	}
+	store, err := runtimepostgres.NewRuntimeStateStore(pool)
+	if err != nil {
+		t.Fatalf("new PostgreSQL store: %v", err)
+	}
+	if err := store.PersistTransitionPlan(ctx, plan); err != nil {
+		t.Fatalf("persist registration: %v", err)
+	}
+	reference := plan.Result().Revision.Specification
+	objectKey := "erasure-tenant/erasure-content/v1/sha256/" + reference.Digest[len("sha256:"):]
+	controller, err := runtimecontent.NewTenantErasureController(content, erasureAuthorizer{allowed: true}, objects)
+	if err != nil {
+		t.Fatalf("new erasure controller: %v", err)
+	}
+	request := runtimepostgres.LifecycleRequest{Action: runtimepostgres.LifecycleEraseTenant, Tenant: tenant, AuthorizationID: "operator-authorization-0001"}
+	if _, err := store.EraseTenantAndContent(ctx, lifecycleAuthorizer{allowed: false}, request, controller); !errors.Is(err, runtimestate.ErrNotFoundOrDenied) {
+		t.Fatalf("unauthorized erasure error = %v, want non-enumerating denial", err)
+	}
+	if _, found := objects.values[objectKey]; !found {
+		t.Fatal("unauthorized erasure deleted immutable content")
+	}
+	receipt, err := store.EraseTenantAndContent(ctx, lifecycleAuthorizer{allowed: true}, request, controller)
+	if err != nil {
+		t.Fatalf("erase tenant and content: %v", err)
+	}
+	if receipt.Tenant != tenant || len(receipt.Content.Deleted) != 1 || receipt.Content.Failed != nil || receipt.Content.Deleted[0] != reference {
+		t.Fatalf("erasure receipt = %#v", receipt)
+	}
+	if _, found := objects.values[objectKey]; found {
+		t.Fatal("authorized erasure retained immutable content")
+	}
+	var remaining int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM runtime.tenants WHERE tenant_id = $1`, string(tenant)).Scan(&remaining); err != nil {
+		t.Fatalf("count tenant: %v", err)
+	}
+	if remaining != 0 {
+		t.Fatalf("remaining tenant rows = %d, want 0", remaining)
+	}
+	if _, err := store.LoadRuntimeState(ctx, mutation.ReceiptBinding().Scope); err != nil {
+		t.Fatalf("load erased tenant state: %v", err)
+	}
+}
+
 type stateStoreClock struct{ now time.Time }
 
 func (clock stateStoreClock) Now() time.Time { return clock.now }
@@ -142,4 +219,27 @@ func (objects *stateStoreObjects) PutIfAbsent(_ context.Context, key string, val
 }
 func (objects *stateStoreObjects) Get(_ context.Context, key string, _ int) ([]byte, error) {
 	return append([]byte(nil), objects.values[key]...), nil
+}
+
+func (objects *stateStoreObjects) DeleteExact(_ context.Context, key string) error {
+	delete(objects.values, key)
+	return nil
+}
+
+type lifecycleAuthorizer struct{ allowed bool }
+
+func (authorizer lifecycleAuthorizer) AuthorizeLifecycle(_ context.Context, _ runtimepostgres.LifecycleRequest) error {
+	if !authorizer.allowed {
+		return errors.New("denied")
+	}
+	return nil
+}
+
+type erasureAuthorizer struct{ allowed bool }
+
+func (authorizer erasureAuthorizer) AuthorizeErasure(_ context.Context, _ runtimecontent.ErasureRequest) error {
+	if !authorizer.allowed {
+		return errors.New("denied")
+	}
+	return nil
 }
