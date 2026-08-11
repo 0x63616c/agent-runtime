@@ -24,7 +24,11 @@ does not erase the class boundary.
 The state planner assigns every record and effect its class-specific retention
 horizon atomically with the transition. The class-selection test proves that
 event, audit, outbox, and receipt horizons diverge from the Agent/Session/Input
-records they accompany. Actual physical collection remains an operator-owned,
-separately evidenced process: records must be authorized for removal and any
-cross-store operation must leave an explicit reconciliation outcome rather than
-guessing.
+records they accompany. The PostgreSQL lifecycle authority also executes an
+operator-authorized physical collection for expired, unpinned Agent/Input,
+Artifact, and Conversation metadata: it holds a tenant advisory lock, removes
+only exact objects absent from the surviving metadata set, and leaves metadata
+intact if content deletion fails. The disposable PostgreSQL/MinIO harness
+proves both its non-enumerating authorization refusal and successful exact
+collection. Other physical collectors remain separately operator-owned and
+must leave an explicit reconciliation outcome rather than guessing.

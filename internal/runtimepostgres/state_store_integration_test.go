@@ -173,6 +173,80 @@ func TestPostgresTenantErasureDeletesOnlyAuthorizedStateReferencedContent(t *tes
 	}
 }
 
+func TestPostgresRetentionCollectionDeletesOnlyExpiredUnpinnedContent(t *testing.T) {
+	ctx := context.Background()
+	pool := openRuntimePool(t)
+	resetRuntimeV2(t, ctx, pool)
+	applyRuntimeMigrations(t, ctx, pool)
+	now := time.Date(2026, 8, 10, 18, 0, 0, 0, time.UTC)
+	tenant, err := runtimecontent.ParseTenantID("retention-tenant")
+	if err != nil {
+		t.Fatal(err)
+	}
+	objects := &stateStoreObjects{values: map[string][]byte{}}
+	content, err := runtimecontent.New("retention-content", objects)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err := content.StageAgentSpecificationBody(ctx, tenant, runtimecontent.AgentSpecificationBody{Name: "expired", ModelProfile: "balanced", Instructions: "collect exactly"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	compiler, err := runtimestate.NewCompiler(content)
+	if err != nil {
+		t.Fatal(err)
+	}
+	planner, err := runtimestate.NewRuntimeStatePlanner(stateStoreClock{now: now}, &stateStoreIDs{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mutation, err := compiler.CompileRegisterAgentRevision(runtimestate.RegisterAgentRevisionCommand{Scope: runtimestate.MutationScope{Tenant: tenant, Authority: runtimestate.AuthorityTenantAdministrator}, IdempotencyKey: "register-expired", Specification: body})
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan, err := planner.Plan(ctx, runtimestate.RuntimeState{}, mutation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := runtimepostgres.NewRuntimeStateStore(pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.PersistTransitionPlan(ctx, plan); err != nil {
+		t.Fatal(err)
+	}
+	reference := plan.Result().Revision.Specification
+	objectKey := "retention-tenant/retention-content/v1/sha256/" + reference.Digest[len("sha256:"):]
+	controller, err := runtimecontent.NewTenantErasureController(content, erasureAuthorizer{allowed: true}, objects)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := runtimepostgres.LifecycleRequest{Action: runtimepostgres.LifecycleCollectExpired, Tenant: tenant, AuthorizationID: "operator-authorization-0002", EvaluatedAt: now.Add(24*time.Hour + time.Nanosecond)}
+	if _, err := store.CollectExpiredAndContent(ctx, lifecycleAuthorizer{allowed: false}, request, controller); !errors.Is(err, runtimestate.ErrNotFoundOrDenied) {
+		t.Fatalf("unauthorized retention collection error = %v, want non-enumerating denial", err)
+	}
+	if _, found := objects.values[objectKey]; !found {
+		t.Fatal("unauthorized retention collection deleted immutable content")
+	}
+	receipt, err := store.CollectExpiredAndContent(ctx, lifecycleAuthorizer{allowed: true}, request, controller)
+	if err != nil {
+		t.Fatalf("collect expired content: %v", err)
+	}
+	if receipt.RemovedMetadata != 1 || len(receipt.Content.Deleted) != 1 || receipt.Content.Deleted[0] != reference {
+		t.Fatalf("retention collection receipt = %#v", receipt)
+	}
+	if _, found := objects.values[objectKey]; found {
+		t.Fatal("expired unpinned immutable content was retained")
+	}
+	state, err := store.LoadRuntimeState(ctx, mutation.ReceiptBinding().Scope)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(state.Revisions) != 0 {
+		t.Fatalf("retained revisions = %#v, want expired metadata removed", state.Revisions)
+	}
+}
+
 type stateStoreClock struct{ now time.Time }
 
 func (clock stateStoreClock) Now() time.Time { return clock.now }

@@ -2,10 +2,13 @@ package runtimepostgres
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
+	"time"
 
 	"github.com/0x63616c/agent-runtime/internal/runtimecontent"
 	"github.com/0x63616c/agent-runtime/internal/runtimestate"
+	agentruntime "github.com/0x63616c/agent-runtime/sdk/go"
 )
 
 // LifecycleAction is one operator-only state lifecycle operation.
@@ -14,6 +17,9 @@ type LifecycleAction string
 const (
 	// LifecycleEraseTenant permanently removes one tenant's PostgreSQL state metadata.
 	LifecycleEraseTenant LifecycleAction = "erase_tenant"
+	// LifecycleCollectExpired removes only retention-expired content metadata and
+	// exact unreferenced immutable objects for one tenant.
+	LifecycleCollectExpired LifecycleAction = "collect_expired"
 )
 
 // LifecycleRequest binds an operator authorization reference to one bounded action.
@@ -21,6 +27,7 @@ type LifecycleRequest struct {
 	Action          LifecycleAction
 	Tenant          runtimecontent.TenantID
 	AuthorizationID string
+	EvaluatedAt     time.Time
 }
 
 // LifecycleAuthorizer verifies an operator-owned authorization outside the runtime public API.
@@ -32,6 +39,161 @@ type LifecycleAuthorizer interface {
 type CoordinatedErasureReceipt struct {
 	Tenant  runtimecontent.TenantID
 	Content runtimecontent.ErasureReceipt
+}
+
+// RetentionCollectionReceipt reports a bounded, operator-only physical
+// collection result. It never includes object keys or content bytes.
+type RetentionCollectionReceipt struct {
+	Tenant          runtimecontent.TenantID
+	RemovedMetadata uint64
+	Content         runtimecontent.ErasureReceipt
+	CollectionAt    time.Time
+}
+
+// CollectExpiredAndContent physically removes retention-expired immutable
+// content metadata and only those exact objects which are no longer referenced
+// by surviving metadata. It holds the tenant advisory lock throughout the
+// content/metadata boundary: a content failure leaves metadata intact for a
+// retry, and no bucket listing is used as deletion authority.
+func (store *RuntimeStateStore) CollectExpiredAndContent(ctx context.Context, authorizer LifecycleAuthorizer, request LifecycleRequest, content *runtimecontent.TenantErasureController) (RetentionCollectionReceipt, error) {
+	if err := ctx.Err(); err != nil {
+		return RetentionCollectionReceipt{}, err
+	}
+	if store == nil || store.pool == nil || authorizer == nil || content == nil || request.Action != LifecycleCollectExpired || request.Tenant == "" || request.EvaluatedAt.IsZero() || !validLifecycleAuthorizationID(request.AuthorizationID) {
+		return RetentionCollectionReceipt{}, runtimestate.ErrNotFoundOrDenied
+	}
+	if err := authorizer.AuthorizeLifecycle(ctx, request); err != nil {
+		return RetentionCollectionReceipt{}, runtimestate.ErrNotFoundOrDenied
+	}
+	tx, err := store.pool.Begin(ctx)
+	if err != nil {
+		return RetentionCollectionReceipt{}, runtimestate.ErrUnavailable
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, string(request.Tenant)); err != nil {
+		return RetentionCollectionReceipt{}, runtimestate.ErrUnavailable
+	}
+	state, err := store.load(ctx, tx, request.Tenant)
+	if err != nil {
+		return RetentionCollectionReceipt{}, err
+	}
+	compacted, candidates, removed := compactExpiredContentMetadata(state, request.EvaluatedAt.UTC())
+	result := RetentionCollectionReceipt{Tenant: request.Tenant, RemovedMetadata: removed, CollectionAt: request.EvaluatedAt.UTC()}
+	if removed == 0 {
+		return result, nil
+	}
+	remaining := referenceSet(stateReferences(compacted))
+	toDelete := unreferenced(candidates, remaining)
+	if len(toDelete) > 0 {
+		receipt, err := content.Erase(ctx, runtimecontent.ErasureRequest{Tenant: request.Tenant, AuthorizationID: request.AuthorizationID, References: toDelete})
+		result.Content = receipt
+		if err != nil {
+			return result, err
+		}
+	}
+	encoded, err := json.Marshal(compacted)
+	if err != nil {
+		return result, runtimestate.ErrIntegrity
+	}
+	if _, err := tx.Exec(ctx, `UPDATE runtime.runtime_state_snapshots SET generation = generation + 1, state = $2::jsonb, updated_at = now() WHERE tenant_id = $1`, string(request.Tenant), encoded); err != nil {
+		return result, runtimestate.ErrUnavailable
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return result, runtimestate.ErrUnavailable
+	}
+	return result, nil
+}
+
+func compactExpiredContentMetadata(state runtimestate.RuntimeState, at time.Time) (runtimestate.RuntimeState, []runtimecontent.Reference, uint64) {
+	compacted := state.Clone()
+	candidates := []runtimecontent.Reference{}
+	removed := uint64(0)
+	keepReference := func(until time.Time, reference runtimecontent.Reference) bool {
+		if until.After(at) {
+			return true
+		}
+		candidates = append(candidates, reference)
+		removed++
+		return false
+	}
+	compacted.Inputs = filterInputs(compacted.Inputs, keepReference)
+	compacted.Artifacts = filterArtifacts(compacted.Artifacts, keepReference)
+	compacted.Conversations = filterConversations(compacted.Conversations, keepReference)
+	// Agent revisions remain pinned while any Session names them. Their
+	// specification body is therefore never collected behind a live Session.
+	pinned := map[string]struct{}{}
+	for _, session := range compacted.Sessions {
+		pinned[string(session.RevisionID)] = struct{}{}
+	}
+	revisions := compacted.Revisions[:0]
+	for _, record := range compacted.Revisions {
+		if record.RetainUntil.After(at) || hasRevision(pinned, record.RevisionID) {
+			revisions = append(revisions, record)
+			continue
+		}
+		candidates = append(candidates, record.Specification)
+		removed++
+	}
+	compacted.Revisions = revisions
+	return compacted, candidates, removed
+}
+
+func filterInputs(records []runtimestate.InputRecord, keep func(time.Time, runtimecontent.Reference) bool) []runtimestate.InputRecord {
+	result := records[:0]
+	for _, record := range records {
+		if keep(record.RetentionUntil, record.Content) {
+			result = append(result, record)
+		}
+	}
+	return result
+}
+
+func filterArtifacts(records []runtimestate.ArtifactRecord, keep func(time.Time, runtimecontent.Reference) bool) []runtimestate.ArtifactRecord {
+	result := records[:0]
+	for _, record := range records {
+		if keep(record.RetainUntil, record.Reference) {
+			result = append(result, record)
+		}
+	}
+	return result
+}
+
+func filterConversations(records []runtimestate.ConversationRecord, keep func(time.Time, runtimecontent.Reference) bool) []runtimestate.ConversationRecord {
+	result := records[:0]
+	for _, record := range records {
+		if keep(record.RetainUntil, record.Reference) {
+			result = append(result, record)
+		}
+	}
+	return result
+}
+
+func hasRevision(pinned map[string]struct{}, revisionID agentruntime.AgentRevisionID) bool {
+	_, exists := pinned[string(revisionID)]
+	return exists
+}
+
+func referenceSet(references []runtimecontent.Reference) map[string]struct{} {
+	result := map[string]struct{}{}
+	for _, reference := range references {
+		result[reference.Digest+"\x00"+reference.MediaType] = struct{}{}
+	}
+	return result
+}
+
+func unreferenced(candidates []runtimecontent.Reference, remaining map[string]struct{}) []runtimecontent.Reference {
+	seen, result := map[string]struct{}{}, []runtimecontent.Reference{}
+	for _, reference := range candidates {
+		key := reference.Digest + "\x00" + reference.MediaType
+		if _, exists := remaining[key]; exists {
+			continue
+		}
+		if _, exists := seen[key]; !exists {
+			seen[key] = struct{}{}
+			result = append(result, reference)
+		}
+	}
+	return result
 }
 
 // EraseTenantAndContent removes exact state-referenced immutable content, then
