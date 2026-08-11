@@ -99,3 +99,6 @@ AR_RUNTIME_API_POSTGRES_DSN="$runtime_worker_dsn" \
 
 reset_runtime_schema
 go test -race -tags=integration ./examples/durable-chat -run 'Test(DurableChatReconnectsAndCancelsThroughRestartedDurableAPIProcess|DurableChatTerminalAndWebBinariesUseOnlyPublicPathAcrossRestart)' -count=1
+
+reset_runtime_schema
+go test -race -tags=integration ./internal/runtimeapiprocess -run 'TestDurableWorkspaceAgentBinariesUseOnlyThePublicAPI' -count=1
