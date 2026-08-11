@@ -165,16 +165,11 @@ func (w *Worker) retireExpiredGrants(ctx context.Context, tenant runtimecontent.
 		if grant.RevokedAt != nil || w.clock.Now().Before(grant.ExpiresAt) {
 			continue
 		}
-		for _, intent := range state.ToolIntents {
-			if intent.ToolCallID != grant.ToolCallID || intent.Principal != grant.Principal {
-				continue
-			}
-			expire, compileErr := w.compiler.CompileExpireCapabilityGrant(runtimestate.ExpireCapabilityGrantCommand{Scope: runtimestate.MutationScope{Tenant: tenant, Principal: grant.Principal, Authority: runtimestate.AuthorityRuntimeWorker}, IdempotencyKey: "tool-expire-" + grant.GrantID, GrantID: grant.GrantID, ToolCallID: grant.ToolCallID, SessionID: intent.SessionID, TurnID: intent.TurnID})
-			if compileErr != nil {
-				return compileErr
-			}
-			return w.persist(ctx, expire)
+		expire, compileErr := w.compiler.CompileExpireCapabilityGrant(runtimestate.ExpireCapabilityGrantCommand{Scope: runtimestate.MutationScope{Tenant: tenant, Principal: grant.Principal, Authority: runtimestate.AuthorityRuntimeWorker}, IdempotencyKey: "tool-expire-" + grant.GrantID, GrantID: grant.GrantID, ToolCallID: grant.ToolCallID, SessionID: grant.SessionID, TurnID: grant.TurnID})
+		if compileErr != nil {
+			return compileErr
 		}
+		return w.persist(ctx, expire)
 	}
 	return nil
 }
@@ -201,7 +196,7 @@ func (w *Worker) admitApprovedGrants(ctx context.Context, tenant runtimecontent.
 		}
 		var approval runtimestate.ApprovalRecord
 		for _, candidate := range state.Approvals {
-			if candidate.ToolCallID == grant.ToolCallID && candidate.State == "approved" && candidate.Principal == grant.Principal {
+			if candidate.ToolCallID == grant.ToolCallID && candidate.SessionID == grant.SessionID && candidate.TurnID == grant.TurnID && candidate.State == "approved" && candidate.Principal == grant.Principal {
 				approval = candidate
 				break
 			}
@@ -222,7 +217,7 @@ func (w *Worker) admitApprovedGrants(ctx context.Context, tenant runtimecontent.
 			continue
 		}
 		if grant.Uses == 0 {
-			consume, err := w.compiler.CompileConsumeCapabilityGrant(runtimestate.ConsumeCapabilityGrantCommand{Scope: runtimestate.MutationScope{Tenant: tenant, Principal: grant.Principal, Authority: runtimestate.AuthorityRuntimeWorker}, IdempotencyKey: "tool-consume-" + grant.GrantID, GrantID: grant.GrantID, ToolCallID: grant.ToolCallID, PolicyRevisionDigest: grant.PolicyRevisionDigest, SessionID: approval.SessionID, TurnID: approval.TurnID})
+			consume, err := w.compiler.CompileConsumeCapabilityGrant(runtimestate.ConsumeCapabilityGrantCommand{Scope: runtimestate.MutationScope{Tenant: tenant, Principal: grant.Principal, Authority: runtimestate.AuthorityRuntimeWorker}, IdempotencyKey: "tool-consume-" + grant.GrantID, GrantID: grant.GrantID, ToolCallID: grant.ToolCallID, PolicyRevisionDigest: grant.PolicyRevisionDigest, SessionID: grant.SessionID, TurnID: grant.TurnID})
 			if err != nil {
 				return err
 			}
@@ -230,7 +225,7 @@ func (w *Worker) admitApprovedGrants(ctx context.Context, tenant runtimecontent.
 				return err
 			}
 		}
-		begin, err := w.compiler.CompileBeginToolExecution(runtimestate.BeginToolExecutionCommand{Scope: runtimestate.MutationScope{Tenant: tenant, Principal: grant.Principal, Authority: runtimestate.AuthorityRuntimeWorker}, IdempotencyKey: "tool-begin-" + grant.GrantID, GrantID: grant.GrantID, ToolCallID: grant.ToolCallID, SessionID: approval.SessionID, TurnID: approval.TurnID, OperationID: operationID})
+		begin, err := w.compiler.CompileBeginToolExecution(runtimestate.BeginToolExecutionCommand{Scope: runtimestate.MutationScope{Tenant: tenant, Principal: grant.Principal, Authority: runtimestate.AuthorityRuntimeWorker}, IdempotencyKey: "tool-begin-" + grant.GrantID, GrantID: grant.GrantID, ToolCallID: grant.ToolCallID, SessionID: grant.SessionID, TurnID: grant.TurnID, OperationID: operationID})
 		if err != nil {
 			return err
 		}
@@ -352,7 +347,7 @@ func (w *Worker) executionDispatchAllowed(state runtimestate.RuntimeState, execu
 		return false
 	}
 	for _, grant := range state.Grants {
-		if grant.GrantID == execution.GrantID && grant.Principal == execution.Principal {
+		if grant.GrantID == execution.GrantID && grant.Principal == execution.Principal && grant.SessionID == execution.SessionID && grant.TurnID == execution.TurnID {
 			return grant.RevokedAt == nil && w.clock.Now().Before(grant.ExpiresAt)
 		}
 	}

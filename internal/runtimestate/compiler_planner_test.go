@@ -554,6 +554,44 @@ func plannerHasAuditKind(records []runtimestate.AuditFactRecord, expected string
 	return false
 }
 
+func TestPlannerCancellationNeverRevokesSameNamedGrantFromAnotherTurn(t *testing.T) {
+	now := time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC)
+	content, _, tenant, principal := testRuntimeContent(t)
+	compiler, _ := runtimestate.NewCompiler(content)
+	planner, _ := runtimestate.NewRuntimeStatePlanner(fixedPlannerClock{now: now}, &uniquePlannerIDs{})
+	firstSession, secondSession := agentruntime.SessionID("sess_1234567890ABCDEF"), agentruntime.SessionID("sess_1234567890ABCDEG")
+	firstTurn, secondTurn := agentruntime.TurnID("turn_1234567890ABCDEF"), agentruntime.TurnID("turn_1234567890ABCDEG")
+	state := runtimestate.RuntimeState{
+		Sessions: []runtimestate.SessionRecord{
+			{Tenant: tenant, Principal: principal, SessionID: firstSession, State: agentruntime.SessionOpen, Version: 1, CreatedAt: now, UpdatedAt: now},
+			{Tenant: tenant, Principal: principal, SessionID: secondSession, State: agentruntime.SessionOpen, Version: 1, CreatedAt: now, UpdatedAt: now},
+		},
+		Turns: []runtimestate.TurnRecord{
+			{Tenant: tenant, Principal: principal, SessionID: firstSession, TurnID: firstTurn, State: agentruntime.TurnRunning},
+			{Tenant: tenant, Principal: principal, SessionID: secondSession, TurnID: secondTurn, State: agentruntime.TurnRunning},
+		},
+		ToolIntents: []runtimestate.ToolIntentRecord{
+			{Tenant: tenant, Principal: principal, SessionID: firstSession, TurnID: firstTurn, ToolCallID: "tcall_shared_123456"},
+			{Tenant: tenant, Principal: principal, SessionID: secondSession, TurnID: secondTurn, ToolCallID: "tcall_shared_123456"},
+		},
+		Grants: []runtimestate.CapabilityGrantRecord{
+			{Tenant: tenant, Principal: principal, SessionID: firstSession, TurnID: firstTurn, GrantID: "grant_first_123456", ToolCallID: "tcall_shared_123456", MaximumUses: 1, ExpiresAt: now.Add(time.Hour)},
+			{Tenant: tenant, Principal: principal, SessionID: secondSession, TurnID: secondTurn, GrantID: "grant_second_12345", ToolCallID: "tcall_shared_123456", MaximumUses: 1, ExpiresAt: now.Add(time.Hour)},
+		},
+	}
+	cancel, err := compiler.CompileCancelTurn(runtimestate.CancelTurnCommand{Scope: ownerScope(tenant, principal), IdempotencyKey: "cancel-first-shared-tool-call", SessionID: firstSession, TurnID: firstTurn})
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan, err := planner.Plan(context.Background(), state, cancel)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.State().Grants[0].RevokedAt == nil || plan.State().Grants[1].RevokedAt != nil {
+		t.Fatalf("cancellation cross-revoked shared tool-call grants: %#v", plan.State().Grants)
+	}
+}
+
 func TestPlannerConsumesApprovedCapabilityOnlyWithinItsPolicyAndExpiry(t *testing.T) {
 	now := time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC)
 	content, _, tenant, principal := testRuntimeContent(t)
@@ -566,7 +604,7 @@ func TestPlannerConsumesApprovedCapabilityOnlyWithinItsPolicyAndExpiry(t *testin
 		Sessions:    []runtimestate.SessionRecord{{Tenant: tenant, Principal: principal, SessionID: session, State: agentruntime.SessionOpen, CreatedAt: now, UpdatedAt: now}},
 		Turns:       []runtimestate.TurnRecord{{Tenant: tenant, Principal: principal, SessionID: session, TurnID: turn, State: agentruntime.TurnRunning}},
 		ToolIntents: []runtimestate.ToolIntentRecord{{Tenant: tenant, Principal: principal, SessionID: session, TurnID: turn, ToolCallID: "tcall_1234567890ABCDEF", ActionDigest: digest, PolicyRevisionDigest: digest, CreatedAt: now}},
-		Grants:      []runtimestate.CapabilityGrantRecord{{Tenant: tenant, Principal: principal, GrantID: "grant_1234567890ABCDE", ToolCallID: "tcall_1234567890ABCDEF", CapabilityDigest: digest, MaximumUses: 1, ExpiresAt: now.Add(time.Hour), PolicyRevisionDigest: digest, CreatedAt: now}},
+		Grants:      []runtimestate.CapabilityGrantRecord{{Tenant: tenant, Principal: principal, SessionID: session, TurnID: turn, GrantID: "grant_1234567890ABCDE", ToolCallID: "tcall_1234567890ABCDEF", CapabilityDigest: digest, MaximumUses: 1, ExpiresAt: now.Add(time.Hour), PolicyRevisionDigest: digest, CreatedAt: now}},
 	}
 	consume, err := compiler.CompileConsumeCapabilityGrant(runtimestate.ConsumeCapabilityGrantCommand{Scope: workerScope(tenant, principal), IdempotencyKey: "use-grant", SessionID: session, TurnID: turn, ToolCallID: "tcall_1234567890ABCDEF", GrantID: "grant_1234567890ABCDE", PolicyRevisionDigest: digest})
 	if err != nil {

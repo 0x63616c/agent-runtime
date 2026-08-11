@@ -460,7 +460,7 @@ func (runtime *StateRuntime) InspectToolCalls(ctx context.Context, identity Iden
 			}
 		}
 		for _, grant := range state.Grants {
-			if grant.ToolCallID == intent.ToolCallID && grant.Tenant == scope.Tenant && grant.Principal == scope.Principal {
+			if grant.ToolCallID == intent.ToolCallID && grant.SessionID == sessionID && grant.TurnID == turnID && grant.Tenant == scope.Tenant && grant.Principal == scope.Principal {
 				call.Grant = &agentruntime.CapabilityGrant{MaximumUses: grant.MaximumUses, Uses: grant.Uses, ExpiresAt: grant.ExpiresAt}
 				if call.State != agentruntime.ToolCallAwaitingApproval {
 					call.State = agentruntime.ToolCallAuthorized
