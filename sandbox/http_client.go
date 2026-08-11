@@ -217,6 +217,9 @@ func (client *httpControlClient) WatchOperation(ctx context.Context, id Operatio
 	}
 	return &sliceOperationStream{events: events}, nil
 }
+func (client *httpControlClient) Capabilities(context.Context) (CapabilitySnapshot, error) {
+	return CapabilitySnapshot{}, newFailure(FailureUnavailable, "sandbox capability transport is not implemented", RetryAfterReconcile)
+}
 func (client *httpControlClient) GetSandbox(context.Context, SandboxID) (SandboxInfo, error) {
 	return SandboxInfo{}, newFailure(FailureUnavailable, "sandbox resource transport is not implemented", RetryAfterReconcile)
 }
