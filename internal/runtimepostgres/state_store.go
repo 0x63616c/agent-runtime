@@ -141,7 +141,45 @@ func (store *RuntimeStateStore) load(ctx context.Context, query stateLoader, ten
 	if json.Unmarshal(encoded, &state) != nil {
 		return runtimestate.RuntimeState{}, runtimestate.ErrIntegrity
 	}
+	state, err = upgradeLegacyGrantScopes(state)
+	if err != nil {
+		return runtimestate.RuntimeState{}, runtimestate.ErrIntegrity
+	}
 	return state.Clone(), nil
+}
+
+// upgradeLegacyGrantScopes maps the prior grant JSON shape to the current
+// exact Turn correlation. A later successful transition writes the normalized
+// state in its existing tenant transaction. Ambiguous legacy records remain
+// fail-closed rather than allowing a cross-Turn authority decision.
+func upgradeLegacyGrantScopes(state runtimestate.RuntimeState) (runtimestate.RuntimeState, error) {
+	upgraded := state.Clone()
+	for index := range upgraded.Grants {
+		grant := upgraded.Grants[index]
+		if grant.SessionID != "" || grant.TurnID != "" {
+			if grant.SessionID == "" || grant.TurnID == "" {
+				return runtimestate.RuntimeState{}, errors.New("upgrade legacy grant scope: partial correlation")
+			}
+			continue
+		}
+		var match *runtimestate.ToolIntentRecord
+		for _, intent := range upgraded.ToolIntents {
+			if intent.Tenant != grant.Tenant || intent.Principal != grant.Principal || intent.ToolCallID != grant.ToolCallID {
+				continue
+			}
+			if match != nil {
+				return runtimestate.RuntimeState{}, errors.New("upgrade legacy grant scope: ambiguous correlation")
+			}
+			value := intent
+			match = &value
+		}
+		if match == nil {
+			return runtimestate.RuntimeState{}, errors.New("upgrade legacy grant scope: missing correlation")
+		}
+		grant.SessionID, grant.TurnID = match.SessionID, match.TurnID
+		upgraded.Grants[index] = grant
+	}
+	return upgraded, nil
 }
 
 func (store *RuntimeStateStore) GetAgentRevision(ctx context.Context, query runtimestate.AgentRevisionQuery) (runtimestate.AgentRevisionRecord, error) {
