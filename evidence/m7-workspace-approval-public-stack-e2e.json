@@ -1,0 +1,33 @@
+{
+  "schema_version": 1,
+  "observed_at_utc": "2026-08-11T18:37:37Z",
+  "code_revision": "cb6d9905c5b0da7c4ff483ad8dd4ac10e9fcc40b",
+  "proof_level": "local_tilt_e2e",
+  "scope": "Two isolated declared local Stacks exercised the public Workspace approval lifecycle. This is local Kubernetes composition evidence only; it is not a production provider, Linux/KVM, Firecracker, or sandbox-execution claim.",
+  "runs": [
+    {
+      "scenario": "workspace-approval-reset-v1",
+      "commands": [
+        "go run ./tools/dev up --stack=m7-reset-proof5 --root . --kubeconfig=<redacted> --actor=m7-evidence-operator --fixture-scenario=workspace-approval-reset-v1",
+        "go run ./tools/dev reconcile --stack=m7-reset-proof5 --root .",
+        "go test -tags=stackproof ./tools/dev -run '^TestDeclaredLocalWorkspaceFixturePublicLifecycle$' -count=1 -timeout=60s",
+        "go run ./tools/dev down --stack=m7-reset-proof5 --root ."
+      ],
+      "result": "passed",
+      "observations": "All declared deployments became Available. A public pending approval survived a scoped role reset, the client reconnected through a fresh managed API forward, the same approval idempotency key replayed, exactly one tool execution produced an owner Artifact, a non-owner was denied, and a second pending approval was cancelled without execution."
+    },
+    {
+      "scenario": "workspace-approval-expiry-v1",
+      "commands": [
+        "go run ./tools/dev up --stack=m7-expiry-proof3 --root . --kubeconfig=<redacted> --actor=m7-evidence-operator --fixture-scenario=workspace-approval-expiry-v1",
+        "go run ./tools/dev reconcile --stack=m7-expiry-proof3 --root .",
+        "go test -tags=stackproof ./tools/dev -run '^TestDeclaredLocalWorkspaceFixtureRejectsLateApprovalDecision$' -count=1 -timeout=30s",
+        "go run ./tools/dev down --stack=m7-expiry-proof3 --root ."
+      ],
+      "result": "passed",
+      "observations": "All declared deployments became Available. The public immutable Approval expiry boundary elapsed; the owner late approval returned the stable conflict, the public projection became expired with no decision time, and no Tool execution was exposed."
+    }
+  ],
+  "teardown": "For both exact Stack identities, Kubernetes namespace absence and absence of owned Tilt and API-forward processes were directly verified after teardown.",
+  "redaction": "No secret values, bearer tokens, request headers, raw input, artifact body, runtime IDs, pod logs, kubeconfig bytes, database DSNs, or internal backend identifiers are retained."
+}
