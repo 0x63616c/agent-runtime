@@ -117,7 +117,7 @@ ALTER TABLE runtime.pending_content_deletions FORCE ROW LEVEL SECURITY;
 CREATE POLICY pending_content_deletion_isolation ON runtime.pending_content_deletions
   USING (current_user = 'runtime_state_operator' OR tenant_id = current_setting('runtime.tenant_id', true))
   WITH CHECK (tenant_id = current_setting('runtime.tenant_id', true));
-GRANT SELECT, INSERT, DELETE ON runtime.pending_content_deletions TO runtime_state_app;
+GRANT SELECT, INSERT, UPDATE, DELETE ON runtime.pending_content_deletions TO runtime_state_app;
 
 INSERT INTO runtime.schema_migrations (migration_version, schema_fingerprint, applied_at)
   VALUES (5, 'runtime-v5/tenant-partitions-rls-v1', now())

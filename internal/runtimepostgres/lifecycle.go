@@ -107,7 +107,7 @@ func (store *RuntimeStateStore) CollectExpiredAndContent(ctx context.Context, au
 	if err := tx.Commit(ctx); err != nil {
 		return result, runtimestate.ErrUnavailable
 	}
-	receipt, err := store.reconcilePendingContentDeletions(ctx, request.Tenant, content)
+	receipt, err := store.reconcilePendingContentDeletions(ctx, request.Tenant, request.AuthorizationID, content)
 	result.Content = receipt
 	if err != nil {
 		return result, err
@@ -265,7 +265,7 @@ func (store *RuntimeStateStore) EraseTenantAndContent(ctx context.Context, autho
 	if err := tx.Commit(ctx); err != nil {
 		return result, runtimestate.ErrUnavailable
 	}
-	receipt, err := store.reconcilePendingContentDeletions(ctx, request.Tenant, content)
+	receipt, err := store.reconcilePendingContentDeletions(ctx, request.Tenant, request.AuthorizationID, content)
 	result.Content = receipt
 	if err != nil {
 		return result, err
@@ -317,7 +317,7 @@ func (store *RuntimeStateStore) pendingContentDeletions(ctx context.Context, que
 	return result, nil
 }
 
-func (store *RuntimeStateStore) reconcilePendingContentDeletions(ctx context.Context, tenant runtimecontent.TenantID, content *runtimecontent.TenantErasureController) (runtimecontent.ErasureReceipt, error) {
+func (store *RuntimeStateStore) reconcilePendingContentDeletions(ctx context.Context, tenant runtimecontent.TenantID, authorizationID string, content *runtimecontent.TenantErasureController) (runtimecontent.ErasureReceipt, error) {
 	tx, err := store.pool.Begin(ctx)
 	if err != nil {
 		return runtimecontent.ErasureReceipt{}, runtimestate.ErrUnavailable
@@ -333,9 +333,16 @@ func (store *RuntimeStateStore) reconcilePendingContentDeletions(ctx context.Con
 	if err != nil {
 		return runtimecontent.ErasureReceipt{}, err
 	}
+	if len(pending) > 0 {
+		if _, err := tx.Exec(ctx, `UPDATE runtime.pending_content_deletions
+			SET authorization_id = $2, requested_at = now()
+			WHERE tenant_id = $1`, string(tenant), authorizationID); err != nil {
+			return runtimecontent.ErasureReceipt{}, runtimestate.ErrUnavailable
+		}
+	}
 	result := runtimecontent.ErasureReceipt{Tenant: tenant, Deleted: make([]runtimecontent.Reference, 0, len(pending))}
 	for _, deletion := range pending {
-		receipt, err := content.Erase(ctx, runtimecontent.ErasureRequest{Tenant: tenant, AuthorizationID: deletion.AuthorizationID, References: []runtimecontent.Reference{deletion.Reference}})
+		receipt, err := content.Erase(ctx, runtimecontent.ErasureRequest{Tenant: tenant, AuthorizationID: authorizationID, References: []runtimecontent.Reference{deletion.Reference}})
 		result.Deleted = append(result.Deleted, receipt.Deleted...)
 		if receipt.Failed != nil {
 			failed := *receipt.Failed

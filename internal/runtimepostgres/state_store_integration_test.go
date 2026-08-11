@@ -234,7 +234,8 @@ func TestPostgresTenantErasureReconcilesDeletionIntentAfterAmbiguousExternalDele
 		t.Fatalf("persist registration: %v", err)
 	}
 	reference := plan.Result().Revision.Specification
-	controller, err := runtimecontent.NewTenantErasureController(content, erasureAuthorizer{allowed: true}, objects)
+	erasureAuthorization := &trackingErasureAuthorizer{allowed: map[string]bool{"operator-erasure-reconcile-0001": true, "operator-erasure-reconcile-0002": true}}
+	controller, err := runtimecontent.NewTenantErasureController(content, erasureAuthorization, objects)
 	if err != nil {
 		t.Fatalf("new erasure controller: %v", err)
 	}
@@ -259,6 +260,7 @@ func TestPostgresTenantErasureReconcilesDeletionIntentAfterAmbiguousExternalDele
 	if tenants != 0 || pending != 1 {
 		t.Fatalf("after ambiguous erase tenants=%d pending=%d, want tenants=0 pending=1", tenants, pending)
 	}
+	request.AuthorizationID = "operator-erasure-reconcile-0002"
 	receipt, err := store.EraseTenantAndContent(ctx, lifecycleAuthorizer{allowed: true}, request, controller)
 	if err != nil {
 		t.Fatalf("reconcile erased tenant content: %v", err)
@@ -271,6 +273,9 @@ func TestPostgresTenantErasureReconcilesDeletionIntentAfterAmbiguousExternalDele
 	}
 	if pending != 0 {
 		t.Fatalf("pending deletion records = %d, want 0 after acknowledgement", pending)
+	}
+	if erasureAuthorization.last != request.AuthorizationID {
+		t.Fatalf("reconciled erasure authorization = %q, want current %q", erasureAuthorization.last, request.AuthorizationID)
 	}
 }
 
@@ -392,7 +397,8 @@ func TestPostgresRetentionCollectionReconcilesDeletionIntentAfterAmbiguousExtern
 	}
 	reference := plan.Result().Revision.Specification
 	objectKey := "retention-reconcile-tenant/retention-reconcile-content/v1/sha256/" + reference.Digest[len("sha256:"):]
-	controller, err := runtimecontent.NewTenantErasureController(content, erasureAuthorizer{allowed: true}, objects)
+	erasureAuthorization := &trackingErasureAuthorizer{allowed: map[string]bool{"operator-retention-reconcile-0001": true, "operator-retention-reconcile-0002": true}}
+	controller, err := runtimecontent.NewTenantErasureController(content, erasureAuthorization, objects)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -417,6 +423,7 @@ func TestPostgresRetentionCollectionReconcilesDeletionIntentAfterAmbiguousExtern
 	if pending != 1 {
 		t.Fatalf("pending deletion records = %d, want 1", pending)
 	}
+	request.AuthorizationID = "operator-retention-reconcile-0002"
 	receipt, err := store.CollectExpiredAndContent(ctx, lifecycleAuthorizer{allowed: true}, request, controller)
 	if err != nil {
 		t.Fatalf("reconcile pending deletion: %v", err)
@@ -429,6 +436,9 @@ func TestPostgresRetentionCollectionReconcilesDeletionIntentAfterAmbiguousExtern
 	}
 	if pending != 0 {
 		t.Fatalf("pending deletion records = %d, want 0 after acknowledgement", pending)
+	}
+	if erasureAuthorization.last != request.AuthorizationID {
+		t.Fatalf("reconciled retention authorization = %q, want current %q", erasureAuthorization.last, request.AuthorizationID)
 	}
 }
 
@@ -646,6 +656,19 @@ type erasureAuthorizer struct{ allowed bool }
 
 func (authorizer erasureAuthorizer) AuthorizeErasure(_ context.Context, _ runtimecontent.ErasureRequest) error {
 	if !authorizer.allowed {
+		return errors.New("denied")
+	}
+	return nil
+}
+
+type trackingErasureAuthorizer struct {
+	allowed map[string]bool
+	last    string
+}
+
+func (authorizer *trackingErasureAuthorizer) AuthorizeErasure(_ context.Context, request runtimecontent.ErasureRequest) error {
+	authorizer.last = request.AuthorizationID
+	if !authorizer.allowed[request.AuthorizationID] {
 		return errors.New("denied")
 	}
 	return nil
