@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "observed_at_utc": "2026-08-11T16:52:20Z",
+  "proof_level": "integration",
+  "revision": "168513d8b30e5476d09c7e1d7abd587e563aee1f",
+  "scope": "S5 Tool broker lifecycle on exclusive disposable PostgreSQL and MinIO. The fixture adapter is a declared external-effect test seam; it is not a Workspace service, protected sandbox, Firecracker, or Linux/KVM execution claim.",
+  "commands": [
+    "AR_RUNTIME_POSTGRES_DSN=<redacted> go test -tags=integration ./internal/runtimepostgres -run '^TestPostgresRuntimeStateStorePersistsASealedPlanAndRejectsItsStaleBase$' -count=1",
+    "AR_RUNTIME_API_POSTGRES_DSN=<redacted> AR_RUNTIME_API_MINIO_ENDPOINT=<redacted> AR_RUNTIME_API_MINIO_ACCESS_KEY=<redacted> AR_RUNTIME_API_MINIO_SECRET_KEY=<redacted> AR_RUNTIME_API_MINIO_BUCKET=<redacted> go test -tags=integration ./internal/runtimetool -run '^TestDurableBrokeredToolLifecyclePersistsApprovalAndFinalization$' -count=1 -v",
+    "just check"
+  ],
+  "result": "passed",
+  "observations": {
+    "admission": "Broker.Admit created the policy-bound pending approval; the owner-only public StateRuntime decision created the one-use grant before worker dispatch.",
+    "durability": "The worker finalized exactly one operation, persisted an owner-readable MinIO Artifact, and a new PostgreSQL pool plus StateRuntime replayed the terminal public Tool projection without a second adapter execution.",
+    "authorization": "An expired second brokered approval made no execution intent and no adapter call; the durable audit included capability_grant.expired.",
+    "audit_and_output": "Durable audit contained decision, grant-consumption, execution-intent, terminal-outcome, and grant-exhaustion phases. The artifact read through the owner-authorized public route retained a redacted bounded result and not the fixture credential-shaped value.",
+    "limits": "This proof demonstrates retained output redaction and the successful bounded artifact path only. The oversized-output durable rejection and uncertainty-recovery paths remain unclaimed."
+  },
+  "redaction": "No DSNs, object-store credentials, raw operation IDs, raw descriptors, raw input, artifact body, or backend endpoints are retained."
+}
