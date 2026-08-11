@@ -3,8 +3,12 @@ package sandboxtransfer
 import (
 	"archive/tar"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
+	"os"
 	"path"
 	"strings"
 
@@ -12,6 +16,11 @@ import (
 )
 
 const maximumArchiveEntries = 1024
+
+// ArchiveMediaType is the sole media type accepted by the portable workspace
+// archive door. It is intentionally narrower than a generic file copy: an
+// archive is validated then materialized as one atomic guest directory.
+const ArchiveMediaType = "application/x-tar"
 
 // ArchiveEntry is one validated portable workspace member. Only regular files
 // and explicit directories are representable; links, devices, and host paths
@@ -129,6 +138,17 @@ func (binding *GuestWorkspaceBinding) CopyIn(ctx context.Context, source Artifac
 	return binding.workspace.CopyIn(ctx, source, request)
 }
 
+// CopyArchiveIn validates and atomically materializes one immutable tar
+// artifact below the bound /workspace root. The destination must not exist:
+// replacing a directory is deliberately not an archive operation, because a
+// failed or cancelled extraction must leave the prior workspace untouched.
+func (binding *GuestWorkspaceBinding) CopyArchiveIn(ctx context.Context, source ArtifactSource, request sandbox.CopyInRequest) error {
+	if binding == nil || binding.workspace == nil || request.SandboxID == "" || string(request.SandboxID) != binding.sandboxID {
+		return fmt.Errorf("copy archive into bound guest workspace: %w", ErrPathDenied)
+	}
+	return binding.workspace.CopyArchiveIn(ctx, source, request)
+}
+
 // CopyOut is the sole descriptor-rooted copy-out door exposed by a guest
 // workspace binding. It returns only an immutable artifact reference.
 func (binding *GuestWorkspaceBinding) CopyOut(ctx context.Context, sink ArtifactSink, request sandbox.CopyOutRequest) (sandbox.ArtifactRef, error) {
@@ -143,4 +163,223 @@ func (binding *GuestWorkspaceBinding) Close() error {
 		return nil
 	}
 	return binding.workspace.Close()
+}
+
+// CopyArchiveIn is the bounded archive materialization data plane. It first
+// copies and verifies the immutable archive into a private descriptor-rooted
+// staging file, validates every member, then extracts into a staging directory
+// and renames that directory into place. No archive member can select a host
+// path, create a link/special file, or leave a partial target on failure.
+func (workspace *Workspace) CopyArchiveIn(ctx context.Context, source ArtifactSource, request sandbox.CopyInRequest) (err error) {
+	if workspace == nil || workspace.root == nil || ctx == nil || source == nil || !validArtifact(request.Source) || request.Source.MediaType != ArchiveMediaType {
+		return fmt.Errorf("copy archive into sandbox workspace: invalid bounded source")
+	}
+	if request.Source.SizeBytes > workspace.maximumBytes || request.Source.SizeBytes > maximumStreamBytes || request.Options.Overwrite != sandbox.OverwriteFailIfExists {
+		return fmt.Errorf("copy archive into sandbox workspace: %w", ErrIntegrity)
+	}
+	target, err := workspace.relative(request.Destination)
+	if err != nil {
+		return err
+	}
+	if err := workspace.ensureParent(target); err != nil {
+		return err
+	}
+	if err := workspace.checkArchiveTarget(target); err != nil {
+		return err
+	}
+
+	archiveStaging := workspace.stagingName(target) + ".tar"
+	extractStaging := workspace.stagingName(target)
+	cleanupArchive, cleanupExtract := true, true
+	defer func() {
+		if cleanupExtract {
+			err = errors.Join(err, workspace.root.RemoveAll(extractStaging))
+		}
+		if cleanupArchive {
+			err = errors.Join(err, workspace.root.Remove(archiveStaging))
+		}
+	}()
+
+	reader, err := source.Open(ctx, request.Source)
+	if err != nil {
+		return fmt.Errorf("copy archive into sandbox workspace: open authorized artifact: %w", err)
+	}
+	defer func() { err = errors.Join(err, reader.Close()) }()
+	file, err := workspace.root.OpenFile(archiveStaging, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		return fmt.Errorf("copy archive into sandbox workspace: create staging artifact: %w", err)
+	}
+	closed := false
+	defer func() {
+		if !closed {
+			err = errors.Join(err, file.Close())
+		}
+	}()
+	hash := sha256.New()
+	written, copyErr := io.Copy(io.MultiWriter(file, hash), &contextReader{context: ctx, reader: io.LimitReader(reader, int64(request.Source.SizeBytes)+1)})
+	if copyErr != nil {
+		return fmt.Errorf("copy archive into sandbox workspace: stream source: %w", copyErr)
+	}
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("copy archive into sandbox workspace: %w", err)
+	}
+	if written != int64(request.Source.SizeBytes) || "sha256:"+hex.EncodeToString(hash.Sum(nil)) != string(request.Source.Digest) {
+		return fmt.Errorf("copy archive into sandbox workspace: %w", ErrIntegrity)
+	}
+	if request.Options.Durable {
+		if err := file.Sync(); err != nil {
+			return fmt.Errorf("copy archive into sandbox workspace: sync staging artifact: %w", err)
+		}
+	}
+	if err := file.Close(); err != nil {
+		return fmt.Errorf("copy archive into sandbox workspace: close staging artifact: %w", err)
+	}
+	closed = true
+
+	validated, err := workspace.openArchive(archiveStaging)
+	if err != nil {
+		return err
+	}
+	entries, err := ValidateArchive(ctx, validated, workspace.maximumBytes)
+	closeErr := validated.Close()
+	if err != nil {
+		return err
+	}
+	if closeErr != nil {
+		return fmt.Errorf("copy archive into sandbox workspace: close validated archive: %w", closeErr)
+	}
+	if err := workspace.root.Mkdir(extractStaging, 0o700); err != nil {
+		return fmt.Errorf("copy archive into sandbox workspace: create extraction staging: %w", err)
+	}
+	if err := workspace.extractArchive(ctx, archiveStaging, extractStaging, entries, request.Options); err != nil {
+		return err
+	}
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("copy archive into sandbox workspace: %w", err)
+	}
+	if err := workspace.root.Rename(extractStaging, target); err != nil {
+		return fmt.Errorf("copy archive into sandbox workspace: commit staged archive: %w", err)
+	}
+	cleanupExtract = false
+	if err := workspace.root.Remove(archiveStaging); err != nil {
+		return fmt.Errorf("copy archive into sandbox workspace: remove staging artifact: %w", err)
+	}
+	cleanupArchive = false
+	return nil
+}
+
+func (workspace *Workspace) openArchive(name string) (*os.File, error) {
+	file, err := workspace.root.Open(name)
+	if err != nil {
+		return nil, fmt.Errorf("copy archive into sandbox workspace: open staged archive: %w", err)
+	}
+	info, err := file.Stat()
+	if err != nil || !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 {
+		_ = file.Close()
+		return nil, fmt.Errorf("copy archive into sandbox workspace: %w", ErrIntegrity)
+	}
+	return file, nil
+}
+
+func (workspace *Workspace) extractArchive(ctx context.Context, archiveName, destination string, entries []ArchiveEntry, options sandbox.TransferOptions) (err error) {
+	file, err := workspace.openArchive(archiveName)
+	if err != nil {
+		return err
+	}
+	defer func() { err = errors.Join(err, file.Close()) }()
+	reader := tar.NewReader(file)
+	for index, expected := range entries {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		header, err := reader.Next()
+		if err != nil {
+			return fmt.Errorf("copy archive into sandbox workspace: reopen validated entry %d: %w", index, ErrIntegrity)
+		}
+		name, directory, ok := archivePath(header)
+		if !ok || name != expected.Path || directory != expected.Directory || uint64(header.Size) != expected.SizeBytes {
+			return fmt.Errorf("copy archive into sandbox workspace: reopened archive changed: %w", ErrIntegrity)
+		}
+		member := destination + "/" + name
+		if directory {
+			if err := workspace.makeArchiveDirectory(member); err != nil {
+				return err
+			}
+			continue
+		}
+		if err := workspace.extractArchiveFile(ctx, reader, member, expected.SizeBytes, options); err != nil {
+			return err
+		}
+	}
+	if _, err := reader.Next(); err != io.EOF {
+		return fmt.Errorf("copy archive into sandbox workspace: archive changed after validation: %w", ErrIntegrity)
+	}
+	return nil
+}
+
+func (workspace *Workspace) makeArchiveDirectory(member string) error {
+	info, err := workspace.root.Lstat(member)
+	if errors.Is(err, os.ErrNotExist) {
+		if err := workspace.root.Mkdir(member, 0o700); err != nil && !errors.Is(err, os.ErrExist) {
+			return fmt.Errorf("copy archive into sandbox workspace: make archive directory: %w", err)
+		}
+		info, err = workspace.root.Lstat(member)
+	}
+	if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("copy archive into sandbox workspace: %w", ErrPathDenied)
+	}
+	return nil
+}
+
+func (workspace *Workspace) extractArchiveFile(ctx context.Context, reader io.Reader, member string, size uint64, options sandbox.TransferOptions) (err error) {
+	// Archives need not spell out every directory before a member. Create any
+	// implicit parent only beneath the private extraction staging directory;
+	// ensureParent still rejects an existing non-directory or symlink segment.
+	if err := workspace.ensureParent(member); err != nil {
+		return err
+	}
+	file, err := workspace.root.OpenFile(member, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		return fmt.Errorf("copy archive into sandbox workspace: create archive member: %w", err)
+	}
+	closed := false
+	defer func() {
+		if !closed {
+			err = errors.Join(err, file.Close())
+		}
+	}()
+	written, copyErr := io.Copy(file, &contextReader{context: ctx, reader: io.LimitReader(reader, int64(size)+1)})
+	if copyErr != nil || written != int64(size) {
+		return fmt.Errorf("copy archive into sandbox workspace: extract archive member: %w", ErrIntegrity)
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if options.Durable {
+		if err := file.Sync(); err != nil {
+			return fmt.Errorf("copy archive into sandbox workspace: sync archive member: %w", err)
+		}
+	}
+	if err := applyTransferMetadata(file, options); err != nil {
+		return err
+	}
+	if err := file.Close(); err != nil {
+		return fmt.Errorf("copy archive into sandbox workspace: close archive member: %w", err)
+	}
+	closed = true
+	return nil
+}
+
+func (workspace *Workspace) checkArchiveTarget(target string) error {
+	info, err := workspace.root.Lstat(target)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("inspect sandbox workspace archive target: %w", err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("inspect sandbox workspace archive target: %w", ErrPathDenied)
+	}
+	return ErrTargetExists
 }
