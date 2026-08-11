@@ -121,6 +121,66 @@ func TestHostHandlerPullLostAckReceiptRenewAndResult(t *testing.T) {
 	}
 }
 
+func TestHostHandlerOwnsSignedDataPlaneReceiptBeforeTransferSuccess(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 8, 11, 12, 0, 0, 0, time.UTC)
+	fakeClock, _ := clock.NewFake(now)
+	controlPublic, controlPrivate, _ := ed25519.GenerateKey(rand.Reader)
+	hostPublic, hostPrivate, _ := ed25519.GenerateKey(rand.Reader)
+	certificate := testPeerCertificate(t, "host_data_receipt", 1)
+	store := sandboxcontrol.NewMemoryLedger()
+	host := sandboxcontrol.HostEnrollment{HostID: "host_data_receipt", Tenant: "tenant_01", Pool: "pool_01", Generation: 1, ProtocolVersion: sandboxhostprotocol.Version, CertificateDigest: certificateDigest(certificate), SigningPublicKey: hostPublic, CapabilityDigest: testDigest('b'), Status: sandboxcontrol.HostActive, ExpiresAt: now.Add(time.Hour)}
+	if err := store.ProvisionHost(context.Background(), host, sandboxcontrol.AttestationInput{Profile: sandboxcontrol.AttestationProfileLocalMetadata}, nil); err != nil {
+		t.Fatal(err)
+	}
+	operation := sandboxcontrol.Operation{Principal: "tenant_01:subject_01", Tenant: host.Tenant, ID: "op_data_receipt_api", Kind: "agent-runtime.guest-transfer/v1", TargetKind: "sandbox", TargetID: "sbx_data_receipt", InputDigest: testDigest('c'), CanonicalDigest: testDigest('d'), EffectiveSpecDigest: testDigest('e'), CapabilityDigest: host.CapabilityDigest, DispatchBody: `{"version":"sandbox.control/v1"}`, AcceptedAt: now, RetentionExpiresAt: now.Add(time.Hour), CleanupRequired: true}
+	if _, _, err := store.Accept(context.Background(), operation); err != nil {
+		t.Fatal(err)
+	}
+	trust := testControlTrust(now, controlPublic)
+	handler, err := NewHandler(Config{Store: store, ControlTrust: trust, ControlSigningKey: controlPrivate, Entropy: bytes.NewReader(bytes.Repeat([]byte{0x52}, 4096)), Clock: fakeClock, LeaseDuration: time.Minute})
+	if err != nil {
+		t.Fatal(err)
+	}
+	pulled := perform(t, handler, certificate, http.MethodPost, pullPath, sandboxhostprotocol.PullRequest{ProtocolVersion: sandboxhostprotocol.Version, Kind: "pull", HostID: host.HostID, HostGeneration: host.Generation})
+	if pulled.Code != http.StatusOK {
+		t.Fatalf("pull status=%d body=%s", pulled.Code, pulled.Body.String())
+	}
+	envelope, err := sandboxhostprotocol.VerifyEnvelopeWithTrust(pulled.Body.Bytes(), host.HostID, host.Generation, now, trust)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ack := perform(t, handler, certificate, http.MethodPost, receiptPath, sandboxhostprotocol.ReceiptRequest{ProtocolVersion: sandboxhostprotocol.Version, Kind: "receipt", AssignmentID: envelope.AssignmentID, FencingToken: envelope.FencingToken, ReceiptDigest: sandboxhostprotocol.Digest([]byte("assignment-receipt"))})
+	if ack.Code != http.StatusOK {
+		t.Fatalf("assignment receipt status=%d body=%s", ack.Code, ack.Body.String())
+	}
+	startedWire, err := sandboxhostprotocol.SignResult(sandboxhostprotocol.Result{ProtocolVersion: sandboxhostprotocol.Version, ResultID: "started_data_receipt", HostID: host.HostID, HostGeneration: host.Generation, AssignmentID: envelope.AssignmentID, LeaseEpoch: envelope.LeaseEpoch, FencingToken: envelope.FencingToken, Principal: operation.Principal, OperationID: operation.ID, EffectiveSpecDigest: operation.EffectiveSpecDigest, CapabilityDigest: operation.CapabilityDigest, State: "started", ObservedAt: now}, hostPrivate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response := performBytes(t, handler, certificate, http.MethodPost, resultPath, startedWire); response.Code != http.StatusOK {
+		t.Fatalf("started status=%d body=%s", response.Code, response.Body.String())
+	}
+	reference := []byte(`{"artifact_id":"artifact_01","version":"agent-runtime.transfer-receipt/v1"}`)
+	dataWire, err := sandboxhostprotocol.SignDataPlaneReceipt(sandboxhostprotocol.DataPlaneReceipt{ProtocolVersion: sandboxhostprotocol.Version, ReceiptID: "data_receipt_01", HostID: host.HostID, HostGeneration: host.Generation, AssignmentID: envelope.AssignmentID, LeaseEpoch: envelope.LeaseEpoch, FencingToken: envelope.FencingToken, OperationID: operation.ID, Kind: "transfer", ReceiptDigest: sandboxhostprotocol.Digest(reference)}, hostPrivate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first := performBytes(t, handler, certificate, http.MethodPost, dataReceiptPath, dataWire)
+	retry := performBytes(t, handler, certificate, http.MethodPost, dataReceiptPath, dataWire)
+	if first.Code != http.StatusOK || retry.Code != http.StatusOK || !bytes.Contains(retry.Body.Bytes(), []byte(`"duplicate":true`)) {
+		t.Fatalf("data receipt statuses=%d/%d retry=%s", first.Code, retry.Code, retry.Body.String())
+	}
+	successWire, err := sandboxhostprotocol.SignResult(sandboxhostprotocol.Result{ProtocolVersion: sandboxhostprotocol.Version, ResultID: "success_data_receipt", HostID: host.HostID, HostGeneration: host.Generation, AssignmentID: envelope.AssignmentID, LeaseEpoch: envelope.LeaseEpoch, FencingToken: envelope.FencingToken, Principal: operation.Principal, OperationID: operation.ID, EffectiveSpecDigest: operation.EffectiveSpecDigest, CapabilityDigest: operation.CapabilityDigest, State: "succeeded", ObservedAt: now}, hostPrivate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response := performBytes(t, handler, certificate, http.MethodPost, resultPath, successWire); response.Code != http.StatusOK {
+		t.Fatalf("success status=%d body=%s", response.Code, response.Body.String())
+	}
+}
+
 func TestHostHandlerRejectsRogueTLSAndQuarantinesBadSignature(t *testing.T) {
 	t.Parallel()
 

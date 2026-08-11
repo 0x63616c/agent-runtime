@@ -156,7 +156,7 @@ func (authority *MountExecutionAuthority) Execute(ctx context.Context, envelope 
 	if err != nil {
 		return MountReceipt{}, err
 	}
-	if err := authority.journal.StageTransferReceipt(envelope, wire); err != nil {
+	if err := authority.journal.StageTypedTransferReceipt(envelope, "mount", wire); err != nil {
 		return MountReceipt{}, err
 	}
 	if err := emit(ctx, append([]byte(nil), wire...)); err != nil {

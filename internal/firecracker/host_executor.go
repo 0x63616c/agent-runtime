@@ -151,3 +151,40 @@ func (executor HostProcessExecutor) ExecuteAuthenticatedWithOutput(ctx context.C
 	}
 	return fmt.Errorf("authenticated Firecracker guest dispatch: %w", ErrCapabilityUnavailable)
 }
+
+// ExecuteWithDataPlaneReceipt dispatches only a private reference-only data
+// plane operation. The host-process owner signs and acknowledges the emitted
+// receipt before it may stage a generic terminal result.
+func (executor HostProcessExecutor) ExecuteWithDataPlaneReceipt(ctx context.Context, envelope sandboxhostprotocol.Envelope, emit func(context.Context, string, []byte) error) error {
+	return executor.ExecuteAuthenticatedWithDataPlaneReceipt(ctx, envelope, nil, emit)
+}
+
+// ExecuteAuthenticatedWithDataPlaneReceipt preserves the exact signed control
+// wire while selecting one fixed transfer, restore, or sharing authority.
+func (executor HostProcessExecutor) ExecuteAuthenticatedWithDataPlaneReceipt(ctx context.Context, envelope sandboxhostprotocol.Envelope, authenticatedEnvelope []byte, emit func(context.Context, string, []byte) error) error {
+	if executor.Host == nil || emit == nil || len(authenticatedEnvelope) == 0 {
+		return fmt.Errorf("execute Firecracker data-plane receipt: %w", ErrCapabilityUnavailable)
+	}
+	switch envelope.OperationKind {
+	case GuestTransferOperationKind:
+		if executor.Transfer == nil {
+			return fmt.Errorf("execute Firecracker transfer receipt: %w", ErrCapabilityUnavailable)
+		}
+		_, err := executor.Host.DispatchAuthenticatedTransfer(ctx, envelope, authenticatedEnvelope, executor.Transfer, func(receiptCtx context.Context, wire []byte) error { return emit(receiptCtx, "transfer", wire) })
+		return err
+	case GuestSnapshotRestoreOperationKind:
+		if executor.Restore == nil {
+			return fmt.Errorf("execute Firecracker snapshot restore receipt: %w", ErrCapabilityUnavailable)
+		}
+		_, err := executor.Host.DispatchAuthenticatedSnapshotRestore(ctx, envelope, authenticatedEnvelope, executor.Restore, func(receiptCtx context.Context, wire []byte) error { return emit(receiptCtx, "snapshot-restore", wire) })
+		return err
+	case GuestMountOperationKind:
+		if executor.Mount == nil {
+			return fmt.Errorf("execute Firecracker mount receipt: %w", ErrCapabilityUnavailable)
+		}
+		_, err := executor.Host.DispatchAuthenticatedMount(ctx, envelope, authenticatedEnvelope, executor.Mount, func(receiptCtx context.Context, wire []byte) error { return emit(receiptCtx, "mount", wire) })
+		return err
+	default:
+		return fmt.Errorf("execute Firecracker data-plane receipt: %w", ErrCapabilityUnavailable)
+	}
+}

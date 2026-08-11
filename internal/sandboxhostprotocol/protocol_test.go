@@ -1,6 +1,7 @@
 package sandboxhostprotocol
 
 import (
+	"bytes"
 	"crypto/ed25519"
 	"crypto/rand"
 	"testing"
@@ -254,6 +255,37 @@ func TestOutputSignatureBindsSequenceAndChunkDigest(t *testing.T) {
 	}
 	if _, err := VerifyOutput(changedBytes, now.Add(time.Second), publicKey); err == nil {
 		t.Fatal("VerifyOutput() accepted a changed sequence")
+	}
+}
+
+func TestDataPlaneReceiptSignatureBindsReferenceAndFence(t *testing.T) {
+	t.Parallel()
+
+	publicKey, privateKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reference := []byte(`{"artifact_id":"artifact_01","version":"agent-runtime.transfer-receipt/v1"}`)
+	receipt := DataPlaneReceipt{ProtocolVersion: Version, ReceiptID: "receipt_01", HostID: "host_01", HostGeneration: 7, AssignmentID: "assignment_01", LeaseEpoch: 4, FencingToken: 4, OperationID: "op_01", Kind: "transfer", ReceiptDigest: Digest(reference)}
+	signed, err := SignDataPlaneReceipt(receipt, privateKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(signed, reference) {
+		t.Fatal("signed data-plane receipt exposed private reference metadata")
+	}
+	verified, err := VerifyDataPlaneReceipt(signed, publicKey)
+	if err != nil || verified.ReceiptID != receipt.ReceiptID || verified.ReceiptDigest != Digest(reference) {
+		t.Fatalf("VerifyDataPlaneReceipt() = %#v, %v", verified, err)
+	}
+	changed := verified
+	changed.FencingToken++
+	changedBytes, err := encodeSignedDataPlaneReceipt(changed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := VerifyDataPlaneReceipt(changedBytes, publicKey); err == nil {
+		t.Fatal("VerifyDataPlaneReceipt() accepted a changed fence")
 	}
 }
 

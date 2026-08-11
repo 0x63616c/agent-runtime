@@ -86,6 +86,74 @@ func TestExecuteEnvelopeStagesAndAcknowledgesOutputBeforeTerminalResult(t *testi
 	}
 }
 
+func TestExecuteEnvelopeRequiresDurablePublicDataReceiptAckBeforeSuccess(t *testing.T) {
+	envelope, now := executionEnvelope()
+	journal := executionJournal(t, envelope)
+	receipt := []byte(`{"artifact_id":"artifact_001","version":"agent-runtime.transfer-receipt/v1"}`)
+	executor := dataPlaneReceiptReportingExecutor{emit: func(ctx context.Context, emit DataPlaneReceiptEmitter) error {
+		if err := journal.StageTypedTransferReceipt(envelope, "transfer", receipt); err != nil {
+			return err
+		}
+		return emit(ctx, "transfer", receipt)
+	}}
+	var results, dataReceipts [][]byte
+	err := executeEnvelopeWithOutputAfterTerminalSend(context.Background(), envelope, now, journal, executionPrivateKey(), executor, func(_ context.Context, wire []byte) error {
+		if resultState(t, wire) == "succeeded" && len(journal.PendingTransferReceipts()) != 0 {
+			t.Fatal("success was posted before the durable data-plane receipt acknowledgement")
+		}
+		results = append(results, append([]byte(nil), wire...))
+		return nil
+	}, nil, func(_ context.Context, wire []byte) error {
+		dataReceipts = append(dataReceipts, append([]byte(nil), wire...))
+		verified, err := sandboxhostprotocol.VerifyDataPlaneReceipt(wire, executionPrivateKey().Public().(ed25519.PublicKey))
+		if err != nil || verified.AssignmentID != envelope.AssignmentID || verified.FencingToken != envelope.FencingToken || verified.ReceiptDigest != sandboxhostprotocol.Digest(receipt) {
+			t.Fatalf("VerifyDataPlaneReceipt() = %#v, %v", verified, err)
+		}
+		return nil
+	}, func(ctx context.Context, _ time.Time) (context.Context, context.CancelFunc) { return ctx, func() {} }, nil)
+	if err != nil || len(dataReceipts) != 1 || len(results) != 2 || resultState(t, results[1]) != "succeeded" || len(journal.PendingTransferReceipts()) != 0 {
+		t.Fatalf("receipt execution error=%v receipts=%d results=%d terminal=%q pending=%d", err, len(dataReceipts), len(results), resultState(t, results[len(results)-1]), len(journal.PendingTransferReceipts()))
+	}
+}
+
+func TestExecuteEnvelopeRefusesTerminalResultWhenDataReceiptAckIsLost(t *testing.T) {
+	envelope, now := executionEnvelope()
+	journal := executionJournal(t, envelope)
+	receipt := []byte(`{"artifact_id":"artifact_001","version":"agent-runtime.transfer-receipt/v1"}`)
+	executor := dataPlaneReceiptReportingExecutor{emit: func(ctx context.Context, emit DataPlaneReceiptEmitter) error {
+		if err := journal.StageTypedTransferReceipt(envelope, "transfer", receipt); err != nil {
+			return err
+		}
+		return emit(ctx, "transfer", receipt)
+	}}
+	var results [][]byte
+	err := executeEnvelopeWithOutputAfterTerminalSend(context.Background(), envelope, now, journal, executionPrivateKey(), executor, func(_ context.Context, wire []byte) error {
+		results = append(results, append([]byte(nil), wire...))
+		return nil
+	}, nil, func(context.Context, []byte) error { return errors.New("control unavailable") }, func(ctx context.Context, _ time.Time) (context.Context, context.CancelFunc) { return ctx, func() {} }, nil)
+	if err == nil || len(results) != 1 || resultState(t, results[0]) != "started" || len(journal.PendingTransferReceipts()) != 1 || len(journal.PendingResults()) != 0 {
+		t.Fatalf("lost receipt acknowledgement error=%v results=%d state=%q pending-receipts=%d pending-results=%d", err, len(results), resultState(t, results[0]), len(journal.PendingTransferReceipts()), len(journal.PendingResults()))
+	}
+}
+
+func TestPendingDataPlaneReceiptReplayPreservesItsDurableFence(t *testing.T) {
+	privateKey := executionPrivateKey()
+	receipt := []byte(`{"snapshot_id":"snapshot_01","version":"agent-runtime.snapshot-restore-receipt/v1"}`)
+	entry := sandboxhostjournal.Entry{ReceiptKey: "host_01\x00assignment_01\x00op_01\x00sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc", HostGeneration: 1, LeaseEpoch: 2, FencingToken: 3}
+	wire, err := signPendingDataPlaneReceipt(entry, "snapshot-restore", receipt, privateKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	verified, err := sandboxhostprotocol.VerifyDataPlaneReceipt(wire, privateKey.Public().(ed25519.PublicKey))
+	if err != nil || verified.HostGeneration != entry.HostGeneration || verified.LeaseEpoch != entry.LeaseEpoch || verified.FencingToken != entry.FencingToken || verified.Kind != "snapshot-restore" {
+		t.Fatalf("replayed receipt = %#v, %v", verified, err)
+	}
+	entry.HostGeneration = 0
+	if _, err := signPendingDataPlaneReceipt(entry, "snapshot-restore", receipt, privateKey); err == nil {
+		t.Fatal("legacy receipt without host generation was replayed")
+	}
+}
+
 type recordingAuthenticatedExecutor struct {
 	envelope sandboxhostprotocol.Envelope
 	wire     []byte
@@ -93,6 +161,18 @@ type recordingAuthenticatedExecutor struct {
 
 type outputReportingExecutor struct {
 	emit func(context.Context, OutputEmitter) error
+}
+
+type dataPlaneReceiptReportingExecutor struct {
+	emit func(context.Context, DataPlaneReceiptEmitter) error
+}
+
+func (executor dataPlaneReceiptReportingExecutor) Execute(context.Context, sandboxhostprotocol.Envelope) error {
+	return nil
+}
+
+func (executor dataPlaneReceiptReportingExecutor) ExecuteWithDataPlaneReceipt(ctx context.Context, _ sandboxhostprotocol.Envelope, emit DataPlaneReceiptEmitter) error {
+	return executor.emit(ctx, emit)
 }
 
 func (executor outputReportingExecutor) Execute(context.Context, sandboxhostprotocol.Envelope) error {

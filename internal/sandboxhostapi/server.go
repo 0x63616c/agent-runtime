@@ -29,6 +29,7 @@ const (
 	receiptPath             = "/sandbox.host-control/v1/receipt"
 	heartbeatPath           = "/sandbox.host-control/v1/heartbeat"
 	outputPath              = "/sandbox.host-control/v1/output"
+	dataReceiptPath         = "/sandbox.host-control/v1/data-receipt"
 	resultPath              = "/sandbox.host-control/v1/result"
 	bootProbePreparePath    = "/sandbox.host-control/v2/firecracker-boot-probe/prepare"
 	bootProbeStageReadyPath = "/sandbox.host-control/v2/firecracker-boot-probe/stage-ready"
@@ -81,6 +82,7 @@ func NewHandler(config Config) (http.Handler, error) {
 	mux.HandleFunc("POST "+receiptPath, server.receipt)
 	mux.HandleFunc("POST "+heartbeatPath, server.heartbeat)
 	mux.HandleFunc("POST "+outputPath, server.output)
+	mux.HandleFunc("POST "+dataReceiptPath, server.dataReceipt)
 	mux.HandleFunc("POST "+resultPath, server.result)
 	if config.BootProbeStore != nil {
 		mux.HandleFunc("POST "+bootProbePreparePath, server.bootProbePrepare)
@@ -276,6 +278,29 @@ func (server *server) output(writer http.ResponseWriter, request *http.Request) 
 		return
 	}
 	writeJSON(writer, http.StatusOK, acknowledgement{ProtocolVersion: sandboxhostprotocol.Version, Kind: "output-ack", Duplicate: duplicate})
+}
+
+func (server *server) dataReceipt(writer http.ResponseWriter, request *http.Request) {
+	identity, enrollment, ok := server.authenticatePeer(writer, request)
+	if !ok {
+		return
+	}
+	wire, ok := readBody(request)
+	if !ok {
+		server.denyWithQuarantine(writer, request.Context(), identity, "invalid-data-receipt-envelope")
+		return
+	}
+	receipt, err := sandboxhostprotocol.VerifyDataPlaneReceipt(wire, enrollment.SigningPublicKey)
+	if err != nil || receipt.HostID != identity.HostID || receipt.HostGeneration != identity.Generation {
+		server.denyWithQuarantine(writer, request.Context(), identity, "invalid-data-receipt-signature")
+		return
+	}
+	duplicate, err := server.config.Store.RecordAuthenticatedDataPlaneReceipt(request.Context(), identity, receipt, server.config.Clock.Now().UTC())
+	if err != nil {
+		server.protocolStoreError(writer, request.Context(), identity, err, "invalid-data-receipt-binding")
+		return
+	}
+	writeJSON(writer, http.StatusOK, acknowledgement{ProtocolVersion: sandboxhostprotocol.Version, Kind: "data-receipt-ack", Duplicate: duplicate})
 }
 
 func (server *server) authenticatePeer(writer http.ResponseWriter, request *http.Request) (sandboxcontrol.HostIdentity, sandboxcontrol.HostEnrollment, bool) {

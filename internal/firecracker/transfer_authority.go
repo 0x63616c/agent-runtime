@@ -196,7 +196,7 @@ func (authority *TransferExecutionAuthority) Execute(ctx context.Context, envelo
 	if err != nil {
 		return TransferReceipt{}, err
 	}
-	if err := authority.journal.StageTransferReceipt(envelope, wire); err != nil {
+	if err := authority.journal.StageTypedTransferReceipt(envelope, "transfer", wire); err != nil {
 		return TransferReceipt{}, err
 	}
 	if err := emit(ctx, append([]byte(nil), wire...)); err != nil {
@@ -268,7 +268,7 @@ func (authority *SnapshotRestoreExecutionAuthority) Execute(ctx context.Context,
 	if err != nil {
 		return TransferReceipt{}, err
 	}
-	if err := authority.journal.StageTransferReceipt(envelope, wire); err != nil {
+	if err := authority.journal.StageTypedTransferReceipt(envelope, "snapshot-restore", wire); err != nil {
 		return TransferReceipt{}, err
 	}
 	if err := emit(ctx, append([]byte(nil), wire...)); err != nil {

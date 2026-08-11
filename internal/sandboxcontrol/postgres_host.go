@@ -309,6 +309,35 @@ func (ledger *PostgresLedger) RecordAuthenticatedHostOutput(ctx context.Context,
 	return duplicate, err
 }
 
+// RecordAuthenticatedDataPlaneReceipt persists one exact reference-only
+// terminal receipt while the assignment remains live. Late duplicate replay is
+// accepted only when its immutable bytes already exist.
+func (ledger *PostgresLedger) RecordAuthenticatedDataPlaneReceipt(ctx context.Context, identity HostIdentity, receipt sandboxhostprotocol.DataPlaneReceipt, receivedAt time.Time) (bool, error) {
+	var duplicate bool
+	err := ledger.transaction(ctx, "record authenticated PostgreSQL sandbox host data-plane receipt", func(tx pgx.Tx) error {
+		if _, err := authenticatePostgresHost(ctx, tx, identity, receivedAt); err != nil {
+			return err
+		}
+		operation, fields, err := postgresAssignment(ctx, tx, identity, receipt.AssignmentID)
+		if err != nil || !validHostDataPlaneReceiptImmutableBinding(identity, operation, receipt) {
+			return ErrStaleFence
+		}
+		if fields.DataReceiptDigest != "" {
+			if fields.DataReceiptID != receipt.ReceiptID || fields.DataReceiptKind != receipt.Kind || fields.DataReceiptDigest != receipt.ReceiptDigest {
+				return ErrHostProtocolViolation
+			}
+			duplicate = true
+			return nil
+		}
+		if !validHostDataPlaneReceiptLiveBinding(operation, receipt, receivedAt) {
+			return ErrStaleFence
+		}
+		_, err = tx.Exec(ctx, `UPDATE runtime.sandbox_host_dispatches SET data_receipt_id=$2,data_receipt_kind=$3,data_receipt_digest=$4 WHERE assignment_id=$1`, receipt.AssignmentID, receipt.ReceiptID, receipt.Kind, receipt.ReceiptDigest)
+		return errors.Wrap(err, "persist sandbox host data-plane receipt")
+	})
+	return duplicate, err
+}
+
 // RecordAuthenticatedHostResult performs durable assignment and digest checks.
 func (ledger *PostgresLedger) RecordAuthenticatedHostResult(ctx context.Context, identity HostIdentity, result sandboxhostprotocol.Result, receivedAt time.Time) (Operation, error) {
 	var updated Operation
@@ -333,6 +362,9 @@ func (ledger *PostgresLedger) RecordAuthenticatedHostResult(ctx context.Context,
 				updated = operation
 				return nil
 			}
+			return ErrHostProtocolViolation
+		}
+		if next == StateSucceeded && dataPlaneReceiptRequired(operation) && fields.DataReceiptDigest == "" {
 			return ErrHostProtocolViolation
 		}
 		if !validHostResultLiveBinding(operation, result, receivedAt) {
@@ -444,15 +476,24 @@ func postgresAssignment(ctx context.Context, tx pgx.Tx, identity HostIdentity, a
 func readPostgresDispatch(ctx context.Context, tx pgx.Tx, principal, operationID string) (hostAssignmentFields, error) {
 	var fields hostAssignmentFields
 	var hostGeneration, leaseEpoch int64
-	var receipt, result *string
+	var receipt, dataReceiptID, dataReceiptKind, dataReceiptDigest, result *string
 	var acknowledged *time.Time
-	err := tx.QueryRow(ctx, `SELECT assignment_id, host_generation, lease_epoch, envelope_id, delivery_id, envelope_digest, envelope_body, receipt_digest, result_digest, acknowledged_at FROM runtime.sandbox_host_dispatches WHERE principal=$1 AND operation_id=$2 FOR UPDATE`, principal, operationID).Scan(&fields.AssignmentID, &hostGeneration, &leaseEpoch, &fields.EnvelopeID, &fields.DeliveryID, &fields.EnvelopeDigest, &fields.EnvelopeBody, &receipt, &result, &acknowledged)
+	err := tx.QueryRow(ctx, `SELECT assignment_id, host_generation, lease_epoch, envelope_id, delivery_id, envelope_digest, envelope_body, receipt_digest, data_receipt_id, data_receipt_kind, data_receipt_digest, result_digest, acknowledged_at FROM runtime.sandbox_host_dispatches WHERE principal=$1 AND operation_id=$2 FOR UPDATE`, principal, operationID).Scan(&fields.AssignmentID, &hostGeneration, &leaseEpoch, &fields.EnvelopeID, &fields.DeliveryID, &fields.EnvelopeDigest, &fields.EnvelopeBody, &receipt, &dataReceiptID, &dataReceiptKind, &dataReceiptDigest, &result, &acknowledged)
 	if err != nil {
 		return hostAssignmentFields{}, errors.Wrap(err, "read sandbox host dispatch")
 	}
 	fields.HostGeneration, fields.LeaseEpoch = uint64(hostGeneration), uint64(leaseEpoch)
 	if receipt != nil {
 		fields.ReceiptDigest = *receipt
+	}
+	if dataReceiptID != nil {
+		fields.DataReceiptID = *dataReceiptID
+	}
+	if dataReceiptKind != nil {
+		fields.DataReceiptKind = *dataReceiptKind
+	}
+	if dataReceiptDigest != nil {
+		fields.DataReceiptDigest = *dataReceiptDigest
 	}
 	if result != nil {
 		fields.ResultDigest = *result
@@ -474,7 +515,9 @@ func writePostgresDispatch(ctx context.Context, tx pgx.Tx, operation Operation, 
 			host_generation=EXCLUDED.host_generation, lease_epoch=EXCLUDED.lease_epoch,
 			envelope_id=EXCLUDED.envelope_id, delivery_id=EXCLUDED.delivery_id,
 			envelope_digest=EXCLUDED.envelope_digest, envelope_body=EXCLUDED.envelope_body,
-			receipt_digest=NULL, result_digest=NULL, acknowledged_at=NULL`,
+			receipt_digest=NULL, data_receipt_id=NULL, data_receipt_kind=NULL,
+			data_receipt_digest=NULL, result_digest=NULL,
+			acknowledged_at=NULL`,
 		operation.Principal, operation.ID, fields.AssignmentID, operation.Assignment.HostID,
 		int64(fields.HostGeneration), int64(fields.LeaseEpoch), fields.EnvelopeID,
 		fields.DeliveryID, fields.EnvelopeDigest, fields.EnvelopeBody)

@@ -176,17 +176,18 @@ func (ledger *MemoryLedger) ClaimExpiredCleanup(ctx context.Context, now time.Ti
 
 // MemoryLedger is a deterministic DurableStore used by hermetic lifecycle tests.
 type MemoryLedger struct {
-	mu         sync.Mutex
-	operations map[string]Operation
-	outbox     []OutboxRecord
-	hosts      map[string]HostEnrollment
-	dispatches map[string]hostAssignmentFields
-	hostOutput map[string]hostOutputFields
+	mu           sync.Mutex
+	operations   map[string]Operation
+	outbox       []OutboxRecord
+	hosts        map[string]HostEnrollment
+	dispatches   map[string]hostAssignmentFields
+	hostOutput   map[string]hostOutputFields
+	hostReceipts map[string]hostDataPlaneReceiptFields
 }
 
 // NewMemoryLedger constructs an empty deterministic operation ledger.
 func NewMemoryLedger() *MemoryLedger {
-	return &MemoryLedger{operations: make(map[string]Operation), hosts: make(map[string]HostEnrollment), dispatches: make(map[string]hostAssignmentFields), hostOutput: make(map[string]hostOutputFields)}
+	return &MemoryLedger{operations: make(map[string]Operation), hosts: make(map[string]HostEnrollment), dispatches: make(map[string]hostAssignmentFields), hostOutput: make(map[string]hostOutputFields), hostReceipts: make(map[string]hostDataPlaneReceiptFields)}
 }
 
 // Accept records an immutable operation or returns a prior identical record.

@@ -110,6 +110,23 @@ type Output struct {
 	Signature       string    `json:"signature"`
 }
 
+// DataPlaneReceipt is one host-signed, reference-only terminal observation
+// owned by private control. It carries only the digest of the private canonical
+// metadata; the metadata stays in the host journal and never crosses control.
+type DataPlaneReceipt struct {
+	ProtocolVersion string `json:"protocol_version"`
+	ReceiptID       string `json:"receipt_id"`
+	HostID          string `json:"host_id"`
+	HostGeneration  uint64 `json:"host_generation"`
+	AssignmentID    string `json:"assignment_id"`
+	LeaseEpoch      uint64 `json:"lease_epoch"`
+	FencingToken    uint64 `json:"fencing_token"`
+	OperationID     string `json:"operation_id"`
+	Kind            string `json:"kind"`
+	ReceiptDigest   string `json:"receipt_digest"`
+	Signature       string `json:"signature"`
+}
+
 // GuestOutput is one bounded guest chunk before the host signs and durably
 // acknowledges its public-control metadata.
 type GuestOutput struct {
@@ -298,6 +315,53 @@ func Digest(value []byte) string {
 	return "sha256:" + hex.EncodeToString(sum[:])
 }
 
+// SignDataPlaneReceipt signs one exact canonical reference-only receipt.
+func SignDataPlaneReceipt(receipt DataPlaneReceipt, privateKey ed25519.PrivateKey) ([]byte, error) {
+	receipt.Signature = ""
+	if !validDataPlaneReceipt(receipt) || len(privateKey) != ed25519.PrivateKeySize {
+		return nil, errors.New("sign host data-plane receipt: invalid bounded receipt or key")
+	}
+	unsigned, err := json.Marshal(receipt)
+	if err != nil {
+		return nil, errors.Wrap(err, "sign host data-plane receipt")
+	}
+	receipt.Signature = base64.RawURLEncoding.EncodeToString(ed25519.Sign(privateKey, unsigned))
+	return encodeSignedDataPlaneReceipt(receipt)
+}
+
+// VerifyDataPlaneReceipt strictly verifies one canonical host-signed terminal
+// receipt. Callers must additionally bind it to their enrolled host identity.
+func VerifyDataPlaneReceipt(wire []byte, publicKey ed25519.PublicKey) (DataPlaneReceipt, error) {
+	if len(wire) == 0 || len(wire) > maxWireBytes {
+		return DataPlaneReceipt{}, errors.New("verify host data-plane receipt: invalid bounded input")
+	}
+	decoder := json.NewDecoder(bytes.NewReader(wire))
+	decoder.DisallowUnknownFields()
+	var receipt DataPlaneReceipt
+	if err := decoder.Decode(&receipt); err != nil {
+		return DataPlaneReceipt{}, errors.New("verify host data-plane receipt: invalid wire")
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); err != io.EOF {
+		return DataPlaneReceipt{}, errors.New("verify host data-plane receipt: invalid trailing wire")
+	}
+	canonical, err := encodeSignedDataPlaneReceipt(receipt)
+	if err != nil || !bytes.Equal(canonical, wire) || !validDataPlaneReceipt(receipt) {
+		return DataPlaneReceipt{}, errors.New("verify host data-plane receipt: refused")
+	}
+	signature, err := base64.RawURLEncoding.DecodeString(receipt.Signature)
+	if err != nil || len(publicKey) != ed25519.PublicKeySize || len(signature) != ed25519.SignatureSize {
+		return DataPlaneReceipt{}, errors.New("verify host data-plane receipt: refused")
+	}
+	unsigned := receipt
+	unsigned.Signature = ""
+	unsignedWire, err := json.Marshal(unsigned)
+	if err != nil || !ed25519.Verify(publicKey, unsignedWire, signature) {
+		return DataPlaneReceipt{}, errors.New("verify host data-plane receipt: refused")
+	}
+	return receipt, nil
+}
+
 func encodeSignedEnvelope(envelope Envelope) ([]byte, error) {
 	encoded, err := json.Marshal(envelope)
 	if err != nil || len(encoded) > maxWireBytes {
@@ -318,6 +382,14 @@ func encodeSignedOutput(output Output) ([]byte, error) {
 	encoded, err := json.Marshal(output)
 	if err != nil || len(encoded) > maxWireBytes {
 		return nil, errors.New("encode host output: exceeds bounded canonical wire")
+	}
+	return encoded, nil
+}
+
+func encodeSignedDataPlaneReceipt(receipt DataPlaneReceipt) ([]byte, error) {
+	encoded, err := json.Marshal(receipt)
+	if err != nil || len(encoded) > maxWireBytes {
+		return nil, errors.New("encode host data-plane receipt: exceeds bounded canonical wire")
 	}
 	return encoded, nil
 }
@@ -344,6 +416,10 @@ func validResult(result Result) bool {
 
 func validOutput(output Output) bool {
 	return output.ProtocolVersion == Version && boundedID(output.OutputID, 128) && boundedID(output.HostID, 128) && output.HostGeneration > 0 && boundedID(output.AssignmentID, 128) && output.LeaseEpoch > 0 && output.FencingToken > 0 && boundedID(output.Principal, 512) && boundedID(output.OperationID, 128) && (output.Stream == "stdout" || output.Stream == "stderr") && output.Sequence > 0 && validDigest(output.ChunkDigest) && output.SizeBytes > 0 && output.SizeBytes <= 256<<10 && !output.ObservedAt.IsZero() && output.ObservedAt.Location() == time.UTC && (output.Signature == "" || len(output.Signature) <= 128)
+}
+
+func validDataPlaneReceipt(receipt DataPlaneReceipt) bool {
+	return receipt.ProtocolVersion == Version && boundedID(receipt.ReceiptID, 128) && boundedID(receipt.HostID, 128) && receipt.HostGeneration > 0 && boundedID(receipt.AssignmentID, 128) && receipt.LeaseEpoch > 0 && receipt.FencingToken > 0 && boundedID(receipt.OperationID, 128) && (receipt.Kind == "transfer" || receipt.Kind == "snapshot-restore" || receipt.Kind == "mount") && validDigest(receipt.ReceiptDigest) && (receipt.Signature == "" || len(receipt.Signature) <= 128)
 }
 
 func boundedID(value string, maximum int) bool {

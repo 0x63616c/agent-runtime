@@ -114,6 +114,7 @@ type HostControlStore interface {
 	AcknowledgeHostAssignment(context.Context, HostIdentity, string, uint64, string, time.Time) (bool, error)
 	RenewHostAssignment(context.Context, HostIdentity, string, uint64, time.Time, time.Time, DeliverySeed, EnvelopeSigner) (HostDispatch, error)
 	RecordAuthenticatedHostOutput(context.Context, HostIdentity, sandboxhostprotocol.Output, time.Time) (bool, error)
+	RecordAuthenticatedDataPlaneReceipt(context.Context, HostIdentity, sandboxhostprotocol.DataPlaneReceipt, time.Time) (bool, error)
 	RecordAuthenticatedHostResult(context.Context, HostIdentity, sandboxhostprotocol.Result, time.Time) (Operation, error)
 	QuarantineHost(context.Context, HostIdentity, string, time.Time) ([]Operation, error)
 	ConfirmHostCleanupAndRequeue(context.Context, string, string, uint64, time.Time) (Operation, error)
@@ -125,16 +126,19 @@ type HostControlStore interface {
 // AssignmentID and LeaseEpoch bind private host-control envelopes; the public
 // sandbox API never exposes them.
 type hostAssignmentFields struct {
-	AssignmentID   string
-	HostGeneration uint64
-	LeaseEpoch     uint64
-	EnvelopeID     string
-	DeliveryID     string
-	EnvelopeDigest string
-	EnvelopeBody   []byte
-	ReceiptDigest  string
-	ResultDigest   string
-	AcknowledgedAt time.Time
+	AssignmentID      string
+	HostGeneration    uint64
+	LeaseEpoch        uint64
+	EnvelopeID        string
+	DeliveryID        string
+	EnvelopeDigest    string
+	EnvelopeBody      []byte
+	ReceiptDigest     string
+	DataReceiptID     string
+	DataReceiptKind   string
+	DataReceiptDigest string
+	ResultDigest      string
+	AcknowledgedAt    time.Time
 }
 
 type hostOutputFields struct {
@@ -145,6 +149,16 @@ type hostOutputFields struct {
 	ChunkDigest  string
 	SizeBytes    uint32
 	ObservedAt   time.Time
+}
+
+type hostDataPlaneReceiptFields struct {
+	ReceiptID     string
+	AssignmentID  string
+	LeaseEpoch    uint64
+	FencingToken  uint64
+	OperationID   string
+	Kind          string
+	ReceiptDigest string
 }
 
 // ProvisionHost records an audited enrollment generation or idempotently
@@ -368,6 +382,42 @@ func (ledger *MemoryLedger) RecordAuthenticatedHostOutput(ctx context.Context, i
 	return false, nil
 }
 
+// RecordAuthenticatedDataPlaneReceipt persists one reference-only terminal
+// observation before the host can send a terminal result. Exact late retries
+// remain idempotent; a changed receipt for the same assignment is refused.
+func (ledger *MemoryLedger) RecordAuthenticatedDataPlaneReceipt(ctx context.Context, identity HostIdentity, receipt sandboxhostprotocol.DataPlaneReceipt, receivedAt time.Time) (bool, error) {
+	if err := ctx.Err(); err != nil {
+		return false, errors.Wrap(err, "record authenticated sandbox host data-plane receipt")
+	}
+	ledger.mu.Lock()
+	defer ledger.mu.Unlock()
+	if _, err := ledger.authenticateHostLocked(identity, receivedAt); err != nil {
+		return false, err
+	}
+	key, operation, _, ok := ledger.assignmentLocked(identity, receipt.AssignmentID, receipt.FencingToken)
+	if !ok || !validHostDataPlaneReceiptImmutableBinding(identity, operation, receipt) {
+		return false, ErrStaleFence
+	}
+	fields := dataPlaneReceiptFields(receipt)
+	receiptKey := dataPlaneReceiptKey(receipt.AssignmentID, receipt.LeaseEpoch, receipt.FencingToken)
+	if prior, exists := ledger.hostReceipts[receiptKey]; exists {
+		if !sameDataPlaneReceiptFields(prior, fields) {
+			return false, ErrHostProtocolViolation
+		}
+		return true, nil
+	}
+	if !validHostDataPlaneReceiptLiveBinding(operation, receipt, receivedAt) {
+		return false, ErrStaleFence
+	}
+	ledger.hostReceipts[receiptKey] = fields
+	dispatch := ledger.dispatches[key]
+	dispatch.DataReceiptID = fields.ReceiptID
+	dispatch.DataReceiptKind = fields.Kind
+	dispatch.DataReceiptDigest = fields.ReceiptDigest
+	ledger.dispatches[key] = dispatch
+	return false, nil
+}
+
 // RecordAuthenticatedHostResult accepts only the current enrolled generation,
 // assignment, lease epoch, fence, digests, scope and finite observed lease.
 func (ledger *MemoryLedger) RecordAuthenticatedHostResult(ctx context.Context, identity HostIdentity, result sandboxhostprotocol.Result, receivedAt time.Time) (Operation, error) {
@@ -397,6 +447,9 @@ func (ledger *MemoryLedger) RecordAuthenticatedHostResult(ctx context.Context, i
 		if fields.ResultDigest == resultDigest {
 			return operation, nil
 		}
+		return Operation{}, ErrHostProtocolViolation
+	}
+	if next == StateSucceeded && dataPlaneReceiptRequired(operation) && fields.DataReceiptDigest == "" {
 		return Operation{}, ErrHostProtocolViolation
 	}
 	if !validHostResultLiveBinding(operation, result, receivedAt) {
@@ -568,6 +621,34 @@ func validHostOutputLiveBinding(operation Operation, output sandboxhostprotocol.
 	return (operation.State == StateDispatched || operation.State == StateStarted) && receivedAt.Before(operation.Assignment.LeaseExpiresAt) && !output.ObservedAt.After(receivedAt)
 }
 
+func validHostDataPlaneReceiptImmutableBinding(identity HostIdentity, operation Operation, receipt sandboxhostprotocol.DataPlaneReceipt) bool {
+	return receipt.ProtocolVersion == sandboxhostprotocol.Version && receipt.HostID == identity.HostID && receipt.HostGeneration == identity.Generation && receipt.AssignmentID == operation.Assignment.AssignmentID && receipt.LeaseEpoch == operation.Assignment.LeaseEpoch && receipt.FencingToken == operation.Assignment.FencingToken && receipt.OperationID == operation.ID && validBounded(receipt.ReceiptID, 128) && (receipt.Kind == "transfer" || receipt.Kind == "snapshot-restore" || receipt.Kind == "mount") && validBounded(receipt.ReceiptDigest, maxDigestBytes)
+}
+
+func validHostDataPlaneReceiptLiveBinding(operation Operation, receipt sandboxhostprotocol.DataPlaneReceipt, receivedAt time.Time) bool {
+	return operation.State == StateStarted && receivedAt.Before(operation.Assignment.LeaseExpiresAt)
+}
+
+func dataPlaneReceiptFields(receipt sandboxhostprotocol.DataPlaneReceipt) hostDataPlaneReceiptFields {
+	return hostDataPlaneReceiptFields{ReceiptID: receipt.ReceiptID, AssignmentID: receipt.AssignmentID, LeaseEpoch: receipt.LeaseEpoch, FencingToken: receipt.FencingToken, OperationID: receipt.OperationID, Kind: receipt.Kind, ReceiptDigest: receipt.ReceiptDigest}
+}
+
+func sameDataPlaneReceiptFields(left, right hostDataPlaneReceiptFields) bool {
+	return left.ReceiptID == right.ReceiptID && left.AssignmentID == right.AssignmentID && left.LeaseEpoch == right.LeaseEpoch && left.FencingToken == right.FencingToken && left.OperationID == right.OperationID && left.Kind == right.Kind && left.ReceiptDigest == right.ReceiptDigest
+}
+
+// dataPlaneReceiptRequired selects only control-owned operation kinds. Their
+// signed host envelope is derived from this immutable operation record, so a
+// host cannot omit a required receipt by rewriting its private wire.
+func dataPlaneReceiptRequired(operation Operation) bool {
+	switch operation.Kind {
+	case "agent-runtime.guest-transfer/v1", "agent-runtime.guest-snapshot-restore/v1", "agent-runtime.guest-mount/v1":
+		return true
+	default:
+		return false
+	}
+}
+
 func validHostResultImmutableBinding(identity HostIdentity, operation Operation, result sandboxhostprotocol.Result) bool {
 	return result.HostID == identity.HostID && result.HostGeneration == identity.Generation && result.AssignmentID == operation.Assignment.AssignmentID && result.LeaseEpoch == operation.Assignment.LeaseEpoch && result.FencingToken == operation.Assignment.FencingToken && result.Principal == operation.Principal && result.OperationID == operation.ID && result.EffectiveSpecDigest == operation.EffectiveSpecDigest && result.CapabilityDigest == operation.CapabilityDigest && !result.ObservedAt.IsZero()
 }
@@ -590,6 +671,10 @@ func authenticatedResultDigest(result sandboxhostprotocol.Result) (string, error
 
 func hostOutputKey(assignmentID, stream string, sequence uint64) string {
 	return assignmentID + "\x00" + stream + "\x00" + strconv.FormatUint(sequence, 10)
+}
+
+func dataPlaneReceiptKey(assignmentID string, leaseEpoch, fencingToken uint64) string {
+	return assignmentID + "\x00" + strconv.FormatUint(leaseEpoch, 10) + "\x00" + strconv.FormatUint(fencingToken, 10)
 }
 
 func isTerminalState(state State) bool {
