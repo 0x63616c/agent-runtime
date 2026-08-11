@@ -532,6 +532,26 @@ func TestPlannerPersistsToolIntentBeforeApprovalDecision(t *testing.T) {
 	if grant.ToolCallID != "tcall_1234567890ABCDEF" || grant.CapabilityDigest != digest || grant.MaximumUses != 1 || grant.Uses != 0 || !grant.ExpiresAt.Equal(now.Add(time.Hour)) || grant.PolicyRevisionDigest != digest {
 		t.Fatalf("capability grant = %#v; want proposal-bounded unused grant", grant)
 	}
+	cancel, err := compiler.CompileCancelTurn(runtimestate.CancelTurnCommand{Scope: ownerScope(tenant, principal), IdempotencyKey: "cancel-approved-tool", SessionID: session, TurnID: turn})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cancelled, err := planner.Plan(context.Background(), plan.State(), cancel)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cancelled.State().Turns[0].State != agentruntime.TurnCancelled || cancelled.State().Grants[0].RevokedAt == nil || cancelled.State().Grants[0].Uses != 0 || !plannerHasAuditKind(cancelled.State().Audit, "capability_grant.revoked") || !plannerHasAuditKind(cancelled.State().Audit, "cancel_turn.terminal") {
+		t.Fatalf("cancelled approved grant = state=%#v audit=%#v", cancelled.State(), cancelled.State().Audit)
+	}
+}
+
+func plannerHasAuditKind(records []runtimestate.AuditFactRecord, expected string) bool {
+	for _, record := range records {
+		if record.Kind == expected {
+			return true
+		}
+	}
+	return false
 }
 
 func TestPlannerConsumesApprovedCapabilityOnlyWithinItsPolicyAndExpiry(t *testing.T) {
