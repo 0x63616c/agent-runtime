@@ -28,6 +28,7 @@ const (
 	CommandRecordToolIntent       CommandKind = "record_tool_intent"
 	CommandRequestApproval        CommandKind = "request_approval"
 	CommandDecideApproval         CommandKind = "decide_approval"
+	CommandRevokeCapabilityGrant  CommandKind = "revoke_capability_grant"
 	CommandConsumeCapabilityGrant CommandKind = "consume_capability_grant"
 	CommandBeginToolExecution     CommandKind = "begin_tool_execution"
 	CommandRecordToolOutcome      CommandKind = "record_tool_execution_outcome"
@@ -222,6 +223,17 @@ func (compiler *Compiler) CompileConsumeCapabilityGrant(command ConsumeCapabilit
 		return CompiledMutation{}, errors.New("compile consume capability grant: invalid command")
 	}
 	return compiler.compile(CommandConsumeCapabilityGrant, command.Scope, command.IdempotencyKey, command, command)
+}
+
+// CompileRevokeCapabilityGrant seals an owner-authorized withdrawal of one
+// still-unused grant. It intentionally cannot cancel an already intended
+// external operation: that boundary must reconcile its own outcome.
+func (compiler *Compiler) CompileRevokeCapabilityGrant(command RevokeCapabilityGrantCommand) (CompiledMutation, error) {
+	command = command.Owned()
+	if err := validateScope(command.Scope, AuthoritySessionOwner, true); err != nil || validSession(command.SessionID) != nil || validTurn(command.TurnID) != nil || !validOpaque(command.ToolCallID, 128) || !validOpaque(command.GrantID, 128) {
+		return CompiledMutation{}, errors.New("compile revoke capability grant: invalid command")
+	}
+	return compiler.compile(CommandRevokeCapabilityGrant, command.Scope, command.IdempotencyKey, command, command)
 }
 
 // CompileBeginToolExecution validates one capability-bound external operation intent.

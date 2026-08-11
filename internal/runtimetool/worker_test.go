@@ -252,6 +252,21 @@ func TestWorkerNeverDispatchesExpiredOrCancelledApprovedGrants(t *testing.T) {
 				}
 			},
 		},
+		{
+			name: "owner revocation withdraws an unused grant before dispatch",
+			prepare: func(t *testing.T, compiler *runtimestate.Compiler, store *runtimestate.MemoryRuntimeStateStore, _ *clock.Fake, approved approvedToolGrant) {
+				t.Helper()
+				ownerScope := approved.workerScope
+				ownerScope.Authority = runtimestate.AuthoritySessionOwner
+				revoke, err := compiler.CompileRevokeCapabilityGrant(runtimestate.RevokeCapabilityGrantCommand{Scope: ownerScope, IdempotencyKey: "revoke-before-tool-dispatch", SessionID: approved.sessionID, TurnID: approved.turnID, ToolCallID: approved.toolCallID, GrantID: approved.grantID})
+				if err != nil {
+					t.Fatal(err)
+				}
+				if _, err = store.Apply(context.Background(), revoke); err != nil {
+					t.Fatal(err)
+				}
+			},
+		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			ctx := context.Background()
@@ -285,6 +300,58 @@ func TestWorkerNeverDispatchesExpiredOrCancelledApprovedGrants(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestOwnerRevocationIsDurableIdempotentAndTerminalBeforeExecution(t *testing.T) {
+	ctx := context.Background()
+	now := time.Date(2026, 8, 11, 12, 0, 0, 0, time.UTC)
+	content, err := runtimecontent.New("runtime-content", &toolObjects{values: map[string][]byte{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tenant, _ := runtimecontent.ParseTenantID("tenant-a")
+	principal, _ := runtimecontent.ParsePrincipalID("principal-a")
+	compiler, _ := runtimestate.NewCompiler(content)
+	source, _ := clock.NewFake(now)
+	planner, _ := runtimestate.NewRuntimeStatePlanner(source, &toolIDs{})
+	store, _ := runtimestate.NewMemoryRuntimeStateStore(planner)
+	approved := createApprovedToolGrant(t, ctx, content, compiler, store, tenant, principal, now)
+	ownerScope := approved.workerScope
+	ownerScope.Authority = runtimestate.AuthoritySessionOwner
+	revoke, err := compiler.CompileRevokeCapabilityGrant(runtimestate.RevokeCapabilityGrantCommand{Scope: ownerScope, IdempotencyKey: "revoke-approved-tool", SessionID: approved.sessionID, TurnID: approved.turnID, ToolCallID: approved.toolCallID, GrantID: approved.grantID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = store.Apply(ctx, revoke); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = store.Apply(ctx, revoke); err != nil {
+		t.Fatalf("replay revoke: %v", err)
+	}
+	state, err := store.LoadRuntimeState(ctx, approved.workerScope)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(state.Grants) != 1 || state.Grants[0].RevokedAt == nil || state.Grants[0].Uses != 0 || len(state.ToolExecutions) != 0 || !hasAuditKind(state.Audit, "capability_grant.revoked") || !hasAuditKind(state.Audit, "revoke_capability_grant.terminal") {
+		t.Fatalf("revoked state = grants=%#v executions=%#v audit=%#v", state.Grants, state.ToolExecutions, state.Audit)
+	}
+	adapter := &recordingAdapter{response: runtimetool.Response{Output: []byte("must not execute")}}
+	worker, err := runtimetool.NewWorker(runtimetool.Config{Store: store, Tenants: store, Compiler: compiler, Planner: planner, Clock: source, Content: content, Adapter: adapter, Claimer: "tool-worker"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = worker.ScanOnce(ctx); err != nil || adapter.executes != 0 || adapter.reconciles != 0 {
+		t.Fatalf("revoked grant scan = calls=%d/%d, err=%v", adapter.executes, adapter.reconciles, err)
+	}
+}
+
+func hasAuditKind(records []runtimestate.AuditFactRecord, want string) bool {
+	for _, record := range records {
+		if record.Kind == want {
+			return true
+		}
+	}
+	return false
 }
 
 func TestStateAuthorizationRejectsCrossScopeToolDescriptorReads(t *testing.T) {

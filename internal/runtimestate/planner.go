@@ -309,6 +309,8 @@ func (planner *RuntimeStatePlanner) Plan(ctx context.Context, prior RuntimeState
 		result, effects, err = planner.decideApproval(&state, mutation.mutation.receipt, command, now)
 	case ConsumeCapabilityGrantCommand:
 		result, effects, err = planner.consumeCapabilityGrant(&state, mutation.mutation.receipt, command, now)
+	case RevokeCapabilityGrantCommand:
+		result, effects, err = planner.revokeCapabilityGrant(&state, mutation.mutation.receipt, command, now)
 	case BeginToolExecutionCommand:
 		result, effects, err = planner.beginToolExecution(&state, mutation.mutation.receipt, command, now)
 	case RecordToolExecutionOutcomeCommand:
@@ -722,12 +724,39 @@ func (planner *RuntimeStatePlanner) consumeCapabilityGrant(state *RuntimeState, 
 		if grant.GrantID != c.GrantID || grant.Tenant != binding.Scope.Tenant || grant.Principal != binding.Scope.Principal {
 			continue
 		}
-		if grant.ToolCallID != c.ToolCallID || grant.PolicyRevisionDigest != c.PolicyRevisionDigest || !now.Before(grant.ExpiresAt) || grant.Uses >= grant.MaximumUses {
+		if grant.ToolCallID != c.ToolCallID || grant.PolicyRevisionDigest != c.PolicyRevisionDigest || grant.RevokedAt != nil || !now.Before(grant.ExpiresAt) || grant.Uses >= grant.MaximumUses {
 			return PlanResult{}, EffectSet{}, ErrConflict
 		}
 		grant.Uses++
 		state.Grants[index] = grant
 		effects, err := planner.auditOnly(state, binding, "capability_grant.consumed", c.SessionID, c.TurnID, now)
+		return PlanResult{}, effects, err
+	}
+	return PlanResult{}, EffectSet{}, ErrNotFoundOrDenied
+}
+
+func (planner *RuntimeStatePlanner) revokeCapabilityGrant(state *RuntimeState, binding ReceiptBinding, c RevokeCapabilityGrantCommand, now time.Time) (PlanResult, EffectSet, error) {
+	turnIndex := findTurn(state, binding.Scope, c.SessionID, c.TurnID)
+	if turnIndex < 0 {
+		return PlanResult{}, EffectSet{}, ErrNotFoundOrDenied
+	}
+	for index := range state.Grants {
+		grant := state.Grants[index]
+		if grant.GrantID != c.GrantID || grant.Tenant != binding.Scope.Tenant || grant.Principal != binding.Scope.Principal {
+			continue
+		}
+		if grant.ToolCallID != c.ToolCallID || grant.Uses != 0 || grant.RevokedAt != nil || !now.Before(grant.ExpiresAt) {
+			return PlanResult{}, EffectSet{}, ErrConflict
+		}
+		for _, execution := range state.ToolExecutions {
+			if execution.GrantID == grant.GrantID {
+				return PlanResult{}, EffectSet{}, ErrConflict
+			}
+		}
+		value := now
+		grant.RevokedAt = &value
+		state.Grants[index] = grant
+		effects, err := planner.auditOnly(state, binding, "capability_grant.revoked", c.SessionID, c.TurnID, now)
 		return PlanResult{}, effects, err
 	}
 	return PlanResult{}, EffectSet{}, ErrNotFoundOrDenied
@@ -1166,7 +1195,7 @@ func auditLifecycleKinds(command CommandKind) []string {
 	prefix := string(command)
 	kinds := []string{prefix + ".attempted", prefix + ".authorized", prefix + ".committed"}
 	switch command {
-	case CommandRecordToolOutcome, CommandRecordOutcome, CommandSettleTurn, CommandCancelTurn, CommandCloseSession, CommandCancelSession, CommandFailSession:
+	case CommandRecordToolOutcome, CommandRecordOutcome, CommandSettleTurn, CommandCancelTurn, CommandCloseSession, CommandCancelSession, CommandFailSession, CommandRevokeCapabilityGrant:
 		return append(kinds, prefix+".terminal")
 	case CommandClaimOutbox, CommandAcknowledgeOutbox:
 		return append(kinds, prefix+".reconciled")
@@ -1491,7 +1520,7 @@ func validateState(state RuntimeState) error {
 		}
 	}
 	for _, record := range state.Grants {
-		if duplicate(grants, record.GrantID) || record.MaximumUses == 0 || record.Uses > record.MaximumUses || record.ExpiresAt.IsZero() {
+		if duplicate(grants, record.GrantID) || record.MaximumUses == 0 || record.Uses > record.MaximumUses || record.ExpiresAt.IsZero() || (record.RevokedAt != nil && (record.RevokedAt.IsZero() || record.RevokedAt.Location() != time.UTC || record.Uses != 0)) {
 			return ErrIntegrity
 		}
 	}

@@ -125,7 +125,7 @@ func (w *Worker) admitApprovedGrants(ctx context.Context, tenant runtimecontent.
 		return err
 	}
 	for _, grant := range state.Grants {
-		if !w.clock.Now().Before(grant.ExpiresAt) {
+		if grant.RevokedAt != nil || !w.clock.Now().Before(grant.ExpiresAt) {
 			continue
 		}
 		operationID := runtimestate.OperationID("op-tool-" + grant.GrantID)
