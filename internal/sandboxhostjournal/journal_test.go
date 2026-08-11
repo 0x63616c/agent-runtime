@@ -45,6 +45,46 @@ func TestJournalPersistsReceiptBeforeSingleReferenceEffect(t *testing.T) {
 	}
 }
 
+func TestJournalReplaysOutputBeforeAllowingTerminalResultAfterLostAcknowledgement(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "receipts.json")
+	journal, err := Open(path, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	envelope := sandboxhostprotocol.Envelope{HostID: "host_01", HostGeneration: 1, AssignmentID: "assignment_01", LeaseEpoch: 1, FencingToken: 1, OperationID: "op_01", CanonicalRequestDigest: testDigest('a')}
+	if _, _, err := journal.Accept(envelope, testDigest('b')); err != nil {
+		t.Fatal(err)
+	}
+	started := []byte(`{"state":"started"}`)
+	if err := journal.StageStarted(envelope, started); err != nil {
+		t.Fatal(err)
+	}
+	output := []byte(`{"output":"one"}`)
+	if err := journal.StageOutput(envelope, output); err != nil {
+		t.Fatal(err)
+	}
+	if err := journal.StageResult(envelope, []byte(`{"state":"succeeded"}`)); err == nil {
+		t.Fatal("StageResult() accepted terminal result before output acknowledgement")
+	}
+	if err := journal.Close(); err != nil {
+		t.Fatal(err)
+	}
+	restarted, err := Open(path, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pending := restarted.PendingOutputs()
+	if len(pending) != 1 || string(pending[0].Wire) != string(output) {
+		t.Fatalf("PendingOutputs() = %#v", pending)
+	}
+	if err := restarted.AcknowledgeOutput(pending[0].ReceiptKey, sandboxhostprotocol.Digest(output)); err != nil {
+		t.Fatal(err)
+	}
+	if err := restarted.StageResult(envelope, []byte(`{"state":"succeeded"}`)); err != nil {
+		t.Fatalf("StageResult() after output acknowledgement = %v", err)
+	}
+}
+
 func TestJournalRefusesCorruptStartedAcknowledgementWithoutIntent(t *testing.T) {
 	t.Parallel()
 

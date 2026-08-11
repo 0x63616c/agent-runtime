@@ -23,22 +23,36 @@ var (
 
 // Entry is one immutable accepted receipt key and reference execution marker.
 type Entry struct {
-	ReceiptKey          string `json:"receipt_key"`
-	EnvelopeDigest      string `json:"envelope_digest"`
-	ReceiptDigest       string `json:"receipt_digest"`
-	ExecutionCount      uint64 `json:"execution_count"`
-	LeaseEpoch          uint64 `json:"lease_epoch"`
-	FencingToken        uint64 `json:"fencing_token"`
-	StartedWire         []byte `json:"started_wire"`
-	StartedDigest       string `json:"started_digest"`
-	StartedAcknowledged bool   `json:"started_acknowledged"`
-	ResultWire          []byte `json:"result_wire"`
-	ResultDigest        string `json:"result_digest"`
-	ResultAcknowledged  bool   `json:"result_acknowledged"`
+	ReceiptKey          string   `json:"receipt_key"`
+	EnvelopeDigest      string   `json:"envelope_digest"`
+	ReceiptDigest       string   `json:"receipt_digest"`
+	ExecutionCount      uint64   `json:"execution_count"`
+	LeaseEpoch          uint64   `json:"lease_epoch"`
+	FencingToken        uint64   `json:"fencing_token"`
+	StartedWire         []byte   `json:"started_wire"`
+	StartedDigest       string   `json:"started_digest"`
+	StartedAcknowledged bool     `json:"started_acknowledged"`
+	ResultWire          []byte   `json:"result_wire"`
+	ResultDigest        string   `json:"result_digest"`
+	ResultAcknowledged  bool     `json:"result_acknowledged"`
+	Outputs             []Output `json:"outputs,omitempty"`
+}
+
+// Output is one signed output observation staged before its control send.
+type Output struct {
+	Wire         []byte `json:"wire"`
+	Digest       string `json:"digest"`
+	Acknowledged bool   `json:"acknowledged"`
 }
 
 // PendingResult is one exact signed result awaiting control acknowledgement.
 type PendingResult struct {
+	ReceiptKey string
+	Wire       []byte
+}
+
+// PendingOutput is one exact signed output awaiting control acknowledgement.
+type PendingOutput struct {
 	ReceiptKey string
 	Wire       []byte
 }
@@ -101,7 +115,7 @@ func Open(path string, maximum int) (*Journal, error) {
 	}
 	prior := ""
 	for _, entry := range decoded.Entries {
-		if entry.ReceiptKey == "" || entry.ReceiptKey <= prior || entry.EnvelopeDigest == "" || entry.ReceiptDigest == "" || entry.ExecutionCount != 1 || entry.LeaseEpoch == 0 || entry.FencingToken == 0 || !validExecutionState(entry) || !validResultState(entry) {
+		if entry.ReceiptKey == "" || entry.ReceiptKey <= prior || entry.EnvelopeDigest == "" || entry.ReceiptDigest == "" || entry.ExecutionCount != 1 || entry.LeaseEpoch == 0 || entry.FencingToken == 0 || !validExecutionState(entry) || !validResultState(entry) || !validOutputState(entry) {
 			return nil, errors.New("open sandbox host journal: invalid receipt entry")
 		}
 		journal.entries[entry.ReceiptKey] = entry
@@ -277,6 +291,11 @@ func (journal *Journal) stageResult(key string, wire []byte) error {
 	if !exists || entry.StartedDigest == "" {
 		return errors.New("stage sandbox host result: durable started receipt is required")
 	}
+	for _, output := range entry.Outputs {
+		if !output.Acknowledged {
+			return errors.New("stage sandbox host result: every durable output must be acknowledged first")
+		}
+	}
 	digest := sandboxhostprotocol.Digest(wire)
 	if entry.ResultDigest != "" {
 		if entry.ResultDigest != digest || !bytes.Equal(entry.ResultWire, wire) {
@@ -328,6 +347,85 @@ func (journal *Journal) PendingResults() []PendingResult {
 	}
 	sort.Slice(results, func(left, right int) bool { return results[left].ReceiptKey < results[right].ReceiptKey })
 	return results
+}
+
+// StageOutput fsyncs one exact signed output after started intent and before
+// its first control send. A terminal result cannot overtake an unacked output.
+func (journal *Journal) StageOutput(envelope sandboxhostprotocol.Envelope, wire []byte) error {
+	if journal == nil || len(wire) == 0 || len(wire) > 1<<20 {
+		return errors.New("stage sandbox host output: bounded output is required")
+	}
+	key := receiptKey(envelope)
+	journal.mu.Lock()
+	defer journal.mu.Unlock()
+	entry, exists := journal.entries[key]
+	if !exists || entry.StartedDigest == "" || entry.ResultDigest != "" {
+		return errors.New("stage sandbox host output: durable started receipt without terminal result is required")
+	}
+	digest := sandboxhostprotocol.Digest(wire)
+	for _, output := range entry.Outputs {
+		if output.Digest == digest && bytes.Equal(output.Wire, wire) {
+			return nil
+		}
+	}
+	entry.Outputs = append(entry.Outputs, Output{Wire: append([]byte(nil), wire...), Digest: digest})
+	journal.entries[key] = entry
+	if err := journal.persistLocked(); err != nil {
+		entry.Outputs = entry.Outputs[:len(entry.Outputs)-1]
+		journal.entries[key] = entry
+		return err
+	}
+	return nil
+}
+
+// PendingOutputs returns every exact output whose acknowledgement is not yet durable.
+func (journal *Journal) PendingOutputs() []PendingOutput {
+	if journal == nil {
+		return nil
+	}
+	journal.mu.Lock()
+	defer journal.mu.Unlock()
+	var pending []PendingOutput
+	for key, entry := range journal.entries {
+		for _, output := range entry.Outputs {
+			if !output.Acknowledged {
+				pending = append(pending, PendingOutput{ReceiptKey: key, Wire: append([]byte(nil), output.Wire...)})
+			}
+		}
+	}
+	sort.Slice(pending, func(i, j int) bool {
+		return pending[i].ReceiptKey < pending[j].ReceiptKey || pending[i].ReceiptKey == pending[j].ReceiptKey && string(pending[i].Wire) < string(pending[j].Wire)
+	})
+	return pending
+}
+
+// AcknowledgeOutput records only one exact staged output acknowledgement.
+func (journal *Journal) AcknowledgeOutput(receiptKey, digest string) error {
+	if journal == nil || receiptKey == "" || digest == "" {
+		return errors.New("acknowledge sandbox host output: receipt and output are required")
+	}
+	journal.mu.Lock()
+	defer journal.mu.Unlock()
+	entry, exists := journal.entries[receiptKey]
+	if !exists {
+		return errors.New("acknowledge sandbox host output: absent output")
+	}
+	for index := range entry.Outputs {
+		if entry.Outputs[index].Digest == digest {
+			if entry.Outputs[index].Acknowledged {
+				return nil
+			}
+			entry.Outputs[index].Acknowledged = true
+			journal.entries[receiptKey] = entry
+			if err := journal.persistLocked(); err != nil {
+				entry.Outputs[index].Acknowledged = false
+				journal.entries[receiptKey] = entry
+				return err
+			}
+			return nil
+		}
+	}
+	return errors.New("acknowledge sandbox host output: altered or absent output")
 }
 
 // AcknowledgeResult durably marks only the exact staged result as complete.
@@ -454,6 +552,15 @@ func validResultState(entry Entry) bool {
 		return len(entry.ResultWire) == 0 && !entry.ResultAcknowledged
 	}
 	return len(entry.ResultWire) > 0 && len(entry.ResultWire) <= 1<<20 && sandboxhostprotocol.Digest(entry.ResultWire) == entry.ResultDigest
+}
+
+func validOutputState(entry Entry) bool {
+	for _, output := range entry.Outputs {
+		if len(output.Wire) == 0 || len(output.Wire) > 1<<20 || output.Digest != sandboxhostprotocol.Digest(output.Wire) {
+			return false
+		}
+	}
+	return true
 }
 
 func validExecutionState(entry Entry) bool {
