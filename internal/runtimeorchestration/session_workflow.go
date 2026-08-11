@@ -18,11 +18,14 @@ const (
 	// SessionCommandSignal is the private signal name for one already-durable state command.
 	SessionCommandSignal = "runtime.session.command.v1"
 	// DispatchStateCommandActivity is the registered activity name that reaches the state-backed dispatcher.
-	DispatchStateCommandActivity = "runtime.dispatch-state-command.v1"
-	workflowVersionChange        = "runtime.session-workflow.command-dispatch.v1"
-	deterministicRouteErrorType  = "runtime.deterministic_outbox_route"
-	uncertainEffectErrorType     = "runtime.uncertain_external_effect"
-	incompatiblePolicyErrorType  = "runtime.incompatible_persisted_policy"
+	DispatchStateCommandActivity   = "runtime.dispatch-state-command.v1"
+	workflowVersionChange          = "runtime.session-workflow.command-dispatch.v1"
+	deterministicRouteErrorType    = "runtime.deterministic_outbox_route"
+	uncertainEffectErrorType       = "runtime.uncertain_external_effect"
+	incompatiblePolicyErrorType    = "runtime.incompatible_persisted_policy"
+	maximumWorkflowIdentifierBytes = 256
+	maximumWorkflowCommandBytes    = 1024
+	maximumWorkflowContinueAfter   = 10000
 )
 
 var (
@@ -187,7 +190,7 @@ type workflowRegistry interface {
 
 // SessionWorkflow serially dispatches already-durable command routes and rolls over with compact state.
 func SessionWorkflow(ctx workflow.Context, input WorkflowInput) error {
-	if input.SessionID == "" || input.ContinueAfter == 0 {
+	if validateWorkflowInput(input) != nil {
 		return errors.New("invalid runtime Session workflow input")
 	}
 	if workflow.GetVersion(ctx, workflowVersionChange, workflow.DefaultVersion, 1) != 1 {
@@ -235,6 +238,16 @@ func SessionWorkflow(ctx workflow.Context, input WorkflowInput) error {
 func validateCommand(command Command) error {
 	if command.Tenant == "" || command.OutboxID == "" || command.SessionID == "" || command.Sequence == 0 || !knownCommandKind(command.Kind) {
 		return errors.New("invalid runtime state command")
+	}
+	if len(command.Tenant) > maximumWorkflowIdentifierBytes || len(command.OutboxID) > maximumWorkflowIdentifierBytes || len(command.SessionID) > maximumWorkflowIdentifierBytes || len(command.Tenant)+len(command.OutboxID)+len(command.SessionID)+len(command.Kind)+8 > maximumWorkflowCommandBytes {
+		return errors.New("invalid runtime state command")
+	}
+	return nil
+}
+
+func validateWorkflowInput(input WorkflowInput) error {
+	if input.SessionID == "" || len(input.SessionID) > maximumWorkflowIdentifierBytes || input.ContinueAfter == 0 || input.ContinueAfter > maximumWorkflowContinueAfter {
+		return errors.New("invalid runtime Session workflow input")
 	}
 	return nil
 }

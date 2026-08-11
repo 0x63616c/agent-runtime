@@ -22,7 +22,12 @@ and closed route kind only. It contains neither public credentials nor content
 bytes/keys. Session workflows record a `GetVersion` marker, accept duplicate
 at-least-once routes as no-ops, and Continue-As-New after a bounded command
 count while retaining only Session ID, the last durable sequence, and the
-small in-chain command count.
+small in-chain command count. The private continuation rejects a Session ID
+over 256 bytes, a non-positive or over-10,000 rollover count, and any command
+whose tenant, outbox ID, or Session ID exceeds 256 bytes or whose metadata
+byte budget exceeds 1024 bytes. These limits prevent an unbounded signal
+from becoming workflow-history state; they are not public caller payload
+limits.
 
 `session.created` starts a chain. `input.accepted`, `turn.cancelled`,
 `turn.succeeded`, `turn.failed`, `approval.resolved`,

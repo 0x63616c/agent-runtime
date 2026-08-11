@@ -3,6 +3,7 @@ package runtimeorchestration_test
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -58,6 +59,29 @@ func TestSessionWorkflowRejectsACommandForAnotherSession(t *testing.T) {
 	if err := environment.GetWorkflowError(); err == nil {
 		t.Fatal("workflow error = nil, want command binding failure")
 	}
+}
+
+func TestSessionWorkflowRejectsOversizedPrivatePayloads(t *testing.T) {
+	t.Run("continuation state", func(t *testing.T) {
+		var suite testsuite.WorkflowTestSuite
+		environment := suite.NewTestWorkflowEnvironment()
+		environment.ExecuteWorkflow(runtimeorchestration.SessionWorkflow, runtimeorchestration.WorkflowInput{SessionID: strings.Repeat("s", 257), ContinueAfter: 1})
+		if err := environment.GetWorkflowError(); err == nil || !strings.Contains(err.Error(), "invalid runtime Session workflow input") {
+			t.Fatalf("workflow error = %v, want bounded continuation-state refusal", err)
+		}
+	})
+
+	t.Run("durable command", func(t *testing.T) {
+		var suite testsuite.WorkflowTestSuite
+		environment := suite.NewTestWorkflowEnvironment()
+		environment.RegisterDelayedCallback(func() {
+			environment.SignalWorkflow(runtimeorchestration.SessionCommandSignal, runtimeorchestration.Command{Tenant: "tenant-a", OutboxID: strings.Repeat("o", 257), SessionID: "sess_1234567890ABCDEF", Kind: runtimeorchestration.CommandInputAccepted, Sequence: 1})
+		}, 0)
+		environment.ExecuteWorkflow(runtimeorchestration.SessionWorkflow, runtimeorchestration.WorkflowInput{SessionID: "sess_1234567890ABCDEF", ContinueAfter: 1})
+		if err := environment.GetWorkflowError(); err == nil || !strings.Contains(err.Error(), "invalid runtime Session workflow command") {
+			t.Fatalf("workflow error = %v, want bounded command refusal", err)
+		}
+	})
 }
 
 func TestSessionWorkflowFinalizesAfterDurableSessionCompletedRoute(t *testing.T) {

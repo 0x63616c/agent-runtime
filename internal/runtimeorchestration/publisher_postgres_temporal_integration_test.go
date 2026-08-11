@@ -171,6 +171,147 @@ func TestPostgresOutboxReclaimsLiveTemporalRouteAfterAcknowledgementLoss(t *test
 	}
 }
 
+// TestPublicSDKInputStartsAndSignalsThePrivateSessionWorkflow proves TMP-002
+// through the public HTTP/Go SDK and the actual PostgreSQL outbox boundary.
+// The application caller observes only runtime-owned Session and Turn IDs;
+// the private publisher alone creates and signals the Temporal workflow.
+func TestPublicSDKInputStartsAndSignalsThePrivateSessionWorkflow(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+	postgresDSN := requiredPublisherEnvironment(t, "AR_RUNTIME_API_POSTGRES_DSN")
+	endpoint := requiredPublisherEnvironment(t, "AR_RUNTIME_API_MINIO_ENDPOINT")
+	accessKey := requiredPublisherEnvironment(t, "AR_RUNTIME_API_MINIO_ACCESS_KEY")
+	secretKey := requiredPublisherEnvironment(t, "AR_RUNTIME_API_MINIO_SECRET_KEY")
+	contentBucket := requiredPublisherEnvironment(t, "AR_RUNTIME_API_MINIO_BUCKET")
+	payloadBucket := contentBucket + "-temporal-public-sdk"
+
+	objects, err := minio.New(endpoint, &minio.Options{Creds: credentials.NewStaticV4(accessKey, secretKey, ""), Secure: false})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, bucket := range []string{contentBucket, payloadBucket} {
+		if err := objects.MakeBucket(ctx, bucket, minio.MakeBucketOptions{}); err != nil && minio.ToErrorResponse(err).Code != "BucketAlreadyOwnedByYou" {
+			t.Fatal(err)
+		}
+	}
+	pool, err := pgxpool.New(ctx, postgresDSN)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	timeSource, err := clock.NewFake(time.Date(2026, 8, 11, 23, 45, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := runtimepostgres.NewRuntimeStateStore(pool, timeSource)
+	if err != nil {
+		t.Fatal(err)
+	}
+	content := publisherIntegrationContent(t, endpoint, accessKey, secretKey, contentBucket)
+	compiler, err := runtimestate.NewCompiler(content)
+	if err != nil {
+		t.Fatal(err)
+	}
+	planner, err := runtimestate.NewRuntimeStatePlanner(timeSource, &publisherIntegrationIDs{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime, err := runtimeapi.NewStateRuntime(runtimeapi.StateRuntimeConfig{Content: content, Compiler: compiler, Planner: planner, Store: store, ModelProfiles: []string{"balanced"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler, err := runtimeapi.NewHandler(runtimeapi.Config{Runtime: runtime, Authenticator: publicLifecycleAuthenticator{identities: map[string]runtimeapi.Identity{
+		"admin-token-000000": {Tenant: "public-sdk-temporal", Principal: "admin", Admin: true},
+		"owner-token-000000": {Tenant: "public-sdk-temporal", Principal: "owner"},
+	}}, RequestIDs: &publicLifecycleRequestIDs{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	apiServer := httptest.NewServer(handler)
+	defer apiServer.Close()
+	admin := newPublicLifecycleClient(t, apiServer.URL, "admin-token-000000")
+	owner := newPublicLifecycleClient(t, apiServer.URL, "owner-token-000000")
+	agent, err := admin.CreateAgent(ctx, agentruntime.CreateAgentRequest{IdempotencyKey: "public-sdk-agent", Name: "public-sdk-temporal", ModelProfile: "balanced", Instructions: "route through durable state"})
+	if err != nil {
+		t.Fatalf("create Agent through public SDK: %v", err)
+	}
+	session, err := owner.CreateSession(ctx, agentruntime.CreateSessionRequest{IdempotencyKey: "public-sdk-session", AgentRevision: agent.RevisionID})
+	if err != nil {
+		t.Fatalf("create Session through public SDK: %v", err)
+	}
+	request := agentruntime.SendInputRequest{SessionID: session.ID, IdempotencyKey: "public-sdk-input", Parts: []agentruntime.ContentPart{{Kind: agentruntime.ContentText, Text: "start and signal the private workflow"}}}
+	accepted, err := owner.SendInput(ctx, request)
+	if err != nil {
+		t.Fatalf("send Input through public SDK: %v", err)
+	}
+	if replay, err := owner.SendInput(ctx, request); err != nil || replay.Input.ID != accepted.Input.ID || replay.Turn.ID != accepted.Turn.ID {
+		t.Fatalf("replay public Input = %#v, %v; want durable Input/Turn IDs %#v/%#v", replay, err, accepted.Input.ID, accepted.Turn.ID)
+	}
+
+	server, err := testsuite.StartDevServer(ctx, testsuite.DevServerOptions{})
+	if err != nil {
+		t.Fatalf("start Temporal development server: %v", err)
+	}
+	defer func() { _ = server.Stop() }()
+	factory, err := temporalpayloadruntime.NewS3Factory(temporalpayloadruntime.S3Config{Endpoint: endpoint, Bucket: payloadBucket, Prefix: "public-sdk", AccessKey: accessKey, SecretKey: secretKey})
+	if err != nil {
+		t.Fatal(err)
+	}
+	taskQueue := "public-sdk-temporal"
+	workerClient, err := factory.NewClient(ctx, client.Options{HostPort: server.FrontendHostPort()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer workerClient.Close()
+	workerRuntime, err := factory.NewWorker(workerClient, taskQueue, worker.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	durableDispatcher, err := NewDurableStateDispatcher(store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dispatcher := &publisherIntegrationDispatcher{StateDispatcher: durableDispatcher}
+	activities, err := NewActivities(dispatcher)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := Register(workerRuntime, activities); err != nil {
+		t.Fatal(err)
+	}
+	if err := workerRuntime.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer workerRuntime.Stop()
+	publisherClient, err := factory.NewClient(ctx, client.Options{HostPort: server.FrontendHostPort()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer publisherClient.Close()
+	tenant, err := runtimecontent.ParseTenantID("public-sdk-temporal")
+	if err != nil {
+		t.Fatal(err)
+	}
+	publisher, err := NewPublisher(PublisherConfig{Store: store, Tenants: publisherIntegrationTenants{tenant: tenant}, Compiler: compiler, Planner: planner, Clock: timeSource, Publisher: temporalSessionPublisher{client: publisherClient, taskQueue: taskQueue}, Claimer: "public-sdk-temporal-publisher"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := publisher.ScanOnce(ctx); err != nil {
+		t.Fatalf("publish public SDK lifecycle: %v", err)
+	}
+	if !dispatcher.waitForSession(ctx, CommandInputAccepted, tenant, session.ID) {
+		t.Fatal("public Input was not delivered through the private Temporal Session workflow")
+	}
+	if got := dispatcher.countForSession(CommandInputAccepted, tenant, session.ID); got != 1 {
+		t.Fatalf("public Input Temporal dispatches = %d, want exactly one after idempotent SDK replay", got)
+	}
+	state := loadPublisherIntegrationState(t, ctx, store, tenant)
+	inputRoute := publisherIntegrationInputRoute(t, state, session.ID)
+	if inputRoute.State != runtimestate.OutboxPublished || inputRoute.SessionID != session.ID || accepted.Turn.ID == "" {
+		t.Fatalf("public Input route = %#v, want published Session-bound route with runtime-owned result", inputRoute)
+	}
+}
+
 // TestPostgresOutboxRecoversAcrossActualPublisherProcessKills proves the
 // DAT-012/DAT-013 boundary with a real child publisher process. It kills the
 // process after durable claim and after Temporal accepts the route before the
@@ -792,6 +933,43 @@ type publisherIntegrationTenants struct{ tenant runtimecontent.TenantID }
 
 func (source publisherIntegrationTenants) ListOutboxTenants(context.Context) ([]runtimecontent.TenantID, error) {
 	return []runtimecontent.TenantID{source.tenant}, nil
+}
+
+type publicLifecycleAuthenticator struct {
+	identities map[string]runtimeapi.Identity
+}
+
+func (authenticator publicLifecycleAuthenticator) Authenticate(_ context.Context, credential string) (runtimeapi.Identity, error) {
+	identity, found := authenticator.identities[credential]
+	if !found {
+		return runtimeapi.Identity{}, errors.New("public lifecycle credential is not recognized")
+	}
+	return identity, nil
+}
+
+type publicLifecycleRequestIDs struct {
+	mu   sync.Mutex
+	next uint64
+}
+
+func (source *publicLifecycleRequestIDs) NextRequestID() (agentruntime.RequestID, error) {
+	source.mu.Lock()
+	defer source.mu.Unlock()
+	source.next++
+	return agentruntime.ParseRequestID(fmt.Sprintf("req_%016d", source.next))
+}
+
+func newPublicLifecycleClient(t *testing.T, baseURL, token string) *agentruntime.Client {
+	t.Helper()
+	credential, err := agentruntime.NewStaticBearerCredential(token)
+	if err != nil {
+		t.Fatal(err)
+	}
+	client, err := agentruntime.NewClient(agentruntime.ClientConfig{BaseURL: baseURL, HTTPClient: http.DefaultClient, Credentials: credential, RequestIDs: &publicLifecycleRequestIDs{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return client
 }
 
 type auditPublisherRetention struct{}
