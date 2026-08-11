@@ -37,6 +37,7 @@
         "docs/reference/sandbox-host-control-v1.md",
         "docs/reference/runtime-go-contract.md",
         "docs/reference/api-compatibility.md",
+        "docs/reference/data-lifecycle.md",
         "docs/reference/runtime-http-api.md",
         "docs/reference/temporal-payloads.md",
         "evidence/issue-14-deployment-e2e.json",

@@ -37,8 +37,38 @@ type IdentifierSource interface {
 	NextIdentifier(IdentifierKind) (string, error)
 }
 
-// RetentionPolicy declares metadata retention at the transition boundary.
+// DataClass identifies an independently governed durable-data lifecycle.
+// Classes intentionally describe persisted data rather than process roles, so
+// operators can set different retention and collection policies without
+// coupling public event replay to audit or idempotency retention.
+type DataClass string
+
+const (
+	DataClassAgentRevision DataClass = "agent_revision"
+	DataClassPolicy        DataClass = "policy"
+	DataClassSession       DataClass = "session"
+	DataClassInput         DataClass = "input"
+	DataClassTurn          DataClass = "turn"
+	DataClassArtifact      DataClass = "artifact"
+	DataClassConversation  DataClass = "conversation"
+	DataClassAuthorization DataClass = "authorization"
+	DataClassInvocation    DataClass = "invocation"
+	DataClassEvent         DataClass = "product_event"
+	DataClassAudit         DataClass = "audit"
+	DataClassOutbox        DataClass = "outbox"
+	DataClassReceipt       DataClass = "idempotency_receipt"
+)
+
+// RetentionPolicy declares the fallback metadata retention at the transition boundary.
 type RetentionPolicy interface{ RetainUntil(time.Time) time.Time }
+
+// ClassRetentionPolicy optionally supplies independent retention horizons for
+// individual durable data classes. The fallback RetentionPolicy remains
+// supported so existing operator configuration has stable behavior.
+type ClassRetentionPolicy interface {
+	RetentionPolicy
+	RetainClassUntil(DataClass, time.Time) time.Time
+}
 type defaultRetention struct{}
 
 func (defaultRetention) RetainUntil(now time.Time) time.Time { return now.Add(24 * time.Hour) }
@@ -46,7 +76,7 @@ func (defaultRetention) RetainUntil(now time.Time) time.Time { return now.Add(24
 // PlannerOption configures one RuntimeStatePlanner.
 type PlannerOption func(*RuntimeStatePlanner) error
 
-// WithRetentionPolicy injects the retention authority used for every planner-owned record.
+// WithRetentionPolicy injects the retention authority used for planner-owned records.
 func WithRetentionPolicy(policy RetentionPolicy) PlannerOption {
 	return func(planner *RuntimeStatePlanner) error {
 		if policy == nil {
@@ -320,10 +350,10 @@ func (planner *RuntimeStatePlanner) registerPolicy(state *RuntimeState, binding 
 	if err != nil {
 		return PlanResult{}, EffectSet{}, ErrIntegrity
 	}
-	until := planner.retain(now)
+	until := planner.retain(now, DataClassPolicy)
 	record := PolicyRevisionRecord{Tenant: binding.Scope.Tenant, Name: command.Name, Revision: latest + 1, Digest: digest, Rules: rules, CreatedAt: now, RetainUntil: until}
 	state.Policies = append(state.Policies, record)
-	effects, err := planner.auditOnly(state, binding, "policy_revision.registered", "", "", now, until)
+	effects, err := planner.auditOnly(state, binding, "policy_revision.registered", "", "", now)
 	if err != nil {
 		return PlanResult{}, EffectSet{}, err
 	}
@@ -370,14 +400,14 @@ func (planner *RuntimeStatePlanner) register(state *RuntimeState, binding Receip
 	if err != nil {
 		return PlanResult{}, EffectSet{}, err
 	}
-	until := planner.retain(now)
+	until := planner.retain(now, DataClassAgentRevision)
 	record := AgentRevisionRecord{Tenant: binding.Scope.Tenant, AgentID: agentID, RevisionID: revisionID, Revision: revision, Name: compiled.commitment.Name, ModelProfile: compiled.commitment.ModelProfile, Specification: compiled.commitment.Reference, CreatedAt: now, RetainUntil: until}
 	state.Revisions = append(state.Revisions, record)
-	effects, err := planner.auditOnly(state, binding, "agent_revision.registered", "", "", now, until)
+	effects, err := planner.auditOnly(state, binding, "agent_revision.registered", "", "", now)
 	if err != nil {
 		return PlanResult{}, EffectSet{}, err
 	}
-	outbox, err := planner.catalogOutbox(binding, record, now, until)
+	outbox, err := planner.catalogOutbox(binding, record, now, planner.retain(now, DataClassOutbox))
 	if err != nil {
 		return PlanResult{}, EffectSet{}, err
 	}
@@ -402,10 +432,10 @@ func (planner *RuntimeStatePlanner) createSession(state *RuntimeState, binding R
 	if err != nil {
 		return PlanResult{}, EffectSet{}, err
 	}
-	until := planner.retain(now)
+	until := planner.retain(now, DataClassSession)
 	session := SessionRecord{Tenant: binding.Scope.Tenant, Principal: binding.Scope.Principal, SessionID: id, AgentID: revision.AgentID, RevisionID: revision.RevisionID, State: agentruntime.SessionOpen, Version: 1, CreatedAt: now, UpdatedAt: now, RetainUntil: until}
 	state.Sessions = append(state.Sessions, session)
-	effects, err := planner.effects(state, binding, session, TurnRecord{}, InvocationRecord{}, []agentruntime.EventKind{agentruntime.EventSessionCreated}, now, until)
+	effects, err := planner.effects(state, binding, session, TurnRecord{}, InvocationRecord{}, []agentruntime.EventKind{agentruntime.EventSessionCreated}, now)
 	if err != nil {
 		return PlanResult{}, EffectSet{}, err
 	}
@@ -430,8 +460,9 @@ func (planner *RuntimeStatePlanner) admit(state *RuntimeState, binding ReceiptBi
 	if err != nil {
 		return PlanResult{}, EffectSet{}, err
 	}
-	until := planner.retain(now)
-	input := InputRecord{Tenant: session.Tenant, Principal: session.Principal, SessionID: session.SessionID, InputID: inputID, Content: compiled.commitment.Reference, AcceptedAt: now, RetentionUntil: until}
+	inputUntil := planner.retain(now, DataClassInput)
+	turnUntil := planner.retain(now, DataClassTurn)
+	input := InputRecord{Tenant: session.Tenant, Principal: session.Principal, SessionID: session.SessionID, InputID: inputID, Content: compiled.commitment.Reference, AcceptedAt: now, RetentionUntil: inputUntil}
 	state.Inputs = append(state.Inputs, input)
 	position := uint64(1)
 	active := false
@@ -451,12 +482,12 @@ func (planner *RuntimeStatePlanner) admit(state *RuntimeState, binding ReceiptBi
 	if active {
 		turnState, kinds, started = agentruntime.TurnQueued, []agentruntime.EventKind{agentruntime.EventInputAccepted, agentruntime.EventTurnQueued}, nil
 	}
-	turn := TurnRecord{Tenant: session.Tenant, Principal: session.Principal, SessionID: session.SessionID, TurnID: turnID, InputID: inputID, Position: position, State: turnState, Version: 1, StartedAt: started, RetentionUntil: until}
+	turn := TurnRecord{Tenant: session.Tenant, Principal: session.Principal, SessionID: session.SessionID, TurnID: turnID, InputID: inputID, Position: position, State: turnState, Version: 1, StartedAt: started, RetentionUntil: turnUntil}
 	state.Turns = append(state.Turns, turn)
 	session.Version++
 	session.UpdatedAt = now
 	state.Sessions[sessionIndex] = session
-	effects, err := planner.effects(state, binding, session, turn, InvocationRecord{}, kinds, now, until)
+	effects, err := planner.effects(state, binding, session, turn, InvocationRecord{}, kinds, now)
 	if err != nil {
 		return PlanResult{}, EffectSet{}, err
 	}
@@ -472,14 +503,14 @@ func (planner *RuntimeStatePlanner) registerArtifact(state *RuntimeState, bindin
 	if err != nil {
 		return PlanResult{}, EffectSet{}, err
 	}
-	until := planner.retain(now)
+	until := planner.retain(now, DataClassArtifact)
 	record := ArtifactRecord{Tenant: binding.Scope.Tenant, Principal: binding.Scope.Principal, ArtifactID: id, SessionID: command.SessionID, TurnID: command.TurnID, Reference: compiled.commitment.Reference, CreatedAt: now, RetainUntil: until}
 	state.Artifacts = append(state.Artifacts, record)
-	effects, err := planner.auditOnly(state, binding, "artifact.registered", command.SessionID, command.TurnID, now, until)
+	effects, err := planner.auditOnly(state, binding, "artifact.registered", command.SessionID, command.TurnID, now)
 	if err != nil {
 		return PlanResult{}, EffectSet{}, err
 	}
-	outbox, err := planner.artifactOutbox(binding, record, now, until)
+	outbox, err := planner.artifactOutbox(binding, record, now, planner.retain(now, DataClassOutbox))
 	if err != nil {
 		return PlanResult{}, EffectSet{}, err
 	}
@@ -502,14 +533,14 @@ func (planner *RuntimeStatePlanner) appendConversation(state *RuntimeState, bind
 	if command.ExpectedVersion != version {
 		return PlanResult{}, EffectSet{}, ErrConflict
 	}
-	until := planner.retain(now)
+	until := planner.retain(now, DataClassConversation)
 	record := ConversationRecord{Tenant: binding.Scope.Tenant, Principal: binding.Scope.Principal, SessionID: command.SessionID, Version: version + 1, Reference: compiled.commitment.Reference, CreatedAt: now, RetainUntil: until}
 	state.Conversations = append(state.Conversations, record)
-	effects, err := planner.auditOnly(state, binding, "conversation.appended", command.SessionID, "", now, until)
+	effects, err := planner.auditOnly(state, binding, "conversation.appended", command.SessionID, "", now)
 	if err != nil {
 		return PlanResult{}, EffectSet{}, err
 	}
-	outbox, err := planner.conversationOutbox(binding, record, now, until)
+	outbox, err := planner.conversationOutbox(binding, record, now, planner.retain(now, DataClassOutbox))
 	if err != nil {
 		return PlanResult{}, EffectSet{}, err
 	}
@@ -522,9 +553,9 @@ func (planner *RuntimeStatePlanner) recordToolIntent(state *RuntimeState, bindin
 	if findTurn(state, binding.Scope, c.SessionID, c.TurnID) < 0 {
 		return PlanResult{}, EffectSet{}, ErrNotFoundOrDenied
 	}
-	r := ToolIntentRecord{Tenant: binding.Scope.Tenant, Principal: binding.Scope.Principal, SessionID: c.SessionID, TurnID: c.TurnID, ToolCallID: c.ToolCallID, ToolName: c.ToolName, ActionDigest: c.ActionDigest, PolicyRevisionDigest: c.PolicyRevisionDigest, CreatedAt: now, RetainUntil: planner.retain(now)}
+	r := ToolIntentRecord{Tenant: binding.Scope.Tenant, Principal: binding.Scope.Principal, SessionID: c.SessionID, TurnID: c.TurnID, ToolCallID: c.ToolCallID, ToolName: c.ToolName, ActionDigest: c.ActionDigest, PolicyRevisionDigest: c.PolicyRevisionDigest, CreatedAt: now, RetainUntil: planner.retain(now, DataClassAuthorization)}
 	state.ToolIntents = append(state.ToolIntents, r)
-	e, err := planner.auditOnly(state, binding, "tool.intent_recorded", c.SessionID, c.TurnID, now, r.RetainUntil)
+	e, err := planner.auditOnly(state, binding, "tool.intent_recorded", c.SessionID, c.TurnID, now)
 	return PlanResult{}, e, err
 }
 func (planner *RuntimeStatePlanner) requestApproval(state *RuntimeState, binding ReceiptBinding, c RequestApprovalCommand, now time.Time) (PlanResult, EffectSet, error) {
@@ -545,9 +576,9 @@ func (planner *RuntimeStatePlanner) requestApproval(state *RuntimeState, binding
 			return PlanResult{}, EffectSet{}, ErrConflict
 		}
 	}
-	r := ApprovalRecord{Tenant: binding.Scope.Tenant, Principal: binding.Scope.Principal, ApprovalID: c.ApprovalID, SessionID: c.SessionID, TurnID: c.TurnID, ToolCallID: c.ToolCallID, ActionDigest: c.ActionDigest, PolicyRevisionDigest: c.PolicyRevisionDigest, State: "pending", CapabilityDigest: c.CapabilityDigest, MaximumUses: c.MaximumUses, ExpiresAt: c.ExpiresAt, CreatedAt: now, RetainUntil: planner.retain(now)}
+	r := ApprovalRecord{Tenant: binding.Scope.Tenant, Principal: binding.Scope.Principal, ApprovalID: c.ApprovalID, SessionID: c.SessionID, TurnID: c.TurnID, ToolCallID: c.ToolCallID, ActionDigest: c.ActionDigest, PolicyRevisionDigest: c.PolicyRevisionDigest, State: "pending", CapabilityDigest: c.CapabilityDigest, MaximumUses: c.MaximumUses, ExpiresAt: c.ExpiresAt, CreatedAt: now, RetainUntil: planner.retain(now, DataClassAuthorization)}
 	state.Approvals = append(state.Approvals, r)
-	e, err := planner.auditOnly(state, binding, "approval.requested", c.SessionID, c.TurnID, now, r.RetainUntil)
+	e, err := planner.auditOnly(state, binding, "approval.requested", c.SessionID, c.TurnID, now)
 	return PlanResult{}, e, err
 }
 func (planner *RuntimeStatePlanner) decideApproval(state *RuntimeState, binding ReceiptBinding, c DecideApprovalCommand, now time.Time) (PlanResult, EffectSet, error) {
@@ -562,7 +593,7 @@ func (planner *RuntimeStatePlanner) decideApproval(state *RuntimeState, binding 
 		if !now.Before(a.ExpiresAt) {
 			a.State = "expired"
 			state.Approvals[n] = a
-			effects, err := planner.auditOnly(state, binding, "approval.expired", a.SessionID, a.TurnID, now, a.RetainUntil)
+			effects, err := planner.auditOnly(state, binding, "approval.expired", a.SessionID, a.TurnID, now)
 			return PlanResult{}, effects, err
 		}
 		a.State = c.Decision
@@ -587,7 +618,7 @@ func (planner *RuntimeStatePlanner) decideApproval(state *RuntimeState, binding 
 				RetainUntil:          a.RetainUntil,
 			})
 		}
-		e, err := planner.auditOnly(state, binding, "approval."+c.Decision, a.SessionID, a.TurnID, now, a.RetainUntil)
+		e, err := planner.auditOnly(state, binding, "approval."+c.Decision, a.SessionID, a.TurnID, now)
 		return PlanResult{}, e, err
 	}
 	return PlanResult{}, EffectSet{}, ErrNotFoundOrDenied
@@ -607,7 +638,7 @@ func (planner *RuntimeStatePlanner) consumeCapabilityGrant(state *RuntimeState, 
 		}
 		grant.Uses++
 		state.Grants[index] = grant
-		effects, err := planner.auditOnly(state, binding, "capability_grant.consumed", c.SessionID, c.TurnID, now, grant.RetainUntil)
+		effects, err := planner.auditOnly(state, binding, "capability_grant.consumed", c.SessionID, c.TurnID, now)
 		return PlanResult{}, effects, err
 	}
 	return PlanResult{}, EffectSet{}, ErrNotFoundOrDenied
@@ -646,14 +677,14 @@ func (planner *RuntimeStatePlanner) begin(state *RuntimeState, binding ReceiptBi
 	if err != nil {
 		return PlanResult{}, EffectSet{}, err
 	}
-	until := planner.retain(now)
+	until := planner.retain(now, DataClassInvocation)
 	invocation := InvocationRecord{Tenant: session.Tenant, Principal: session.Principal, SessionID: session.SessionID, TurnID: turn.TurnID, InvocationID: id, OperationID: command.OperationID, Ordinal: ordinal, Fence: fence, State: InvocationIntent, CreatedAt: now, UpdatedAt: now, RetentionUntil: until}
 	state.Invocations = append(state.Invocations, invocation)
 	turn.Version++
 	session.Version++
 	session.UpdatedAt = now
 	state.Turns[turnIndex], state.Sessions[sessionIndex] = turn, session
-	effects, err := planner.effects(state, binding, session, turn, invocation, nil, now, until)
+	effects, err := planner.effects(state, binding, session, turn, invocation, nil, now)
 	if err != nil {
 		return PlanResult{}, EffectSet{}, err
 	}
@@ -673,7 +704,7 @@ func (planner *RuntimeStatePlanner) recordOutcome(state *RuntimeState, binding R
 	}
 	invocation.State, invocation.Result, invocation.Failure, invocation.UpdatedAt = command.Outcome, command.Result, command.Failure.Clone(), now
 	state.Invocations[invocationIndex] = invocation
-	effects, err := planner.effects(state, binding, session, turn, invocation, nil, now, planner.retain(now))
+	effects, err := planner.effects(state, binding, session, turn, invocation, nil, now)
 	if err != nil {
 		return PlanResult{}, EffectSet{}, err
 	}
@@ -712,7 +743,7 @@ func (planner *RuntimeStatePlanner) settle(state *RuntimeState, binding ReceiptB
 		kinds = append(kinds, agentruntime.EventSessionCompleted)
 	}
 	state.Sessions[sessionIndex] = session
-	effects, err := planner.effects(state, binding, session, turn, InvocationRecord{}, kinds, now, planner.retain(now))
+	effects, err := planner.effects(state, binding, session, turn, InvocationRecord{}, kinds, now)
 	if err != nil {
 		return PlanResult{}, EffectSet{}, err
 	}
@@ -746,7 +777,7 @@ func (planner *RuntimeStatePlanner) cancel(state *RuntimeState, binding ReceiptB
 		kinds = append(kinds, agentruntime.EventSessionCompleted)
 	}
 	state.Sessions[sessionIndex] = session
-	effects, err := planner.effects(state, binding, session, turn, InvocationRecord{}, kinds, now, planner.retain(now))
+	effects, err := planner.effects(state, binding, session, turn, InvocationRecord{}, kinds, now)
 	if err != nil {
 		return PlanResult{}, EffectSet{}, err
 	}
@@ -769,7 +800,7 @@ func (planner *RuntimeStatePlanner) close(state *RuntimeState, binding ReceiptBi
 		kinds = append(kinds, agentruntime.EventSessionCompleted)
 	}
 	state.Sessions[index] = session
-	effects, err := planner.effects(state, binding, session, TurnRecord{}, InvocationRecord{}, kinds, now, planner.retain(now))
+	effects, err := planner.effects(state, binding, session, TurnRecord{}, InvocationRecord{}, kinds, now)
 	if err != nil {
 		return PlanResult{}, EffectSet{}, err
 	}
@@ -787,7 +818,7 @@ func (planner *RuntimeStatePlanner) claim(state *RuntimeState, binding ReceiptBi
 	}
 	record.State, record.ClaimedBy, record.ClaimUntil, record.Version = OutboxClaimed, command.Claimer, &command.ClaimUntil, record.Version+1
 	state.Outbox[index] = record
-	effects, err := planner.auditOnly(state, binding, "outbox.claimed", record.SessionID, record.TurnID, now, planner.retain(now))
+	effects, err := planner.auditOnly(state, binding, "outbox.claimed", record.SessionID, record.TurnID, now)
 	return PlanResult{Outbox: record}, effects, err
 }
 func (planner *RuntimeStatePlanner) acknowledge(state *RuntimeState, binding ReceiptBinding, command AcknowledgeOutboxCommand, now time.Time) (PlanResult, EffectSet, error) {
@@ -801,7 +832,7 @@ func (planner *RuntimeStatePlanner) acknowledge(state *RuntimeState, binding Rec
 	}
 	record.State, record.Version, record.ClaimUntil = OutboxPublished, record.Version+1, nil
 	state.Outbox[index] = record
-	effects, err := planner.auditOnly(state, binding, "outbox.published", record.SessionID, record.TurnID, now, planner.retain(now))
+	effects, err := planner.auditOnly(state, binding, "outbox.published", record.SessionID, record.TurnID, now)
 	return PlanResult{Outbox: record}, effects, err
 }
 
@@ -821,30 +852,30 @@ func (planner *RuntimeStatePlanner) promote(state *RuntimeState, sessionID agent
 	result := state.Turns[index].Clone()
 	return &result
 }
-func (planner *RuntimeStatePlanner) effects(state *RuntimeState, binding ReceiptBinding, session SessionRecord, turn TurnRecord, invocation InvocationRecord, kinds []agentruntime.EventKind, now, until time.Time) (EffectSet, error) {
+func (planner *RuntimeStatePlanner) effects(state *RuntimeState, binding ReceiptBinding, session SessionRecord, turn TurnRecord, invocation InvocationRecord, kinds []agentruntime.EventKind, now time.Time) (EffectSet, error) {
 	effects := EffectSet{}
 	for _, kind := range kinds {
-		event, err := planner.event(state, session, turn, binding, kind, now, until)
+		event, err := planner.event(state, session, turn, binding, kind, now, planner.retain(now, DataClassEvent))
 		if err != nil {
 			return EffectSet{}, err
 		}
 		state.Events = append(state.Events, event)
 		effects.Events = append(effects.Events, event)
-		outbox, err := planner.outbox(session, turn, invocation, event.EventID, kind, event.Sequence, now, until)
+		outbox, err := planner.outbox(session, turn, invocation, event.EventID, kind, event.Sequence, now, planner.retain(now, DataClassOutbox))
 		if err != nil {
 			return EffectSet{}, err
 		}
 		state.Outbox = append(state.Outbox, outbox)
 		effects.Outbox = append(effects.Outbox, outbox)
 	}
-	fact, err := planner.fact(binding, session, turn, now, until)
+	fact, err := planner.fact(binding, session, turn, now, planner.retain(now, DataClassAudit))
 	if err != nil {
 		return EffectSet{}, err
 	}
 	state.Audit = append(state.Audit, fact)
 	effects.Audit = append(effects.Audit, fact)
 	if len(kinds) == 0 {
-		outbox, err := planner.outbox(session, turn, invocation, agentruntime.EventID(""), "", 0, now, until)
+		outbox, err := planner.outbox(session, turn, invocation, agentruntime.EventID(""), "", 0, now, planner.retain(now, DataClassOutbox))
 		if err != nil {
 			return EffectSet{}, err
 		}
@@ -853,8 +884,8 @@ func (planner *RuntimeStatePlanner) effects(state *RuntimeState, binding Receipt
 	}
 	return effects, nil
 }
-func (planner *RuntimeStatePlanner) auditOnly(state *RuntimeState, binding ReceiptBinding, kind string, sessionID agentruntime.SessionID, turnID agentruntime.TurnID, now, until time.Time) (EffectSet, error) {
-	fact, err := planner.factKind(binding, kind, sessionID, turnID, now, until)
+func (planner *RuntimeStatePlanner) auditOnly(state *RuntimeState, binding ReceiptBinding, kind string, sessionID agentruntime.SessionID, turnID agentruntime.TurnID, now time.Time) (EffectSet, error) {
+	fact, err := planner.factKind(binding, kind, sessionID, turnID, now, planner.retain(now, DataClassAudit))
 	if err != nil {
 		return EffectSet{}, err
 	}
@@ -917,7 +948,7 @@ func (planner *RuntimeStatePlanner) conversationOutbox(binding ReceiptBinding, c
 	return OutboxRecord{Tenant: conversation.Tenant, Principal: conversation.Principal, OutboxID: id, Aggregate: "conversation", AggregateVersion: conversation.Version, Version: 1, OperationID: OperationID(binding.IdempotencyKey), SessionID: conversation.SessionID, State: OutboxPending, CommittedAt: now, RetentionUntil: until}, nil
 }
 func (planner *RuntimeStatePlanner) receipt(binding ReceiptBinding, result PlanResult, now time.Time) MutationReceipt {
-	return MutationReceipt{Scope: binding.Scope, IdempotencyKey: binding.IdempotencyKey, OperationID: OperationID(binding.IdempotencyKey), Command: string(binding.Command), RequestDigest: binding.RequestDigest, AgentID: result.Revision.AgentID, RevisionID: result.Revision.RevisionID, PolicyName: result.Policy.Name, PolicyRevision: result.Policy.Revision, SessionID: firstID(firstID(firstID(result.Session.SessionID, result.Turn.SessionID), result.Artifact.SessionID), result.Conversation.SessionID), InputID: result.Input.InputID, TurnID: firstTurnID(result.Turn.TurnID, result.Artifact.TurnID), ArtifactID: result.Artifact.ArtifactID, ConversationVersion: result.Conversation.Version, AcceptedAt: now, RetentionUntil: planner.retain(now)}
+	return MutationReceipt{Scope: binding.Scope, IdempotencyKey: binding.IdempotencyKey, OperationID: OperationID(binding.IdempotencyKey), Command: string(binding.Command), RequestDigest: binding.RequestDigest, AgentID: result.Revision.AgentID, RevisionID: result.Revision.RevisionID, PolicyName: result.Policy.Name, PolicyRevision: result.Policy.Revision, SessionID: firstID(firstID(firstID(result.Session.SessionID, result.Turn.SessionID), result.Artifact.SessionID), result.Conversation.SessionID), InputID: result.Input.InputID, TurnID: firstTurnID(result.Turn.TurnID, result.Artifact.TurnID), ArtifactID: result.Artifact.ArtifactID, ConversationVersion: result.Conversation.Version, AcceptedAt: now, RetentionUntil: planner.retain(now, DataClassReceipt)}
 }
 func firstID(left, right agentruntime.SessionID) agentruntime.SessionID {
 	if left != "" {
@@ -931,7 +962,10 @@ func firstTurnID(left, right agentruntime.TurnID) agentruntime.TurnID {
 	}
 	return right
 }
-func (planner *RuntimeStatePlanner) retain(now time.Time) time.Time {
+func (planner *RuntimeStatePlanner) retain(now time.Time, class DataClass) time.Time {
+	if policy, ok := planner.retention.(ClassRetentionPolicy); ok {
+		return normalizeTime(policy.RetainClassUntil(class, now))
+	}
 	return normalizeTime(planner.retention.RetainUntil(now))
 }
 func (planner *RuntimeStatePlanner) raw(kind IdentifierKind) (string, error) {

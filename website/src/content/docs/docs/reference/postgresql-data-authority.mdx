@@ -17,6 +17,10 @@ Input-body, or Product-event body columns. The declared blob authority owns
 content bytes; PostgreSQL owns authorization-scoped indexes, state, order, and
 retention metadata.
 
+The repository's [data lifecycle reference](https://github.com/0x63616c/agent-runtime/blob/main/docs/reference/data-lifecycle.md)
+defines the independently configurable retention classes for state metadata,
+events, audit facts, outbox, receipts, payload blobs, and sandbox records.
+
 Its database constraints establish the initial mechanical guards:
 
 - every runtime row is scoped by its tenant, and Session records are additionally

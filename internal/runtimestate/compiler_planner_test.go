@@ -147,6 +147,85 @@ func TestCompilerCreatesTheOnlyReceiptBoundMutationAndPlannerCreatesRevision(t *
 	}
 }
 
+func TestPlannerAssignsIndependentRetentionHorizonsByDataClass(t *testing.T) {
+	now := time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC)
+	content, _, tenant, principal := testRuntimeContent(t)
+	compiler, err := runtimestate.NewCompiler(content)
+	if err != nil {
+		t.Fatal(err)
+	}
+	retention := classRetention{fallback: time.Hour, durations: map[runtimestate.DataClass]time.Duration{
+		runtimestate.DataClassAgentRevision: 2 * time.Hour,
+		runtimestate.DataClassSession:       3 * time.Hour,
+		runtimestate.DataClassInput:         4 * time.Hour,
+		runtimestate.DataClassTurn:          5 * time.Hour,
+		runtimestate.DataClassEvent:         6 * time.Hour,
+		runtimestate.DataClassAudit:         7 * time.Hour,
+		runtimestate.DataClassOutbox:        8 * time.Hour,
+		runtimestate.DataClassReceipt:       9 * time.Hour,
+	}}
+	planner, err := runtimestate.NewRuntimeStatePlanner(fixedPlannerClock{now: now}, &uniquePlannerIDs{}, runtimestate.WithRetentionPolicy(retention))
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err := content.StageAgentSpecificationBody(context.Background(), tenant, runtimecontent.AgentSpecificationBody{Name: "retention", ModelProfile: "balanced", Instructions: "safe"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	register, err := compiler.CompileRegisterAgentRevision(runtimestate.RegisterAgentRevisionCommand{Scope: runtimestate.MutationScope{Tenant: tenant, Authority: runtimestate.AuthorityTenantAdministrator}, IdempotencyKey: "register", Specification: body})
+	if err != nil {
+		t.Fatal(err)
+	}
+	registered, err := planner.Plan(context.Background(), runtimestate.RuntimeState{}, register)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := registered.Result().Revision.RetainUntil, now.Add(2*time.Hour); !got.Equal(want) {
+		t.Fatalf("Agent retention = %s, want %s", got, want)
+	}
+	if got, want := registered.Effects().Audit[0].RetentionUntil, now.Add(7*time.Hour); !got.Equal(want) {
+		t.Fatalf("Agent audit retention = %s, want %s", got, want)
+	}
+	if got, want := registered.Effects().Outbox[0].RetentionUntil, now.Add(8*time.Hour); !got.Equal(want) {
+		t.Fatalf("Agent outbox retention = %s, want %s", got, want)
+	}
+	if got, want := registered.Result().Receipt.RetentionUntil, now.Add(9*time.Hour); !got.Equal(want) {
+		t.Fatalf("Agent receipt retention = %s, want %s", got, want)
+	}
+	create, err := compiler.CompileCreateSession(runtimestate.CreateSessionCommand{Scope: ownerScope(tenant, principal), IdempotencyKey: "session", RevisionID: registered.Result().Revision.RevisionID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	created, err := planner.Plan(context.Background(), registered.State(), create)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := created.Result().Session.RetainUntil, now.Add(3*time.Hour); !got.Equal(want) {
+		t.Fatalf("Session retention = %s, want %s", got, want)
+	}
+	if got, want := created.Effects().Events[0].RetentionUntil, now.Add(6*time.Hour); !got.Equal(want) {
+		t.Fatalf("Session event retention = %s, want %s", got, want)
+	}
+	input, err := content.StageInputEnvelope(context.Background(), tenant, []agentruntime.ContentPart{{Kind: agentruntime.ContentText, Text: "retention"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	admit, err := compiler.CompileAdmitInput(runtimestate.AdmitInputCommand{Scope: ownerScope(tenant, principal), IdempotencyKey: "input", SessionID: created.Result().Session.SessionID, Input: input})
+	if err != nil {
+		t.Fatal(err)
+	}
+	accepted, err := planner.Plan(context.Background(), created.State(), admit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := accepted.Result().Input.RetentionUntil, now.Add(4*time.Hour); !got.Equal(want) {
+		t.Fatalf("Input retention = %s, want %s", got, want)
+	}
+	if got, want := accepted.Result().Turn.RetentionUntil, now.Add(5*time.Hour); !got.Equal(want) {
+		t.Fatalf("Turn retention = %s, want %s", got, want)
+	}
+}
+
 func TestPlannerPromotesQueuedTurnAfterOneWinningSettlement(t *testing.T) {
 	now := time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC)
 	content, _, tenant, principal := testRuntimeContent(t)
@@ -511,6 +590,20 @@ func TestCompilerRejectsForgedScopeAndCompilesOnlyStateScopedContentReaders(t *t
 type fixedPlannerClock struct{ now time.Time }
 
 func (clock fixedPlannerClock) Now() time.Time { return clock.now }
+
+type classRetention struct {
+	fallback  time.Duration
+	durations map[runtimestate.DataClass]time.Duration
+}
+
+func (policy classRetention) RetainUntil(now time.Time) time.Time { return now.Add(policy.fallback) }
+
+func (policy classRetention) RetainClassUntil(class runtimestate.DataClass, now time.Time) time.Time {
+	if duration, ok := policy.durations[class]; ok {
+		return now.Add(duration)
+	}
+	return policy.RetainUntil(now)
+}
 
 type fixedPlannerIDs struct{ next int }
 
