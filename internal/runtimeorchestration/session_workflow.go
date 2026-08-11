@@ -150,6 +150,11 @@ func (activities *Activities) DispatchStateCommand(ctx context.Context, command 
 	}
 	if err := activities.dispatcher.Dispatch(ctx, command); err != nil {
 		switch {
+		case errors.Is(err, context.Canceled):
+			// A Go context error by itself is encoded by Temporal as an ordinary
+			// activity failure and would be retried. Preserve the intended
+			// cancellation semantics with Temporal's typed cancellation result.
+			return temporal.NewCanceledError("durable state dispatch cancelled")
 		case errors.Is(err, runtimestate.ErrNotFoundOrDenied), errors.Is(err, runtimestate.ErrIntegrity):
 			return temporal.NewNonRetryableApplicationError("durable outbox route rejected", deterministicRouteErrorType, err)
 		case errors.Is(err, ErrUncertainExternalEffect):
@@ -157,9 +162,8 @@ func (activities *Activities) DispatchStateCommand(ctx context.Context, command 
 		case errors.Is(err, ErrIncompatiblePersistedPolicy):
 			return temporal.NewNonRetryableApplicationError("persisted policy is incompatible", incompatiblePolicyErrorType, err)
 		default:
-			// State unavailability remains retryable. Context cancellation also
-			// propagates unchanged so Temporal cancels rather than schedules a
-			// replacement activity.
+			// State unavailability remains retryable. Typed cancellation above
+			// stops the activity without scheduling a replacement attempt.
 			return err
 		}
 	}

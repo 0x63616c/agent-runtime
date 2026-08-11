@@ -69,8 +69,8 @@ not evidence claimed to exist today.
 | TMP-006 | Startup compatibility failure/success integration test. | Upgrade troubleshooting. |
 | TMP-007 | Role registration/process startup integration matrix. | Deployment roles reference. |
 | TMP-008 | Credential absence/presence role test using fixture secret source. | Trust-separation diagram. |
-| TMP-009 | Activity retry decision table test with uncertain-effect case. | Retry policy guide. |
-| TMP-010 | Temporal test-environment suite for listed lifecycle scenarios. | Test evidence report. |
+| TMP-009 | `TestDispatchStateCommandClassifiesRetrySafetyWithoutRepeatingUnknownEffects`, `TestSessionWorkflowRetriesOnlyRetryableDurableDispatch`, and `TestSessionWorkflowDoesNotRetryCancelledDurableDispatch` prove decision classification, actual retry of only durable-route observation, and cancellation without replacement. | Retry policy guide. |
+| TMP-010 | `TestSessionWorkflowExercisesEveryOwnedTerminalEffectRoute`, `TestSessionWorkflowReplaysCheckedInHistoricLifecycle`, `TestPostgresOutboxReclaimsLiveTemporalRouteAfterAcknowledgementLoss`, and `TestPostgresOutboxRecoversAcrossActualPublisherProcessKills` cover test-environment lifecycle routes, retained replay, and durable PostgreSQL/Temporal recovery. | Test evidence report. |
 | PAY-001 | Workspace import/build and second in-repo consumer test. | Module reference/version policy. |
 | PAY-002 | Golden inline/zstd/remote size-selection vectors. | Payload chain architecture. |
 | PAY-003 | Module conformance suite covers store/key/layer/handler/metrics. | Codec module reference. |

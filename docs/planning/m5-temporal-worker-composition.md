@@ -37,11 +37,31 @@ retry decision is deliberately closed and covered by
 
 | Condition | Activity outcome | Automatic retry |
 | --- | --- | --- |
-| Caller/workflow cancellation | Propagate cancellation unchanged. | No replacement activity. |
+| Caller/workflow cancellation | Convert the cancelled state observation to Temporal's typed `CanceledError`. | No replacement activity. |
 | Invalid, absent, or integrity-rejected durable route | Non-retryable `runtime.deterministic_outbox_route`. | No. |
 | State backend unavailable | Preserve a storage-neutral transient error. | Yes, within Temporal's bounded policy. |
 | Unknown external-effect result | Non-retryable `runtime.uncertain_external_effect`; reconciliation owns the next decision. | No. |
 | Incompatible persisted policy | Non-retryable `runtime.incompatible_persisted_policy`. | No. |
+
+`TestSessionWorkflowRetriesOnlyRetryableDurableDispatch` runs the actual
+Temporal retry policy: one unavailable durable-route observation retries that
+same route and then succeeds. `TestSessionWorkflowDoesNotRetryCancelledDurableDispatch`
+proves a Go context cancellation becomes Temporal cancellation rather than an
+ordinary retryable activity error. Neither case is an effect retry; this
+activity only rereads the already-committed route and cannot invoke a model,
+tool, or sandbox adapter.
+
+The final M5 effect/recovery matrix deliberately composes evidence at the
+actual authority boundary rather than pretending one test executes every
+external system:
+
+| Boundary | Retained evidence | Safe conclusion |
+| --- | --- | --- |
+| Approval/grant → sandbox finalization | `TestDurableToolLifecyclePersistsDescriptorApprovalAndFinalization` | Descriptor, approval/grant and terminal control-plane observation survive durable storage/restart; not sandbox command execution. |
+| Model stream → terminal Turn | `TestDurableModelNormalizedStreamFinalizesOwnerReadableOutput` and `TestDurableModelProducerLossFinalizesGapAndReplays` | A bounded normalized fixture stream is finalized as an Artifact; an unreconciled producer gets explicit gap/failure. Not a live provider integration. |
+| Cancellation → terminal route | `TestSessionWorkflowDoesNotRetryCancelledDurableDispatch` plus StateRuntime cancellation tests | Cancellation never causes activity replacement; the public mutation remains the sole terminal authority. |
+| Publisher → Temporal → acknowledgement loss | `TestPostgresOutboxReclaimsLiveTemporalRouteAfterAcknowledgementLoss` and `TestPostgresOutboxRecoversAcrossActualPublisherProcessKills` | A claimed route is reclaimed and re-signalled at-least-once; workflow sequence dedupe prevents a second private dispatch. |
+| Replay/versioning | `TestSessionWorkflowReplaysCheckedInHistoricLifecycle` | The retained private history remains replay-compatible. |
 
 The orchestration dispatcher has no model, tool, approval service, or sandbox
 credential, so the latter two cases are classification guards rather than a
