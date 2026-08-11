@@ -4,6 +4,11 @@ Durable Chat is a loopback web UI and terminal UI built only on the public Go
 SDK/HTTP contract. It creates or resumes a Session, queues Inputs, reconnects
 from a Product-event cursor, inspects durable state, and cancels a Turn.
 
+For declared local Kubernetes composition, `go run ./tools/dev up` renders the
+reviewed Stack and `go run ./tools/dev api` forwards only its `runtime-api`
+Service. That API is PostgreSQL/MinIO-backed, has its own service account and
+default-deny egress policy, and receives generated local Secret references.
+
 It deliberately does not configure, inspect, or impersonate a model provider.
 Codex subscription support remains blocked pending a production-supported
 official model surface and a protected canary; this application is not a

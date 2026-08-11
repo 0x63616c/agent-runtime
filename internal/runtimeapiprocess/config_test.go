@@ -38,9 +38,9 @@ func TestConfigurationIsStrictAndRequiresExplicitUnsafeMemoryStorage(t *testing.
 	if _, err := runtimeapiprocess.Parse(strings.NewReader(unknown)); err == nil {
 		t.Fatal("Parse(unknown field) error = nil")
 	}
-	wildcard := strings.Replace(validConfig, "127.0.0.1:8088", "0.0.0.0:8088", 1)
-	if _, err := runtimeapiprocess.Parse(strings.NewReader(wildcard)); err == nil {
-		t.Fatal("Parse(wildcard plain HTTP bind) error = nil")
+	kubernetes := strings.Replace(validConfig, "127.0.0.1:8088", "0.0.0.0:8088", 1)
+	if _, err := runtimeapiprocess.Parse(strings.NewReader(kubernetes)); err != nil {
+		t.Fatalf("Parse(Kubernetes bind): %v", err)
 	}
 	observed := strings.Replace(validConfig, `"principals": [`, `"observability":{"identity_correlation_key_environment":"OBSERVABILITY_CORRELATION_KEY"}, "principals": [`, 1)
 	if _, err := runtimeapiprocess.Parse(strings.NewReader(observed)); err != nil {

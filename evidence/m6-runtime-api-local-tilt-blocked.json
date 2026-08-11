@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "scope": "M6 runtime-api local Tilt preflight diagnostic; this is explicitly not success evidence and does not satisfy EX-001 or any Codex subscription requirement",
+  "commands": [
+    "go run ./tools/dev up --stack=m6-runtime-api --root=.",
+    "kubectl --context orbstack get --raw=/readyz"
+  ],
+  "result": "blocked-before-tilt",
+  "blocker": "The explicit orbstack Kubernetes API timed out during its TLS handshake before Tilt could render, apply, or run Durable Chat.",
+  "observed_output": "Unable to connect to the server: net/http: TLS handshake timeout",
+  "redaction": "No generated Secret values, local state files, credentials, tokens, pod logs, or application data were retained."
+}

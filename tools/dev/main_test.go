@@ -300,6 +300,7 @@ func TestMaterializeSecretsKeepsValuesPrivateAndStablePerStack(t *testing.T) {
 		"ar-safe-stack-tool-broker-secret":                {"TOOL_BROKER_TOKEN"},
 		"ar-safe-stack-sandbox-control-secret":            {"SANDBOX_CONTROL_TOKEN"},
 		"ar-safe-stack-blob-storage-secret":               {"BLOB_STORAGE_CREDENTIAL", "MINIO_ROOT_PASSWORD", "MINIO_ROOT_USER"},
+		"ar-safe-stack-runtime-api-secret":                {"AR_RUNTIME_MINIO_ACCESS_KEY", "AR_RUNTIME_MINIO_SECRET_KEY", "RUNTIME_API_ADMIN_TOKEN", "RUNTIME_API_DEVELOPER_TOKEN"},
 		"ar-safe-stack-orchestration-payload-blob-secret": {"ORCHESTRATION_PAYLOAD_BLOB_ACCESS_KEY", "ORCHESTRATION_PAYLOAD_BLOB_SECRET_KEY"},
 		"ar-safe-stack-codec-blob-secret":                 {"CODEC_BLOB_CREDENTIAL"},
 		"ar-safe-stack-sandbox-host-ca-secret":            {"SANDBOX_HOST_CA"},
@@ -310,7 +311,9 @@ func TestMaterializeSecretsKeepsValuesPrivateAndStablePerStack(t *testing.T) {
 	if len(secrets.Items) != len(expectedSecretKeys) {
 		t.Fatalf("generated Secret count = %d, want %d", len(secrets.Items), len(expectedSecretKeys))
 	}
+	valuesByName := make(map[string]map[string]string, len(secrets.Items))
 	for _, secret := range secrets.Items {
+		valuesByName[secret.Metadata.Name] = secret.StringData
 		expected, found := expectedSecretKeys[secret.Metadata.Name]
 		if !found {
 			t.Fatalf("unexpected generated Secret %q", secret.Metadata.Name)
@@ -324,6 +327,9 @@ func TestMaterializeSecretsKeepsValuesPrivateAndStablePerStack(t *testing.T) {
 		if strings.Join(actual, ",") != strings.Join(expected, ",") {
 			t.Fatalf("generated Secret %s keys = %v, want %v", secret.Metadata.Name, actual, expected)
 		}
+	}
+	if valuesByName["ar-safe-stack-runtime-api-secret"]["AR_RUNTIME_MINIO_ACCESS_KEY"] != valuesByName["ar-safe-stack-blob-storage-secret"]["MINIO_ROOT_USER"] || valuesByName["ar-safe-stack-runtime-api-secret"]["AR_RUNTIME_MINIO_SECRET_KEY"] != valuesByName["ar-safe-stack-blob-storage-secret"]["MINIO_ROOT_PASSWORD"] {
+		t.Fatal("runtime API storage credentials must be derived from the declared local blob Secret")
 	}
 	path := filepath.Join(root, ".runtime", "dev", "safe-stack.secrets.json")
 	info, err := os.Stat(path)
