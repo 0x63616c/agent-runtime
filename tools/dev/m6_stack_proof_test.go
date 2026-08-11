@@ -160,6 +160,72 @@ func TestDeclaredLocalWorkspaceFixturePublicLifecycle(t *testing.T) {
 	t.Logf("public Workspace fixture lifecycle complete: approval=%s tool=%s artifact=%s bytes=%d", pending.Approval.ID, completed.ID, artifact.Artifact.ID, len(body))
 }
 
+// TestDeclaredLocalWorkspaceFixtureRejectsLateApprovalDecision is run only
+// against the separately declared short-expiry local fixture scenario. It
+// observes the public HTTP/SDK seam: a pending approval expires before the
+// owner decides, the late decision is safely rejected, and no tool execution
+// is exposed. It is not workspace-service, Sandbox, or Firecracker evidence.
+func TestDeclaredLocalWorkspaceFixtureRejectsLateApprovalDecision(t *testing.T) {
+	endpoint := requiredStackProofEnvironment(t, "M6_STACK_API_URL")
+	admin := stackProofClient(t, endpoint, requiredStackProofEnvironment(t, "M6_STACK_ADMIN_TOKEN"))
+	developer := stackProofClient(t, endpoint, requiredStackProofEnvironment(t, "M6_STACK_DEVELOPER_TOKEN"))
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	runKey := fmt.Sprintf("m7-workspace-expiry-%d", time.Now().UnixNano())
+
+	policy, err := admin.CreatePolicy(ctx, agentruntime.CreatePolicyRequest{IdempotencyKey: "m7-workspace-policy", Name: "workspace-write-demo", Rules: []agentruntime.PolicyRule{{ToolName: "workspace.write", Decision: agentruntime.PolicyRequiresApproval}}})
+	if err != nil || policy.Revision != 1 {
+		t.Fatalf("create public expiry demo policy = %#v, %v", policy, err)
+	}
+	agent, err := admin.CreateAgent(ctx, agentruntime.CreateAgentRequest{IdempotencyKey: "m7-workspace-expiry-agent", Name: "workspace-expiry", ModelProfile: "balanced", Instructions: "use the declared workspace tool", Tools: []agentruntime.ToolDefinition{{Name: "workspace.write", Description: "bounded declared local Workspace fixture"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	session, err := developer.CreateSession(ctx, agentruntime.CreateSessionRequest{IdempotencyKey: runKey + "-session", AgentRevision: agent.RevisionID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	accepted, err := developer.SendInput(ctx, agentruntime.SendInputRequest{SessionID: session.ID, IdempotencyKey: runKey + "-input", Parts: []agentruntime.ContentPart{{Kind: agentruntime.ContentText, Text: "expire the declared workspace report"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var pending agentruntime.ToolCall
+	awaitStackProof(t, ctx, func() (bool, error) {
+		calls, inspectErr := developer.InspectToolCalls(ctx, session.ID, accepted.Turn.ID)
+		if inspectErr != nil || len(calls.Calls) != 1 {
+			return false, inspectErr
+		}
+		pending = calls.Calls[0]
+		return pending.State == agentruntime.ToolCallAwaitingApproval && pending.Approval != nil && pending.Approval.State == agentruntime.ApprovalPending, nil
+	})
+
+	// The public Approval projection is the immutable authority for the late
+	// decision boundary. The state transition itself is performed atomically by
+	// the late public decision, so there is no pre-decision polling side effect.
+	deadline := pending.Approval.ExpiresAt.Add(100 * time.Millisecond)
+	if deadline.After(time.Now().UTC()) {
+		expiryWait, stopExpiryWait := context.WithDeadline(ctx, deadline)
+		<-expiryWait.Done()
+		waitErr := expiryWait.Err()
+		stopExpiryWait()
+		if !errors.Is(waitErr, context.DeadlineExceeded) {
+			t.Fatalf("await declared public Approval expiry deadline: %v", waitErr)
+		}
+	}
+	if _, err := developer.DecideApproval(ctx, agentruntime.DecideApprovalRequest{ApprovalID: pending.Approval.ID, Decision: agentruntime.ApprovalApproved, IdempotencyKey: runKey + "-late-approve"}); !stackProofConflict(err) {
+		t.Fatalf("late public approval decision = %v, want safe conflict", err)
+	}
+	expired, err := developer.InspectApproval(ctx, pending.Approval.ID)
+	if err != nil || expired.State != agentruntime.ApprovalExpired || expired.DecidedAt != nil {
+		t.Fatalf("public expired approval projection = %#v, %v", expired, err)
+	}
+	calls, err := developer.InspectToolCalls(ctx, session.ID, accepted.Turn.ID)
+	if err != nil || len(calls.Calls) != 1 || calls.Calls[0].Approval == nil || calls.Calls[0].Approval.State != agentruntime.ApprovalExpired || calls.Calls[0].Execution != nil {
+		t.Fatalf("late approval tool projection = %#v, %v", calls, err)
+	}
+	t.Logf("public Workspace late-decision refusal complete: approval=%s", pending.Approval.ID)
+}
+
 func requiredStackProofEnvironment(t *testing.T, name string) string {
 	t.Helper()
 	value := os.Getenv(name)
@@ -250,6 +316,11 @@ func awaitStackProof(t *testing.T, ctx context.Context, condition func() (bool, 
 func stackProofNotFound(err error) bool {
 	var runtimeErr *agentruntime.Error
 	return errors.As(err, &runtimeErr) && runtimeErr.Failure.Code == agentruntime.FailureNotFound
+}
+
+func stackProofConflict(err error) bool {
+	var runtimeErr *agentruntime.Error
+	return errors.As(err, &runtimeErr) && runtimeErr.Failure.Code == agentruntime.FailureConflict
 }
 
 func resetStackProofAfterPending(t *testing.T, ctx context.Context) {

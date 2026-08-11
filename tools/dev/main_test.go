@@ -70,6 +70,13 @@ func TestLocalFixtureScenarioIsRejectedOutsideTheDeclaredLocalRender(t *testing.
 	}
 }
 
+func TestLocalTiltArgumentsPreserveTheDeclaredFixtureScenario(t *testing.T) {
+	arguments := localTiltUpArguments("fixture-proof", 43821, localFixtureScenarioWorkspaceApprovalExpiry)
+	if got := strings.Join(arguments, " "); !strings.Contains(got, "--fixture-scenario=workspace-approval-expiry-v1") || !strings.Contains(got, "--stack=fixture-proof") {
+		t.Fatalf("local Tilt arguments = %q, want exact Stack and fixture scenario", got)
+	}
+}
+
 func fixtureScenarioAttachments(t *testing.T, document []byte, profile, scenario string) int {
 	t.Helper()
 	var rendered struct {

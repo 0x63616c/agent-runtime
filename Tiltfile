@@ -2,12 +2,14 @@
 # no infrastructure schema and is intentionally locked to OrbStack.
 config.define_string('stack', usage='sole local Stack identity')
 config.define_string('profile', usage='explicit local or CI Stack profile')
+config.define_string('fixture-scenario', usage='explicit declared local-only fixture scenario')
 config.define_string('ci-context', usage='generated private k3d CI context')
 config.define_string('ci-registry-host', usage='generated loopback CI registry host')
 config.define_string('ci-registry-host-from-cluster', usage='generated in-cluster CI registry host')
 cfg = config.parse()
 stack = cfg.get('stack', '')
 profile = cfg.get('profile', 'local')
+fixture_scenario = cfg.get('fixture-scenario', 'workspace-approval-reset-v1')
 ci_context = cfg.get('ci-context', 'k3d-ar-ci-')
 ci_registry_host = cfg.get('ci-registry-host', 'localhost:0')
 ci_registry_host_from_cluster = cfg.get('ci-registry-host-from-cluster', 'k3d-ar-reg-.localhost:5000')
@@ -31,6 +33,8 @@ if profile == 'ci':
     ci_identity = ci_context[len(ci_context_prefix):]
     if not ci_identity or not ci_registry_host.startswith('localhost:') or ci_registry_host_from_cluster != 'k3d-ar-reg-' + ci_identity + '.localhost:5000':
         fail('CI infrastructure inputs must use generated agent-runtime k3d identities')
+if profile != 'local' and fixture_scenario != 'workspace-approval-reset-v1':
+    fail('fixture scenario is local-only')
 ci_readiness_timeout = '12m' if profile == 'ci' else '10m'
 ci_settings(readiness_timeout=ci_readiness_timeout)
 if k8s_context() == 'orbstack' and profile != 'local':
@@ -41,7 +45,10 @@ if k8s_context() == ci_context:
     default_registry(ci_registry_host, host_from_cluster=ci_registry_host_from_cluster)
 
 stack_file = '.runtime/dev/' + stack + '.stack.json'
-local('go run ./tools/dev render --stack=' + stack + ' --output=' + stack_file, quiet=True)
+render_command = 'go run ./tools/dev render --stack=' + stack + ' --output=' + stack_file
+if profile == 'local':
+    render_command = render_command + ' --fixture-scenario=' + fixture_scenario
+local(render_command, quiet=True)
 stack_manifests = local('go run ./cmd/stackctl manifests --stack-file ' + stack_file + ' --profile ' + profile, quiet=True)
 secret_manifests = local('go run ./tools/dev secrets --stack=' + stack + ' --profile=' + profile + ' --root=.', quiet=True)
 k8s_yaml([stack_manifests, secret_manifests])
