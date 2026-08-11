@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -170,6 +171,13 @@ func TestPublisherReclaimsAnUnacknowledgedRouteAfterProcessLoss(t *testing.T) {
 	if len(temporal.commands) != 1 {
 		t.Fatalf("commands after lost acknowledgement = %#v, want one delivered route", temporal.commands)
 	}
+	claimedState, err := store.LoadRuntimeState(ctx, runtimestate.MutationScope{Tenant: tenant, Authority: runtimestate.AuthorityOutboxPublisher})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !hasAuditOperation(claimedState.Audit, "outbox.claimed", "temporal-claim-"+temporal.commands[0].OutboxID+"-") || hasAuditOperation(claimedState.Audit, "outbox.published", "temporal-ack-"+temporal.commands[0].OutboxID+"-") {
+		t.Fatalf("audit after lost acknowledgement = %#v, want claimed fact without published fact", claimedState.Audit)
+	}
 	if err := timeSource.Advance(2*time.Minute + time.Nanosecond); err != nil {
 		t.Fatal(err)
 	}
@@ -178,6 +186,13 @@ func TestPublisherReclaimsAnUnacknowledgedRouteAfterProcessLoss(t *testing.T) {
 	}
 	if len(temporal.commands) != 2 || temporal.commands[0] != temporal.commands[1] {
 		t.Fatalf("commands after reclaim = %#v, want exactly one duplicate durable route", temporal.commands)
+	}
+	publishedState, err := store.LoadRuntimeState(ctx, runtimestate.MutationScope{Tenant: tenant, Authority: runtimestate.AuthorityOutboxPublisher})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !hasAuditOperation(publishedState.Audit, "outbox.published", "temporal-ack-"+temporal.commands[0].OutboxID+"-") {
+		t.Fatalf("audit after recovered acknowledgement = %#v, want published fact", publishedState.Audit)
 	}
 	page, err := store.ReadOutbox(ctx, runtimestate.OutboxQuery{Scope: runtimestate.MutationScope{Tenant: tenant, Authority: runtimestate.AuthorityOutboxPublisher}, Limit: 10})
 	if err != nil {
@@ -192,6 +207,15 @@ func TestPublisherReclaimsAnUnacknowledgedRouteAfterProcessLoss(t *testing.T) {
 		}
 	}
 	t.Fatalf("outbox after reclaim = %#v, want the delivered input route", page.Records)
+}
+
+func hasAuditOperation(facts []runtimestate.AuditFactRecord, kind, operationPrefix string) bool {
+	for _, fact := range facts {
+		if fact.Kind == kind && strings.HasPrefix(string(fact.OperationID), operationPrefix) {
+			return true
+		}
+	}
+	return false
 }
 
 // failFirstAcknowledgementStore simulates the narrow crash window after a
