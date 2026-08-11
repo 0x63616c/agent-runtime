@@ -366,6 +366,58 @@ func (runtime *StateRuntime) InspectTurn(ctx context.Context, identity Identity,
 	return publicTurnWithUsage(record, latestInvocationUsage(state, record)), nil
 }
 
+// InspectToolCalls returns bounded safe projections for one principal-owned Turn.
+func (runtime *StateRuntime) InspectToolCalls(ctx context.Context, identity Identity, sessionID agentruntime.SessionID, turnID agentruntime.TurnID) (agentruntime.ToolCallPage, error) {
+	scope, err := ownerScope(identity)
+	if err != nil {
+		return agentruntime.ToolCallPage{}, err
+	}
+	if _, err := runtime.store.GetTurn(ctx, runtimestate.TurnQuery{Scope: scope, SessionID: sessionID, TurnID: turnID}); err != nil {
+		return agentruntime.ToolCallPage{}, runtimeFailure("inspect Tool calls", err)
+	}
+	state, err := runtime.store.LoadRuntimeState(ctx, scope)
+	if err != nil {
+		return agentruntime.ToolCallPage{}, runtimeFailure("inspect Tool calls", err)
+	}
+	page := agentruntime.ToolCallPage{}
+	for _, intent := range state.ToolIntents {
+		if intent.Tenant != scope.Tenant || intent.Principal != scope.Principal || intent.SessionID != sessionID || intent.TurnID != turnID {
+			continue
+		}
+		if len(page.Calls) == agentruntime.MaxToolCallsPerTurn {
+			page.Truncated = true
+			break
+		}
+		call := agentruntime.ToolCall{ID: intent.ToolCallID, Name: intent.ToolName, State: agentruntime.ToolCallIntent, CreatedAt: intent.CreatedAt}
+		for _, approval := range state.Approvals {
+			if approval.ToolCallID == intent.ToolCallID && approval.SessionID == sessionID && approval.TurnID == turnID {
+				value := publicApproval(approval)
+				call.Approval = &value
+				if value.State == agentruntime.ApprovalPending {
+					call.State = agentruntime.ToolCallAwaitingApproval
+				}
+			}
+		}
+		for _, grant := range state.Grants {
+			if grant.ToolCallID == intent.ToolCallID && grant.Tenant == scope.Tenant && grant.Principal == scope.Principal {
+				call.Grant = &agentruntime.CapabilityGrant{MaximumUses: grant.MaximumUses, Uses: grant.Uses, ExpiresAt: grant.ExpiresAt}
+				if call.State != agentruntime.ToolCallAwaitingApproval {
+					call.State = agentruntime.ToolCallAuthorized
+				}
+			}
+		}
+		for _, execution := range state.ToolExecutions {
+			if execution.ToolCallID == intent.ToolCallID && execution.SessionID == sessionID && execution.TurnID == turnID {
+				value := publicToolExecution(execution)
+				call.Execution = &value
+				call.State = value.State
+			}
+		}
+		page.Calls = append(page.Calls, call)
+	}
+	return page, nil
+}
+
 // Events reads a bounded cursor-resumable page of principal-scoped Product events.
 func (runtime *StateRuntime) Events(ctx context.Context, identity Identity, sessionID agentruntime.SessionID, after agentruntime.Cursor, limit int) (agentruntime.EventPage, error) {
 	scope, err := ownerScope(identity)
@@ -589,6 +641,24 @@ func publicModelUsage(usage *runtimestate.ModelUsage) *agentruntime.ModelUsage {
 		result.OutputTokens = &value
 	}
 	return &result
+}
+
+func publicToolExecution(record runtimestate.ToolExecutionRecord) agentruntime.ToolExecution {
+	state := agentruntime.ToolCallExecuting
+	switch record.State {
+	case runtimestate.ToolExecutionSucceeded:
+		state = agentruntime.ToolCallSucceeded
+	case runtimestate.ToolExecutionFailed:
+		state = agentruntime.ToolCallFailed
+	case runtimestate.ToolExecutionUncertain:
+		state = agentruntime.ToolCallUncertain
+	}
+	result := agentruntime.ToolExecution{State: state, Failure: record.Failure.Clone(), CreatedAt: record.CreatedAt}
+	if record.State != runtimestate.ToolExecutionIntent {
+		value := record.UpdatedAt
+		result.CompletedAt = &value
+	}
+	return result
 }
 
 func publicArtifact(record runtimestate.ArtifactRecord) agentruntime.ArtifactReference {

@@ -68,6 +68,12 @@ type ArtifactStreamer interface {
 	OpenArtifact(context.Context, ArtifactID) (ArtifactStream, error)
 }
 
+// ToolCallInspector is the additive public capability for owner-scoped Tool-call inspection.
+type ToolCallInspector interface {
+	// InspectToolCalls returns bounded safe Tool intent, approval, grant, and execution projections.
+	InspectToolCalls(context.Context, SessionID, TurnID) (ToolCallPage, error)
+}
+
 // RequestIDSource creates a fresh opaque correlation ID for each HTTP attempt.
 type RequestIDSource interface {
 	// NextRequestID creates one fresh opaque correlation ID.
@@ -400,6 +406,12 @@ func (client *Client) InspectSession(ctx context.Context, sessionID SessionID) (
 func (client *Client) InspectTurn(ctx context.Context, sessionID SessionID, turnID TurnID) (Turn, error) {
 	path := replacePath(replacePath(openAPIPathInspectTurn, "session_id", sessionID.String()), "turn_id", turnID.String())
 	return doJSON[Turn](client, ctx, openAPIMethodInspectTurn, path, "", nil)
+}
+
+// InspectToolCalls returns bounded owner-scoped Tool-call lifecycle projections.
+func (client *Client) InspectToolCalls(ctx context.Context, sessionID SessionID, turnID TurnID) (ToolCallPage, error) {
+	path := replacePath(replacePath(openAPIPathInspectToolCalls, "session_id", sessionID.String()), "turn_id", turnID.String())
+	return doJSON[ToolCallPage](client, ctx, openAPIMethodInspectToolCalls, path, "", nil)
 }
 
 // Events resumes bounded Product-event observation after an opaque Cursor.

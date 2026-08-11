@@ -16,6 +16,12 @@ credential material. Agent catalog operations require a tenant administrator. Se
 owned by the authenticated tenant and principal; absent and unauthorized
 resources return the same safe `not_found` classification.
 
+`GET /v1/sessions/{session_id}/turns/{turn_id}/tools` returns at most 64
+owner-scoped Tool-call projections. A projection distinguishes model intent
+from execution, reports only Approval state, bounded grant use counters and
+expiry, and a safe terminal failure. It never exposes a descriptor, capability
+or policy digest, grant identity, raw result, backend handle, or credential.
+
 An inspected terminal Turn can additionally include provider-neutral token
 usage from its latest recorded model invocation. Omitted usage fields mean the
 provider did not report them; they never mean zero. Provider error payloads and

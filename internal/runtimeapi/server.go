@@ -83,6 +83,7 @@ func NewHandler(config Config) (http.Handler, error) {
 	mux.HandleFunc(openAPIMethodSendInput+" "+openAPIPathSendInput, server.sendInput)
 	mux.HandleFunc(openAPIMethodInspectSession+" "+openAPIPathInspectSession, server.inspectSession)
 	mux.HandleFunc(openAPIMethodInspectTurn+" "+openAPIPathInspectTurn, server.inspectTurn)
+	mux.HandleFunc(openAPIMethodInspectToolCalls+" "+openAPIPathInspectToolCalls, server.inspectToolCalls)
 	mux.HandleFunc(openAPIMethodListEvents+" "+openAPIPathListEvents, server.events)
 	mux.HandleFunc(openAPIMethodCancelTurn+" "+openAPIPathCancelTurn, server.cancelTurn)
 	mux.HandleFunc(openAPIMethodCloseSession+" "+openAPIPathCloseSession, server.closeSession)
@@ -364,6 +365,21 @@ func (server *server) inspectApproval(writer http.ResponseWriter, request *http.
 	}
 	result, callErr := server.runtime.InspectApproval(request.Context(), contextValue.identity, approvalID)
 	server.writeResult(writer, contextValue.requestID, http.StatusOK, result, callErr)
+}
+
+func (server *server) inspectToolCalls(writer http.ResponseWriter, request *http.Request) {
+	contextValue := request.Context().Value(requestContextKey{}).(requestContext)
+	sessionID, sessionErr := agentruntime.ParseSessionID(request.PathValue("session_id"))
+	turnID, turnErr := agentruntime.ParseTurnID(request.PathValue("turn_id"))
+	inspector, ok := server.runtime.(interface {
+		InspectToolCalls(context.Context, Identity, agentruntime.SessionID, agentruntime.TurnID) (agentruntime.ToolCallPage, error)
+	})
+	if sessionErr != nil || turnErr != nil || !ok {
+		server.writeInvalid(writer, contextValue.requestID)
+		return
+	}
+	result, err := inspector.InspectToolCalls(request.Context(), contextValue.identity, sessionID, turnID)
+	server.writeResult(writer, contextValue.requestID, http.StatusOK, result, err)
 }
 
 func (server *server) decideApproval(writer http.ResponseWriter, request *http.Request) {

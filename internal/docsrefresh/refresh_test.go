@@ -21,8 +21,8 @@ var _ = Describe("refreshing public documentation", func() {
 
 	BeforeEach(func() {
 		files = &memoryFiles{content: map[string][]byte{
-			"README.md":                          []byte("# Agent Runtime\n"),
-			"website/astro.config.mjs":       []byte("base: '/agent-runtime'\n"),
+			"README.md":                []byte("# Agent Runtime\n"),
+			"website/astro.config.mjs": []byte("base: '/agent-runtime'\n"),
 			"website/src/content/docs/docs/security/overview.mdx": []byte("operator-owned prose\n"),
 		}}
 		changes = &fakeChanges{}
@@ -382,8 +382,8 @@ var _ = Describe("refreshing public documentation", func() {
 	It("bootstraps a missing OS output but refuses to replace it while untracked", func() {
 		root := GinkgoT().TempDir()
 		for path, content := range map[string]string{
-			"README.md":                          "initial\n",
-			"website/astro.config.mjs":       "config\n",
+			"README.md":                "initial\n",
+			"website/astro.config.mjs": "config\n",
 			"website/src/content/docs/docs/security/overview.mdx": "curated\n",
 		} {
 			absolute := filepath.Join(root, filepath.FromSlash(path))
@@ -434,6 +434,7 @@ func validOpenAPIContract(infoVersion string) []byte {
 		{"inspectSession", "get", "/v1/sessions/{session_id}", "200", false, false},
 		{"sendInput", "post", "/v1/sessions/{session_id}/inputs", "202", true, true},
 		{"inspectTurn", "get", "/v1/sessions/{session_id}/turns/{turn_id}", "200", false, false},
+		{"inspectToolCalls", "get", "/v1/sessions/{session_id}/turns/{turn_id}/tools", "200", false, false},
 		{"listEvents", "get", "/v1/sessions/{session_id}/events", "200", false, false},
 		{"cancelTurn", "post", "/v1/sessions/{session_id}/turns/{turn_id}/cancel", "200", true, true},
 		{"closeSession", "post", "/v1/sessions/{session_id}/close", "200", true, true},

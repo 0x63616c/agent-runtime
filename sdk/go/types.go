@@ -16,6 +16,97 @@ const (
 	MaxSessionViewQueuedTurns = 100
 )
 
+// MaxToolCallsPerTurn bounds one public Tool-call inspection response.
+const MaxToolCallsPerTurn = 64
+
+// ToolCallState is the safe public lifecycle of one model Tool intent.
+type ToolCallState string
+
+const (
+	// ToolCallIntent records model intent without execution authority.
+	ToolCallIntent ToolCallState = "intent"
+	// ToolCallAwaitingApproval awaits a permitted human decision.
+	ToolCallAwaitingApproval ToolCallState = "awaiting_approval"
+	// ToolCallAuthorized has a bounded capability grant but no execution outcome.
+	ToolCallAuthorized ToolCallState = "authorized"
+	// ToolCallExecuting has committed a capability-bound execution intent.
+	ToolCallExecuting ToolCallState = "executing"
+	// ToolCallSucceeded has a durable terminal successful observation.
+	ToolCallSucceeded ToolCallState = "succeeded"
+	// ToolCallFailed has a durable terminal safe failure.
+	ToolCallFailed ToolCallState = "failed"
+	// ToolCallUncertain has an unresolved external-effect outcome.
+	ToolCallUncertain ToolCallState = "uncertain"
+)
+
+// CapabilityGrant is a caller-safe projection of bounded grant consumption.
+// It deliberately omits capability bytes, policy digests, and grant identity.
+type CapabilityGrant struct {
+	MaximumUses uint32    `json:"maximum_uses"`
+	Uses        uint32    `json:"uses"`
+	ExpiresAt   time.Time `json:"expires_at"`
+}
+
+// ToolExecution is a caller-safe terminal or in-progress tool observation.
+type ToolExecution struct {
+	State       ToolCallState `json:"state"`
+	Failure     *Failure      `json:"failure,omitempty"`
+	CreatedAt   time.Time     `json:"created_at"`
+	CompletedAt *time.Time    `json:"completed_at,omitempty"`
+}
+
+// Clone returns an independent ToolExecution snapshot.
+func (execution *ToolExecution) Clone() *ToolExecution {
+	if execution == nil {
+		return nil
+	}
+	clone := *execution
+	clone.Failure = execution.Failure.Clone()
+	if execution.CompletedAt != nil {
+		value := *execution.CompletedAt
+		clone.CompletedAt = &value
+	}
+	return &clone
+}
+
+// ToolCall is a caller-safe model intent and its derived authorization/execution state.
+type ToolCall struct {
+	ID        string           `json:"id"`
+	Name      string           `json:"name"`
+	State     ToolCallState    `json:"state"`
+	Approval  *Approval        `json:"approval,omitempty"`
+	Grant     *CapabilityGrant `json:"grant,omitempty"`
+	Execution *ToolExecution   `json:"execution,omitempty"`
+	CreatedAt time.Time        `json:"created_at"`
+}
+
+// Clone returns an independent ToolCall snapshot.
+func (call ToolCall) Clone() ToolCall {
+	clone := call
+	if call.Approval != nil {
+		value := call.Approval.Clone()
+		clone.Approval = &value
+	}
+	clone.Execution = call.Execution.Clone()
+	return clone
+}
+
+// ToolCallPage is one bounded owner-scoped Tool-call inspection result.
+type ToolCallPage struct {
+	Calls     []ToolCall `json:"calls"`
+	Truncated bool       `json:"truncated"`
+}
+
+// Clone returns an independent ToolCallPage snapshot.
+func (page ToolCallPage) Clone() ToolCallPage {
+	clone := page
+	clone.Calls = make([]ToolCall, len(page.Calls))
+	for index := range page.Calls {
+		clone.Calls[index] = page.Calls[index].Clone()
+	}
+	return clone
+}
+
 // ToolDefinition describes model-visible intent without granting execution authority.
 type ToolDefinition struct {
 	Name        string `json:"name"`

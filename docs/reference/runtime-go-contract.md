@@ -21,6 +21,10 @@ The package currently defines:
 - optional provider-neutral token usage on an inspected Turn; a missing token
   value remains unknown rather than becoming zero, and provider diagnostics are
   never public data;
+- bounded owner-scoped Tool-call inspection projections: model intent name and
+  lifecycle, Approval, grant use counters/expiry, and safe execution failure;
+  action descriptors, policy/capability digests, grant identities, backend
+  handles, raw results, and credentials are never exposed;
 - ordered bounded Product events, opaque replay cursors, and explicit Gap
   results requiring Session inspection;
 - requests for Agent creation/revision, Session creation, idempotent Input,

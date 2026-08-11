@@ -99,6 +99,7 @@ func CollectRoutes(paths map[string]map[string]Operation) ([]Route, error) {
 		"inspectSession":    {Method: "GET", Path: "/v1/sessions/{session_id}", Status: "200"},
 		"sendInput":         {Method: "POST", Path: "/v1/sessions/{session_id}/inputs", Status: "202", Mutation: true},
 		"inspectTurn":       {Method: "GET", Path: "/v1/sessions/{session_id}/turns/{turn_id}", Status: "200"},
+		"inspectToolCalls":  {Method: "GET", Path: "/v1/sessions/{session_id}/turns/{turn_id}/tools", Status: "200"},
 		"listEvents":        {Method: "GET", Path: "/v1/sessions/{session_id}/events", Status: "200"},
 		"cancelTurn":        {Method: "POST", Path: "/v1/sessions/{session_id}/turns/{turn_id}/cancel", Status: "200", Mutation: true},
 		"closeSession":      {Method: "POST", Path: "/v1/sessions/{session_id}/close", Status: "200", Mutation: true},

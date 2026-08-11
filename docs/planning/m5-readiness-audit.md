@@ -29,10 +29,10 @@ The acceptance ledger specifies the missing proof/behavior, not merely
 documentation:
 
 - DOM-008–009, DOM-012–013: durable grant expiry/max-use and safe public
-  Approval/Turn outcome evidence now exist, including the concrete TLS
-  sandbox-control adapter and unknown-preserving public model usage. A public
-  Tool-intent/execution inspection surface, production model-provider
-  composition, and normalized streaming remain absent.
+  Approval/Turn outcome evidence now exist, including concrete TLS
+  sandbox-control adapter recovery, unknown-preserving public model usage, and
+  bounded owner-scoped Tool intent/execution inspection. Production
+  model-provider composition and normalized streaming remain absent.
 - API-011: retain the release-consumer compatibility check; API-012: final combined admin authorization suite.
 - DAT-009–013: full named attempted/authorized/committed/terminal/reconciled
   audit-lifecycle evidence, production PostgreSQL authority, production audit-sink

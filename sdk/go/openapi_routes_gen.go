@@ -3,7 +3,7 @@
 package agentruntime
 
 const (
-	openAPIContractSHA256          = "38f317d3e4aed2a21da4b45fb2c40d5a6b4c0d7a7d8bf34df92c90791ab5201d"
+	openAPIContractSHA256          = "644bd56b964a018c51047b7d0aae6c17c8cd3a16fa34fc8dabd067ab9848d6ec"
 	openAPIMethodCancelTurn        = "POST"
 	openAPIPathCancelTurn          = "/v1/sessions/{session_id}/turns/{turn_id}/cancel"
 	openAPIMethodCloseSession      = "POST"
@@ -26,6 +26,8 @@ const (
 	openAPIPathInspectApproval     = "/v1/approvals/{approval_id}"
 	openAPIMethodInspectSession    = "GET"
 	openAPIPathInspectSession      = "/v1/sessions/{session_id}"
+	openAPIMethodInspectToolCalls  = "GET"
+	openAPIPathInspectToolCalls    = "/v1/sessions/{session_id}/turns/{turn_id}/tools"
 	openAPIMethodInspectTurn       = "GET"
 	openAPIPathInspectTurn         = "/v1/sessions/{session_id}/turns/{turn_id}"
 	openAPIMethodListEvents        = "GET"

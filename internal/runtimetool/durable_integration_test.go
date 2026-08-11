@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/0x63616c/agent-runtime/internal/clock"
+	"github.com/0x63616c/agent-runtime/internal/runtimeapi"
 	"github.com/0x63616c/agent-runtime/internal/runtimecontent"
 	"github.com/0x63616c/agent-runtime/internal/runtimepostgres"
 	"github.com/0x63616c/agent-runtime/internal/runtimestate"
@@ -180,6 +181,23 @@ func TestDurableToolLifecyclePersistsDescriptorApprovalAndFinalization(t *testin
 	}
 	if !found {
 		t.Fatalf("durable event replay lacks sandbox finalization: %#v", state.Events)
+	}
+	pool.Close()
+	pool, err = pgxpool.New(ctx, dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err = runtimepostgres.NewRuntimeStateStore(pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	restarted, err := runtimeapi.NewStateRuntime(runtimeapi.StateRuntimeConfig{Content: content, Compiler: compiler, Planner: planner, Store: store, ModelProfiles: []string{"balanced"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	page, err := restarted.InspectToolCalls(ctx, runtimeapi.Identity{Tenant: string(tenant), Principal: string(principal)}, session, turn)
+	if err != nil || len(page.Calls) != 1 || page.Truncated || page.Calls[0].State != agentruntime.ToolCallSucceeded || page.Calls[0].Approval == nil || page.Calls[0].Approval.State != agentruntime.ApprovalApproved || page.Calls[0].Grant == nil || page.Calls[0].Grant.Uses != 1 || page.Calls[0].Execution == nil || page.Calls[0].Execution.Failure != nil {
+		t.Fatalf("restarted durable Tool inspection = %#v, %v", page, err)
 	}
 }
 

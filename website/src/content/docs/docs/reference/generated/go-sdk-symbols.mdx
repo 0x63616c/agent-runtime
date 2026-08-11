@@ -53,6 +53,7 @@ This index is derived only from the declared public `sdk/go` source files. It li
 | `type` | `AuthorizationSink` | AuthorizationSink accepts one request-scoped bearer credential. |
 | `method` | `AuthorizationSink.SetBearerToken` | SetBearerToken accepts one request-scoped bearer credential. |
 | `type` | `CancelTurnRequest` | CancelTurnRequest explicitly cancels one active or queued Turn. |
+| `type` | `CapabilityGrant` | CapabilityGrant is a caller-safe projection of bounded grant consumption. It deliberately omits capability bytes, policy digests, and grant identity. |
 | `type` | `Client` | Client is the concrete HTTP implementation of RuntimeClient. |
 | `method` | `Client.CancelTurn` | CancelTurn explicitly requests durable Turn cancellation. |
 | `method` | `Client.CloseSession` | CloseSession closes Input admission and drains accepted work. |
@@ -66,6 +67,7 @@ This index is derived only from the declared public `sdk/go` source files. It li
 | `method` | `Client.IdempotencyStatus` | IdempotencyStatus reads the caller-scoped durable status of one mutation key. |
 | `method` | `Client.InspectApproval` | InspectApproval returns the caller-authorized state of one Approval. |
 | `method` | `Client.InspectSession` | InspectSession returns caller-safe Session state without backend identifiers. |
+| `method` | `Client.InspectToolCalls` | InspectToolCalls returns bounded owner-scoped Tool-call lifecycle projections. |
 | `method` | `Client.InspectTurn` | InspectTurn returns one caller-safe Turn snapshot. |
 | `method` | `Client.OpenArtifact` | OpenArtifact opens a bounded Artifact response. Reaching EOF verifies its declared Digest trailer; Close permits cancellation before completion. |
 | `method` | `Client.ReadArtifact` | ReadArtifact downloads bounded immutable content only after the server has authorized the exact tenant/principal/artifact tuple. |
@@ -136,6 +138,7 @@ This index is derived only from the declared public `sdk/go` source files. It li
 | `const` | `MaxInputParts` | MaxInputParts bounds the number of public Input parts accepted in one request. |
 | `const` | `MaxSessionViewQueuedTurns` | MaxSessionViewQueuedTurns bounds the queued Turns included in one Session inspection. |
 | `const` | `MaxTextPartBytes` | MaxTextPartBytes bounds one public text Input part. |
+| `const` | `MaxToolCallsPerTurn` | MaxToolCallsPerTurn bounds one public Tool-call inspection response. |
 | `type` | `ModelUsage` | ModelUsage retains provider-neutral token accounting for the latest recorded model invocation. Nil values remain unknown; they are never coerced to zero. |
 | `method` | `ModelUsage.Clone` | Clone returns an independent ModelUsage snapshot. |
 | `func` | `NewClient` | NewClient validates a bounded, explicit public HTTP client configuration. |
@@ -205,7 +208,23 @@ This index is derived only from the declared public `sdk/go` source files. It li
 | `method` | `StaticBearerCredential.Authorize` | Authorize applies the credential to one request-scoped sink. |
 | `method` | `StaticBearerCredential.GoString` | GoString keeps detailed formatter diagnostics secret-safe. |
 | `method` | `StaticBearerCredential.String` | String returns a secret-safe credential diagnostic. |
+| `type` | `ToolCall` | ToolCall is a caller-safe model intent and its derived authorization/execution state. |
+| `method` | `ToolCall.Clone` | Clone returns an independent ToolCall snapshot. |
+| `const` | `ToolCallAuthorized` | ToolCallAuthorized has a bounded capability grant but no execution outcome. |
+| `const` | `ToolCallAwaitingApproval` | ToolCallAwaitingApproval awaits a permitted human decision. |
+| `const` | `ToolCallExecuting` | ToolCallExecuting has committed a capability-bound execution intent. |
+| `const` | `ToolCallFailed` | ToolCallFailed has a durable terminal safe failure. |
+| `type` | `ToolCallInspector` | ToolCallInspector is the additive public capability for owner-scoped Tool-call inspection. |
+| `method` | `ToolCallInspector.InspectToolCalls` | InspectToolCalls returns bounded safe Tool intent, approval, grant, and execution projections. |
+| `const` | `ToolCallIntent` | ToolCallIntent records model intent without execution authority. |
+| `type` | `ToolCallPage` | ToolCallPage is one bounded owner-scoped Tool-call inspection result. |
+| `method` | `ToolCallPage.Clone` | Clone returns an independent ToolCallPage snapshot. |
+| `type` | `ToolCallState` | ToolCallState is the safe public lifecycle of one model Tool intent. |
+| `const` | `ToolCallSucceeded` | ToolCallSucceeded has a durable terminal successful observation. |
+| `const` | `ToolCallUncertain` | ToolCallUncertain has an unresolved external-effect outcome. |
 | `type` | `ToolDefinition` | ToolDefinition describes model-visible intent without granting execution authority. |
+| `type` | `ToolExecution` | ToolExecution is a caller-safe terminal or in-progress tool observation. |
+| `method` | `ToolExecution.Clone` | Clone returns an independent ToolExecution snapshot. |
 | `type` | `Turn` | Turn is an immutable snapshot of one durable progression from Input to outcome. |
 | `method` | `Turn.Clone` | Clone returns an independent Turn snapshot. |
 | `const` | `TurnCancelled` | TurnCancelled completed after explicit cancellation. |

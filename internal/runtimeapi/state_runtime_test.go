@@ -479,6 +479,97 @@ func TestStateRuntimeHTTPAndSDKExposeProviderNeutralUsageAndSafeModelFailure(t *
 	}
 }
 
+func TestStateRuntimeHTTPAndSDKInspectOwnerScopedToolLifecycle(t *testing.T) {
+	runtime, content, compiler, store, _ := newMemoryStateAuthority(t)
+	ctx := context.Background()
+	admin := runtimeapi.Identity{Tenant: "tenant-a", Principal: "admin", Admin: true}
+	alice := runtimeapi.Identity{Tenant: "tenant-a", Principal: "alice"}
+	bob := runtimeapi.Identity{Tenant: "tenant-a", Principal: "bob"}
+	agent, err := runtime.CreateAgent(ctx, admin, agentruntime.CreateAgentRequest{IdempotencyKey: "tool-inspection-agent", Name: "assistant", ModelProfile: "balanced", Instructions: "safe"})
+	if err != nil {
+		t.Fatalf("create Agent: %v", err)
+	}
+	session, err := runtime.CreateSession(ctx, alice, agentruntime.CreateSessionRequest{IdempotencyKey: "tool-inspection-session", AgentRevision: agent.RevisionID})
+	if err != nil {
+		t.Fatalf("create Session: %v", err)
+	}
+	accepted, err := runtime.SendInput(ctx, alice, agentruntime.SendInputRequest{SessionID: session.ID, IdempotencyKey: "tool-inspection-input", Parts: []agentruntime.ContentPart{{Kind: agentruntime.ContentText, Text: "write the report"}}})
+	if err != nil {
+		t.Fatalf("send Input: %v", err)
+	}
+	tenant, _ := runtimecontent.ParseTenantID("tenant-a")
+	principal, _ := runtimecontent.ParsePrincipalID("alice")
+	workerScope := runtimestate.MutationScope{Tenant: tenant, Principal: principal, Authority: runtimestate.AuthorityRuntimeWorker}
+	digest := "sha256:" + strings.Repeat("a", 64)
+	descriptor, err := content.StageToolActionDescriptor(ctx, tenant, []byte("private tool descriptor"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	intent, err := compiler.CompileRecordToolIntent(runtimestate.RecordToolIntentCommand{Scope: workerScope, IdempotencyKey: "tool-inspection-intent", SessionID: session.ID, TurnID: accepted.Turn.ID, ToolCallID: "tcall_1234567890ABCDEF", ToolName: "write", ActionDigest: digest, PolicyRevisionDigest: digest, Descriptor: descriptor})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Apply(ctx, intent); err != nil {
+		t.Fatal(err)
+	}
+	approvalRequest, err := compiler.CompileRequestApproval(runtimestate.RequestApprovalCommand{Scope: workerScope, IdempotencyKey: "tool-inspection-approval", SessionID: session.ID, TurnID: accepted.Turn.ID, ToolCallID: "tcall_1234567890ABCDEF", ApprovalID: "appr_1234567890ABCDEF", ActionDigest: digest, PolicyRevisionDigest: digest, CapabilityDigest: digest, MaximumUses: 1, ExpiresAt: time.Date(2026, 8, 10, 13, 0, 0, 0, time.UTC)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Apply(ctx, approvalRequest); err != nil {
+		t.Fatal(err)
+	}
+	handler, err := runtimeapi.NewHandler(runtimeapi.Config{Runtime: runtime, Authenticator: staticAuth{identities: map[string]runtimeapi.Identity{"alice-token-000000": alice, "bob-token-00000000": bob}}, RequestIDs: &requestIDs{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(handler)
+	defer server.Close()
+	aliceClient := newStateRuntimeHTTPClient(t, server.URL, "alice-token-000000")
+	pending, err := aliceClient.InspectToolCalls(ctx, session.ID, accepted.Turn.ID)
+	if err != nil || len(pending.Calls) != 1 || pending.Calls[0].Name != "write" || pending.Calls[0].State != agentruntime.ToolCallAwaitingApproval || pending.Calls[0].Approval == nil || pending.Calls[0].Approval.State != agentruntime.ApprovalPending || pending.Calls[0].Grant != nil || pending.Calls[0].Execution != nil {
+		t.Fatalf("SDK inspect pending Tool call = %#v, %v", pending, err)
+	}
+	approvalID, _ := agentruntime.ParseApprovalID("appr_1234567890ABCDEF")
+	if _, err := aliceClient.DecideApproval(ctx, agentruntime.DecideApprovalRequest{ApprovalID: approvalID, Decision: agentruntime.ApprovalApproved, IdempotencyKey: "tool-inspection-decision"}); err != nil {
+		t.Fatal(err)
+	}
+	state, err := store.LoadRuntimeState(ctx, workerScope)
+	if err != nil || len(state.Grants) != 1 {
+		t.Fatalf("load approved grant = %#v, %v", state.Grants, err)
+	}
+	grant := state.Grants[0]
+	consume, err := compiler.CompileConsumeCapabilityGrant(runtimestate.ConsumeCapabilityGrantCommand{Scope: workerScope, IdempotencyKey: "tool-inspection-consume", SessionID: session.ID, TurnID: accepted.Turn.ID, ToolCallID: "tcall_1234567890ABCDEF", GrantID: grant.GrantID, PolicyRevisionDigest: digest})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Apply(ctx, consume); err != nil {
+		t.Fatal(err)
+	}
+	begin, err := compiler.CompileBeginToolExecution(runtimestate.BeginToolExecutionCommand{Scope: workerScope, IdempotencyKey: "tool-inspection-begin", SessionID: session.ID, TurnID: accepted.Turn.ID, ToolCallID: "tcall_1234567890ABCDEF", GrantID: grant.GrantID, OperationID: "op_tool_inspection_0001"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Apply(ctx, begin); err != nil {
+		t.Fatal(err)
+	}
+	failure := &agentruntime.Failure{Code: agentruntime.FailureUnavailable, Message: "tool outcome is uncertain", Retryable: true}
+	outcome, err := compiler.CompileRecordToolExecutionOutcome(runtimestate.RecordToolExecutionOutcomeCommand{Scope: workerScope, IdempotencyKey: "tool-inspection-outcome", SessionID: session.ID, TurnID: accepted.Turn.ID, ToolCallID: "tcall_1234567890ABCDEF", OperationID: "op_tool_inspection_0001", Outcome: runtimestate.ToolExecutionUncertain, Failure: failure})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Apply(ctx, outcome); err != nil {
+		t.Fatal(err)
+	}
+	terminal, err := aliceClient.InspectToolCalls(ctx, session.ID, accepted.Turn.ID)
+	if err != nil || len(terminal.Calls) != 1 || terminal.Calls[0].State != agentruntime.ToolCallUncertain || terminal.Calls[0].Approval == nil || terminal.Calls[0].Approval.State != agentruntime.ApprovalApproved || terminal.Calls[0].Grant == nil || terminal.Calls[0].Grant.Uses != 1 || terminal.Calls[0].Grant.MaximumUses != 1 || terminal.Calls[0].Execution == nil || terminal.Calls[0].Execution.Failure == nil || terminal.Calls[0].Execution.Failure.Code != agentruntime.FailureUnavailable {
+		t.Fatalf("SDK inspect terminal Tool call = %#v, %v", terminal, err)
+	}
+	if _, err := newStateRuntimeHTTPClient(t, server.URL, "bob-token-00000000").InspectToolCalls(ctx, session.ID, accepted.Turn.ID); !hasFailure(err, agentruntime.FailureNotFound) {
+		t.Fatalf("cross-principal Tool inspection error = %v, want safe not-found", err)
+	}
+}
+
 func TestStateRuntimeHTTPAndSDKRejectExpiredMutationReceiptWithoutReplayingWork(t *testing.T) {
 	runtime, _, _, _, fakeClock := newMemoryStateAuthorityWithRetention(t, testRetention{duration: time.Minute})
 	handler, err := runtimeapi.NewHandler(runtimeapi.Config{Runtime: runtime, Authenticator: staticAuth{identities: map[string]runtimeapi.Identity{
