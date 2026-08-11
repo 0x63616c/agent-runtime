@@ -51,6 +51,8 @@ This index is derived only from the declared public `sdk/go` source files. It li
 | `method` | `ArtifactID.Redacted` | Redacted returns a safe diagnostic Artifact ID. |
 | `method` | `ArtifactID.String` | String returns the canonical Artifact ID. |
 | `method` | `ArtifactID.UnmarshalJSON` | UnmarshalJSON decodes and validates an Artifact ID. |
+| `type` | `ArtifactPage` | ArtifactPage is one bounded owner-scoped Artifact index for a Session. It exposes immutable metadata only; Artifact bytes require ReadArtifact or OpenArtifact and are authorized again for the exact caller. |
+| `method` | `ArtifactPage.Clone` | Clone returns an independent ArtifactPage snapshot. |
 | `type` | `ArtifactReference` | ArtifactReference identifies immutable content without exposing a storage URL. |
 | `type` | `ArtifactStream` | ArtifactStream is an authorized immutable Artifact transfer. Callers must Close it; reading to EOF verifies the HTTP Digest trailer and exact size. |
 | `type` | `ArtifactStreamer` | ArtifactStreamer is the additive streaming Artifact capability. It remains separate from RuntimeClient so existing RuntimeClient implementations keep their v1 source compatibility. |
@@ -75,6 +77,7 @@ This index is derived only from the declared public `sdk/go` source files. It li
 | `method` | `Client.InspectToolCalls` | InspectToolCalls returns bounded owner-scoped Tool-call lifecycle projections. |
 | `method` | `Client.InspectTurn` | InspectTurn returns one caller-safe Turn snapshot. |
 | `method` | `Client.ListApprovals` | ListApprovals returns the caller-authorized bounded Approval inbox. |
+| `method` | `Client.ListSessionArtifacts` | ListSessionArtifacts returns one bounded owner-scoped Artifact index for a Session without downloading artifact bytes or exposing content storage. |
 | `method` | `Client.OpenArtifact` | OpenArtifact opens a bounded Artifact response. Reaching EOF verifies its declared Digest trailer; Close permits cancellation before completion. |
 | `method` | `Client.ReadArtifact` | ReadArtifact downloads bounded immutable content only after the server has authorized the exact tenant/principal/artifact tuple. |
 | `method` | `Client.ReviseAgent` | ReviseAgent creates another immutable Agent revision through the admin surface. |
@@ -141,6 +144,7 @@ This index is derived only from the declared public `sdk/go` source files. It li
 | `method` | `InputID.String` | String returns the canonical Input ID. |
 | `method` | `InputID.UnmarshalJSON` | UnmarshalJSON decodes and validates an Input ID. |
 | `const` | `MaxApprovalsPerPage` | MaxApprovalsPerPage bounds one owner-scoped approval inbox response. |
+| `const` | `MaxArtifactsPerSession` | MaxArtifactsPerSession bounds one owner-scoped Session Artifact index response. |
 | `const` | `MaxIdempotencyKeyBytes` | MaxIdempotencyKeyBytes bounds one public idempotency key before transport-specific limits apply. |
 | `const` | `MaxInputParts` | MaxInputParts bounds the number of public Input parts accepted in one request. |
 | `const` | `MaxSessionViewQueuedTurns` | MaxSessionViewQueuedTurns bounds the queued Turns included in one Session inspection. |
@@ -198,6 +202,8 @@ This index is derived only from the declared public `sdk/go` source files. It li
 | `type` | `SendInputRequest` | SendInputRequest idempotently submits bounded content to a Session. |
 | `type` | `SendInputResult` | SendInputResult identifies both the accepted Input and its exactly-one Turn. |
 | `type` | `Session` | Session is an immutable caller snapshot of a durable Session. |
+| `type` | `SessionArtifactLister` | SessionArtifactLister is the additive public capability for discovering a caller's immutable artifacts for one exact Session. |
+| `method` | `SessionArtifactLister.ListSessionArtifacts` | ListSessionArtifacts returns bounded metadata only; bytes require a separate caller-authorized Artifact read. |
 | `const` | `SessionCancelled` | SessionCancelled ended through explicit cancellation. |
 | `const` | `SessionClosing` | SessionClosing drains already accepted Input and rejects new Input. |
 | `const` | `SessionCompleted` | SessionCompleted has drained its accepted work. |

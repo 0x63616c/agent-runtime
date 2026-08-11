@@ -57,6 +57,12 @@ stream with metadata authorized before content storage opens. It verifies the
 exact byte count and `Digest` trailer only at EOF; closing an unfinished body
 cancels observation without changing durable work.
 
+`SessionArtifactLister` is another additive capability. Its
+`ListSessionArtifacts` method returns a bounded Session-owned Artifact metadata
+index without making content storage discoverable. Research Dossier uses this
+index to recover its retained research outputs after reconnect or API restart,
+then makes a separate authorized read for one selected dossier.
+
 The standalone API role still uses explicitly labelled `memory-unsafe`
 storage. It does not prove restart durability. PostgreSQL/outbox authority,
 Temporal workflow execution, model/tool/approval execution, and live push

@@ -63,7 +63,7 @@ export default defineConfig({
             {label: 'Publication operations', slug: 'docs/help/publication-operations'},
           ],
         },
-        {label: 'Examples', items: [{label: 'Examples', slug: 'docs/examples'}]},
+        {label: 'Examples', items: [{label: 'Examples', slug: 'docs/examples'}, {label: 'Research Dossier', slug: 'docs/examples/research-dossier'}]},
       ],
     }),
   ],

@@ -669,7 +669,10 @@ func up(ctx context.Context, stack, root, kubeconfig, actor string, output io.Wr
 	if err := command.Run(); err != nil {
 		return fmt.Errorf("start isolated local Tilt Stack %s: %w", stack, err)
 	}
-	return nil
+	// Tilt has applied the declared Kubernetes resources. Reconcile provider
+	// resources only after its migration and Temporal deployments are ready:
+	// bootstrap alone cannot create a Temporal namespace before Temporal exists.
+	return reconcile(ctx, stack, root, output)
 }
 
 func reconcile(ctx context.Context, stack, root string, output io.Writer) error {
@@ -690,6 +693,11 @@ func reconcile(ctx context.Context, stack, root string, output io.Writer) error 
 	if err := runStackctl(ctx, root, output, "reconcile", state); err != nil {
 		return fmt.Errorf("reconcile verified local Stack providers: %w", err)
 	}
+	ready := exec.CommandContext(ctx, "kubectl", "--kubeconfig", state.Kubeconfig, "--context", "orbstack", "--namespace", state.Namespace, "rollout", "status", "deployment/orchestration", "--timeout=120s")
+	ready.Dir, ready.Stdout, ready.Stderr = root, output, output
+	if err := ready.Run(); err != nil {
+		return fmt.Errorf("wait for reconciled local Stack orchestration readiness: %w", err)
+	}
 	return nil
 }
 
@@ -703,10 +711,13 @@ func bootstrap(ctx context.Context, stack, root, kubeconfig, actor string, outpu
 		if state.Kubeconfig != kubeconfig || state.OperatorActor != actor {
 			return fmt.Errorf("reuse local Stack bootstrap capability: refuse a different kubeconfig or operator actor")
 		}
-		if verifyErr := verifyNamespace(ctx, state); verifyErr != nil {
+		if verifyErr := verifyNamespace(ctx, state); verifyErr == nil {
+			return nil
+		} else if goneErr := verifyNamespaceGone(ctx, state); goneErr != nil {
 			return fmt.Errorf("reuse local Stack bootstrap capability: %w", verifyErr)
+		} else if retireErr := retireBootstrapCapability(root, state); retireErr != nil {
+			return retireErr
 		}
-		return nil
 	} else if !os.IsNotExist(err) {
 		return fmt.Errorf("read local Stack bootstrap capability: %w", err)
 	}

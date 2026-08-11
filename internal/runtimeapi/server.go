@@ -76,6 +76,7 @@ func NewHandler(config Config) (http.Handler, error) {
 	mux.HandleFunc(openAPIMethodRevisePolicy+" "+openAPIPathRevisePolicy, server.revisePolicy)
 	mux.HandleFunc(openAPIMethodGetPolicy+" "+openAPIPathGetPolicy, server.getPolicy)
 	mux.HandleFunc(openAPIMethodReadArtifact+" "+openAPIPathReadArtifact, server.readArtifact)
+	mux.HandleFunc(openAPIMethodListSessionArtifacts+" "+openAPIPathListSessionArtifacts, server.listSessionArtifacts)
 	mux.HandleFunc(openAPIMethodInspectApproval+" "+openAPIPathInspectApproval, server.inspectApproval)
 	mux.HandleFunc(openAPIMethodListApprovals+" "+openAPIPathListApprovals, server.listApprovals)
 	mux.HandleFunc(openAPIMethodDecideApproval+" "+openAPIPathDecideApproval, server.decideApproval)
@@ -365,6 +366,17 @@ func (server *server) inspectApproval(writer http.ResponseWriter, request *http.
 		return
 	}
 	result, callErr := server.runtime.InspectApproval(request.Context(), contextValue.identity, approvalID)
+	server.writeResult(writer, contextValue.requestID, http.StatusOK, result, callErr)
+}
+
+func (server *server) listSessionArtifacts(writer http.ResponseWriter, request *http.Request) {
+	contextValue := request.Context().Value(requestContextKey{}).(requestContext)
+	sessionID, err := agentruntime.ParseSessionID(request.PathValue("session_id"))
+	if err != nil {
+		server.writeInvalid(writer, contextValue.requestID)
+		return
+	}
+	result, callErr := server.runtime.ListSessionArtifacts(request.Context(), contextValue.identity, sessionID)
 	server.writeResult(writer, contextValue.requestID, http.StatusOK, result, callErr)
 }
 

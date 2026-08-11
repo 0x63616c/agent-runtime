@@ -74,16 +74,17 @@ var _ = Describe("Kubectl migrations", func() {
 		namespace := fmt.Sprintf(`{"metadata":{"uid":"uid-namespace","labels":{"app.kubernetes.io/part-of":"agent-runtime","agent-runtime.dev/stack":"feature-a","agent-runtime.dev/profile":"local"},"annotations":{"agent-runtime.dev/bootstrap-nonce-sha256":%q}}}`, authority.NonceDigest())
 		runner := &bootstrapRunner{results: []stack.KubectlCommandResult{
 			{Output: []byte(namespace)}, {}, {}, {Output: []byte(namespace)}, {},
-			{Output: []byte("recorded\n")},
+			{Output: []byte("present\n")}, {Output: []byte("recorded\n")},
 		}}
 		adapter, err := stack.NewKubectlAdapter(runner)
 		Expect(err).NotTo(HaveOccurred())
 
 		Expect(adapter.Upgrade(context.Background(), stack.OperatorTarget{Kubeconfig: "/explicit/kubeconfig", Context: "disposable", MigrationRoot: root}, rendered, authority)).To(Succeed())
 
-		Expect(runner.commands).To(HaveLen(6))
-		Expect(strings.Join(runner.commands[5].arguments, " ")).To(ContainSubstring("psql -At -v ON_ERROR_STOP=1 -U postgres -d agent_runtime -c SELECT CASE"))
-		Expect(string(runner.commands[5].input)).To(BeEmpty())
+		Expect(runner.commands).To(HaveLen(7))
+		Expect(strings.Join(runner.commands[5].arguments, " ")).To(ContainSubstring("to_regclass('runtime.schema_migrations')"))
+		Expect(strings.Join(runner.commands[6].arguments, " ")).To(ContainSubstring("FROM runtime.schema_migrations"))
+		Expect(string(runner.commands[6].input)).To(BeEmpty())
 	})
 
 	It("executes only the removed reviewed migration rollback through an explicit revision transition", func() {

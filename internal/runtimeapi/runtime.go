@@ -15,6 +15,7 @@ type Runtime interface {
 	RevisePolicy(context.Context, Identity, agentruntime.RevisePolicyRequest) (agentruntime.Policy, error)
 	GetPolicy(context.Context, Identity, string, uint64) (agentruntime.Policy, error)
 	ReadArtifact(context.Context, Identity, agentruntime.ArtifactID) (agentruntime.ArtifactDownload, error)
+	ListSessionArtifacts(context.Context, Identity, agentruntime.SessionID) (agentruntime.ArtifactPage, error)
 	InspectApproval(context.Context, Identity, agentruntime.ApprovalID) (agentruntime.Approval, error)
 	ListApprovals(context.Context, Identity) (agentruntime.ApprovalPage, error)
 	DecideApproval(context.Context, Identity, agentruntime.DecideApprovalRequest) (agentruntime.Approval, error)

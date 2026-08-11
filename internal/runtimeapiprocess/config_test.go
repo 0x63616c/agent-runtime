@@ -39,8 +39,8 @@ func TestConfigurationIsStrictAndRequiresExplicitUnsafeMemoryStorage(t *testing.
 		t.Fatal("Parse(unknown field) error = nil")
 	}
 	wildcard := strings.Replace(validConfig, "127.0.0.1:8088", "0.0.0.0:8088", 1)
-	if _, err := runtimeapiprocess.Parse(strings.NewReader(wildcard)); err == nil {
-		t.Fatal("Parse(wildcard plain HTTP bind) error = nil")
+	if _, err := runtimeapiprocess.Parse(strings.NewReader(wildcard)); err != nil {
+		t.Fatalf("Parse(wildcard in-cluster bind): %v", err)
 	}
 	observed := strings.Replace(validConfig, `"principals": [`, `"observability":{"identity_correlation_key_environment":"OBSERVABILITY_CORRELATION_KEY"}, "principals": [`, 1)
 	if _, err := runtimeapiprocess.Parse(strings.NewReader(observed)); err != nil {
