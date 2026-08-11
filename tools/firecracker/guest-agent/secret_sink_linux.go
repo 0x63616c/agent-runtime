@@ -241,6 +241,30 @@ func (sink *guestSecretSink) RevokeAfterTreeReap(ctx context.Context, request sa
 	return nil
 }
 
+// AbortBeforeStart closes a sealed delivery only when no command process was
+// ever bound. It is the sole cleanup path for a failed launch before a secret
+// descriptor could reach a recipient process.
+func (sink *guestSecretSink) AbortBeforeStart(ctx context.Context, request sandboxauthority.SecretRequest) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if sink == nil {
+		return fmt.Errorf("abort guest secret: secret lifecycle conflict")
+	}
+	sink.mu.Lock()
+	delivery, ok := sink.active[request.ProcessID]
+	if !ok || delivery.request != request || delivery.bound || delivery.reaped {
+		sink.mu.Unlock()
+		return fmt.Errorf("abort guest secret: recipient process state is not prestart")
+	}
+	delete(sink.active, request.ProcessID)
+	sink.mu.Unlock()
+	if err := delivery.memfd.Close(); err != nil {
+		return fmt.Errorf("abort guest secret memfd: %w", err)
+	}
+	return nil
+}
+
 func writeGuestSecret(file *os.File, value []byte) error {
 	for len(value) > 0 {
 		written, err := file.Write(value)

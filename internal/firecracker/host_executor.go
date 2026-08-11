@@ -13,7 +13,10 @@ import (
 // seam to one LinuxJailerHost. Envelope signature/trust verification and the
 // durable started/uncertain journal remain owned by sandboxhostprocess; this
 // adapter receives only a verified fenced Envelope.
-type HostProcessExecutor struct{ Host *LinuxJailerHost }
+type HostProcessExecutor struct {
+	Host    *LinuxJailerHost
+	Secrets *SecretExecutionAuthority
+}
 
 // Execute hands an already-verified envelope to the sole Firecracker guest-dispatch gate.
 func (executor HostProcessExecutor) Execute(ctx context.Context, envelope sandboxhostprotocol.Envelope) error {
@@ -62,6 +65,12 @@ func (executor HostProcessExecutor) ExecuteWithOutput(ctx context.Context, envel
 func (executor HostProcessExecutor) ExecuteAuthenticatedWithOutput(ctx context.Context, envelope sandboxhostprotocol.Envelope, authenticatedEnvelope []byte, emit sandboxhostprotocol.GuestOutputEmitter) error {
 	if executor.Host == nil || emit == nil {
 		return fmt.Errorf("execute authenticated Firecracker guest output: %w", ErrCapabilityUnavailable)
+	}
+	if envelope.OperationKind == GuestSecretCommandOperationKind {
+		if executor.Secrets == nil {
+			return fmt.Errorf("execute authenticated Firecracker secret command: %w", ErrCapabilityUnavailable)
+		}
+		return executor.Host.DispatchAuthenticatedSecret(ctx, envelope, authenticatedEnvelope, executor.Secrets, emit)
 	}
 	result, err := executor.Host.DispatchAuthenticated(ctx, envelope, authenticatedEnvelope)
 	if err != nil {

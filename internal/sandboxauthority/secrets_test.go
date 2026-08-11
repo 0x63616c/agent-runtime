@@ -64,6 +64,25 @@ func TestManagerClearsARejectedDeliveryReservationForARetry(t *testing.T) {
 	}
 }
 
+func TestManagerAbortsOnlyASinkProvenPrestartDeliveryAndZeroizesIt(t *testing.T) {
+	now := time.Date(2026, 8, 10, 0, 0, 0, 0, time.UTC)
+	sink := &testSink{prestartAbort: true}
+	manager, err := NewManager(&testResolver{value: SecretValue{Version: "v1", ExpiresAt: now.Add(time.Minute), Bytes: []byte("secret")}}, sink, &testAudit{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := testSecretRequest(now)
+	if err := manager.Deliver(context.Background(), request, now); err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.AbortBeforeStart(context.Background(), request.ProcessID); err != nil {
+		t.Fatalf("AbortBeforeStart() error = %v", err)
+	}
+	if !sink.aborted || len(manager.RedactionValues(request.ProcessID)) != 0 {
+		t.Fatalf("prestart abort = %#v", sink)
+	}
+}
+
 type testResolver struct{ value SecretValue }
 
 func (resolver *testResolver) Resolve(context.Context, SecretRequest) (SecretValue, error) {
@@ -71,10 +90,12 @@ func (resolver *testResolver) Resolve(context.Context, SecretRequest) (SecretVal
 }
 
 type testSink struct {
-	delivered  []byte
-	revoked    bool
-	deliverErr error
-	revokeErr  error
+	delivered     []byte
+	revoked       bool
+	deliverErr    error
+	revokeErr     error
+	prestartAbort bool
+	aborted       bool
 }
 
 func (sink *testSink) Deliver(_ context.Context, _ SecretRequest, value []byte) error {
@@ -89,6 +110,13 @@ func (sink *testSink) RevokeAfterTreeReap(context.Context, SecretRequest) error 
 		return sink.revokeErr
 	}
 	sink.revoked = true
+	return nil
+}
+func (sink *testSink) AbortBeforeStart(context.Context, SecretRequest) error {
+	if !sink.prestartAbort {
+		return errors.New("prestart abort unsupported")
+	}
+	sink.aborted = true
 	return nil
 }
 
