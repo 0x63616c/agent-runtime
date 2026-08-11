@@ -43,9 +43,17 @@ retry decision is deliberately closed and covered by
 | Unknown external-effect result | Non-retryable `runtime.uncertain_external_effect`; reconciliation owns the next decision. | No. |
 | Incompatible persisted policy | Non-retryable `runtime.incompatible_persisted_policy`. | No. |
 
-The current dispatcher has no model, tool, approval service, or sandbox
+The orchestration dispatcher has no model, tool, approval service, or sandbox
 credential, so the latter two cases are classification guards rather than a
-claim that the dispatcher executes those effects. The publisher test follows
+claim that it executes those effects. The separate `internal/runtimemodel`
+worker owns only invocation-intent Outbox records: a new record calls its
+provider-neutral adapter once, while an expired claim calls `Reconcile` with
+the same operation ID and never blindly invokes again. It stages a successful
+normalized response as immutable content, records the exact fenced outcome,
+settles the Turn, then acknowledges the intent record. Its deterministic fake
+adapter test proves both new invocation and recovered-claim paths; production
+provider configuration and normalized streaming are still outside this
+evidence. The publisher test follows
 the actual state transition from persisted tool intent through a principal
 approval decision, then through a fenced `uncertain` model invocation caused
 by producer loss and a terminal `turn.failed` outbox route. It verifies that

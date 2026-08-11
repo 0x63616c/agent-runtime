@@ -211,6 +211,15 @@ func TestPublisherDerivesTemporalRoutesOnlyFromClaimedDurableOutbox(t *testing.T
 	if temporal.commands[1].Sequence >= temporal.commands[2].Sequence {
 		t.Fatalf("terminal command ordering = %#v, want approval before finalization", temporal.commands)
 	}
+	afterPublish, err := store.LoadRuntimeState(ctx, runtimestate.MutationScope{Tenant: tenant, Authority: runtimestate.AuthorityOutboxPublisher})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, record := range afterPublish.Outbox {
+		if record.InvocationID != "" && record.EventKind == "" && record.State != runtimestate.OutboxPending {
+			t.Fatalf("Temporal publisher acknowledged model intent %#v; model worker must own it", record)
+		}
+	}
 	dispatcher, err := runtimeorchestration.NewDurableStateDispatcher(store)
 	if err != nil {
 		t.Fatal(err)
