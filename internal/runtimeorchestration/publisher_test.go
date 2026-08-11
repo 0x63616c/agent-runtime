@@ -74,6 +74,10 @@ func TestPublisherDerivesTemporalRoutesOnlyFromClaimedDurableOutbox(t *testing.T
 	}
 	state := acceptedPlan.State()
 	digest := "sha256:" + strings.Repeat("a", 64)
+	descriptor, err := content.StageToolActionDescriptor(ctx, tenant, []byte("write action"))
+	if err != nil {
+		t.Fatal(err)
+	}
 	intent, err := compiler.CompileRecordToolIntent(runtimestate.RecordToolIntentCommand{
 		Scope:                runtimestate.MutationScope{Tenant: tenant, Principal: principal, Authority: runtimestate.AuthorityRuntimeWorker},
 		IdempotencyKey:       "tool-intent",
@@ -83,6 +87,7 @@ func TestPublisherDerivesTemporalRoutesOnlyFromClaimedDurableOutbox(t *testing.T
 		ToolName:             "write",
 		ActionDigest:         digest,
 		PolicyRevisionDigest: digest,
+		Descriptor:           descriptor,
 	})
 	if err != nil {
 		t.Fatal(err)

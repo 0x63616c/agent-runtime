@@ -299,7 +299,7 @@ func (planner *RuntimeStatePlanner) Plan(ctx context.Context, prior RuntimeState
 		result, effects, err = planner.registerArtifact(&state, mutation.mutation.receipt, command, now)
 	case compiledConversation:
 		result, effects, err = planner.appendConversation(&state, mutation.mutation.receipt, command, now)
-	case RecordToolIntentCommand:
+	case compiledToolIntent:
 		result, effects, err = planner.recordToolIntent(&state, mutation.mutation.receipt, command, now)
 	case RequestApprovalCommand:
 		result, effects, err = planner.requestApproval(&state, mutation.mutation.receipt, command, now)
@@ -558,11 +558,12 @@ func (planner *RuntimeStatePlanner) appendConversation(state *RuntimeState, bind
 	return PlanResult{Conversation: record}, effects, nil
 }
 
-func (planner *RuntimeStatePlanner) recordToolIntent(state *RuntimeState, binding ReceiptBinding, c RecordToolIntentCommand, now time.Time) (PlanResult, EffectSet, error) {
+func (planner *RuntimeStatePlanner) recordToolIntent(state *RuntimeState, binding ReceiptBinding, compiled compiledToolIntent, now time.Time) (PlanResult, EffectSet, error) {
+	c := compiled.command
 	if findTurn(state, binding.Scope, c.SessionID, c.TurnID) < 0 {
 		return PlanResult{}, EffectSet{}, ErrNotFoundOrDenied
 	}
-	r := ToolIntentRecord{Tenant: binding.Scope.Tenant, Principal: binding.Scope.Principal, SessionID: c.SessionID, TurnID: c.TurnID, ToolCallID: c.ToolCallID, ToolName: c.ToolName, ActionDigest: c.ActionDigest, PolicyRevisionDigest: c.PolicyRevisionDigest, CreatedAt: now, RetainUntil: planner.retain(now, DataClassAuthorization)}
+	r := ToolIntentRecord{Tenant: binding.Scope.Tenant, Principal: binding.Scope.Principal, SessionID: c.SessionID, TurnID: c.TurnID, ToolCallID: c.ToolCallID, ToolName: c.ToolName, ActionDigest: c.ActionDigest, ActionDescriptor: compiled.descriptor, PolicyRevisionDigest: c.PolicyRevisionDigest, CreatedAt: now, RetainUntil: planner.retain(now, DataClassAuthorization)}
 	state.ToolIntents = append(state.ToolIntents, r)
 	e, err := planner.auditOnly(state, binding, "tool.intent_recorded", c.SessionID, c.TurnID, now)
 	return PlanResult{}, e, err

@@ -173,6 +173,7 @@ type ToolIntentRecord struct {
 	ToolCallID           string
 	ToolName             string
 	ActionDigest         string
+	ActionDescriptor     runtimecontent.Reference
 	PolicyRevisionDigest string
 	CreatedAt            time.Time
 	RetainUntil          time.Time
@@ -587,6 +588,7 @@ type RecordToolIntentCommand struct {
 	SessionID                                                agentruntime.SessionID
 	TurnID                                                   agentruntime.TurnID
 	ToolCallID, ToolName, ActionDigest, PolicyRevisionDigest string
+	Descriptor                                               runtimecontent.ContentHandoff
 }
 
 func (command RecordToolIntentCommand) Owned() RecordToolIntentCommand { return command }

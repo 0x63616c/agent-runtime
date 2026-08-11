@@ -177,6 +177,9 @@ func (rejectContentHandoff) ValidateArtifactHandoff(runtimecontent.ContentHandof
 func (rejectContentHandoff) ValidateConversationEntryHandoff(runtimecontent.ContentHandoff) (runtimecontent.ConversationEntryCommitment, error) {
 	return runtimecontent.ConversationEntryCommitment{}, runtimecontent.ErrNotFoundOrDenied
 }
+func (rejectContentHandoff) ValidateToolActionDescriptorHandoff(runtimecontent.ContentHandoff) (runtimecontent.ToolActionDescriptorCommitment, error) {
+	return runtimecontent.ToolActionDescriptorCommitment{}, runtimecontent.ErrNotFoundOrDenied
+}
 
 type processClock struct{}
 

@@ -173,10 +173,11 @@ func (compiler *Compiler) CompileAppendConversation(command AppendConversationCo
 
 func (compiler *Compiler) CompileRecordToolIntent(command RecordToolIntentCommand) (CompiledMutation, error) {
 	command = command.Owned()
-	if err := validateWorkerCommand(command.Scope, command.SessionID, command.TurnID, OperationID(command.ToolCallID)); err != nil || !validOpaque(command.ToolName, 128) || !validDigest(command.ActionDigest) || !validDigest(command.PolicyRevisionDigest) {
+	commitment, descriptorErr := compiler.content.ValidateToolActionDescriptorHandoff(command.Descriptor)
+	if err := validateWorkerCommand(command.Scope, command.SessionID, command.TurnID, OperationID(command.ToolCallID)); err != nil || descriptorErr != nil || commitment.Tenant != command.Scope.Tenant || !validOpaque(command.ToolName, 128) || !validDigest(command.ActionDigest) || !validDigest(command.PolicyRevisionDigest) {
 		return CompiledMutation{}, errors.New("compile tool intent: invalid command")
 	}
-	return compiler.compile(CommandRecordToolIntent, command.Scope, command.IdempotencyKey, command, command)
+	return compiler.compile(CommandRecordToolIntent, command.Scope, command.IdempotencyKey, commitment.Reference, compiledToolIntent{command, commitment.Reference})
 }
 func (compiler *Compiler) CompileRequestApproval(command RequestApprovalCommand) (CompiledMutation, error) {
 	command = command.Owned()
@@ -373,6 +374,10 @@ type compiledArtifact struct {
 type compiledConversation struct {
 	command    AppendConversationCommand
 	commitment runtimecontent.ConversationEntryCommitment
+}
+type compiledToolIntent struct {
+	command    RecordToolIntentCommand
+	descriptor runtimecontent.Reference
 }
 
 func (compiler *Compiler) compile(kind CommandKind, scope MutationScope, key string, shape any, command any) (CompiledMutation, error) {

@@ -130,7 +130,7 @@ func TestStateRuntimeReadsOnlyStateAuthorizedArtifactBytes(t *testing.T) {
 }
 
 func TestStateRuntimeInspectsAndDecidesOwnerApprovalIdempotently(t *testing.T) {
-	runtime, _, compiler, store, _ := newMemoryStateAuthority(t)
+	runtime, content, compiler, store, _ := newMemoryStateAuthority(t)
 	ctx := context.Background()
 	admin := runtimeapi.Identity{Tenant: "tenant-a", Principal: "admin", Admin: true}
 	alice := runtimeapi.Identity{Tenant: "tenant-a", Principal: "alice"}
@@ -150,7 +150,11 @@ func TestStateRuntimeInspectsAndDecidesOwnerApprovalIdempotently(t *testing.T) {
 	tenant, _ := runtimecontent.ParseTenantID("tenant-a")
 	principal, _ := runtimecontent.ParsePrincipalID("alice")
 	digest := "sha256:" + strings.Repeat("a", 64)
-	intent, err := compiler.CompileRecordToolIntent(runtimestate.RecordToolIntentCommand{Scope: runtimestate.MutationScope{Tenant: tenant, Principal: principal, Authority: runtimestate.AuthorityRuntimeWorker}, IdempotencyKey: "approval-intent", SessionID: session.ID, TurnID: accepted.Turn.ID, ToolCallID: "tcall_1234567890ABCDEF", ToolName: "write", ActionDigest: digest, PolicyRevisionDigest: digest})
+	descriptor, err := content.StageToolActionDescriptor(ctx, tenant, []byte("write action"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	intent, err := compiler.CompileRecordToolIntent(runtimestate.RecordToolIntentCommand{Scope: runtimestate.MutationScope{Tenant: tenant, Principal: principal, Authority: runtimestate.AuthorityRuntimeWorker}, IdempotencyKey: "approval-intent", SessionID: session.ID, TurnID: accepted.Turn.ID, ToolCallID: "tcall_1234567890ABCDEF", ToolName: "write", ActionDigest: digest, PolicyRevisionDigest: digest, Descriptor: descriptor})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -182,7 +186,7 @@ func TestStateRuntimeInspectsAndDecidesOwnerApprovalIdempotently(t *testing.T) {
 }
 
 func TestStateRuntimePersistsApprovalExpiryBeforeRefusingLateDecision(t *testing.T) {
-	runtime, _, compiler, store, fakeClock := newMemoryStateAuthority(t)
+	runtime, content, compiler, store, fakeClock := newMemoryStateAuthority(t)
 	ctx := context.Background()
 	admin := runtimeapi.Identity{Tenant: "tenant-a", Principal: "admin", Admin: true}
 	alice := runtimeapi.Identity{Tenant: "tenant-a", Principal: "alice"}
@@ -201,7 +205,11 @@ func TestStateRuntimePersistsApprovalExpiryBeforeRefusingLateDecision(t *testing
 	tenant, _ := runtimecontent.ParseTenantID("tenant-a")
 	principal, _ := runtimecontent.ParsePrincipalID("alice")
 	digest := "sha256:" + strings.Repeat("b", 64)
-	intent, err := compiler.CompileRecordToolIntent(runtimestate.RecordToolIntentCommand{Scope: runtimestate.MutationScope{Tenant: tenant, Principal: principal, Authority: runtimestate.AuthorityRuntimeWorker}, IdempotencyKey: "expired-approval-intent", SessionID: session.ID, TurnID: accepted.Turn.ID, ToolCallID: "tcall_1234567890ABCDEF", ToolName: "write", ActionDigest: digest, PolicyRevisionDigest: digest})
+	descriptor, err := content.StageToolActionDescriptor(ctx, tenant, []byte("write action"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	intent, err := compiler.CompileRecordToolIntent(runtimestate.RecordToolIntentCommand{Scope: runtimestate.MutationScope{Tenant: tenant, Principal: principal, Authority: runtimestate.AuthorityRuntimeWorker}, IdempotencyKey: "expired-approval-intent", SessionID: session.ID, TurnID: accepted.Turn.ID, ToolCallID: "tcall_1234567890ABCDEF", ToolName: "write", ActionDigest: digest, PolicyRevisionDigest: digest, Descriptor: descriptor})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -309,7 +317,7 @@ func TestStateRuntimeHTTPAndSDKKeepPolicyAdministrationSeparateFromSessionCaller
 }
 
 func TestStateRuntimeHTTPAndSDKExposeExpiredApprovalAndItsDurableReceipt(t *testing.T) {
-	runtime, _, compiler, store, fakeClock := newMemoryStateAuthority(t)
+	runtime, content, compiler, store, fakeClock := newMemoryStateAuthority(t)
 	ctx := context.Background()
 	admin := runtimeapi.Identity{Tenant: "tenant-a", Principal: "admin", Admin: true}
 	alice := runtimeapi.Identity{Tenant: "tenant-a", Principal: "alice"}
@@ -328,7 +336,11 @@ func TestStateRuntimeHTTPAndSDKExposeExpiredApprovalAndItsDurableReceipt(t *test
 	tenant, _ := runtimecontent.ParseTenantID("tenant-a")
 	principal, _ := runtimecontent.ParsePrincipalID("alice")
 	digest := "sha256:" + strings.Repeat("c", 64)
-	intent, err := compiler.CompileRecordToolIntent(runtimestate.RecordToolIntentCommand{Scope: runtimestate.MutationScope{Tenant: tenant, Principal: principal, Authority: runtimestate.AuthorityRuntimeWorker}, IdempotencyKey: "http-expiry-intent", SessionID: session.ID, TurnID: accepted.Turn.ID, ToolCallID: "tcall_1234567890ABCDEF", ToolName: "write", ActionDigest: digest, PolicyRevisionDigest: digest})
+	descriptor, err := content.StageToolActionDescriptor(ctx, tenant, []byte("write action"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	intent, err := compiler.CompileRecordToolIntent(runtimestate.RecordToolIntentCommand{Scope: runtimestate.MutationScope{Tenant: tenant, Principal: principal, Authority: runtimestate.AuthorityRuntimeWorker}, IdempotencyKey: "http-expiry-intent", SessionID: session.ID, TurnID: accepted.Turn.ID, ToolCallID: "tcall_1234567890ABCDEF", ToolName: "write", ActionDigest: digest, PolicyRevisionDigest: digest, Descriptor: descriptor})
 	if err != nil {
 		t.Fatal(err)
 	}

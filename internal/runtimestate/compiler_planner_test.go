@@ -491,7 +491,9 @@ func TestPlannerPersistsToolIntentBeforeApprovalDecision(t *testing.T) {
 	turn := agentruntime.TurnID("turn_1234567890ABCDEF")
 	state := runtimestate.RuntimeState{Sessions: []runtimestate.SessionRecord{{Tenant: tenant, Principal: principal, SessionID: session, State: agentruntime.SessionOpen, CreatedAt: now, UpdatedAt: now}}, Turns: []runtimestate.TurnRecord{{Tenant: tenant, Principal: principal, SessionID: session, TurnID: turn, State: agentruntime.TurnRunning}}}
 	digest := "sha256:" + strings.Repeat("a", 64)
-	intent, err := compiler.CompileRecordToolIntent(runtimestate.RecordToolIntentCommand{Scope: workerScope(tenant, principal), IdempotencyKey: "intent", SessionID: session, TurnID: turn, ToolCallID: "tcall_1234567890ABCDEF", ToolName: "write", ActionDigest: digest, PolicyRevisionDigest: digest})
+	descriptor, err := content.StageToolActionDescriptor(context.Background(), tenant, []byte("canonical tool action"))
+	if err != nil { t.Fatal(err) }
+	intent, err := compiler.CompileRecordToolIntent(runtimestate.RecordToolIntentCommand{Scope: workerScope(tenant, principal), IdempotencyKey: "intent", SessionID: session, TurnID: turn, ToolCallID: "tcall_1234567890ABCDEF", ToolName: "write", ActionDigest: digest, PolicyRevisionDigest: digest, Descriptor: descriptor})
 	if err != nil {
 		t.Fatal(err)
 	}
