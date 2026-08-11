@@ -19,6 +19,9 @@ const (
 // MaxToolCallsPerTurn bounds one public Tool-call inspection response.
 const MaxToolCallsPerTurn = 64
 
+// MaxApprovalsPerPage bounds one owner-scoped approval inbox response.
+const MaxApprovalsPerPage = 64
+
 // ToolCallState is the safe public lifecycle of one model Tool intent.
 type ToolCallState string
 
@@ -334,6 +337,21 @@ type Approval struct {
 	Scope     *ApprovalScope  `json:"scope,omitempty"`
 	ExpiresAt time.Time       `json:"expires_at"`
 	DecidedAt *time.Time      `json:"decided_at,omitempty"`
+}
+
+// ApprovalPage is one bounded owner-scoped Approval inbox projection.
+type ApprovalPage struct {
+	Approvals []Approval `json:"approvals"`
+	Truncated bool       `json:"truncated"`
+}
+
+// Clone returns an independent Approval inbox snapshot.
+func (page ApprovalPage) Clone() ApprovalPage {
+	clone := ApprovalPage{Truncated: page.Truncated, Approvals: make([]Approval, len(page.Approvals))}
+	for index := range page.Approvals {
+		clone.Approvals[index] = page.Approvals[index].Clone()
+	}
+	return clone
 }
 
 // Clone returns an independent Approval snapshot.

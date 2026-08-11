@@ -44,6 +44,8 @@
         "evidence/issue-14-m1-stack-contract-e2e.json",
         "evidence/issue-14-two-stack-e2e.json",
         "evidence/requirements-ledger.json",
+		"examples/workspace-agent/approval.go",
+		"examples/workspace-agent/approval_test.go",
         "sandbox/api.go",
         "sandbox/api_example_test.go",
         "sandbox/control_v1.schema.json",

@@ -77,6 +77,7 @@ func NewHandler(config Config) (http.Handler, error) {
 	mux.HandleFunc(openAPIMethodGetPolicy+" "+openAPIPathGetPolicy, server.getPolicy)
 	mux.HandleFunc(openAPIMethodReadArtifact+" "+openAPIPathReadArtifact, server.readArtifact)
 	mux.HandleFunc(openAPIMethodInspectApproval+" "+openAPIPathInspectApproval, server.inspectApproval)
+	mux.HandleFunc(openAPIMethodListApprovals+" "+openAPIPathListApprovals, server.listApprovals)
 	mux.HandleFunc(openAPIMethodDecideApproval+" "+openAPIPathDecideApproval, server.decideApproval)
 	mux.HandleFunc(openAPIMethodIdempotencyStatus+" "+openAPIPathIdempotencyStatus, server.idempotencyStatus)
 	mux.HandleFunc(openAPIMethodCreateSession+" "+openAPIPathCreateSession, server.createSession)
@@ -364,6 +365,12 @@ func (server *server) inspectApproval(writer http.ResponseWriter, request *http.
 		return
 	}
 	result, callErr := server.runtime.InspectApproval(request.Context(), contextValue.identity, approvalID)
+	server.writeResult(writer, contextValue.requestID, http.StatusOK, result, callErr)
+}
+
+func (server *server) listApprovals(writer http.ResponseWriter, request *http.Request) {
+	contextValue := request.Context().Value(requestContextKey{}).(requestContext)
+	result, callErr := server.runtime.ListApprovals(request.Context(), contextValue.identity)
 	server.writeResult(writer, contextValue.requestID, http.StatusOK, result, callErr)
 }
 

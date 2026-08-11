@@ -3,7 +3,7 @@
 package runtimeapi
 
 const (
-	openAPIContractSHA256          = "9a2eef3d61d4be3737d3bc02e1b0e8d57627ca69f843f7f134e1024b2c84d7e5"
+	openAPIContractSHA256          = "62708eec7cb75be68c86bc9edda72742c8602f901e275c5ff02297e0b8e7e8f2"
 	openAPIMethodCancelTurn        = "POST"
 	openAPIPathCancelTurn          = "/v1/sessions/{session_id}/turns/{turn_id}/cancel"
 	openAPIMethodCloseSession      = "POST"
@@ -30,6 +30,8 @@ const (
 	openAPIPathInspectToolCalls    = "/v1/sessions/{session_id}/turns/{turn_id}/tools"
 	openAPIMethodInspectTurn       = "GET"
 	openAPIPathInspectTurn         = "/v1/sessions/{session_id}/turns/{turn_id}"
+	openAPIMethodListApprovals     = "GET"
+	openAPIPathListApprovals       = "/v1/approvals"
 	openAPIMethodListEvents        = "GET"
 	openAPIPathListEvents          = "/v1/sessions/{session_id}/events"
 	openAPIMethodReadArtifact      = "GET"

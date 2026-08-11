@@ -40,6 +40,8 @@ type RuntimeClient interface {
 	ReadArtifact(context.Context, ArtifactID) (ArtifactDownload, error)
 	// InspectApproval returns the caller-authorized state of one Approval.
 	InspectApproval(context.Context, ApprovalID) (Approval, error)
+	// ListApprovals returns the caller-authorized bounded Approval inbox.
+	ListApprovals(context.Context) (ApprovalPage, error)
 	// DecideApproval records one idempotent owner decision for a pending Approval.
 	DecideApproval(context.Context, DecideApprovalRequest) (Approval, error)
 	// IdempotencyStatus reads one retained receipt without re-executing work.
@@ -358,6 +360,11 @@ func (client *Client) InspectApproval(ctx context.Context, approvalID ApprovalID
 		return Approval{}, errors.New("inspect Approval: invalid approval ID")
 	}
 	return doJSON[Approval](client, ctx, openAPIMethodInspectApproval, replacePath(openAPIPathInspectApproval, "approval_id", approvalID.String()), "", nil)
+}
+
+// ListApprovals returns the caller-authorized bounded Approval inbox.
+func (client *Client) ListApprovals(ctx context.Context) (ApprovalPage, error) {
+	return doJSON[ApprovalPage](client, ctx, openAPIMethodListApprovals, openAPIPathListApprovals, "", nil)
 }
 
 // DecideApproval records one idempotent owner decision for a pending Approval.
