@@ -169,6 +169,9 @@ func TestRetireBootstrapCapabilityRemovesOnlyTheVerifiedLocalCapability(t *testi
 	if _, err := os.Stat(path); !os.IsNotExist(err) {
 		t.Fatalf("capability remains after retirement: %v", err)
 	}
+	if err := retireBootstrapCapability(root, state); err != nil {
+		t.Fatalf("retire already absent capability: %v", err)
+	}
 	if err := stack.WriteBootstrapAuthority(path, authority); err != nil {
 		t.Fatalf("rewrite capability: %v", err)
 	}
@@ -178,6 +181,37 @@ func TestRetireBootstrapCapabilityRemovesOnlyTheVerifiedLocalCapability(t *testi
 	}
 	if _, err := os.Stat(path); err != nil {
 		t.Fatalf("foreign capability was removed: %v", err)
+	}
+}
+
+func TestRemoveRetiredLocalStackStateRemovesOnlyNamedPrivateLifecycleFiles(t *testing.T) {
+	root := t.TempDir()
+	state := localState{Stack: "cleanup-proof", Namespace: "ar-cleanup-proof"}
+	paths := []string{
+		statePath(root, state.Stack),
+		secretStatePath(root, state.Stack, "local"),
+		filepath.Join(root, ".runtime", "dev", state.Stack+".stack.json"),
+		operatorAuditPath(root, state.Stack),
+	}
+	for _, path := range paths {
+		if err := writePrivate(path, []byte("private")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	sibling := statePath(root, "sibling-stack")
+	if err := writePrivate(sibling, []byte("preserve")); err != nil {
+		t.Fatal(err)
+	}
+	if err := removeRetiredLocalStackState(root, state); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range paths {
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Fatalf("retired private state %s remains: %v", path, err)
+		}
+	}
+	if _, err := os.Stat(sibling); err != nil {
+		t.Fatalf("sibling private state was removed: %v", err)
 	}
 }
 
