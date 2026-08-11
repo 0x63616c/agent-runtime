@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "observed_at_utc": "2026-08-11T21:58:33Z",
+  "proof_level": "unit",
+  "revision": "c991c188e08e13f94bf96214674a7abf2f8db718",
+  "scope": "HITL-003 public HTTP/SDK authorization matrix with an injected fake approval clock. It covers only the state-backed public contract; it is not a PostgreSQL/MinIO, Temporal-process, Workspace service, sandbox, Firecracker, Linux/KVM, or browser claim.",
+  "commands": [
+    "go test ./internal/runtimeapi -run '^TestStateRuntimeHTTPAndSDKAuthorizationMatrixUsesFakeApprovalClock$' -count=1",
+    "just check"
+  ],
+  "result": "passed",
+  "observations": {
+    "owner_authorization": "The owner reads and approves a caller-owned pending Approval through public HTTP/SDK; a second identical decision idempotently replays the same terminal result.",
+    "safe_denial_and_scope": "A cross-principal read/decision receives the safe not-found result, and an attempt to submit a grant-shaped scope change is rejected as invalid input rather than broadening authority.",
+    "fake_clock_expiry": "Advancing the injected clock makes a late public decision conflict and leaves the Tool undispatched; explicit denial also leaves the Tool undispatched."
+  },
+  "redaction": "No bearer tokens, raw tenant/session/turn/approval IDs, action descriptors, capability values, grants, backend handles, or provider credentials are retained."
+}

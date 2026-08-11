@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "observed_at_utc": "2026-08-11T21:58:33Z",
+  "proof_level": "integration",
+  "revision": "c991c188e08e13f94bf96214674a7abf2f8db718",
+  "scope": "HITL-001 pending-approval phase only. The Temporal workflow-state test and disposable PostgreSQL/MinIO public-process check cover a waiting Approval before and after runtime API restart. Private Broker seeding is test setup only. This is not a model-provider, Workspace service, protected sandbox, Firecracker, Linux/KVM, or browser claim.",
+  "commands": [
+    "go test ./internal/runtimeorchestration -run '^TestSessionWorkflowDoesNotStartAWaitingApprovalTurn$' -count=1",
+    "./deploy/runtimeapi/run-durable-integration.sh",
+    "just check"
+  ],
+  "result": "passed",
+  "observations": {
+    "workflow_state": "A claimed durable input route reaches the Session workflow while its Turn is waiting for approval, continues as new at the intended workflow boundary, and creates no model invocation.",
+    "durable_public_restart": "The disposable runtime API-process check reads the caller-owned pending Approval and waiting Turn through fresh public HTTP/SDK clients before and after an actual runtime API process restart, then decides and idempotently replays through the public boundary.",
+    "safety": "The retained observations contain no descriptor bytes, capability value, credential, grant ID, backend handle, or raw request content."
+  },
+  "redaction": "No DSNs, object-store credentials, tokens, raw tenant/session/turn/approval IDs, descriptors, input bytes, artifacts, backend endpoints, or provider credentials are retained."
+}
