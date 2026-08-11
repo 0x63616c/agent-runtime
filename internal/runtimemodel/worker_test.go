@@ -67,7 +67,8 @@ func TestWorkerFinalizesNewAndRecoveredModelIntentsWithoutBlindReinvoke(t *testi
 					t.Fatal(err)
 				}
 			}
-			adapter := &recordingAdapter{response: runtimemodel.Response{Output: []byte("normalized model result")}, err: test.adapterErr}
+			inputTokens := uint64(17)
+			adapter := &recordingAdapter{response: runtimemodel.Response{Output: []byte("normalized model result"), Usage: &runtimestate.ModelUsage{InputTokens: &inputTokens}}, err: test.adapterErr}
 			worker, err := runtimemodel.NewWorker(runtimemodel.WorkerConfig{Store: store, Tenants: store, Compiler: compiler, Planner: planner, Clock: source, Content: content, Adapter: adapter, Claimer: "model-worker"})
 			if err != nil {
 				t.Fatal(err)
@@ -87,6 +88,9 @@ func TestWorkerFinalizesNewAndRecoveredModelIntentsWithoutBlindReinvoke(t *testi
 			}
 			if test.wantState == runtimestate.InvocationUncertain && (len(state.Events) < 2 || state.Events[len(state.Events)-2].Kind != agentruntime.EventProducerGap || state.Events[len(state.Events)-1].Kind != agentruntime.EventTurnFailed) {
 				t.Fatalf("uncertain producer events = %#v, want ordered explicit gap then finalization", state.Events)
+			}
+			if test.wantState == runtimestate.InvocationSucceeded && (state.Invocations[0].Usage == nil || state.Invocations[0].Usage.InputTokens == nil || *state.Invocations[0].Usage.InputTokens != inputTokens || state.Invocations[0].Usage.OutputTokens != nil) {
+				t.Fatalf("model usage = %#v, want provider-neutral reported input and unknown output", state.Invocations[0].Usage)
 			}
 			if record := invocationOutbox(t, ctx, store, tenant); record.State != runtimestate.OutboxPublished {
 				t.Fatalf("invocation outbox = %#v, want acknowledged after finalization", record)

@@ -273,6 +273,30 @@ const (
 	InvocationCancelled InvocationState = "cancelled"
 )
 
+// ModelUsage retains provider-neutral token accounting. Nil fields mean the
+// provider did not report that value; unknown is never coerced to zero.
+type ModelUsage struct {
+	InputTokens  *uint64
+	OutputTokens *uint64
+}
+
+// Clone returns an independent usage snapshot.
+func (usage *ModelUsage) Clone() *ModelUsage {
+	if usage == nil {
+		return nil
+	}
+	clone := *usage
+	if usage.InputTokens != nil {
+		value := *usage.InputTokens
+		clone.InputTokens = &value
+	}
+	if usage.OutputTokens != nil {
+		value := *usage.OutputTokens
+		clone.OutputTokens = &value
+	}
+	return &clone
+}
+
 // InvocationRecord retains only the external-effect identity, fence, safe references and outcome metadata.
 type InvocationRecord struct {
 	Tenant         runtimecontent.TenantID
@@ -286,6 +310,7 @@ type InvocationRecord struct {
 	State          InvocationState
 	Result         *runtimecontent.Reference
 	Failure        *agentruntime.Failure
+	Usage          *ModelUsage
 	CreatedAt      time.Time
 	UpdatedAt      time.Time
 	RetentionUntil time.Time
@@ -295,6 +320,7 @@ type InvocationRecord struct {
 func (record InvocationRecord) Clone() InvocationRecord {
 	clone := record
 	clone.Failure = record.Failure.Clone()
+	clone.Usage = record.Usage.Clone()
 	if record.Result != nil {
 		result := *record.Result
 		clone.Result = &result
@@ -593,6 +619,7 @@ type RecordInvocationOutcomeCommand struct {
 	Outcome                InvocationState
 	Result                 *runtimecontent.Reference
 	Failure                *agentruntime.Failure
+	Usage                  *ModelUsage
 	ExpectedSessionVersion uint64
 	ExpectedTurnVersion    uint64
 }
@@ -600,6 +627,7 @@ type RecordInvocationOutcomeCommand struct {
 // Owned returns a value-owned command and clones all caller-owned pointer metadata.
 func (command RecordInvocationOutcomeCommand) Owned() RecordInvocationOutcomeCommand {
 	command.Failure = command.Failure.Clone()
+	command.Usage = command.Usage.Clone()
 	if command.Result != nil {
 		result := *command.Result
 		command.Result = &result

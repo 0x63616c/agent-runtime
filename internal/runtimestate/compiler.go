@@ -469,7 +469,8 @@ func outcomeDigestShape(command RecordInvocationOutcomeCommand) any {
 		Outcome                                     InvocationState
 		Result                                      runtimecontent.Reference
 		Failure                                     *agentruntime.Failure
-	}{command.SessionID.String(), command.TurnID.String(), string(command.OperationID), command.Ordinal, command.Fence, command.ExpectedSessionVersion, command.ExpectedTurnVersion, command.Outcome, result, command.Failure}
+		Usage                                       *ModelUsage
+	}{command.SessionID.String(), command.TurnID.String(), string(command.OperationID), command.Ordinal, command.Fence, command.ExpectedSessionVersion, command.ExpectedTurnVersion, command.Outcome, result, command.Failure, command.Usage}
 }
 func receiptExpired(receipt MutationReceipt, now time.Time) bool {
 	return !receipt.RetentionUntil.IsZero() && !receipt.RetentionUntil.After(now)

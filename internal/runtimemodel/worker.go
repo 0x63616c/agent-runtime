@@ -35,6 +35,7 @@ type Response struct {
 	Output    []byte
 	Failure   *agentruntime.Failure
 	Uncertain bool
+	Usage     *runtimestate.ModelUsage
 }
 
 // Adapter is the model-provider seam. Invoke is allowed exactly once for a
@@ -196,6 +197,7 @@ func (worker *Worker) finalize(ctx context.Context, record runtimestate.OutboxRe
 		Outcome:                state,
 		Result:                 result,
 		Failure:                failure,
+		Usage:                  response.Usage,
 		ExpectedSessionVersion: session.Version,
 		ExpectedTurnVersion:    turn.Version,
 	})

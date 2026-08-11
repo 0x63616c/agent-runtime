@@ -718,7 +718,7 @@ func (planner *RuntimeStatePlanner) recordOutcome(state *RuntimeState, binding R
 	if session.Version != command.ExpectedSessionVersion || turn.Version != command.ExpectedTurnVersion || invocation.Ordinal != command.Ordinal || invocation.Fence != command.Fence || invocation.State != InvocationIntent || turn.State != agentruntime.TurnRunning {
 		return PlanResult{}, EffectSet{}, ErrConflict
 	}
-	invocation.State, invocation.Result, invocation.Failure, invocation.UpdatedAt = command.Outcome, command.Result, command.Failure.Clone(), now
+	invocation.State, invocation.Result, invocation.Failure, invocation.Usage, invocation.UpdatedAt = command.Outcome, command.Result, command.Failure.Clone(), command.Usage.Clone(), now
 	state.Invocations[invocationIndex] = invocation
 	effects, err := planner.effects(state, binding, session, turn, invocation, nil, now)
 	if err != nil {

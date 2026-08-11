@@ -52,7 +52,9 @@ the same operation ID and never blindly invokes again. It stages a successful
 normalized response as immutable content, records the exact fenced outcome,
 settles the Turn, then acknowledges the intent record. An uncertain outcome
 records ordered `producer.gap` then `turn.failed` Events, making a missing
-producer segment visible to public cursor replay. Its deterministic fake
+producer segment visible to public cursor replay. Provider-neutral model usage
+retains optional input/output token counts, preserving unknown values as
+unknown rather than zero. Its deterministic fake
 adapter test proves both new invocation and recovered-claim paths; production
 provider configuration and normalized streaming are still outside this
 evidence. The publisher test follows
