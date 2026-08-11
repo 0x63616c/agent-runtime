@@ -69,3 +69,45 @@ func TestEvidenceRoundTripIsStrictAndNeverOverwritesAnExistingArtifact(t *testin
 		t.Fatal("unknown report field was accepted")
 	}
 }
+
+func TestRetentionEvidenceRequiresACompletedCollectionAndASeparateFutureSchedule(t *testing.T) {
+	completed := time.Date(2026, 8, 11, 12, 0, 0, 0, time.UTC)
+	planned := completed.Add(24 * time.Hour)
+
+	tests := []struct {
+		name                        string
+		last, next                  time.Time
+		authorization, expected     string
+		wantExecuted, wantScheduled bool
+	}{
+		{
+			name: "completed collection with successor schedule",
+			last: completed, next: planned, authorization: "retention-authorization-0001", expected: "retention-authorization-0001",
+			wantExecuted: true, wantScheduled: true,
+		},
+		{
+			name: "never collected cannot be reported as executed",
+			next: planned, authorization: "retention-authorization-0001", expected: "retention-authorization-0001",
+			wantExecuted: false, wantScheduled: true,
+		},
+		{
+			name: "stale authorization cannot prove execution",
+			last: completed, next: planned, authorization: "old-authorization-0000001", expected: "retention-authorization-0001",
+			wantExecuted: false, wantScheduled: true,
+		},
+		{
+			name: "schedule at collection time is not a successor schedule",
+			last: completed, next: completed, authorization: "retention-authorization-0001", expected: "retention-authorization-0001",
+			wantExecuted: false, wantScheduled: false,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			executed, scheduled := retentionEvidence(test.last, test.next, test.authorization, test.expected)
+			if executed != test.wantExecuted || scheduled != test.wantScheduled {
+				t.Fatalf("retention evidence = executed:%t scheduled:%t, want executed:%t scheduled:%t", executed, scheduled, test.wantExecuted, test.wantScheduled)
+			}
+		})
+	}
+}

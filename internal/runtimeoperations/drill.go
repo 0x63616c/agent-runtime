@@ -226,7 +226,17 @@ func inspectSource(ctx context.Context, pool *pgxpool.Pool, config Config) (bool
 	if err := pool.QueryRow(ctx, `SELECT current_setting('archive_mode'), current_setting('archive_command'), pg_is_in_recovery()`).Scan(&archiveMode, &archiveCommand, &recovering); err != nil {
 		return false, false, 0, false, false, false, false, fmt.Errorf("read protected WAL archive settings: %w", err)
 	}
-	return appMember, operatorMember, partitions, authorization == config.RetentionAuthorization && next.After(last), !next.IsZero(), archiveMode == "on" && strings.TrimSpace(archiveCommand) != "", !recovering, nil
+	retentionExecuted, retentionScheduled := retentionEvidence(last, next, authorization, config.RetentionAuthorization)
+	return appMember, operatorMember, partitions, retentionExecuted, retentionScheduled, archiveMode == "on" && strings.TrimSpace(archiveCommand) != "", !recovering, nil
+}
+
+// retentionEvidence separates an observed completed collection from the
+// independently scheduled next collection. A future schedule alone must never
+// make protected-run evidence claim that retention was executed.
+func retentionEvidence(last, next time.Time, authorization, expectedAuthorization string) (executed, scheduled bool) {
+	scheduled = !next.IsZero() && (last.IsZero() || next.After(last))
+	executed = scheduled && !last.IsZero() && authorization == expectedAuthorization
+	return executed, scheduled
 }
 
 func inspectAuditSink(ctx context.Context, config Config) (int, int, int64, error) {

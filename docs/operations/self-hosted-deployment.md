@@ -175,8 +175,10 @@ designated retention/PITR tenant, distinct current authorization identifiers,
 the authorized RFC3339 recovery point, and the expected restored snapshot
 generation. The drill verifies the source's `runtime_state_app` and
 `runtime_state_operator` memberships, assumes each narrow role, verifies an
-actual authorized retention record has a later next-collection schedule, and
-checks the four native snapshot partitions. It refuses unless source WAL
+actual authorized completed retention collection plus a later next-collection
+schedule, and checks the four native snapshot partitions. A future schedule
+without a completed collection is not retention-execution evidence. It refuses
+unless source WAL
 archiving is active and the source is primary; it then reads only the bound
 tenant's expected generation from the isolated restore target.
 
