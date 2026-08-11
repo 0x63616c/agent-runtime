@@ -237,6 +237,10 @@ type durableToolAdapter struct{ executes, reconciles int }
 
 func newDurableToolAdapter() *durableToolAdapter { return &durableToolAdapter{} }
 
+func (adapter *durableToolAdapter) ExternalEffectContract() runtimetool.ExternalEffectContract {
+	return runtimetool.ExternalEffectContract{IdempotencyKey: "operation_id", Reconciles: true}
+}
+
 func (adapter *durableToolAdapter) Execute(_ context.Context, request runtimetool.Request) (runtimetool.Response, error) {
 	adapter.executes++
 	return runtimetool.Response{Output: []byte(`{"result":"workspace action completed","operation_id":"` + string(request.OperationID) + `"}`), MediaType: "application/json"}, nil

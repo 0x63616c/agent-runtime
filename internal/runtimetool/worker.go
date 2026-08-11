@@ -38,6 +38,21 @@ type Adapter interface {
 	Execute(context.Context, Request) (Response, error)
 	Reconcile(context.Context, Request) (Response, error)
 }
+
+// ExternalEffectContract declares the two runtime guarantees every concrete
+// tool adapter must preserve. The adapter uses OperationID as its application
+// idempotency key and Reconcile observes that exact key without resubmission.
+type ExternalEffectContract struct {
+	IdempotencyKey string
+	Reconciles     bool
+}
+
+// ContractAdapter is the sealed construction boundary for adapters that can
+// cause an external effect.
+type ContractAdapter interface {
+	Adapter
+	ExternalEffectContract() ExternalEffectContract
+}
 type Config struct {
 	Store    runtimestate.RuntimeStateStore
 	Tenants  runtimestate.OutboxTenantSource
@@ -63,6 +78,10 @@ type Worker struct {
 func NewWorker(c Config) (*Worker, error) {
 	if c.Store == nil || c.Tenants == nil || c.Compiler == nil || c.Planner == nil || c.Clock == nil || c.Content == nil || c.Adapter == nil || c.Claimer == "" {
 		return nil, errors.New("create runtime tool worker: complete authority is required")
+	}
+	contract, ok := c.Adapter.(ContractAdapter)
+	if !ok || contract.ExternalEffectContract() != (ExternalEffectContract{IdempotencyKey: "operation_id", Reconciles: true}) {
+		return nil, errors.New("create runtime tool worker: adapter must reconcile the runtime operation idempotency key")
 	}
 	reader, err := runtimecontent.NewToolActionDescriptorReader(c.Content, descriptorRepository{store: c.Store, compiler: c.Compiler})
 	if err != nil {

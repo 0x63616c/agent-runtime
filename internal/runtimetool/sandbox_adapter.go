@@ -23,6 +23,11 @@ func NewSandboxAdapter(client sandbox.Client) (*SandboxAdapter, error) {
 	return &SandboxAdapter{client: client}, nil
 }
 
+// ExternalEffectContract declares sandbox-control's operation-ID recovery path.
+func (adapter *SandboxAdapter) ExternalEffectContract() ExternalEffectContract {
+	return ExternalEffectContract{IdempotencyKey: "operation_id", Reconciles: true}
+}
+
 func (adapter *SandboxAdapter) Execute(ctx context.Context, request Request) (Response, error) {
 	action, response := decodeSandboxAction(request)
 	if response.Failure != nil {
