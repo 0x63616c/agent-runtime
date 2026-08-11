@@ -115,10 +115,10 @@ func TestDurableToolLifecyclePersistsDescriptorApprovalAndFinalization(t *testin
 		t.Fatal(err)
 	}
 	accepted := apply(mutation)
-	descriptorBytes, err := sandbox.EncodeControlOperationRequest(sandbox.OperationRequest{ID: "op_tool_durable_0001", Kind: sandbox.OperationCloseSandbox, CloseSandbox: &sandbox.CloseSandboxRequest{SandboxID: "sbx_tool_durable_0001"}})
-	if err != nil {
-		t.Fatal(err)
-	}
+	// This is a private opaque adapter descriptor, never a public projection or
+	// a sandbox capability. The external test adapter receives only the
+	// runtime-owned operation ID once the worker has durably consumed a grant.
+	descriptorBytes := []byte(`{"action":"workspace.write","path":"notes.txt"}`)
 	descriptor, err := content.StageToolActionDescriptor(ctx, tenant, descriptorBytes)
 	if err != nil {
 		t.Fatal(err)
@@ -140,42 +140,29 @@ func TestDurableToolLifecyclePersistsDescriptorApprovalAndFinalization(t *testin
 		t.Fatal(err)
 	}
 	apply(mutation)
-	state, err := store.LoadRuntimeState(ctx, workerScope)
-	if err != nil || len(state.Grants) != 1 {
-		t.Fatalf("durable approval grant = %#v, %v", state.Grants, err)
-	}
-	grant := state.Grants[0].GrantID
-	mutation, err = compiler.CompileConsumeCapabilityGrant(runtimestate.ConsumeCapabilityGrantCommand{Scope: workerScope, IdempotencyKey: "durable-tool-consume", SessionID: session, TurnID: turn, ToolCallID: "tcall_1234567890ABCDEF", GrantID: grant, PolicyRevisionDigest: digest})
-	if err != nil {
-		t.Fatal(err)
-	}
-	apply(mutation)
-	mutation, err = compiler.CompileBeginToolExecution(runtimestate.BeginToolExecutionCommand{Scope: workerScope, IdempotencyKey: "durable-tool-begin", SessionID: session, TurnID: turn, ToolCallID: "tcall_1234567890ABCDEF", GrantID: grant, OperationID: "op_tool_durable_0001"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	apply(mutation)
-	adapter, complete := newDurableHTTPSAdapter(t)
+	adapter := newDurableToolAdapter()
 	worker, err := runtimetool.NewWorker(runtimetool.Config{Store: store, Tenants: store, Compiler: compiler, Planner: planner, Clock: source, Content: content, Adapter: adapter, Claimer: "durable-tool-worker"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	done := make(chan error, 1)
-	go func() { done <- worker.ScanOnce(ctx) }()
-	complete()
-	if err := <-done; err != nil {
+	if err := worker.ScanOnce(ctx); err != nil {
 		t.Fatal(err)
 	}
-	state, err = store.LoadRuntimeState(ctx, workerScope)
+	// A restart/replay finds the published outbox and immutable terminal state,
+	// so it cannot submit the external application operation a second time.
+	if err := worker.ScanOnce(ctx); err != nil {
+		t.Fatal(err)
+	}
+	state, err := store.LoadRuntimeState(ctx, workerScope)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(state.ToolExecutions) != 1 || state.ToolExecutions[0].State != runtimestate.ToolExecutionSucceeded {
+	if len(state.ToolExecutions) != 1 || state.ToolExecutions[0].State != runtimestate.ToolExecutionSucceeded || len(state.Grants) != 1 || state.Grants[0].Uses != 1 || adapter.executes != 1 || adapter.reconciles != 0 {
 		t.Fatalf("durable execution = %#v", state.ToolExecutions)
 	}
 	found := false
 	for _, event := range state.Events {
-		if event.Kind == agentruntime.EventSandboxOperationFinalized && event.OperationID == "op_tool_durable_0001" {
+		if event.Kind == agentruntime.EventSandboxOperationFinalized && event.OperationID == state.ToolExecutions[0].OperationID {
 			found = true
 		}
 	}
@@ -222,6 +209,24 @@ type durableToolIDs struct{ next uint64 }
 func (ids *durableToolIDs) NextIdentifier(kind runtimestate.IdentifierKind) (string, error) {
 	ids.next++
 	return fmt.Sprintf("%s_%016d", kind, ids.next), nil
+}
+
+// durableToolAdapter is the disposable external-effect seam for this
+// PostgreSQL/MinIO lifecycle proof. It accepts only the runtime-owned
+// operation identity and returns a bounded safe result; it does not model a
+// sandbox or create any Firecracker isolation claim.
+type durableToolAdapter struct{ executes, reconciles int }
+
+func newDurableToolAdapter() *durableToolAdapter { return &durableToolAdapter{} }
+
+func (adapter *durableToolAdapter) Execute(_ context.Context, request runtimetool.Request) (runtimetool.Response, error) {
+	adapter.executes++
+	return runtimetool.Response{Output: []byte(`{"result":"workspace action completed","operation_id":"` + string(request.OperationID) + `"}`), MediaType: "application/json"}, nil
+}
+
+func (adapter *durableToolAdapter) Reconcile(_ context.Context, request runtimetool.Request) (runtimetool.Response, error) {
+	adapter.reconciles++
+	return runtimetool.Response{Output: []byte(`{"result":"workspace action reconciled","operation_id":"` + string(request.OperationID) + `"}`), MediaType: "application/json"}, nil
 }
 
 // newDurableHTTPSAdapter exercises the concrete TLS control client. It drives
