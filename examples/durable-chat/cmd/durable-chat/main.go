@@ -56,7 +56,12 @@ func run(ctx context.Context, arguments []string, lookup func(string) (string, b
 	if err != nil {
 		return err
 	}
-	return http.ListenAndServe(*listen, handler)
+	listener, err := net.Listen("tcp", *listen)
+	if err != nil {
+		return fmt.Errorf("serve Durable Chat web: %w", err)
+	}
+	_, _ = fmt.Fprintln(output, "Durable Chat web ready at http://"+listener.Addr().String())
+	return http.Serve(listener, handler)
 }
 
 type requestIDs struct{ next uint64 }

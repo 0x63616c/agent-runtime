@@ -25,7 +25,7 @@ func NewWebHandler(config WebConfig) (http.Handler, error) {
 	if state == "" {
 		state = "Codex subscription support is blocked pending an official production-supported model surface; this UI is not a subscription canary."
 	}
-	page, err := template.New("chat").Parse(`<!doctype html><html><head><meta charset="utf-8"><title>Durable Chat</title></head><body><h1>Durable Chat</h1><p>{{.Provider}}</p><form method="post" action="/sessions"><label>Agent revision <input name="revision" required></label><button>Create session</button></form>{{if .Session}}<h2>Session {{.Session}}</h2><form method="post" action="/sessions/{{.Session}}/messages"><textarea name="text" required></textarea><button>Queue message</button></form><form method="get" action="/sessions/{{.Session}}"><button>Resume state</button></form><form method="get" action="/sessions/{{.Session}}/events"><label>Cursor <input name="after"></label><button>Reconnect events</button></form>{{end}}{{if .Notice}}<pre>{{.Notice}}</pre>{{end}}</body></html>`)
+	page, err := template.New("chat").Parse(`<!doctype html><html><head><meta charset="utf-8"><title>Durable Chat</title></head><body><h1>Durable Chat</h1><p>{{.Provider}}</p><form method="post" action="/sessions"><label>Agent revision <input name="revision" required></label><button>Create session</button></form>{{if .Session}}<h2>Session {{.Session}}</h2><form method="post" action="/sessions/{{.Session}}/messages"><textarea name="text" required></textarea><button>Queue message</button></form><form method="post" action="/sessions/{{.Session}}/cancel"><label>Turn <input name="turn" required></label><button>Cancel turn</button></form><form method="get" action="/sessions/{{.Session}}"><button>Resume state</button></form><form method="get" action="/sessions/{{.Session}}/events"><label>Cursor <input name="after"></label><button>Reconnect events</button></form>{{end}}{{if .Notice}}<pre>{{.Notice}}</pre>{{end}}</body></html>`)
 	if err != nil {
 		return nil, fmt.Errorf("create Durable Chat web handler: %w", err)
 	}
@@ -49,6 +49,22 @@ func NewWebHandler(config WebConfig) (http.Handler, error) {
 		sessionID, err := agentruntime.ParseSessionID(request.PathValue("session_id"))
 		if err == nil {
 			_, err = config.App.Send(request.Context(), sessionID, request.FormValue("text"))
+		}
+		if err == nil {
+			http.Redirect(writer, request, "/?session="+sessionID.String(), http.StatusSeeOther)
+			return
+		}
+		renderPage(writer, page, state, request.PathValue("session_id"), safeNotice(err))
+	})
+	mux.HandleFunc("POST /sessions/{session_id}/cancel", func(writer http.ResponseWriter, request *http.Request) {
+		sessionID, err := agentruntime.ParseSessionID(request.PathValue("session_id"))
+		if err == nil {
+			turnID, turnErr := agentruntime.ParseTurnID(request.FormValue("turn"))
+			if turnErr != nil {
+				err = turnErr
+			} else {
+				_, err = config.App.Cancel(request.Context(), sessionID, turnID)
+			}
 		}
 		if err == nil {
 			http.Redirect(writer, request, "/?session="+sessionID.String(), http.StatusSeeOther)
