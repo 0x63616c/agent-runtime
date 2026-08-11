@@ -132,6 +132,28 @@ type WorkerConfig struct {
 	AuditSink *AuditSinkConfig `json:"audit_sink,omitempty"`
 }
 
+// LocalDemoFixtureScenario identifies one finite, declared local Stack
+// evidence plan. It is not a caller-controlled runtime value.
+type LocalDemoFixtureScenario string
+
+const (
+	// LocalDemoFixtureScenarioWorkspaceApprovalReset keeps the normal Approval
+	// lifetime for local reset/reconnect evidence.
+	LocalDemoFixtureScenarioWorkspaceApprovalReset LocalDemoFixtureScenario = "workspace-approval-reset-v1"
+	// LocalDemoFixtureScenarioWorkspaceApprovalExpiry uses the bounded local
+	// lifetime required to prove a pending Approval's late-decision refusal.
+	LocalDemoFixtureScenarioWorkspaceApprovalExpiry LocalDemoFixtureScenario = "workspace-approval-expiry-v1"
+)
+
+// ParseLocalDemoFixtureScenario validates one explicit local-only fixture plan.
+func ParseLocalDemoFixtureScenario(value string) (LocalDemoFixtureScenario, error) {
+	scenario := LocalDemoFixtureScenario(value)
+	if !validLocalDemoFixtureScenario(scenario) {
+		return "", errors.New("parse local demo fixture scenario: scenario is not declared")
+	}
+	return scenario, nil
+}
+
 // LocalDemoWorkerConfig declares the intentionally deterministic local Stack
 // fixture used for end-to-end topology evidence. It is not a provider profile,
 // accepts no production credential, and is rejected outside the model/tool
@@ -141,12 +163,15 @@ type LocalDemoWorkerConfig struct {
 	Mode    string `json:"mode"`
 	// Fixture identifies the one reviewed local behavior. It is deliberately
 	// not inferred from an Agent, Tenant, prompt, or Tool name.
-	Fixture                     string `json:"fixture"`
-	StateDSNEnvironment         string `json:"state_dsn_environment"`
-	ContentEndpoint             string `json:"content_endpoint"`
-	ContentAccessKeyEnvironment string `json:"content_access_key_environment"`
-	ContentSecretKeyEnvironment string `json:"content_secret_key_environment"`
-	ContentBucket               string `json:"content_bucket"`
+	Fixture string `json:"fixture"`
+	// FixtureScenario selects one finite, declared local-only evidence plan.
+	// It is never inferred from a prompt, Stack name, or runtime object.
+	FixtureScenario             LocalDemoFixtureScenario `json:"fixture_scenario"`
+	StateDSNEnvironment         string                   `json:"state_dsn_environment"`
+	ContentEndpoint             string                   `json:"content_endpoint"`
+	ContentAccessKeyEnvironment string                   `json:"content_access_key_environment"`
+	ContentSecretKeyEnvironment string                   `json:"content_secret_key_environment"`
+	ContentBucket               string                   `json:"content_bucket"`
 }
 
 // AuditSinkConfig declares one bounded HTTPS audit-delivery capability. It
@@ -291,18 +316,49 @@ func Parse(input io.Reader) (Config, error) {
 	return Config{role: decoded.Role, namespace: decoded.Namespace, listenAddress: decoded.ListenAddress, dependencies: dependencies, worker: decoded.Worker, localDemo: decoded.LocalDemo}, nil
 }
 
+// WithLocalDemoFixtureScenario replaces one already-declared local fixture
+// scenario in a strict runtime role configuration. It preserves no caller
+// supplied JSON shape: the resulting configuration is validated and encoded
+// from the owned role document before a process can consume it.
+func WithLocalDemoFixtureScenario(configuration string, scenario LocalDemoFixtureScenario) (string, error) {
+	if !validLocalDemoFixtureScenario(scenario) {
+		return "", errors.New("set local demo fixture scenario: scenario is not declared")
+	}
+	decoder := json.NewDecoder(strings.NewReader(configuration))
+	decoder.DisallowUnknownFields()
+	var decoded document
+	if err := decoder.Decode(&decoded); err != nil {
+		return "", errors.Wrap(err, "set local demo fixture scenario: parse role configuration")
+	}
+	if err := requireEnd(decoder); err != nil {
+		return "", err
+	}
+	if decoded.LocalDemo == nil || !decoded.LocalDemo.Enabled {
+		return "", errors.New("set local demo fixture scenario: local demo worker is not declared")
+	}
+	decoded.LocalDemo.FixtureScenario = scenario
+	encoded, err := json.Marshal(decoded)
+	if err != nil {
+		return "", errors.Wrap(err, "set local demo fixture scenario: encode role configuration")
+	}
+	if _, err := Parse(strings.NewReader(string(encoded))); err != nil {
+		return "", errors.Wrap(err, "set local demo fixture scenario: validate role configuration")
+	}
+	return string(encoded), nil
+}
+
 func validateWorker(role Role, worker *WorkerConfig, localDemo *LocalDemoWorkerConfig) error {
 	if localDemo != nil {
 		if role != RoleModel && role != RoleTool {
 			return errors.New("validate runtime role configuration: local demo worker is only allowed for model or tool")
 		}
 		if !localDemo.Enabled {
-			if worker != nil || localDemo.Mode != "disabled" || localDemo.Fixture != "" || localDemo.StateDSNEnvironment != "" || localDemo.ContentEndpoint != "" || localDemo.ContentAccessKeyEnvironment != "" || localDemo.ContentSecretKeyEnvironment != "" || localDemo.ContentBucket != "" {
+			if worker != nil || localDemo.Mode != "disabled" || localDemo.Fixture != "" || localDemo.FixtureScenario != "" || localDemo.StateDSNEnvironment != "" || localDemo.ContentEndpoint != "" || localDemo.ContentAccessKeyEnvironment != "" || localDemo.ContentSecretKeyEnvironment != "" || localDemo.ContentBucket != "" {
 				return errors.New("validate runtime role configuration: disabled local demo worker capability is invalid")
 			}
 			return nil
 		}
-		if worker != nil || localDemo.Mode != "local-demo-v1" || localDemo.Fixture != "workspace-approval-v1" || localDemo.StateDSNEnvironment != "LOCAL_DEMO_STATE_DSN" || !validEndpoint(localDemo.ContentEndpoint) || localDemo.ContentAccessKeyEnvironment != "LOCAL_DEMO_CONTENT_ACCESS_KEY" || localDemo.ContentSecretKeyEnvironment != "LOCAL_DEMO_CONTENT_SECRET_KEY" || !validWorkerSegment(localDemo.ContentBucket) {
+		if worker != nil || localDemo.Mode != "local-demo-v1" || localDemo.Fixture != "workspace-approval-v1" || !validLocalDemoFixtureScenario(localDemo.FixtureScenario) || localDemo.StateDSNEnvironment != "LOCAL_DEMO_STATE_DSN" || !validEndpoint(localDemo.ContentEndpoint) || localDemo.ContentAccessKeyEnvironment != "LOCAL_DEMO_CONTENT_ACCESS_KEY" || localDemo.ContentSecretKeyEnvironment != "LOCAL_DEMO_CONTENT_SECRET_KEY" || !validWorkerSegment(localDemo.ContentBucket) {
 			return errors.New("validate runtime role configuration: local demo worker capability is incomplete")
 		}
 		return nil
@@ -317,6 +373,15 @@ func validateWorker(role Role, worker *WorkerConfig, localDemo *LocalDemoWorkerC
 		return errors.New("validate runtime role configuration: orchestration-codec worker capability is incomplete")
 	}
 	return nil
+}
+
+func validLocalDemoFixtureScenario(value LocalDemoFixtureScenario) bool {
+	switch value {
+	case LocalDemoFixtureScenarioWorkspaceApprovalReset, LocalDemoFixtureScenarioWorkspaceApprovalExpiry:
+		return true
+	default:
+		return false
+	}
 }
 
 func validAuditSink(sink *AuditSinkConfig) bool {

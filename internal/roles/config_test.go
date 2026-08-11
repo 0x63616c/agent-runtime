@@ -86,18 +86,37 @@ var _ = Describe("Operator role configuration", func() {
 
 	It("admits only the explicitly declared local Workspace approval fixture", func() {
 		configuration := roleConfig(roles.RoleModel, 8082, `[{"name":"conversation","endpoint":"http://api:8080","secret_environment":"CONVERSATION_ACCESS_TOKEN"},{"name":"egress-proxy","endpoint":"http://egress-proxy:8088"},{"name":"model","endpoint":"https://model.example.invalid","secret_environment":"MODEL_API_KEY"},{"name":"telemetry","endpoint":"http://telemetry:4318"}]`)
-		configuration = strings.TrimSuffix(configuration, "}") + `,"local_demo_worker":{"enabled":true,"mode":"local-demo-v1","fixture":"workspace-approval-v1","state_dsn_environment":"LOCAL_DEMO_STATE_DSN","content_endpoint":"blob:9000","content_access_key_environment":"LOCAL_DEMO_CONTENT_ACCESS_KEY","content_secret_key_environment":"LOCAL_DEMO_CONTENT_SECRET_KEY","content_bucket":"fixture"}}`
+		configuration = strings.TrimSuffix(configuration, "}") + `,"local_demo_worker":{"enabled":true,"mode":"local-demo-v1","fixture":"workspace-approval-v1","fixture_scenario":"workspace-approval-reset-v1","state_dsn_environment":"LOCAL_DEMO_STATE_DSN","content_endpoint":"blob:9000","content_access_key_environment":"LOCAL_DEMO_CONTENT_ACCESS_KEY","content_secret_key_environment":"LOCAL_DEMO_CONTENT_SECRET_KEY","content_bucket":"fixture"}}`
 		config, err := roles.Parse(strings.NewReader(configuration))
 		Expect(err).NotTo(HaveOccurred())
 		Expect(config.LocalDemoWorker().Fixture).To(Equal("workspace-approval-v1"))
+		Expect(config.LocalDemoWorker().FixtureScenario).To(Equal(roles.LocalDemoFixtureScenarioWorkspaceApprovalReset))
 
 		for _, invalid := range []string{
 			strings.Replace(configuration, `"fixture":"workspace-approval-v1"`, `"fixture":"research-v1"`, 1),
 			strings.Replace(configuration, `"fixture":"workspace-approval-v1",`, "", 1),
+			strings.Replace(configuration, `"fixture_scenario":"workspace-approval-reset-v1"`, `"fixture_scenario":"ambient"`, 1),
+			strings.Replace(configuration, `"fixture_scenario":"workspace-approval-reset-v1",`, "", 1),
 		} {
 			_, err = roles.Parse(strings.NewReader(invalid))
 			Expect(err).To(MatchError(ContainSubstring("local demo worker capability is incomplete")))
 		}
+	})
+
+	It("rewrites only a declared local fixture scenario through the strict role document", func() {
+		configuration := roleConfig(roles.RoleModel, 8082, `[{"name":"conversation","endpoint":"http://api:8080","secret_environment":"CONVERSATION_ACCESS_TOKEN"},{"name":"egress-proxy","endpoint":"http://egress-proxy:8088"},{"name":"model","endpoint":"https://model.example.invalid","secret_environment":"MODEL_API_KEY"},{"name":"telemetry","endpoint":"http://telemetry:4318"}]`)
+		configuration = strings.TrimSuffix(configuration, "}") + `,"local_demo_worker":{"enabled":true,"mode":"local-demo-v1","fixture":"workspace-approval-v1","fixture_scenario":"workspace-approval-reset-v1","state_dsn_environment":"LOCAL_DEMO_STATE_DSN","content_endpoint":"blob:9000","content_access_key_environment":"LOCAL_DEMO_CONTENT_ACCESS_KEY","content_secret_key_environment":"LOCAL_DEMO_CONTENT_SECRET_KEY","content_bucket":"fixture"}}`
+
+		updated, err := roles.WithLocalDemoFixtureScenario(configuration, roles.LocalDemoFixtureScenarioWorkspaceApprovalExpiry)
+		Expect(err).NotTo(HaveOccurred())
+		parsed, err := roles.Parse(strings.NewReader(updated))
+		Expect(err).NotTo(HaveOccurred())
+		Expect(parsed.LocalDemoWorker().FixtureScenario).To(Equal(roles.LocalDemoFixtureScenarioWorkspaceApprovalExpiry))
+
+		_, err = roles.WithLocalDemoFixtureScenario(configuration, "ambient")
+		Expect(err).To(MatchError(ContainSubstring("scenario is not declared")))
+		_, err = roles.WithLocalDemoFixtureScenario(roleConfig(roles.RoleModel, 8082, `[{"name":"conversation","endpoint":"http://api:8080","secret_environment":"CONVERSATION_ACCESS_TOKEN"},{"name":"egress-proxy","endpoint":"http://egress-proxy:8088"},{"name":"model","endpoint":"https://model.example.invalid","secret_environment":"MODEL_API_KEY"},{"name":"telemetry","endpoint":"http://telemetry:4318"}]`), roles.LocalDemoFixtureScenarioWorkspaceApprovalExpiry)
+		Expect(err).To(MatchError(ContainSubstring("local demo worker is not declared")))
 	})
 
 	It("refuses application configuration and reports missing secrets without their values", func() {

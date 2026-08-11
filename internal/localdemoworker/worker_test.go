@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/0x63616c/agent-runtime/internal/roles"
 	"github.com/0x63616c/agent-runtime/internal/runtimemodel"
 	"github.com/0x63616c/agent-runtime/internal/runtimestate"
 	agentruntime "github.com/0x63616c/agent-runtime/sdk/go"
@@ -61,6 +62,35 @@ func TestModelFixtureUsesTheCanonicalApprovalSummaryForItsWorkspaceTool(t *testi
 	}
 	if _, err := agentruntime.ParseApprovalID(response.Tool.ApprovalID); err != nil {
 		t.Fatalf("fixture approval ID = %q, want public identifier: %v", response.Tool.ApprovalID, err)
+	}
+}
+
+func TestDeclaredFixtureScenariosHaveOnlyFiniteApprovalLifetimes(t *testing.T) {
+	for _, want := range []struct {
+		scenario roles.LocalDemoFixtureScenario
+		ttl      time.Duration
+	}{
+		{scenario: "workspace-approval-reset-v1", ttl: 10 * time.Minute},
+		{scenario: "workspace-approval-expiry-v1", ttl: 2 * time.Second},
+	} {
+		t.Run(string(want.scenario), func(t *testing.T) {
+			ttl, err := approvalTTLForScenario(want.scenario)
+			if err != nil || ttl != want.ttl {
+				t.Fatalf("scenario approval lifetime = %s, %v", ttl, err)
+			}
+			before := time.Now().UTC()
+			response, err := (modelFixture{approvalTTL: ttl}).Invoke(t.Context(), runtimemodel.Request{OperationID: "orchestration-invocation-outbox_1234567890ABCDEF"})
+			if err != nil || response.Tool == nil {
+				t.Fatalf("invoke declared scenario = %#v, %v", response, err)
+			}
+			after := time.Now().UTC()
+			if response.Tool.ExpiresAt.Before(before.Add(ttl)) || response.Tool.ExpiresAt.After(after.Add(ttl)) {
+				t.Fatalf("tool expiry = %s, want bounded around now + %s", response.Tool.ExpiresAt, ttl)
+			}
+		})
+	}
+	if _, err := approvalTTLForScenario("ambient"); err == nil {
+		t.Fatal("undeclared fixture scenario was accepted")
 	}
 }
 

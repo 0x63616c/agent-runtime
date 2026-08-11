@@ -37,6 +37,10 @@ func Run(ctx context.Context, role roles.Config, lookup Lookup) error {
 	if declaration.Fixture != "workspace-approval-v1" {
 		return errors.New("run local demo worker: unsupported declared fixture")
 	}
+	approvalTTL, err := approvalTTLForScenario(declaration.FixtureScenario)
+	if err != nil {
+		return err
+	}
 	dsn, ok := lookup(declaration.StateDSNEnvironment)
 	if !ok || dsn == "" {
 		return errors.New("run local demo worker: state credential is unavailable")
@@ -92,7 +96,7 @@ func Run(ctx context.Context, role roles.Config, lookup Lookup) error {
 		if brokerErr != nil {
 			return brokerErr
 		}
-		worker, createErr := runtimemodel.NewWorker(runtimemodel.WorkerConfig{Store: state, Tenants: state, Compiler: compiler, Planner: planner, Clock: systemClock{}, Content: content, Adapter: modelFixture{}, Broker: broker, Claimer: "local-demo-model"})
+		worker, createErr := runtimemodel.NewWorker(runtimemodel.WorkerConfig{Store: state, Tenants: state, Compiler: compiler, Planner: planner, Clock: systemClock{}, Content: content, Adapter: modelFixture{approvalTTL: approvalTTL}, Broker: broker, Claimer: "local-demo-model"})
 		if createErr != nil {
 			return createErr
 		}
@@ -166,15 +170,31 @@ func (randomIDs) NextIdentifier(kind runtimestate.IdentifierKind) (string, error
 // local demo owner must create its matching policy through the public admin
 // contract. It never receives Agent configuration, raw Input, credentials, or
 // a sandbox capability, so it cannot infer or perform workspace work.
-type modelFixture struct{}
+type modelFixture struct{ approvalTTL time.Duration }
 
-func (modelFixture) Invoke(_ context.Context, request runtimemodel.Request) (runtimemodel.Response, error) {
-	return fixtureModelResponse(request), nil
+func (fixture modelFixture) Invoke(_ context.Context, request runtimemodel.Request) (runtimemodel.Response, error) {
+	return fixtureModelResponseWithTTL(request, fixture.approvalTTL), nil
 }
-func (modelFixture) Reconcile(_ context.Context, request runtimemodel.Request) (runtimemodel.Response, error) {
-	return fixtureModelResponse(request), nil
+func (fixture modelFixture) Reconcile(_ context.Context, request runtimemodel.Request) (runtimemodel.Response, error) {
+	return fixtureModelResponseWithTTL(request, fixture.approvalTTL), nil
 }
+
+func approvalTTLForScenario(scenario roles.LocalDemoFixtureScenario) (time.Duration, error) {
+	switch scenario {
+	case roles.LocalDemoFixtureScenarioWorkspaceApprovalReset:
+		return 10 * time.Minute, nil
+	case roles.LocalDemoFixtureScenarioWorkspaceApprovalExpiry:
+		return 2 * time.Second, nil
+	default:
+		return 0, errors.New("run local demo worker: unsupported declared fixture scenario")
+	}
+}
+
 func fixtureModelResponse(request runtimemodel.Request) runtimemodel.Response {
+	return fixtureModelResponseWithTTL(request, 10*time.Minute)
+}
+
+func fixtureModelResponseWithTTL(request runtimemodel.Request, approvalTTL time.Duration) runtimemodel.Response {
 	sum := sha256.Sum256([]byte(request.OperationID))
 	identity := fmt.Sprintf("%x", sum[:])
 	// Public Approval IDs have an exact sixteen-character opaque payload.
@@ -194,7 +214,7 @@ func fixtureModelResponse(request runtimemodel.Request) runtimemodel.Response {
 		// service or a Firecracker sandbox.
 		Action:      agentruntime.ApprovalAction{Verb: "write", Target: "workspace-service"},
 		MaximumUses: 1,
-		ExpiresAt:   time.Now().UTC().Add(10 * time.Minute),
+		ExpiresAt:   time.Now().UTC().Add(approvalTTL),
 		Descriptor:  descriptor,
 	}}
 }
