@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"io"
 	"reflect"
 	"strings"
 	"testing"
@@ -241,6 +242,7 @@ type recordingObjects struct {
 	getHook        func()
 	forcedValue    []byte
 	gets           int
+	opens          int
 }
 
 func newRecordingObjects() *recordingObjects {
@@ -276,6 +278,18 @@ func (objects *recordingObjects) Get(_ context.Context, key string, _ int) ([]by
 		return nil, runtimecontent.ErrNotFoundOrDenied
 	}
 	return append([]byte(nil), value...), nil
+}
+
+func (objects *recordingObjects) Open(_ context.Context, key string, _ int) (io.ReadCloser, error) {
+	objects.opens++
+	if objects.getErr != nil {
+		return nil, objects.getErr
+	}
+	value, exists := objects.values[key]
+	if !exists {
+		return nil, runtimecontent.ErrNotFoundOrDenied
+	}
+	return io.NopCloser(bytes.NewReader(value)), nil
 }
 
 func testStore(t *testing.T) (*runtimecontent.Store, *recordingObjects, runtimecontent.TenantID, *recordingRepository) {

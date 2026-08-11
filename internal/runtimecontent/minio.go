@@ -60,6 +60,23 @@ func (client minioImmutableClient) Get(ctx context.Context, bucket, key string, 
 	return value, nil
 }
 
+func (client minioImmutableClient) Open(ctx context.Context, bucket, key string, maxBytes int) (io.ReadCloser, error) {
+	object, err := client.client.GetObject(ctx, bucket, key, minio.GetObjectOptions{})
+	if err != nil {
+		return nil, err
+	}
+	information, err := object.Stat()
+	if err != nil {
+		_ = object.Close()
+		return nil, err
+	}
+	if maxBytes <= 0 || information.Size != int64(maxBytes) {
+		_ = object.Close()
+		return nil, ErrIntegrity
+	}
+	return object, nil
+}
+
 func minioPrecondition(err error) bool {
 	response := minio.ToErrorResponse(err)
 	return response.Code == "PreconditionFailed" || response.StatusCode == 412

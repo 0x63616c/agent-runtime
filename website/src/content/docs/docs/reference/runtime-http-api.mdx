@@ -36,6 +36,22 @@ Mutations also require `Idempotency-Key`. JSON and bodies are strict and
 bounded. Observation reconnects by requesting the next page after the last
 accepted opaque Cursor; a disconnect does not imply cancellation.
 
+## Artifact streaming
+
+`GET /v1/artifacts/{artifact_id}` authorizes the exact tenant, principal, and
+immutable Artifact metadata before it opens content storage. Its streaming form
+returns the media type plus `X-Agent-Runtime-Artifact-Size` and
+`X-Agent-Runtime-Artifact-SHA256`, transfers no more than the declared size,
+and emits `Digest: sha-256=...` only as an HTTP trailer after exact copied-byte
+verification. Missing, mismatched, short, or overlong bytes fail the transfer;
+an unfinished response must be closed to cancel its observation. Storage keys
+and credentials never cross this boundary.
+
+The Go SDK keeps bounded `ReadArtifact` and adds a separate `ArtifactStreamer`
+capability implemented by `Client.OpenArtifact`. It intentionally does not
+widen `RuntimeClient`, preserving existing implementations. EOF verifies the
+exact size and digest; callers must close the body even after EOF.
+
 `GET /healthz` and `GET /readyz` are deliberately unauthenticated and return
 only the role and readiness state.
 

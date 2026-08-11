@@ -47,6 +47,9 @@ This index is derived only from the declared public `sdk/go` source files. It li
 | `method` | `ArtifactID.String` | String returns the canonical Artifact ID. |
 | `method` | `ArtifactID.UnmarshalJSON` | UnmarshalJSON decodes and validates an Artifact ID. |
 | `type` | `ArtifactReference` | ArtifactReference identifies immutable content without exposing a storage URL. |
+| `type` | `ArtifactStream` | ArtifactStream is an authorized immutable Artifact transfer. Callers must Close it; reading to EOF verifies the HTTP Digest trailer and exact size. |
+| `type` | `ArtifactStreamer` | ArtifactStreamer is the additive streaming Artifact capability. It remains separate from RuntimeClient so existing RuntimeClient implementations keep their v1 source compatibility. |
+| `method` | `ArtifactStreamer.OpenArtifact` | OpenArtifact opens a caller-authorized Artifact without buffering it. |
 | `type` | `AuthorizationSink` | AuthorizationSink accepts one request-scoped bearer credential. |
 | `method` | `AuthorizationSink.SetBearerToken` | SetBearerToken accepts one request-scoped bearer credential. |
 | `type` | `CancelTurnRequest` | CancelTurnRequest explicitly cancels one active or queued Turn. |
@@ -64,6 +67,7 @@ This index is derived only from the declared public `sdk/go` source files. It li
 | `method` | `Client.InspectApproval` | InspectApproval returns the caller-authorized state of one Approval. |
 | `method` | `Client.InspectSession` | InspectSession returns caller-safe Session state without backend identifiers. |
 | `method` | `Client.InspectTurn` | InspectTurn returns one caller-safe Turn snapshot. |
+| `method` | `Client.OpenArtifact` | OpenArtifact opens a bounded Artifact response. Reaching EOF verifies its declared Digest trailer; Close permits cancellation before completion. |
 | `method` | `Client.ReadArtifact` | ReadArtifact downloads bounded immutable content only after the server has authorized the exact tenant/principal/artifact tuple. |
 | `method` | `Client.ReviseAgent` | ReviseAgent creates another immutable Agent revision through the admin surface. |
 | `method` | `Client.RevisePolicy` | RevisePolicy creates the next immutable revision of a tenant Policy. |

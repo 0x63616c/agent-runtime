@@ -24,6 +24,12 @@ The package currently defines:
   explicit Turn cancellation, and draining Session close; and
 - the narrow `RuntimeClient` interface and its strict concrete HTTP `Client`.
 
+The additive `ArtifactStreamer` capability exposes a closable
+`Client.OpenArtifact` stream without widening `RuntimeClient`. It carries the
+authorized immutable Artifact metadata, reads without buffering the complete
+body, and verifies the declared byte count and HTTP `Digest` trailer at EOF.
+Closing before EOF cancels only the transfer observation.
+
 The deterministic internal kernel implements the first S2 transition slice
 through an atomic, context-aware repository port. It creates immutable Agent
 revisions, pins Sessions, compares canonical mutation content for idempotency,
@@ -60,6 +66,8 @@ The explicitly labelled `memory-unsafe` configuration remains available for
 local transport work only. The durable configuration composes PostgreSQL state
 with immutable runtime content, and the private `orchestration-codec` role
 drains its state-owned outbox into Session workflows without exposing Temporal
-to callers. Live push streaming, model/tool/approval execution, and Artifact
-transfer remain later milestones. M5 implementation evidence does not by
-itself promote a requirement ledger row or production rollout.
+to callers. Live push streaming and model/tool/approval execution remain later
+milestones. Artifact transfer has a bounded authorized HTTP/SDK and
+PostgreSQL/MinIO integration path, but lifecycle/retention and production
+rollout evidence are separate M5 requirements. M5 implementation evidence does
+not by itself promote a requirement ledger row or production rollout.

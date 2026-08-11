@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"io"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -159,6 +160,19 @@ type ContentHandoffValidator interface {
 type ImmutableObjectStore interface {
 	PutIfAbsent(context.Context, string, []byte) (created bool, err error)
 	Get(context.Context, string, int) ([]byte, error)
+}
+
+// ImmutableObjectStreamer is an optional bounded streaming read capability.
+// Buffered reads remain supported for legacy callers.
+type ImmutableObjectStreamer interface {
+	Open(context.Context, string, int) (io.ReadCloser, error)
+}
+
+// ArtifactStream contains state-authorized immutable metadata and a closable
+// bounded byte stream. It never exposes an object-store key.
+type ArtifactStream struct {
+	Reference Reference
+	Body      io.ReadCloser
 }
 
 // AgentSpecificationRecord is the exact durable metadata returned by a repository authorization check.
@@ -441,6 +455,43 @@ func (reader *ArtifactReader) ReadArtifact(ctx context.Context, tenant TenantID,
 	}
 	return reader.store.getArtifact(ctx, artifactLocator{record: record})
 }
+
+// OpenArtifact authorizes exact Artifact metadata before opening the object.
+// It is intentionally additive to ReadArtifact for compatible callers.
+func (reader *ArtifactReader) OpenArtifact(ctx context.Context, tenant TenantID, principal PrincipalID, artifactID agentruntime.ArtifactID) (ArtifactStream, error) {
+	if reader == nil || reader.store == nil || !validTenantID(tenant) || !validPrincipalID(principal) {
+		return ArtifactStream{}, ErrNotFoundOrDenied
+	}
+	if _, err := agentruntime.ParseArtifactID(artifactID.String()); err != nil {
+		return ArtifactStream{}, ErrNotFoundOrDenied
+	}
+	record, err := reader.repository.AuthorizeArtifactRead(ctx, tenant, principal, artifactID)
+	if err != nil {
+		return ArtifactStream{}, classifyObjectError("authorize Artifact stream", err, ErrNotFoundOrDenied)
+	}
+	if record.Tenant != tenant || record.Principal != principal || record.ArtifactID != artifactID || !validArtifactRecord(record) {
+		return ArtifactStream{}, ErrNotFoundOrDenied
+	}
+	streamer, ok := reader.store.objects.(ImmutableObjectStreamer)
+	if !ok {
+		return ArtifactStream{}, ErrUnavailable
+	}
+	body, err := streamer.Open(ctx, reader.store.key(record.Tenant, record.Reference.Digest), int(record.Reference.SizeBytes))
+	if err != nil {
+		return ArtifactStream{}, classifyObjectError("open immutable Artifact", err, ErrNotFoundOrDenied)
+	}
+	if body == nil {
+		return ArtifactStream{}, ErrUnavailable
+	}
+	return ArtifactStream{Reference: record.Reference, Body: &limitedReadCloser{ReadCloser: body, reader: io.LimitReader(body, record.Reference.SizeBytes+1)}}, nil
+}
+
+type limitedReadCloser struct {
+	io.ReadCloser
+	reader io.Reader
+}
+
+func (stream *limitedReadCloser) Read(value []byte) (int, error) { return stream.reader.Read(value) }
 
 // ReadToolActionDescriptor returns exact immutable sandbox-control bytes only
 // after a state-backed runtime-worker authorization for the same operation.

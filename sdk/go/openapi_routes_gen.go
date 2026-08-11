@@ -3,7 +3,7 @@
 package agentruntime
 
 const (
-	openAPIContractSHA256          = "9b8b8f8fe432a70eed0a8ef817bffc995de4635e241a651e008a6cac3355c064"
+	openAPIContractSHA256          = "5863d53da2f25ef200cd82a140265f005d963020cfd17c67575d1668016366d3"
 	openAPIMethodCancelTurn        = "POST"
 	openAPIPathCancelTurn          = "/v1/sessions/{session_id}/turns/{turn_id}/cancel"
 	openAPIMethodCloseSession      = "POST"

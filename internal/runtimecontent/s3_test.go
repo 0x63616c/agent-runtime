@@ -1,7 +1,9 @@
 package runtimecontent
 
 import (
+	"bytes"
 	"context"
+	"io"
 	"testing"
 )
 
@@ -32,9 +34,20 @@ func TestS3ObjectsConditionallyCreatesAndBoundsReads(t *testing.T) {
 	if err != nil || string(value) != "value" {
 		t.Fatalf("get = %q, %v", value, err)
 	}
+	stream, err := objects.Open(context.Background(), "tenant/sha256:abc", 5)
+	if err != nil {
+		t.Fatalf("open = %v", err)
+	}
+	defer stream.Close()
+	if got, err := io.ReadAll(stream); err != nil || string(got) != "value" || client.opens != 1 {
+		t.Fatalf("open value = %q, %v opens=%d", got, err, client.opens)
+	}
 }
 
-type recordingS3Client struct{ values map[string][]byte }
+type recordingS3Client struct {
+	values map[string][]byte
+	opens  int
+}
 
 func (client *recordingS3Client) PutIfAbsent(_ context.Context, bucket, key string, value []byte) (bool, error) {
 	full := bucket + "/" + key
@@ -57,4 +70,16 @@ func (client *recordingS3Client) Get(_ context.Context, bucket, key string, max 
 		return nil, ErrIntegrity
 	}
 	return append([]byte(nil), value...), nil
+}
+
+func (client *recordingS3Client) Open(_ context.Context, bucket, key string, max int) (io.ReadCloser, error) {
+	value, found := client.values[bucket+"/"+key]
+	if !found {
+		return nil, ErrNotFoundOrDenied
+	}
+	if len(value) != max {
+		return nil, ErrIntegrity
+	}
+	client.opens++
+	return io.NopCloser(bytes.NewReader(value)), nil
 }

@@ -4,6 +4,8 @@ package runtimeapi
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"io"
 	"mime"
@@ -14,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/0x63616c/agent-runtime/internal/runtimecontent"
 	agentruntime "github.com/0x63616c/agent-runtime/sdk/go"
 	"github.com/cockroachdb/errors"
 )
@@ -299,6 +302,38 @@ func (server *server) readArtifact(writer http.ResponseWriter, request *http.Req
 		server.writeInvalid(writer, contextValue.requestID)
 		return
 	}
+	if opener, ok := server.runtime.(interface {
+		OpenArtifact(context.Context, Identity, agentruntime.ArtifactID) (runtimecontent.ArtifactStream, error)
+	}); ok {
+		stream, err := opener.OpenArtifact(request.Context(), contextValue.identity, artifactID)
+		if err != nil {
+			server.writeResult(writer, contextValue.requestID, http.StatusOK, nil, err)
+			return
+		}
+		if stream.Body == nil {
+			server.writeFailure(writer, contextValue.requestID, http.StatusInternalServerError, agentruntime.Failure{Code: agentruntime.FailureInternal, Message: "request failed"})
+			return
+		}
+		defer stream.Body.Close()
+		if !validArtifactStreamReference(stream.Reference) {
+			_ = stream.Body.Close()
+			server.writeFailure(writer, contextValue.requestID, http.StatusInternalServerError, agentruntime.Failure{Code: agentruntime.FailureInternal, Message: "request failed"})
+			return
+		}
+		writer.Header().Set("Content-Type", stream.Reference.MediaType)
+		writer.Header().Set("X-Agent-Runtime-Artifact-Size", strconv.FormatInt(stream.Reference.SizeBytes, 10))
+		writer.Header().Set("X-Agent-Runtime-Artifact-SHA256", strings.TrimPrefix(stream.Reference.Digest, "sha256:"))
+		writer.Header().Set("Trailer", "Digest")
+		writer.WriteHeader(http.StatusOK)
+		hash := sha256.New()
+		written, copyErr := io.Copy(io.MultiWriter(writer, hash), io.LimitReader(stream.Body, stream.Reference.SizeBytes))
+		var probe [1]byte
+		extraBytes, probeErr := stream.Body.Read(probe[:])
+		if copyErr == nil && written == stream.Reference.SizeBytes && extraBytes == 0 && probeErr == io.EOF && hex.EncodeToString(hash.Sum(nil)) == strings.TrimPrefix(stream.Reference.Digest, "sha256:") {
+			writer.Header().Set(http.TrailerPrefix+"Digest", "sha-256="+strings.TrimPrefix(stream.Reference.Digest, "sha256:"))
+		}
+		return
+	}
 	result, err := server.runtime.ReadArtifact(request.Context(), contextValue.identity, artifactID)
 	if err != nil {
 		server.writeResult(writer, contextValue.requestID, http.StatusOK, nil, err)
@@ -313,6 +348,11 @@ func (server *server) readArtifact(writer http.ResponseWriter, request *http.Req
 	writer.Header().Set("Digest", "sha-256="+result.Artifact.SHA256)
 	writer.WriteHeader(http.StatusOK)
 	_, _ = writer.Write(result.Body)
+}
+
+func validArtifactStreamReference(reference runtimecontent.Reference) bool {
+	mediaType, _, err := mime.ParseMediaType(reference.MediaType)
+	return err == nil && mediaType != "" && mediaType != "application/json" && reference.SizeBytes > 0 && len(reference.Digest) == len("sha256:")+64 && strings.HasPrefix(reference.Digest, "sha256:") && strings.Trim(strings.TrimPrefix(reference.Digest, "sha256:"), "0123456789abcdef") == ""
 }
 
 func (server *server) inspectApproval(writer http.ResponseWriter, request *http.Request) {

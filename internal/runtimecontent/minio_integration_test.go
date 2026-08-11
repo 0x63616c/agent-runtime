@@ -4,6 +4,7 @@ package runtimecontent_test
 
 import (
 	"context"
+	"io"
 	"os"
 	"testing"
 
@@ -42,6 +43,15 @@ func TestRuntimeContentMinIOImmutableRoundTrip(t *testing.T) {
 	}
 	if _, err := objects.PutIfAbsent(context.Background(), key, []byte("different")); err == nil {
 		t.Fatal("different immutable replay error = nil")
+	}
+	stream, err := objects.Open(context.Background(), key, len("immutable"))
+	if err != nil {
+		t.Fatalf("open immutable stream: %v", err)
+	}
+	defer stream.Close()
+	value, err := io.ReadAll(stream)
+	if err != nil || string(value) != "immutable" {
+		t.Fatalf("read immutable stream = %q, %v", value, err)
 	}
 }
 

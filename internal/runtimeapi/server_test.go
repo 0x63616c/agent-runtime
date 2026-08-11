@@ -16,6 +16,7 @@ import (
 	"github.com/0x63616c/agent-runtime/internal/clock"
 	"github.com/0x63616c/agent-runtime/internal/runtime/kernel"
 	"github.com/0x63616c/agent-runtime/internal/runtimeapi"
+	"github.com/0x63616c/agent-runtime/internal/runtimecontent"
 	agentruntime "github.com/0x63616c/agent-runtime/sdk/go"
 	"github.com/cockroachdb/errors"
 	. "github.com/onsi/ginkgo/v2"
@@ -469,6 +470,81 @@ func TestArtifactHTTPRouteStreamsAuthorizedRuntimeBytes(t *testing.T) {
 	if string(artifact.Body) != "artifact bytes" || artifact.Artifact != runtime.artifact.Artifact {
 		t.Fatalf("artifact download = %#v, want exact authorized bytes and metadata", artifact)
 	}
+}
+
+func TestArtifactHTTPRouteStreamsAuthorizedRuntimeBytesWithVerifiedTrailer(t *testing.T) {
+	body := []byte("streamed artifact bytes")
+	sum := sha256.Sum256(body)
+	runtime := &streamingRuntime{recordingRuntime: &recordingRuntime{}, stream: runtimecontent.ArtifactStream{Reference: runtimecontent.Reference{Digest: "sha256:" + hex.EncodeToString(sum[:]), MediaType: "text/plain", SizeBytes: int64(len(body))}, Body: io.NopCloser(strings.NewReader(string(body)))}}
+	handler, err := runtimeapi.NewHandler(runtimeapi.Config{Runtime: runtime, Authenticator: staticAuth{identities: map[string]runtimeapi.Identity{"alice-token-000000": {Tenant: "tenant-a", Principal: "alice"}}}, RequestIDs: &requestIDs{}})
+	if err != nil {
+		t.Fatalf("new handler: %v", err)
+	}
+	server := httptest.NewServer(handler)
+	defer server.Close()
+	client := newClient(server.URL, "alice-token-000000", &requestIDs{})
+	stream, err := client.OpenArtifact(context.Background(), "art_0000000000000001")
+	if err != nil {
+		t.Fatalf("open artifact: %v", err)
+	}
+	defer stream.Body.Close()
+	got, err := io.ReadAll(stream.Body)
+	if err != nil || string(got) != string(body) {
+		t.Fatalf("read streamed artifact = %q, %v", got, err)
+	}
+	if stream.Artifact.ID != "art_0000000000000001" || stream.Artifact.MediaType != "text/plain" || stream.Artifact.SizeBytes != int64(len(body)) || stream.Artifact.SHA256 != hex.EncodeToString(sum[:]) {
+		t.Fatalf("stream metadata = %#v, want exact immutable metadata", stream.Artifact)
+	}
+}
+
+func TestArtifactHTTPRouteRefusesAnIntegrityMismatchedStream(t *testing.T) {
+	declared := sha256.Sum256([]byte("expected bytes"))
+	runtime := &streamingRuntime{recordingRuntime: &recordingRuntime{}, stream: runtimecontent.ArtifactStream{Reference: runtimecontent.Reference{Digest: "sha256:" + hex.EncodeToString(declared[:]), MediaType: "text/plain", SizeBytes: int64(len("tampered bytes"))}, Body: io.NopCloser(strings.NewReader("tampered bytes"))}}
+	handler, err := runtimeapi.NewHandler(runtimeapi.Config{Runtime: runtime, Authenticator: staticAuth{identities: map[string]runtimeapi.Identity{"alice-token-000000": {Tenant: "tenant-a", Principal: "alice"}}}, RequestIDs: &requestIDs{}})
+	if err != nil {
+		t.Fatalf("new handler: %v", err)
+	}
+	server := httptest.NewServer(handler)
+	defer server.Close()
+	stream, err := newClient(server.URL, "alice-token-000000", &requestIDs{}).OpenArtifact(context.Background(), "art_0000000000000001")
+	if err != nil {
+		t.Fatalf("open artifact: %v", err)
+	}
+	defer stream.Body.Close()
+	if _, err := io.ReadAll(stream.Body); err == nil {
+		t.Fatal("read integrity-mismatched artifact error = nil")
+	}
+}
+
+func TestArtifactHTTPRouteDoesNotSendAnOverlongProbeByte(t *testing.T) {
+	declared := []byte("exact")
+	sum := sha256.Sum256(declared)
+	runtime := &streamingRuntime{recordingRuntime: &recordingRuntime{}, stream: runtimecontent.ArtifactStream{Reference: runtimecontent.Reference{Digest: "sha256:" + hex.EncodeToString(sum[:]), MediaType: "text/plain", SizeBytes: int64(len(declared))}, Body: io.NopCloser(strings.NewReader("exact!"))}}
+	handler, err := runtimeapi.NewHandler(runtimeapi.Config{Runtime: runtime, Authenticator: staticAuth{identities: map[string]runtimeapi.Identity{"alice-token-000000": {Tenant: "tenant-a", Principal: "alice"}}}, RequestIDs: &requestIDs{}})
+	if err != nil {
+		t.Fatalf("new handler: %v", err)
+	}
+	server := httptest.NewServer(handler)
+	defer server.Close()
+	stream, err := newClient(server.URL, "alice-token-000000", &requestIDs{}).OpenArtifact(context.Background(), "art_0000000000000001")
+	if err != nil {
+		t.Fatalf("open artifact: %v", err)
+	}
+	defer stream.Body.Close()
+	got, err := io.ReadAll(stream.Body)
+	if err == nil || string(got) != "exact" {
+		t.Fatalf("read overlong Artifact stream = %q, %v; want declared bytes and integrity failure", got, err)
+	}
+}
+
+type streamingRuntime struct {
+	*recordingRuntime
+	stream    runtimecontent.ArtifactStream
+	streamErr error
+}
+
+func (runtime *streamingRuntime) OpenArtifact(context.Context, runtimeapi.Identity, agentruntime.ArtifactID) (runtimecontent.ArtifactStream, error) {
+	return runtime.stream, runtime.streamErr
 }
 
 func (runtime *recordingRuntime) CreateSession(_ context.Context, _ runtimeapi.Identity, _ agentruntime.CreateSessionRequest) (agentruntime.Session, error) {

@@ -5,6 +5,9 @@ package runtimeapi_test
 import (
 	"context"
 	"fmt"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"strings"
 	"testing"
@@ -98,6 +101,38 @@ func TestDurableStateRuntimeAuthorizesArtifactInputReferences(t *testing.T) {
 	download, err := runtime.ReadArtifact(ctx, alice, artifactID)
 	if err != nil || string(download.Body) != "durable approved report" {
 		t.Fatalf("read restarted durable Artifact = %#v, %v", download, err)
+	}
+	stream, err := runtime.OpenArtifact(ctx, alice, artifactID)
+	if err != nil {
+		t.Fatalf("open restarted durable Artifact: %v", err)
+	}
+	streamed, readErr := io.ReadAll(stream.Body)
+	closeErr := stream.Body.Close()
+	if readErr != nil || closeErr != nil || string(streamed) != "durable approved report" || stream.Reference.SizeBytes != int64(len(streamed)) {
+		t.Fatalf("read opened durable Artifact = %q read=%v close=%v reference=%#v", streamed, readErr, closeErr, stream.Reference)
+	}
+	handler, err := runtimeapi.NewHandler(runtimeapi.Config{Runtime: runtime, Authenticator: staticAuth{identities: map[string]runtimeapi.Identity{"alice-token-000000": alice}}, RequestIDs: &requestIDs{}})
+	if err != nil {
+		t.Fatalf("new durable Artifact handler: %v", err)
+	}
+	server := httptest.NewServer(handler)
+	defer server.Close()
+	credential, err := agentruntime.NewStaticBearerCredential("alice-token-000000")
+	if err != nil {
+		t.Fatalf("new durable Artifact credential: %v", err)
+	}
+	client, err := agentruntime.NewClient(agentruntime.ClientConfig{BaseURL: server.URL, HTTPClient: http.DefaultClient, Credentials: credential, RequestIDs: &requestIDs{}})
+	if err != nil {
+		t.Fatalf("new durable Artifact SDK client: %v", err)
+	}
+	httpStream, err := client.OpenArtifact(ctx, artifactID)
+	if err != nil {
+		t.Fatalf("open durable Artifact through HTTP/SDK: %v", err)
+	}
+	httpBody, readErr := io.ReadAll(httpStream.Body)
+	closeErr = httpStream.Body.Close()
+	if readErr != nil || closeErr != nil || string(httpBody) != "durable approved report" || httpStream.Artifact != download.Artifact {
+		t.Fatalf("read durable Artifact through HTTP/SDK = %q read=%v close=%v metadata=%#v", httpBody, readErr, closeErr, httpStream.Artifact)
 	}
 	result, err := runtime.SendInput(ctx, alice, agentruntime.SendInputRequest{SessionID: session.ID, IdempotencyKey: "artifact-input-reference", Parts: []agentruntime.ContentPart{{Kind: agentruntime.ContentArtifact, Artifact: &download.Artifact}}})
 	if err != nil || len(result.Input.Parts) != 1 || result.Input.Parts[0].Artifact == nil || *result.Input.Parts[0].Artifact != download.Artifact {

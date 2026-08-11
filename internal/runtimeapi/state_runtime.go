@@ -180,6 +180,24 @@ func (runtime *StateRuntime) ReadArtifact(ctx context.Context, identity Identity
 	return agentruntime.ArtifactDownload{Artifact: publicArtifact(record), Body: body}, nil
 }
 
+// OpenArtifact opens an authorized bounded Artifact transfer without exposing a
+// storage locator. The existing ReadArtifact method remains for compatibility.
+func (runtime *StateRuntime) OpenArtifact(ctx context.Context, identity Identity, artifactID agentruntime.ArtifactID) (runtimecontent.ArtifactStream, error) {
+	scope, err := ownerScope(identity)
+	if err != nil {
+		return runtimecontent.ArtifactStream{}, err
+	}
+	reader, err := runtimecontent.NewArtifactReader(runtime.content, stateArtifactRepository{compiler: runtime.compiler, store: runtime.store})
+	if err != nil {
+		return runtimecontent.ArtifactStream{}, runtimeFailure("open Artifact", err)
+	}
+	stream, err := reader.OpenArtifact(ctx, scope.Tenant, scope.Principal, artifactID)
+	if err != nil {
+		return runtimecontent.ArtifactStream{}, contentReadFailure("open Artifact", err)
+	}
+	return stream, nil
+}
+
 // InspectApproval returns the caller-owned projection of one approval without
 // exposing the tool action, policy digest, or capability metadata.
 func (runtime *StateRuntime) InspectApproval(ctx context.Context, identity Identity, approvalID agentruntime.ApprovalID) (agentruntime.Approval, error) {

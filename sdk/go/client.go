@@ -3,8 +3,11 @@ package agentruntime
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"hash"
 	"io"
 	"mime"
 	"net"
@@ -55,6 +58,14 @@ type RuntimeClient interface {
 	CancelTurn(context.Context, CancelTurnRequest) (Turn, error)
 	// CloseSession closes Input admission and drains accepted work.
 	CloseSession(context.Context, CloseSessionRequest) (Session, error)
+}
+
+// ArtifactStreamer is the additive streaming Artifact capability. It remains
+// separate from RuntimeClient so existing RuntimeClient implementations keep
+// their v1 source compatibility.
+type ArtifactStreamer interface {
+	// OpenArtifact opens a caller-authorized Artifact without buffering it.
+	OpenArtifact(context.Context, ArtifactID) (ArtifactStream, error)
 }
 
 // RequestIDSource creates a fresh opaque correlation ID for each HTTP attempt.
@@ -212,6 +223,127 @@ func (client *Client) ReadArtifact(ctx context.Context, artifactID ArtifactID) (
 		return ArtifactDownload{}, errors.New("read Artifact: invalid artifact ID")
 	}
 	return doArtifact(client, ctx, replacePath(openAPIPathReadArtifact, "artifact_id", artifactID.String()), artifactID)
+}
+
+// OpenArtifact opens a bounded Artifact response. Reaching EOF verifies its
+// declared Digest trailer; Close permits cancellation before completion.
+func (client *Client) OpenArtifact(ctx context.Context, artifactID ArtifactID) (ArtifactStream, error) {
+	if client == nil {
+		return ArtifactStream{}, errors.New("open Artifact: client is nil")
+	}
+	if _, err := ParseArtifactID(artifactID.String()); err != nil {
+		return ArtifactStream{}, errors.New("open Artifact: invalid artifact ID")
+	}
+	if err := contextError(ctx); err != nil {
+		return ArtifactStream{}, err
+	}
+	requestID, err := client.requestIDs.NextRequestID()
+	if err != nil {
+		return ArtifactStream{}, errors.Wrap(err, "open Artifact: allocate request ID")
+	}
+	req, err := http.NewRequestWithContext(ctx, openAPIMethodReadArtifact, client.baseURL.String()+replacePath(openAPIPathReadArtifact, "artifact_id", artifactID.String()), nil)
+	if err != nil {
+		return ArtifactStream{}, errors.Wrap(err, "open Artifact")
+	}
+	req.Header.Set("X-Request-ID", requestID.String())
+	req.Header.Set("Accept", "application/octet-stream")
+	sink := &requestAuthorizationSink{header: req.Header}
+	if err := client.credentials.Authorize(ctx, sink); err != nil {
+		return ArtifactStream{}, errors.Wrap(err, "open Artifact")
+	}
+	resp, err := client.httpClient.Do(req)
+	req.Header.Del("Authorization")
+	if err != nil || resp == nil {
+		if err == nil {
+			return ArtifactStream{}, errors.New("open Artifact: transport returned no response")
+		}
+		return ArtifactStream{}, errors.Wrap(err, "open Artifact")
+	}
+	if resp.Header.Get("X-Request-ID") != requestID.String() {
+		resp.Body.Close()
+		return ArtifactStream{}, errors.New("open Artifact: request ID mismatch")
+	}
+	if resp.StatusCode != http.StatusOK {
+		defer resp.Body.Close()
+		return ArtifactStream{}, artifactResponseFailure(resp, requestID, client.maxResponseBytes, "open Artifact")
+	}
+	sizeHeader := resp.Header.Get("X-Agent-Runtime-Artifact-Size")
+	if sizeHeader == "" {
+		sizeHeader = resp.Header.Get("Content-Length")
+	}
+	size, err := strconv.ParseInt(sizeHeader, 10, 64)
+	if err != nil || size < 1 || size > client.maxResponseBytes {
+		resp.Body.Close()
+		return ArtifactStream{}, errors.New("open Artifact: invalid Artifact size")
+	}
+	media, _, err := mime.ParseMediaType(resp.Header.Get("Content-Type"))
+	if err != nil || media == "" || media == "application/json" {
+		resp.Body.Close()
+		return ArtifactStream{}, errors.New("open Artifact: invalid media type")
+	}
+	streamingDigest := resp.Header.Get("X-Agent-Runtime-Artifact-SHA256")
+	digest := strings.TrimPrefix(streamingDigest, "sha-256=")
+	if digest == "" {
+		digest = strings.TrimPrefix(resp.Header.Get("Digest"), "sha-256=")
+	}
+	if !validSHA256(digest) {
+		resp.Body.Close()
+		return ArtifactStream{}, errors.New("open Artifact: invalid Artifact digest")
+	}
+	return ArtifactStream{Artifact: ArtifactReference{ID: artifactID, MediaType: media, SizeBytes: size, SHA256: digest}, Body: &verifiedArtifactBody{ReadCloser: resp.Body, response: resp, remaining: size, expectedDigest: digest, requireTrailer: streamingDigest != "", digester: sha256.New()}}, nil
+}
+
+type verifiedArtifactBody struct {
+	io.ReadCloser
+	response       *http.Response
+	remaining      int64
+	expectedDigest string
+	requireTrailer bool
+	digester       hash.Hash
+}
+
+func (body *verifiedArtifactBody) Read(p []byte) (int, error) {
+	n, err := body.ReadCloser.Read(p)
+	if n > 0 {
+		_, _ = body.digester.Write(p[:n])
+		body.remaining -= int64(n)
+		if body.remaining < 0 {
+			return n, errors.New("Artifact stream exceeds declared size")
+		}
+	}
+	if err == io.EOF {
+		digest := strings.TrimPrefix(body.response.Trailer.Get("Digest"), "sha-256=")
+		if digest == "" && !body.requireTrailer {
+			digest = body.expectedDigest
+		}
+		if body.remaining != 0 || !validSHA256(digest) || digest != body.expectedDigest || hex.EncodeToString(body.digester.Sum(nil)) != digest {
+			return n, errors.New("Artifact stream digest mismatch")
+		}
+	}
+	return n, err
+}
+
+func artifactResponseFailure(response *http.Response, requestID RequestID, maximum int64, operation string) error {
+	limited := io.LimitReader(response.Body, maximum+1)
+	body, err := io.ReadAll(limited)
+	if err != nil {
+		return errors.Wrap(err, operation)
+	}
+	if int64(len(body)) > maximum {
+		return errors.New(operation + ": failure body exceeds configured limit")
+	}
+	var envelope struct {
+		RequestID RequestID `json:"request_id"`
+		Error     Failure   `json:"error"`
+	}
+	if decodeStrict(body, &envelope) != nil || envelope.RequestID != requestID || !validSafeFailure(envelope.Error) {
+		return errors.New(operation + ": invalid safe failure envelope")
+	}
+	return &Error{Failure: *envelope.Error.Clone()}
+}
+
+func validSHA256(value string) bool {
+	return len(value) == 64 && strings.Trim(value, "0123456789abcdef") == ""
 }
 
 // InspectApproval returns the caller-authorized state of one Approval.

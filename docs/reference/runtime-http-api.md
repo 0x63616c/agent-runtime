@@ -29,6 +29,23 @@ JSON is strict and size-bounded. Cursor pagination is the current reconnect
 mechanism: connection loss affects the read only, and the caller resumes after
 the last accepted Cursor.
 
+## Artifact streaming
+
+`GET /v1/artifacts/{artifact_id}` authorizes the exact tenant, principal, and
+immutable Artifact metadata before opening content storage. The streaming form
+returns the media type plus `X-Agent-Runtime-Artifact-Size` and
+`X-Agent-Runtime-Artifact-SHA256` headers, streams no more than that declared
+size, and emits `Digest: sha-256=...` only as an HTTP trailer after the copied
+bytes match the authorized digest. A caller must treat a missing, mismatched,
+short, or overlong stream as failed and must close an unfinished response to
+cancel its observation. Storage keys and credentials never cross this boundary.
+
+The Go SDK keeps `ReadArtifact` for the bounded buffered v1 read and adds the
+separate `ArtifactStreamer` capability implemented by `Client.OpenArtifact`.
+It does not add a method to `RuntimeClient`, preserving existing interface
+implementations. `OpenArtifact` verifies the exact byte count and trailing
+digest only when the caller reaches EOF; callers must always close the body.
+
 `GET /healthz` and `GET /readyz` are deliberately unauthenticated, contain only
 the role and readiness state, and expose no runtime resource data.
 

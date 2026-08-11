@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"reflect"
 	"strings"
 	"testing"
@@ -155,6 +156,44 @@ func TestArtifactReaderRequiresExactTenantPrincipalMetadataAuthorization(t *test
 	}
 	if commitment.Reference.MediaType != "text/plain" || commitment.Reference.SizeBytes != int64(len("approved report")) {
 		t.Fatalf("artifact commitment = %#v, want immutable digest metadata", commitment)
+	}
+}
+
+func TestArtifactReaderOpensAnAuthorizedArtifactWithoutBufferingIt(t *testing.T) {
+	store, objects, tenant, _ := testStore(t)
+	alice := testPrincipalID(t, "alice")
+	bob := testPrincipalID(t, "bob")
+	handoff, err := store.StageArtifact(context.Background(), tenant, "text/plain", []byte("streamed report"))
+	if err != nil {
+		t.Fatalf("stage artifact: %v", err)
+	}
+	commitment, err := store.ValidateArtifactHandoff(handoff)
+	if err != nil {
+		t.Fatalf("validate artifact handoff: %v", err)
+	}
+	artifactID, err := agentruntime.ParseArtifactID("art_0000000000000001")
+	if err != nil {
+		t.Fatalf("parse artifact ID: %v", err)
+	}
+	reader, err := runtimecontent.NewArtifactReader(store, artifactRepository{record: runtimecontent.ArtifactRecord{Tenant: tenant, Principal: alice, ArtifactID: artifactID, Reference: commitment.Reference}})
+	if err != nil {
+		t.Fatalf("new artifact reader: %v", err)
+	}
+	getsBeforeOpen := objects.gets
+	stream, err := reader.OpenArtifact(context.Background(), tenant, alice, artifactID)
+	if err != nil {
+		t.Fatalf("open authorized artifact: %v", err)
+	}
+	defer stream.Body.Close()
+	if stream.Reference != commitment.Reference || objects.opens != 1 || objects.gets != getsBeforeOpen {
+		t.Fatalf("stream = %#v opens=%d gets=%d, want authorized streaming metadata only", stream.Reference, objects.opens, objects.gets)
+	}
+	body, err := io.ReadAll(stream.Body)
+	if err != nil || string(body) != "streamed report" {
+		t.Fatalf("read opened artifact = %q, %v", body, err)
+	}
+	if _, err := reader.OpenArtifact(context.Background(), tenant, bob, artifactID); !errors.Is(err, runtimecontent.ErrNotFoundOrDenied) || objects.opens != 1 {
+		t.Fatalf("cross-principal stream error = %v opens=%d, want denied without object open", err, objects.opens)
 	}
 }
 

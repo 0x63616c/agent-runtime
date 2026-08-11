@@ -2,6 +2,7 @@ package runtimecontent
 
 import (
 	"context"
+	"io"
 	"strings"
 
 	"github.com/cockroachdb/errors"
@@ -12,6 +13,10 @@ import (
 type S3ImmutableClient interface {
 	PutIfAbsent(context.Context, string, string, []byte) (bool, error)
 	Get(context.Context, string, string, int) ([]byte, error)
+}
+
+type s3ImmutableStreamer interface {
+	Open(context.Context, string, string, int) (io.ReadCloser, error)
 }
 
 // S3ImmutableObjects adapts one declared bucket to runtimecontent's immutable
@@ -62,6 +67,29 @@ func (objects *S3ImmutableObjects) Get(ctx context.Context, key string, maxBytes
 		return nil, ErrIntegrity
 	}
 	return append([]byte(nil), value...), nil
+}
+
+// Open opens a bounded immutable object stream when the configured client
+// provides streaming support.
+func (objects *S3ImmutableObjects) Open(ctx context.Context, key string, maxBytes int) (io.ReadCloser, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, errors.Wrap(err, "open immutable runtime content")
+	}
+	if objects == nil || maxBytes <= 0 || !validObjectKey(key) {
+		return nil, ErrUnavailable
+	}
+	client, ok := objects.client.(s3ImmutableStreamer)
+	if !ok {
+		return nil, ErrUnavailable
+	}
+	stream, err := client.Open(ctx, objects.bucket, key, maxBytes)
+	if err != nil {
+		return nil, errors.Wrap(ErrNotFoundOrDenied, "open immutable runtime content")
+	}
+	if stream == nil {
+		return nil, ErrUnavailable
+	}
+	return stream, nil
 }
 
 func validObjectKey(key string) bool {

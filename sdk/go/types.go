@@ -1,6 +1,9 @@
 package agentruntime
 
-import "time"
+import (
+	"io"
+	"time"
+)
 
 const (
 	// MaxIdempotencyKeyBytes bounds one public idempotency key before transport-specific limits apply.
@@ -177,6 +180,13 @@ type ArtifactReference struct {
 type ArtifactDownload struct {
 	Artifact ArtifactReference `json:"artifact"`
 	Body     []byte            `json:"body"`
+}
+
+// ArtifactStream is an authorized immutable Artifact transfer. Callers must
+// Close it; reading to EOF verifies the HTTP Digest trailer and exact size.
+type ArtifactStream struct {
+	Artifact ArtifactReference
+	Body     io.ReadCloser
 }
 
 // Clone returns an independent authorized artifact read.
