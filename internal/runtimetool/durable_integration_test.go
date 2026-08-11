@@ -160,6 +160,16 @@ func TestDurableToolLifecyclePersistsDescriptorApprovalAndFinalization(t *testin
 	if len(state.ToolExecutions) != 1 || state.ToolExecutions[0].State != runtimestate.ToolExecutionSucceeded || len(state.Grants) != 1 || state.Grants[0].Uses != 1 || adapter.executes != 1 || adapter.reconciles != 0 {
 		t.Fatalf("durable execution = %#v", state.ToolExecutions)
 	}
+	// A grant can be revoked only before its execution intent. Once a real
+	// external operation has a durable terminal observation, the owner receives
+	// a stable conflict instead of a fictional undo claim.
+	revoke, err := compiler.CompileRevokeCapabilityGrant(runtimestate.RevokeCapabilityGrantCommand{Scope: ownerScope, IdempotencyKey: "durable-tool-revoke-after-execution", SessionID: session, TurnID: turn, ToolCallID: "tcall_1234567890ABCDEF", GrantID: state.Grants[0].GrantID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = applyRejection(ctx, planner, store, revoke); !errors.Is(err, runtimestate.ErrConflict) {
+		t.Fatalf("revoke completed external operation = %v, want conflict", err)
+	}
 	found := false
 	for _, event := range state.Events {
 		if event.Kind == agentruntime.EventSandboxOperationFinalized && event.OperationID == state.ToolExecutions[0].OperationID {
@@ -194,6 +204,14 @@ func mustToolMutation(t *testing.T, mutation runtimestate.CompiledMutation, err 
 		t.Fatal(err)
 	}
 	return mutation
+}
+
+func applyRejection(ctx context.Context, planner *runtimestate.RuntimeStatePlanner, store runtimestate.RuntimeStateStore, mutation runtimestate.CompiledMutation) (runtimestate.TransitionPlan, error) {
+	state, err := store.LoadRuntimeState(ctx, mutation.ReceiptBinding().Scope)
+	if err != nil {
+		return runtimestate.TransitionPlan{}, err
+	}
+	return planner.Plan(ctx, state, mutation)
 }
 func requiredToolEnvironment(t *testing.T, name string) string {
 	t.Helper()
