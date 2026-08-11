@@ -61,12 +61,22 @@ func TestSessionWorkflowRunsThroughTheOwnedFactoryAgainstTemporal(t *testing.T) 
 	if err != nil {
 		t.Fatalf("start Session workflow: %v", err)
 	}
-	command := runtimeorchestration.Command{Tenant: "tenant-a", OutboxID: "outbox-1", SessionID: "sess_1234567890ABCDEF", Kind: runtimeorchestration.CommandInputAccepted, Sequence: 1}
-	if err := owned.SignalWorkflow(ctx, "session-orchestration-integration", run.GetRunID(), runtimeorchestration.SessionCommandSignal, command); err != nil {
-		t.Fatalf("signal durable command: %v", err)
+	commands := []runtimeorchestration.Command{
+		{Tenant: "tenant-a", OutboxID: "outbox-input", SessionID: "sess_1234567890ABCDEF", Kind: runtimeorchestration.CommandInputAccepted, Sequence: 1},
+		{Tenant: "tenant-a", OutboxID: "outbox-approval", SessionID: "sess_1234567890ABCDEF", Kind: runtimeorchestration.CommandApprovalResolved, Sequence: 2},
+		{Tenant: "tenant-a", OutboxID: "outbox-sandbox", SessionID: "sess_1234567890ABCDEF", Kind: runtimeorchestration.CommandSandboxOperationFinalized, Sequence: 3},
+		{Tenant: "tenant-a", OutboxID: "outbox-complete", SessionID: "sess_1234567890ABCDEF", Kind: runtimeorchestration.CommandSessionCompleted, Sequence: 4},
 	}
-	if !dispatcher.wait(ctx, command) {
-		t.Fatal("state-backed activity did not receive the durable command")
+	for _, command := range commands {
+		if err := owned.SignalWorkflow(ctx, "session-orchestration-integration", run.GetRunID(), runtimeorchestration.SessionCommandSignal, command); err != nil {
+			t.Fatalf("signal durable command %s: %v", command.Kind, err)
+		}
+		if !dispatcher.wait(ctx, command) {
+			t.Fatalf("state-backed activity did not receive durable command %#v", command)
+		}
+	}
+	if err := run.Get(ctx, nil); err != nil {
+		t.Fatalf("complete durable lifecycle workflow: %v", err)
 	}
 	history, err := owned.WorkflowHistory(ctx, "session-orchestration-integration", run.GetRunID())
 	if err != nil || len(history.Events) == 0 {

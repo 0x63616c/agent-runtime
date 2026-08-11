@@ -68,8 +68,13 @@ rechecks it before the private Workflow accepts it. The concrete sandbox
 adapter strictly decodes the descriptor, requires the descriptor operation ID
 to equal the durable operation ID, submits once, and uses `GetOperation` rather
 than resubmitting during recovery. Its unit evidence uses the sandbox client
-contract fake; a disposable control-process/Temporal retained-history scenario
-remains required before TMP-010 can close. The publisher test follows
+contract fake and an HTTPS sandbox control-handler composition; the latter uses
+the handler's deterministic in-memory control ledger and is not production
+durability evidence. A disposable PostgreSQL control-process/Temporal
+retained-history scenario remains required before TMP-010 can close. The owned
+Temporal development-server test now captures and replays the private Input →
+Approval → sandbox-finalization → Session-complete route vocabulary. The
+publisher test follows
 the actual state transition from persisted tool intent through a principal
 approval decision, then through a fenced `uncertain` model invocation caused
 by producer loss and a terminal `turn.failed` outbox route. It verifies that
