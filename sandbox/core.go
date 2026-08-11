@@ -341,12 +341,23 @@ func newEffectiveSpec(request OperationRequest, canonical Digest, policy limitPo
 		if err != nil {
 			return effectiveSpec{}, err
 		}
+		if err := validateCapabilityRequirements(request.CreateSandbox.Spec.Capabilities, spec.capabilities); err != nil {
+			return effectiveSpec{}, err
+		}
+		if err := validateRequestedProfileCapabilities(request.CreateSandbox.Spec, spec.capabilities); err != nil {
+			return effectiveSpec{}, err
+		}
 		spec.image = image
 	}
 	if request.ExecProcess != nil {
 		// Process requests inherit the sandbox limits at dispatch. The fixture
 		// keeps a finite request boundary even before a host is composed.
 		spec.limits = policy.defaults
+	}
+	if request.RestoreSandbox != nil && request.RestoreSandbox.Overrides.Capabilities != nil {
+		if err := validateCapabilityRequirements(*request.RestoreSandbox.Overrides.Capabilities, spec.capabilities); err != nil {
+			return effectiveSpec{}, err
+		}
 	}
 	if spec.limits == (ResourceLimits{}) {
 		spec.limits = policy.defaults
@@ -363,6 +374,77 @@ func newEffectiveSpec(request OperationRequest, canonical Digest, policy limitPo
 	canonicalResources(&builder, spec.limits)
 	spec.digest = digestCanonical(builder.String())
 	return spec, nil
+}
+
+func validateCapabilityRequirements(requirements CapabilityRequirements, available CapabilitySnapshot) error {
+	if len(requirements.Required) > 16 {
+		return newFailure(FailureInvalidArgument, "sandbox capability requirements exceed the finite request limit", RetryNever)
+	}
+	seen := make(map[CapabilityFeature]struct{}, len(requirements.Required))
+	for _, requirement := range requirements.Required {
+		if requirement.Minimum != CapabilityDeclared && requirement.Minimum != CapabilityEnforced {
+			return newFailure(FailureInvalidArgument, "sandbox capability requirement minimum is invalid", RetryNever)
+		}
+		if _, duplicate := seen[requirement.Feature]; duplicate {
+			return newFailure(FailureInvalidArgument, "sandbox capability requirement is duplicated", RetryNever)
+		}
+		seen[requirement.Feature] = struct{}{}
+		actual, known := capabilityDescriptor(available, requirement.Feature)
+		if !known {
+			return newFailure(FailureInvalidArgument, "sandbox capability requirement is unknown", RetryNever)
+		}
+		if !capabilityAtLeast(actual.State, requirement.Minimum) {
+			return newFailure(FailureCapabilityUnavailable, "sandbox capability requirement is not met by the negotiated profile", RetryNever)
+		}
+	}
+	return nil
+}
+
+func validateRequestedProfileCapabilities(spec SandboxSpec, available CapabilitySnapshot) error {
+	for feature, requested := range map[CapabilityFeature]bool{
+		CapabilitySecrets: len(spec.SecretBindings) != 0,
+		CapabilityMounts:  len(spec.Mounts) != 0,
+		CapabilityVolumes: len(spec.VolumeAttachments) != 0,
+	} {
+		if !requested {
+			continue
+		}
+		descriptor, _ := capabilityDescriptor(available, feature)
+		if !capabilityAtLeast(descriptor.State, CapabilityEnforced) {
+			return newFailure(FailureCapabilityUnavailable, "sandbox request requires an unavailable authority profile", RetryNever)
+		}
+	}
+	return nil
+}
+
+func capabilityDescriptor(snapshot CapabilitySnapshot, feature CapabilityFeature) (CapabilityDescriptor, bool) {
+	switch feature {
+	case CapabilityIsolation:
+		return snapshot.Isolation, true
+	case CapabilityEgress:
+		return snapshot.Egress, true
+	case CapabilityMounts:
+		return snapshot.Mounts, true
+	case CapabilityVolumes:
+		return snapshot.Volumes, true
+	case CapabilitySnapshots:
+		return snapshot.Snapshots, true
+	case CapabilitySecrets:
+		return snapshot.Secrets, true
+	case CapabilityTransfer:
+		return snapshot.Transfer, true
+	case CapabilityReconnect:
+		return snapshot.Reconnect, true
+	default:
+		return CapabilityDescriptor{}, false
+	}
+}
+
+func capabilityAtLeast(actual, required CapabilityState) bool {
+	if actual == CapabilityEnforced {
+		return required == CapabilityDeclared || required == CapabilityEnforced
+	}
+	return actual == CapabilityDeclared && required == CapabilityDeclared
 }
 
 func admitImage(image ImageRef, policy limitPolicy) (ImageInfo, error) {

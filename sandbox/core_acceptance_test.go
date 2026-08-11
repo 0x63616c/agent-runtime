@@ -35,7 +35,12 @@ func TestCoreDoesNotEnumeratePrincipalScopedOperations(t *testing.T) {
 }
 
 func TestCoreFreezesEveryTaggedMutableInput(t *testing.T) {
-	client := newCoreClient("principal-a", time.Date(2026, 8, 6, 12, 0, 0, 0, time.UTC))
+	policy := testLimitPolicy()
+	policy.capabilities.Egress = CapabilityDescriptor{State: CapabilityEnforced}
+	client, err := newCoreClientWithPolicy("principal-a", time.Date(2026, 8, 6, 12, 0, 0, 0, time.UTC), policy)
+	if err != nil {
+		t.Fatalf("newCoreClientWithPolicy(): %v", err)
+	}
 	limits := testLimitPolicy().defaults
 	request := OperationRequest{ID: "op_mutable", Kind: OperationRestoreSandbox, RestoreSandbox: &RestoreSandboxRequest{
 		SnapshotID: "snap_01",
@@ -786,6 +791,45 @@ func TestConcurrentEquivalentSubmissionHasOnePrincipalLedgerEntry(t *testing.T) 
 	if got := client.operationCount(); got != 1 {
 		t.Fatalf("operation count = %d, want one", got)
 	}
+}
+
+func TestCreateSandboxRefusesARequiredCapabilityThatTheProfileDoesNotAdvertise(t *testing.T) {
+	client := newCoreClient("principal-a", time.Date(2026, 8, 10, 0, 0, 0, 0, time.UTC))
+	request := validCreateRequest("op_requires_transfer")
+	request.CreateSandbox.Spec.Capabilities.Required = []CapabilityRequirement{{Feature: CapabilityTransfer, Minimum: CapabilityEnforced}}
+
+	_, err := client.Submit(context.Background(), request)
+	failureCode(t, err, FailureCapabilityUnavailable)
+}
+
+func TestCreateSandboxRefusesRequestedSecretMountAndVolumeProfilesThatAreUnavailable(t *testing.T) {
+	client := newCoreClient("principal-a", time.Date(2026, 8, 10, 0, 0, 0, 0, time.UTC))
+	for name, mutate := range map[string]func(*SandboxSpec){
+		"secret": func(spec *SandboxSpec) {
+			spec.SecretBindings = []SecretBinding{{Name: "build-token", Purpose: "build"}}
+		},
+		"mount": func(spec *SandboxSpec) {
+			spec.Mounts = []MountRequest{{Name: "workspace", Target: "/work", Mode: MountReadOnly, View: MountFrozen}}
+		},
+		"volume": func(spec *SandboxSpec) {
+			spec.VolumeAttachments = []VolumeAttachment{{VolumeID: "vol_01", Target: "/work/data", Mode: AttachmentReadWrite}}
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			request := validCreateRequest(OperationID("op_unavailable_" + name))
+			mutate(&request.CreateSandbox.Spec)
+			_, err := client.Submit(context.Background(), request)
+			failureCode(t, err, FailureCapabilityUnavailable)
+		})
+	}
+}
+
+func TestRestoreSandboxRefusesARequiredCapabilityThatTheProfileDoesNotAdvertise(t *testing.T) {
+	client := newCoreClient("principal-a", time.Date(2026, 8, 10, 0, 0, 0, 0, time.UTC))
+	request := OperationRequest{ID: "op_restore_requires_snapshot", Kind: OperationRestoreSandbox, RestoreSandbox: &RestoreSandboxRequest{SnapshotID: "snap_01", Overrides: SandboxOverrides{Capabilities: &CapabilityRequirements{Required: []CapabilityRequirement{{Feature: CapabilitySnapshots, Minimum: CapabilityEnforced}}}}}}
+
+	_, err := client.Submit(context.Background(), request)
+	failureCode(t, err, FailureCapabilityUnavailable)
 }
 
 func failureCode(t *testing.T, err error, want FailureCode) {
