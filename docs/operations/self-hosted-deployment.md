@@ -118,8 +118,12 @@ Before a production rollout, the platform operator must define and test:
   Job readiness, and recovery authority. The runtime v2 base migration is
   deliberately forward-only: its declared rollback artifact refuses before any
   destructive action, so recovery requires an operator-approved PostgreSQL
-  backup/PITR procedure rather than automatic schema deletion. No backup/PITR
-  runbook or restore drill has been implemented or retained yet. The upgrade uses a transaction
+  backup/PITR procedure rather than automatic schema deletion. The owned
+  `deploy/runtimeapi/run-durable-integration.sh` harness proves a disposable
+  PostgreSQL backup/restore drill: it backs up a tenant row, removes it from
+  the source, restores into a fresh database, and verifies recovery. This is
+  not a production PITR procedure; the platform operator must retain and
+  authorize the production backup/PITR runbook and its evidence. The upgrade uses a transaction
   advisory lock plus migration fingerprint and physical-schema checks, then
   declares normalized tenant, Agent revision, Session,
   content-reference Input, Turn, Product-event, audit, and outbox tables. It
