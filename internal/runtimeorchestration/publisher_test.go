@@ -2,6 +2,7 @@ package runtimeorchestration_test
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"testing"
 	"time"
@@ -99,6 +100,115 @@ func TestPublisherDerivesTemporalRoutesOnlyFromClaimedDurableOutbox(t *testing.T
 	if len(temporal.starts) != 1 || len(temporal.commands) != 1 {
 		t.Fatalf("rescan redelivered published routes: starts=%#v commands=%#v", temporal.starts, temporal.commands)
 	}
+}
+
+func TestPublisherReclaimsAnUnacknowledgedRouteAfterProcessLoss(t *testing.T) {
+	ctx := context.Background()
+	now := time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC)
+	content, err := runtimecontent.New("runtime-content", &publisherObjects{values: map[string][]byte{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tenant, _ := runtimecontent.ParseTenantID("tenant-a")
+	principal, _ := runtimecontent.ParsePrincipalID("principal-a")
+	compiler, err := runtimestate.NewCompiler(content)
+	if err != nil {
+		t.Fatal(err)
+	}
+	timeSource, err := clock.NewFake(now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	planner, err := runtimestate.NewRuntimeStatePlanner(timeSource, &publisherIDs{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	memory, err := runtimestate.NewMemoryRuntimeStateStore(planner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := &failFirstAcknowledgementStore{MemoryRuntimeStateStore: memory}
+	body, err := content.StageAgentSpecificationBody(ctx, tenant, runtimecontent.AgentSpecificationBody{Name: "reclaim", ModelProfile: "balanced", Instructions: "safe"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	registered, err := compiler.CompileRegisterAgentRevision(runtimestate.RegisterAgentRevisionCommand{Scope: runtimestate.MutationScope{Tenant: tenant, Authority: runtimestate.AuthorityTenantAdministrator}, IdempotencyKey: "register", Specification: body})
+	if err != nil {
+		t.Fatal(err)
+	}
+	registeredPlan, err := store.Apply(ctx, registered)
+	if err != nil {
+		t.Fatal(err)
+	}
+	created, err := compiler.CompileCreateSession(runtimestate.CreateSessionCommand{Scope: runtimestate.MutationScope{Tenant: tenant, Principal: principal, Authority: runtimestate.AuthoritySessionOwner}, IdempotencyKey: "create-session", RevisionID: registeredPlan.Result().Revision.RevisionID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sessionPlan, err := store.Apply(ctx, created)
+	if err != nil {
+		t.Fatal(err)
+	}
+	input, err := content.StageInputEnvelope(ctx, tenant, []agentruntime.ContentPart{{Kind: agentruntime.ContentText, Text: "hello"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	accepted, err := compiler.CompileAdmitInput(runtimestate.AdmitInputCommand{Scope: runtimestate.MutationScope{Tenant: tenant, Principal: principal, Authority: runtimestate.AuthoritySessionOwner}, IdempotencyKey: "input", SessionID: sessionPlan.Result().Session.SessionID, Input: input})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Apply(ctx, accepted); err != nil {
+		t.Fatal(err)
+	}
+	temporal := &recordingPublisher{}
+	publisher, err := runtimeorchestration.NewPublisher(runtimeorchestration.PublisherConfig{Store: store, Tenants: store, Compiler: compiler, Planner: planner, Clock: timeSource, Publisher: temporal, Claimer: "orchestration-codec"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := publisher.ScanOnce(ctx); err == nil {
+		t.Fatal("publish result = nil, want simulated acknowledgement-loss error")
+	}
+	if len(temporal.commands) != 1 {
+		t.Fatalf("commands after lost acknowledgement = %#v, want one delivered route", temporal.commands)
+	}
+	if err := timeSource.Advance(2*time.Minute + time.Nanosecond); err != nil {
+		t.Fatal(err)
+	}
+	if err := publisher.ScanOnce(ctx); err != nil {
+		t.Fatalf("reclaim expired durable outbox route: %v", err)
+	}
+	if len(temporal.commands) != 2 || temporal.commands[0] != temporal.commands[1] {
+		t.Fatalf("commands after reclaim = %#v, want exactly one duplicate durable route", temporal.commands)
+	}
+	page, err := store.ReadOutbox(ctx, runtimestate.OutboxQuery{Scope: runtimestate.MutationScope{Tenant: tenant, Authority: runtimestate.AuthorityOutboxPublisher}, Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, record := range page.Records {
+		if string(record.OutboxID) == temporal.commands[0].OutboxID {
+			if record.State != runtimestate.OutboxPublished {
+				t.Fatalf("reclaimed input route = %#v, want published", record)
+			}
+			return
+		}
+	}
+	t.Fatalf("outbox after reclaim = %#v, want the delivered input route", page.Records)
+}
+
+// failFirstAcknowledgementStore simulates the narrow crash window after a
+// Temporal route succeeds but before its durable acknowledgement commits.
+// The durable lease must be reclaimable; the workflow is responsible for
+// treating the repeated route as a deterministic no-op.
+type failFirstAcknowledgementStore struct {
+	*runtimestate.MemoryRuntimeStateStore
+	failed bool
+}
+
+func (store *failFirstAcknowledgementStore) PersistTransitionPlan(ctx context.Context, plan runtimestate.TransitionPlan) error {
+	if plan.Kind() == runtimestate.CommandAcknowledgeOutbox && plan.Result().Outbox.EventKind == agentruntime.EventInputAccepted && !store.failed {
+		store.failed = true
+		return errors.New("simulated process loss before outbox acknowledgement")
+	}
+	return store.MemoryRuntimeStateStore.PersistTransitionPlan(ctx, plan)
 }
 
 type recordingPublisher struct {
