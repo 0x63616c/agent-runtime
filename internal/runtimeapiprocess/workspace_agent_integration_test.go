@@ -157,8 +157,8 @@ func TestDurableWorkspaceAgentBinariesUseOnlyThePublicAPI(t *testing.T) {
 	if approval, e := alice.InspectApproval(ctx, denyID); e != nil || approval.State != agentruntime.ApprovalDenied {
 		t.Fatalf("web deny = %#v, %v", approval, e)
 	}
-	if approval, e := alice.InspectApproval(ctx, cancelID); e != nil || approval.State != agentruntime.ApprovalPending {
-		t.Fatalf("cancel changes turn, not approval = %#v, %v", approval, e)
+	if approval, e := alice.InspectApproval(ctx, cancelID); e != nil || approval.State != agentruntime.ApprovalCancelled {
+		t.Fatalf("cancel invalidates pending approval = %#v, %v", approval, e)
 	}
 
 	// The browser must also surface a truthful refusal once the durable API

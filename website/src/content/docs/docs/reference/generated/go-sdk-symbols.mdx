@@ -29,6 +29,7 @@ This index is derived only from the declared public `sdk/go` source files. It li
 | `method` | `Approval.Clone` | Clone returns an independent Approval snapshot. |
 | `type` | `ApprovalAction` | ApprovalAction is the fixed, human-readable description of an elevated operation. It deliberately contains no raw model arguments or credentials. |
 | `const` | `ApprovalApproved` | ApprovalApproved records an owner decision that created a bounded internal grant. |
+| `const` | `ApprovalCancelled` | ApprovalCancelled records that its owning Turn was cancelled before a decision. It can never create or preserve a grant. |
 | `const` | `ApprovalDenied` | ApprovalDenied records an owner decision that forbids the requested effect. |
 | `const` | `ApprovalExpired` | ApprovalExpired records that the decision window elapsed before a decision. |
 | `type` | `ApprovalID` | ApprovalID identifies one owner-actionable Approval request. |

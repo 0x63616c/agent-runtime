@@ -315,6 +315,9 @@ const (
 	ApprovalDenied ApprovalState = "denied"
 	// ApprovalExpired records that the decision window elapsed before a decision.
 	ApprovalExpired ApprovalState = "expired"
+	// ApprovalCancelled records that its owning Turn was cancelled before a
+	// decision. It can never create or preserve a grant.
+	ApprovalCancelled ApprovalState = "cancelled"
 )
 
 // ApprovalAction is the fixed, human-readable description of an elevated

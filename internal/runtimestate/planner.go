@@ -904,6 +904,15 @@ func (planner *RuntimeStatePlanner) cancel(state *RuntimeState, binding ReceiptB
 	priorState := turn.State
 	turn.State, turn.Version, turn.CompletedAt = agentruntime.TurnCancelled, turn.Version+1, &now
 	state.Turns[turnIndex] = turn
+	cancelledApprovals := 0
+	for index := range state.Approvals {
+		approval := state.Approvals[index]
+		if approval.SessionID == command.SessionID && approval.TurnID == command.TurnID && approval.Tenant == binding.Scope.Tenant && approval.Principal == binding.Scope.Principal && approval.State == "pending" {
+			approval.State = string(agentruntime.ApprovalCancelled)
+			state.Approvals[index] = approval
+			cancelledApprovals++
+		}
+	}
 	session.Version++
 	session.UpdatedAt = now
 	kinds := []agentruntime.EventKind{agentruntime.EventTurnCancelled}
@@ -921,6 +930,14 @@ func (planner *RuntimeStatePlanner) cancel(state *RuntimeState, binding ReceiptB
 	effects, err := planner.effects(state, binding, session, turn, InvocationRecord{}, kinds, now)
 	if err != nil {
 		return PlanResult{}, EffectSet{}, err
+	}
+	for range cancelledApprovals {
+		approvalEffects, auditErr := planner.auditOnly(state, binding, "approval.cancelled", command.SessionID, command.TurnID, now)
+		if auditErr != nil {
+			return PlanResult{}, EffectSet{}, auditErr
+		}
+		effects.Audit = append(effects.Audit, approvalEffects.Audit...)
+		effects.Outbox = append(effects.Outbox, approvalEffects.Outbox...)
 	}
 	return PlanResult{Session: session, Turn: turn, Promoted: promoted}, effects, nil
 }
