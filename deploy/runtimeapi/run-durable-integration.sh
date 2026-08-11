@@ -42,10 +42,12 @@ backup_file="$backup_directory/runtime.dump"
 admin_dsn="postgres://runtime_api:${postgres_password}@127.0.0.1:${postgres_port}/postgres?sslmode=disable"
 restore_dsn="postgres://runtime_api:${postgres_password}@127.0.0.1:${postgres_port}/${restore_database}?sslmode=disable"
 psql "$AR_RUNTIME_API_POSTGRES_DSN" --set=ON_ERROR_STOP=1 --command "INSERT INTO runtime.tenants (tenant_id, created_at) VALUES ('backup_drill_tenant', now())"
-pg_dump --dbname="$AR_RUNTIME_API_POSTGRES_DSN" --format=custom --file="$backup_file"
+docker compose --project-name "$project_name" --env-file "$environment_file" --file "$compose_file" exec --no-TTY postgres \
+  pg_dump -U runtime_api -d agent_runtime --format=custom > "$backup_file"
 psql "$AR_RUNTIME_API_POSTGRES_DSN" --set=ON_ERROR_STOP=1 --command "DELETE FROM runtime.tenants WHERE tenant_id = 'backup_drill_tenant'"
 psql "$admin_dsn" --set=ON_ERROR_STOP=1 --command "CREATE DATABASE ${restore_database}"
-pg_restore --dbname="$restore_dsn" --exit-on-error "$backup_file"
+docker compose --project-name "$project_name" --env-file "$environment_file" --file "$compose_file" exec --no-TTY postgres \
+  pg_restore -U runtime_api -d "$restore_database" --exit-on-error < "$backup_file"
 if [ "$(psql "$restore_dsn" --tuples-only --no-align --set=ON_ERROR_STOP=1 --command "SELECT EXISTS(SELECT 1 FROM runtime.tenants WHERE tenant_id = 'backup_drill_tenant')")" != "t" ]; then
   echo 'backup restore drill did not recover the tenant-scoped state' >&2
   exit 1
