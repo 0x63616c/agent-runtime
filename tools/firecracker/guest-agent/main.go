@@ -167,8 +167,32 @@ func serveGuestOperation(vmID string, connection guestControlConnection, operati
 			return fmt.Errorf("invalid guest dispatch")
 		}
 		// This fixture proves framing, boot identity, bounded input, and the
-		// unavailable result path. It contains no command runner, credentials,
-		// mounted data, or network authority to accidentally widen a profile.
+		// unavailable result path. It contains no secret, mount, or network
+		// authority; the typed command runner is unreachable until the host's
+		// separately certified profile gate opens.
+		if envelope.OperationKind == guestCommandVersion {
+			result, runErr := runGuestCommand(context.Background(), envelope.Payload)
+			sequence := uint64(0)
+			if len(result.stdout) > 0 {
+				if err := writeGuestOutput(connection, envelope.EnvelopeID, "stdout", sequence, result.stdout); err != nil {
+					return err
+				}
+				sequence++
+			}
+			if len(result.stderr) > 0 {
+				if err := writeGuestOutput(connection, envelope.EnvelopeID, "stderr", sequence, result.stderr); err != nil {
+					return err
+				}
+			}
+			state := "SUCCEEDED"
+			if runErr != nil {
+				state = "FAILED"
+			}
+			if _, err := fmt.Fprintf(connection, "RESULT %s %s\n", state, envelope.EnvelopeID); err != nil {
+				return fmt.Errorf("write guest command result: %w", err)
+			}
+			return nil
+		}
 		markerBytes := []byte("guest-control-unavailable")
 		marker := base64.RawURLEncoding.EncodeToString(markerBytes)
 		if _, err := fmt.Fprintf(connection, "OUTPUT %s control 0 %s %s\n", envelope.EnvelopeID, sandboxhostprotocol.Digest(markerBytes), marker); err != nil {
@@ -190,6 +214,16 @@ func serveGuestOperation(vmID string, connection guestControlConnection, operati
 		return nil
 	}
 	return fmt.Errorf("invalid guest control operation")
+}
+
+func writeGuestOutput(connection guestControlConnection, envelopeID, stream string, sequence uint64, value []byte) error {
+	if len(value) == 0 {
+		return nil
+	}
+	if _, err := fmt.Fprintf(connection, "OUTPUT %s %s %d %s %s\n", envelopeID, stream, sequence, sandboxhostprotocol.Digest(value), base64.RawURLEncoding.EncodeToString(value)); err != nil {
+		return fmt.Errorf("write guest command output: %w", err)
+	}
+	return nil
 }
 
 func readControlFrame(reader *bufio.Reader, maximumBytes int) ([]string, error) {

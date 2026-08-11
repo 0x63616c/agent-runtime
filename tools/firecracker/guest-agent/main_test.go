@@ -190,6 +190,21 @@ func TestServeGuestControlAcknowledgesABoundedCancellationWithoutStartingWork(t 
 	}
 }
 
+func TestGuestCommandRunnerUsesTypedArgvAndBoundsTheGuestProcessTreeOutput(t *testing.T) {
+	payload, err := json.Marshal(guestCommand{Version: guestCommandVersion, Argv: []string{"/bin/echo", "typed-output"}, WorkingDirectory: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := runGuestCommand(context.Background(), payload)
+	if err != nil || string(result.stdout) != "typed-output\n" || len(result.stderr) != 0 {
+		t.Fatalf("runGuestCommand() = (%q, %q, %v)", result.stdout, result.stderr, err)
+	}
+	unsafe, _ := json.Marshal(guestCommand{Version: guestCommandVersion, Argv: []string{"/bin/echo", "x"}, WorkingDirectory: "/proc"})
+	if _, err := runGuestCommand(context.Background(), unsafe); err == nil {
+		t.Fatal("runGuestCommand() accepted a reserved process workdir")
+	}
+}
+
 func TestGuestControlPortIsTheFixedPrivateGuestPort(t *testing.T) {
 	if got, want := guestControlPort, uint32(10777); got != want {
 		t.Fatalf("guest control port = %d, want %d", got, want)
