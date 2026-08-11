@@ -6,9 +6,11 @@ import (
 	"encoding/json"
 	"math"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/0x63616c/agent-runtime/internal/sandboxhostprotocol"
+	"github.com/0x63616c/agent-runtime/sandbox"
 	"github.com/cockroachdb/errors"
 )
 
@@ -39,13 +41,20 @@ const (
 // HostEnrollment is operator-owned durable host identity metadata. It contains
 // public verification material only, never a certificate or private key.
 type HostEnrollment struct {
-	HostID              string
-	Tenant              string
-	Pool                string
-	Generation          uint64
-	ProtocolVersion     string
-	CertificateDigest   string
-	SigningPublicKey    ed25519.PublicKey
+	HostID            string
+	Tenant            string
+	Pool              string
+	Generation        uint64
+	ProtocolVersion   string
+	CertificateDigest string
+	SigningPublicKey  ed25519.PublicKey
+	// ObservationPublicKey is the separately enrolled M4 observation key for
+	// the v2 boot-probe stage-ready record. It is optional for v1 hosts, but
+	// required before the v2 preparation route can create a session.
+	ObservationPublicKey ed25519.PublicKey
+	// BootProbeProfile is the operator-enrolled immutable M4 identity subset.
+	// M4 supplies the stage digest only after it has staged reviewed resources.
+	BootProbeProfile    BootProbeProfile
 	CapabilityDigest    string
 	AttestationDigest   string
 	AttestationProfile  AttestationProfile
@@ -54,6 +63,17 @@ type HostEnrollment struct {
 	ExpiresAt           time.Time
 	LastAuthenticatedAt time.Time
 	QuarantineReason    string
+}
+
+// BootProbeProfile is the operator-owned stable portion of a trusted M4
+// identity. It deliberately excludes StageDigest, which M4 can produce only
+// after its reviewed staging step.
+type BootProbeProfile struct {
+	VMID            string         `json:"vm_id"`
+	FixtureVersion  string         `json:"fixture_version"`
+	PlanDigest      sandbox.Digest `json:"plan_digest"`
+	FixtureDigest   sandbox.Digest `json:"fixture_digest"`
+	AuthorityDigest sandbox.Digest `json:"authority_digest"`
 }
 
 // HostIdentity is derived from the mutually authenticated peer certificate.
@@ -162,6 +182,7 @@ func (ledger *MemoryLedger) ProvisionHost(ctx context.Context, enrollment HostEn
 		return nil
 	}
 	enrollment.SigningPublicKey = append(ed25519.PublicKey(nil), enrollment.SigningPublicKey...)
+	enrollment.ObservationPublicKey = append(ed25519.PublicKey(nil), enrollment.ObservationPublicKey...)
 	enrollment.ExpiresAt = enrollment.ExpiresAt.UTC()
 	ledger.hosts[key] = enrollment
 	if enrollment.Status == HostAttestationFailed {
@@ -493,11 +514,43 @@ func dispatchFrom(operation Operation, fields hostAssignmentFields) HostDispatch
 }
 
 func validHostEnrollment(host HostEnrollment) bool {
-	return validBounded(host.HostID, maxHostIDBytes) && validBounded(host.Tenant, 256) && validBounded(host.Pool, 128) && host.Generation > 0 && host.ProtocolVersion == sandboxhostprotocol.Version && validBounded(host.CertificateDigest, maxDigestBytes) && len(host.SigningPublicKey) == ed25519.PublicKeySize && validBounded(host.CapabilityDigest, maxDigestBytes) && (host.AttestationDigest == "" || validBounded(host.AttestationDigest, maxDigestBytes)) && validHostAttestation(host) && !host.ExpiresAt.IsZero()
+	return validBounded(host.HostID, maxHostIDBytes) && validBounded(host.Tenant, 256) && validBounded(host.Pool, 128) && host.Generation > 0 && host.ProtocolVersion == sandboxhostprotocol.Version && validBounded(host.CertificateDigest, maxDigestBytes) && len(host.SigningPublicKey) == ed25519.PublicKeySize && (len(host.ObservationPublicKey) == 0 || len(host.ObservationPublicKey) == ed25519.PublicKeySize) && (!host.BootProbeProfile.present() || host.BootProbeProfile.valid()) && validBounded(host.CapabilityDigest, maxDigestBytes) && (host.AttestationDigest == "" || validBounded(host.AttestationDigest, maxDigestBytes)) && validHostAttestation(host) && !host.ExpiresAt.IsZero()
 }
 
 func sameEnrollment(left, right HostEnrollment) bool {
-	return left.HostID == right.HostID && left.Tenant == right.Tenant && left.Pool == right.Pool && left.Generation == right.Generation && left.ProtocolVersion == right.ProtocolVersion && left.CertificateDigest == right.CertificateDigest && string(left.SigningPublicKey) == string(right.SigningPublicKey) && left.CapabilityDigest == right.CapabilityDigest && left.AttestationDigest == right.AttestationDigest && left.AttestationProfile == right.AttestationProfile && left.AttestationState == right.AttestationState && left.Status == right.Status && left.ExpiresAt.Equal(right.ExpiresAt)
+	return left.HostID == right.HostID && left.Tenant == right.Tenant && left.Pool == right.Pool && left.Generation == right.Generation && left.ProtocolVersion == right.ProtocolVersion && left.CertificateDigest == right.CertificateDigest && string(left.SigningPublicKey) == string(right.SigningPublicKey) && string(left.ObservationPublicKey) == string(right.ObservationPublicKey) && left.BootProbeProfile == right.BootProbeProfile && left.CapabilityDigest == right.CapabilityDigest && left.AttestationDigest == right.AttestationDigest && left.AttestationProfile == right.AttestationProfile && left.AttestationState == right.AttestationState && left.Status == right.Status && left.ExpiresAt.Equal(right.ExpiresAt)
+}
+
+func (profile BootProbeProfile) present() bool {
+	return profile.VMID != "" || profile.FixtureVersion != "" || profile.PlanDigest != "" || profile.FixtureDigest != "" || profile.AuthorityDigest != ""
+}
+
+func (profile BootProbeProfile) valid() bool {
+	return validBootProbeName(profile.VMID, false) && validBootProbeName(profile.FixtureVersion, true) && validBootProbeDigest(profile.PlanDigest) && validBootProbeDigest(profile.FixtureDigest) && validBootProbeDigest(profile.AuthorityDigest)
+}
+
+func validBootProbeName(value string, rejectMutable bool) bool {
+	if len(value) == 0 || len(value) > 63 || value[0] == '-' || value[len(value)-1] == '-' || (rejectMutable && (value == "latest" || value == "main")) {
+		return false
+	}
+	for _, character := range value {
+		if !(character >= 'a' && character <= 'z' || character >= '0' && character <= '9' || character == '-') {
+			return false
+		}
+	}
+	return true
+}
+
+func validBootProbeDigest(value sandbox.Digest) bool {
+	if len(value) != 71 || !strings.HasPrefix(string(value), "sha256:") {
+		return false
+	}
+	for _, character := range value[7:] {
+		if !(character >= '0' && character <= '9' || character >= 'a' && character <= 'f') {
+			return false
+		}
+	}
+	return true
 }
 
 func validDeliverySeed(seed DeliverySeed, requireAssignment bool) bool {

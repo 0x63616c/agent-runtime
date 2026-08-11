@@ -157,8 +157,11 @@ key quarantine, explicit cleanup, reassignment to a newly enrolled generation,
 and final public success. A separate private-v2 test starts the actual control
 and host binaries to prove a durable prepared session/snapshot, exact
 same-host-instance prepare recovery after a lost response, tenant refusal,
-revocation, cleanup/reassignment, and idempotent quarantine. The journal,
-authorization, launch-started transition, and lost terminal-ACK recovery are
+revocation, cleanup/reassignment, and idempotent quarantine. M3 also persists
+the operator-enrolled profile and distinct observation public key for the
+StageReady-to-command handoff; M4 must provide the reviewed compiled identity
+and observation-key signature before control seals that command. The journal,
+Jailer start, launch-started transition, and lost terminal-ACK recovery are
 M4-owned post-stage behavior and are deliberately not claimed by this M3 test.
 It does not exercise a certificate rotation or control-trust rotation/reload.
 The harness removes its temporary binaries, network, database container, and

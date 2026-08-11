@@ -3,9 +3,15 @@ package sandboxcontrol
 import (
 	"bytes"
 	"context"
+	"crypto/ed25519"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"time"
 
+	"github.com/0x63616c/agent-runtime/internal/firecrackerbootprobeprotocol"
 	"github.com/0x63616c/agent-runtime/internal/firecrackerbootprobev2"
+	"github.com/0x63616c/agent-runtime/internal/firecrackerlaunchgrant"
 	"github.com/0x63616c/agent-runtime/sandbox"
 	"github.com/cockroachdb/errors"
 	"github.com/jackc/pgx/v5"
@@ -20,6 +26,13 @@ func (ledger *PostgresLedger) CreateBootProbeSession(ctx context.Context, identi
 		host, err := authenticatePostgresHost(ctx, tx, identity, now)
 		if err != nil {
 			return ErrHostDenied
+		}
+		if len(host.ObservationPublicKey) != ed25519.PublicKeySize || !host.BootProbeProfile.valid() {
+			return ErrHostDenied
+		}
+		profileWire, err := json.Marshal(host.BootProbeProfile)
+		if err != nil {
+			return errors.Wrap(err, "encode enrolled v2 boot-probe profile")
 		}
 		op, err := lockedOperation(ctx, tx, principal, operationID)
 		if err != nil {
@@ -75,7 +88,7 @@ func (ledger *PostgresLedger) CreateBootProbeSession(ctx context.Context, identi
 			if err != nil {
 				return err
 			}
-			if _, err := tx.Exec(ctx, `INSERT INTO runtime.firecracker_boot_probe_sessions (host_instance_session_id,host_id,host_generation,principal,operation_id,assignment_id,lease_epoch,fencing_token,version,session_body,created_at,updated_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,1,$9,$10,$10)`, hostInstanceSessionID, binding.HostID, int64(binding.HostGeneration), binding.Principal, binding.OperationID, binding.AssignmentID, int64(initial.LeaseEpoch), int64(initial.FencingToken), wire, now.UTC()); err != nil {
+			if _, err := tx.Exec(ctx, `INSERT INTO runtime.firecracker_boot_probe_sessions (host_instance_session_id,host_id,host_generation,principal,operation_id,assignment_id,lease_epoch,fencing_token,version,session_body,boot_probe_profile,created_at,updated_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,1,$9,$10,$11,$11)`, hostInstanceSessionID, binding.HostID, int64(binding.HostGeneration), binding.Principal, binding.OperationID, binding.AssignmentID, int64(initial.LeaseEpoch), int64(initial.FencingToken), wire, profileWire, now.UTC()); err != nil {
 				return err
 			}
 			snapshot = firecrackerbootprobev2.Snapshot{Version: 1, Session: session, Wire: append([]byte(nil), wire...)}
@@ -91,6 +104,84 @@ func (ledger *PostgresLedger) CreateBootProbeSession(ctx context.Context, identi
 }
 
 func digestToSandbox(value string) sandbox.Digest { return sandbox.Digest(value) }
+
+// SealBootProbeStageReady atomically validates the active enrollment, exact
+// prepared snapshot, and operator profile before persisting the M3-signed M4
+// command. A byte-identical StageReady retry returns the prior command.
+func (ledger *PostgresLedger) SealBootProbeStageReady(ctx context.Context, identity HostIdentity, verified firecrackerbootprobeprotocol.VerifiedStageReady, stageWire []byte, controlPrivateKey ed25519.PrivateKey, now time.Time) ([]byte, error) {
+	if len(controlPrivateKey) != ed25519.PrivateKeySize || len(stageWire) == 0 || len(stageWire) > 32<<10 {
+		return nil, ErrHostDenied
+	}
+	stage := verified.StageReady()
+	var command []byte
+	err := ledger.transaction(ctx, "seal PostgreSQL v2 boot-probe stage-ready", func(tx pgx.Tx) error {
+		host, err := authenticatePostgresHost(ctx, tx, identity, now)
+		if err != nil || stage.Binding.HostID != host.HostID || stage.Binding.HostGeneration != host.Generation || len(host.ObservationPublicKey) != ed25519.PublicKeySize || !host.BootProbeProfile.valid() || !profileMatchesStage(host.BootProbeProfile, stage.M4) {
+			return ErrHostDenied
+		}
+		var version int64
+		var sessionWire, profileWire, persistedStage, persistedCommand []byte
+		if err := tx.QueryRow(ctx, `SELECT version,session_body,boot_probe_profile,stage_ready_wire,command_wire FROM runtime.firecracker_boot_probe_sessions WHERE host_instance_session_id=$1 FOR UPDATE`, stage.HostInstanceSessionID).Scan(&version, &sessionWire, &profileWire, &persistedStage, &persistedCommand); err != nil {
+			return errors.Wrap(err, "load v2 boot-probe prepared session")
+		}
+		var persistedProfile BootProbeProfile
+		if err := json.Unmarshal(profileWire, &persistedProfile); err != nil || !persistedProfile.valid() || persistedProfile != host.BootProbeProfile || !profileMatchesStage(persistedProfile, stage.M4) {
+			return ErrHostDenied
+		}
+		session, err := firecrackerbootprobev2.DecodeSession(sessionWire)
+		if err != nil {
+			return errors.Wrap(err, "decode v2 boot-probe prepared session")
+		}
+		if err := ledger.validateBootProbeAuthority(ctx, tx, identity, session, now); err != nil {
+			return err
+		}
+		if len(persistedCommand) != 0 {
+			if !bytes.Equal(persistedStage, stageWire) {
+				return errors.New("seal v2 boot-probe stage-ready: conflicting persisted stage")
+			}
+			command = append([]byte(nil), persistedCommand...)
+			return nil
+		}
+		if uint64(version) != stage.ExpectedVersion || session.Lifecycle.Phase != firecrackerbootprobev2.LifecyclePrepared || session.Delivery.Binding != stage.Binding || session.Delivery.Current != stage.Delivery {
+			return errors.New("seal v2 boot-probe stage-ready: stale prepared session")
+		}
+		grant, err := firecrackerlaunchgrant.New(bootProbeEnvelopeTuple(stage.Binding, stage.Delivery), stage.M4)
+		if err != nil {
+			return errors.Wrap(err, "build v2 boot-probe grant")
+		}
+		authorized, err := session.AuthorizeLaunch(now)
+		if err != nil {
+			return errors.Wrap(err, "authorize v2 boot-probe stage-ready")
+		}
+		commandWire, err := firecrackerbootprobeprotocol.SignCommand(authorized, grant, stage.GuestNonce, controlPrivateKey)
+		if err != nil {
+			return errors.Wrap(err, "sign v2 boot-probe command")
+		}
+		grantWire, err := firecrackerlaunchgrant.Encode(grant)
+		if err != nil {
+			return errors.Wrap(err, "encode v2 boot-probe grant")
+		}
+		nextSessionWire, err := firecrackerbootprobev2.EncodeSession(authorized)
+		if err != nil {
+			return errors.Wrap(err, "encode authorized v2 boot-probe session")
+		}
+		digest := sha256.Sum256(stageWire)
+		if _, err := tx.Exec(ctx, `UPDATE runtime.firecracker_boot_probe_sessions SET version=version+1,session_body=$2,stage_ready_wire=$3,stage_ready_digest=$4,grant_wire=$5,command_wire=$6,command_version=version+1,updated_at=$8 WHERE host_instance_session_id=$1 AND version=$7`, stage.HostInstanceSessionID, nextSessionWire, stageWire, "sha256:"+hex.EncodeToString(digest[:]), grantWire, commandWire, version, now.UTC()); err != nil {
+			return errors.Wrap(err, "persist v2 boot-probe stage-ready command")
+		}
+		command = append([]byte(nil), commandWire...)
+		return nil
+	})
+	return command, err
+}
+
+func profileMatchesStage(profile BootProbeProfile, identity firecrackerlaunchgrant.TrustedM4Identity) bool {
+	return profile.VMID == identity.VMID && profile.FixtureVersion == identity.FixtureVersion && profile.PlanDigest == identity.PlanDigest && profile.FixtureDigest == identity.FixtureDigest && profile.AuthorityDigest == identity.AuthorityDigest
+}
+
+func bootProbeEnvelopeTuple(binding firecrackerbootprobev2.Binding, delivery firecrackerbootprobev2.Delivery) firecrackerlaunchgrant.EnvelopeTuple {
+	return firecrackerlaunchgrant.EnvelopeTuple{EnvelopeID: delivery.EnvelopeID, DeliveryID: delivery.DeliveryID, Nonce: delivery.Nonce, IssuedAt: delivery.IssuedAt, ExpiresAt: delivery.ExpiresAt, HostID: binding.HostID, HostGeneration: binding.HostGeneration, AssignmentID: binding.AssignmentID, LeaseEpoch: delivery.LeaseEpoch, FencingToken: delivery.FencingToken, Tenant: binding.Tenant, Principal: binding.Principal, SandboxID: binding.SandboxID, OperationID: binding.OperationID, OperationKind: binding.OperationKind, EffectiveSpecDigest: binding.EffectiveSpecDigest, CapabilityDigest: binding.CapabilityDigest, CanonicalRequestDigest: binding.CanonicalRequestDigest}
+}
 
 // RenewBootProbeSession admits exactly one successor only while the original
 // enrolled host, assignment, lease, and fence are still authoritative.

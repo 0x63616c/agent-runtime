@@ -71,11 +71,14 @@ compiler and is useful only after the local sealed verifier has compared it to
 the returned command. Treating a configuration literal as the compiled stage
 identity is prohibited.
 
-The current M3 reference v2 route is a non-executing control prerequisite: it
-persists and fences only the preparation record, then returns the exact
-authority-validated prepared snapshot on retry. It emits no M4 grant or
-command and does not stage, journal, or start Firecracker. It must not be used
-as the final M4 handoff until the interface below exists.
+The M3 v2 route now implements the control half of that handoff. The prepare
+endpoint returns only the exact authority-validated prepared snapshot on retry.
+The separately authenticated stage-ready endpoint accepts only a canonical
+observation-key-signed record for that exact prepared snapshot, then persists
+the profile copy, signed stage-ready wire/digest, grant, command, and command
+CAS version in the same authority transaction before returning the canonical
+M3 command. It does not stage, journal, start, or observe Firecracker; those
+remain M4-owned behavior.
 
 ### Required M4 integration interface
 
