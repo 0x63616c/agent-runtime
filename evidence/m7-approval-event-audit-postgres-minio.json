@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "observed_at_utc": "2026-08-11T21:35:05Z",
+  "proof_level": "integration",
+  "revision": "c3174ec16fe1132b91a6c649c8a1156f7e6f4081",
+  "scope": "HITL-004 S5/S6 approval and tool lifecycle on exclusive disposable PostgreSQL and MinIO. Broker seeding is private test setup; owner decisions and Product-event inspection use the public StateRuntime contract. This is not a Workspace service, protected sandbox, Firecracker, Linux/KVM, or browser/HTTP E2E claim.",
+  "commands": [
+    "./deploy/runtimeapi/run-durable-integration.sh",
+    "just docs-check",
+    "just check"
+  ],
+  "result": "passed",
+  "observations": {
+    "terminal_matrix": "A durable pending approval was explicitly approved, explicitly denied, expired under the injected clock after runtime-store reopen, and cancelled before any grant or execution intent. The approved path then recorded the sandbox-operation finalization.",
+    "product_events": "The public owner projection retained safe ordered approval-resolved, approval-expired, approval-cancelled, and sandbox-operation-finalized events. Event JSON contained neither the fixture descriptor bytes nor the audit probe secret.",
+    "audit_outbox": "For approval, execution, cancellation, denial, and expiry, the durable matrix matched each Product-event outbox record to the exact audit fact and operation ID, in persisted event/fact/route order. Owner scope could not enumerate the separately authorized audit or outbox pages.",
+    "publication_route": "The closed private publisher route test verifies that every terminal approval event maps to an explicit workflow command; no new event is silently acknowledged as an unknown route."
+  },
+  "redaction": "No DSNs, object-store credentials, raw tenant/session/turn/approval/grant/operation IDs, descriptors, input bytes, artifact body, audit probe secret, backend endpoint, or provider credential are retained."
+}
