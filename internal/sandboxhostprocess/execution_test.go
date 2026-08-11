@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -159,6 +160,14 @@ type recordingAuthenticatedExecutor struct {
 	wire     []byte
 }
 
+type recordingAuthenticatedReapingExecutor struct {
+	executeEnvelope sandboxhostprotocol.Envelope
+	executeWire     []byte
+	reapEnvelope    sandboxhostprotocol.Envelope
+	reapWire        []byte
+	executeErr      error
+}
+
 type outputReportingExecutor struct {
 	emit func(context.Context, OutputEmitter) error
 }
@@ -189,6 +198,22 @@ func (executor *recordingAuthenticatedExecutor) Execute(context.Context, sandbox
 func (executor *recordingAuthenticatedExecutor) ExecuteAuthenticated(_ context.Context, envelope sandboxhostprotocol.Envelope, wire []byte) error {
 	executor.envelope = envelope
 	executor.wire = append([]byte(nil), wire...)
+	return nil
+}
+
+func (executor *recordingAuthenticatedReapingExecutor) Execute(context.Context, sandboxhostprotocol.Envelope) error {
+	return nil
+}
+
+func (executor *recordingAuthenticatedReapingExecutor) ExecuteAuthenticated(_ context.Context, envelope sandboxhostprotocol.Envelope, wire []byte) error {
+	executor.executeEnvelope = envelope
+	executor.executeWire = append([]byte(nil), wire...)
+	return executor.executeErr
+}
+
+func (executor *recordingAuthenticatedReapingExecutor) ReapAuthenticated(_ context.Context, envelope sandboxhostprotocol.Envelope, wire []byte) error {
+	executor.reapEnvelope = envelope
+	executor.reapWire = append([]byte(nil), wire...)
 	return nil
 }
 
@@ -318,6 +343,28 @@ func TestExecuteEnvelopeReportsUncertainAfterExecutorFailure(t *testing.T) {
 	}, context.WithDeadline)
 	if err != nil || len(sent) != 2 || resultState(t, sent[1]) != "uncertain" || len(journal.PendingResults()) != 0 {
 		t.Fatalf("executor failure error:%v sent:%d terminal:%q pending:%d", err, len(sent), resultState(t, sent[1]), len(journal.PendingResults()))
+	}
+}
+
+func TestExecuteEnvelopeReapsTheExactAuthenticatedCommandBeforeItsUncertainTerminal(t *testing.T) {
+	envelope, now := executionEnvelope()
+	journal := executionJournal(t, envelope)
+	wire := []byte("the-control-verified-canonical-envelope")
+	executor := &recordingAuthenticatedReapingExecutor{executeErr: errors.New("guest exchange interrupted")}
+	bound := bindAuthenticatedEnvelope(executor, wire)
+	var sent [][]byte
+	if err := executeEnvelope(context.Background(), envelope, now, journal, executionPrivateKey(), bound, func(_ context.Context, result []byte) error {
+		sent = append(sent, append([]byte(nil), result...))
+		return nil
+	}, func(ctx context.Context, _ time.Time) (context.Context, context.CancelFunc) { return ctx, func() {} }); err != nil {
+		t.Fatalf("executeEnvelope() error = %v", err)
+	}
+	if !reflect.DeepEqual(executor.executeEnvelope, envelope) || !reflect.DeepEqual(executor.reapEnvelope, envelope) || string(executor.executeWire) != string(wire) || string(executor.reapWire) != string(wire) || len(sent) != 2 || resultState(t, sent[1]) != "uncertain" {
+		t.Fatalf("authenticated execution/reaper = %#v; terminal=%q", executor, resultState(t, sent[len(sent)-1]))
+	}
+	wire[0] = 'x'
+	if string(executor.reapWire) != "the-control-verified-canonical-envelope" {
+		t.Fatalf("reaper retained caller wire mutation = %q", executor.reapWire)
 	}
 }
 

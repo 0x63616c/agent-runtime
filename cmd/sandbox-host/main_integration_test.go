@@ -38,7 +38,12 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-func TestReferenceHostMultiProcessLostAckQuarantineCleanupAndReassignment(t *testing.T) {
+// TestFirecrackerControlBridgeMultiProcessLostAckQuarantineCleanupAndReassignment
+// proves that the actual sandbox-host binary delivers enrolled v1 commands to
+// the fail-closed Firecracker HostProcessExecutor. It exercises only signed
+// envelope, receipt, uncertain-terminal and reassignment ownership; it does
+// not launch a Jailer or claim a Firecracker capability.
+func TestFirecrackerControlBridgeMultiProcessLostAckQuarantineCleanupAndReassignment(t *testing.T) {
 	controlBinary := requiredEnvironment(t, "AR_SANDBOXCONTROL_BINARY")
 	hostBinary := requiredEnvironment(t, "AR_SANDBOXHOST_BINARY")
 	dsn := requiredEnvironment(t, "AR_SANDBOXCONTROL_POSTGRES_DSN")
@@ -80,11 +85,11 @@ func TestReferenceHostMultiProcessLostAckQuarantineCleanupAndReassignment(t *tes
 	faultConfig := writeHostConfig(t, directory, "host-fault.json", hostAddress, identities, 1, journalPath, true, false, false)
 	hostSigning1 := base64.RawStdEncoding.EncodeToString(hostPrivate1)
 	controlVerify := base64.RawStdEncoding.EncodeToString(controlPublic)
-	fault := startProcess(t, hostBinary, hostArguments(faultConfig), map[string]string{"TEST_CONTROL_PUBLIC_KEY": controlVerify, "TEST_HOST_SIGNING_KEY": hostSigning1})
+	fault := startProcess(t, hostBinary, firecrackerHostArguments(faultConfig), map[string]string{"TEST_CONTROL_PUBLIC_KEY": controlVerify, "TEST_HOST_SIGNING_KEY": hostSigning1})
 	fault.stop(t, false, controlVerify, hostSigning1)
 
 	resumeConfig := writeHostConfig(t, directory, "host-resume.json", hostAddress, identities, 1, journalPath, false, false, false)
-	resumed := startProcess(t, hostBinary, hostArguments(resumeConfig), map[string]string{"TEST_CONTROL_PUBLIC_KEY": controlVerify, "TEST_HOST_SIGNING_KEY": hostSigning1})
+	resumed := startProcess(t, hostBinary, firecrackerHostArguments(resumeConfig), map[string]string{"TEST_CONTROL_PUBLIC_KEY": controlVerify, "TEST_HOST_SIGNING_KEY": hostSigning1})
 	waitForOperationState(t, client, request.ID, sandbox.OperationUncertain)
 	resumed.awaitHostPoll(t)
 	resumed.stop(t, true, controlVerify, hostSigning1)
@@ -103,10 +108,10 @@ func TestReferenceHostMultiProcessLostAckQuarantineCleanupAndReassignment(t *tes
 	}
 	resultJournalPath := filepath.Join(directory, "result-receipts.json")
 	resultFaultConfig := writeHostConfig(t, directory, "host-result-fault.json", hostAddress, identities, 1, resultJournalPath, false, false, true)
-	resultFault := startProcess(t, hostBinary, hostArguments(resultFaultConfig), map[string]string{"TEST_CONTROL_PUBLIC_KEY": controlVerify, "TEST_HOST_SIGNING_KEY": hostSigning1})
+	resultFault := startProcess(t, hostBinary, firecrackerHostArguments(resultFaultConfig), map[string]string{"TEST_CONTROL_PUBLIC_KEY": controlVerify, "TEST_HOST_SIGNING_KEY": hostSigning1})
 	resultFault.stop(t, false, controlVerify, hostSigning1)
 	resultResumeConfig := writeHostConfig(t, directory, "host-result-resume.json", hostAddress, identities, 1, resultJournalPath, false, false, false)
-	resultResumed := startProcess(t, hostBinary, hostArguments(resultResumeConfig), map[string]string{"TEST_CONTROL_PUBLIC_KEY": controlVerify, "TEST_HOST_SIGNING_KEY": hostSigning1})
+	resultResumed := startProcess(t, hostBinary, firecrackerHostArguments(resultResumeConfig), map[string]string{"TEST_CONTROL_PUBLIC_KEY": controlVerify, "TEST_HOST_SIGNING_KEY": hostSigning1})
 	waitForOperationState(t, client, resultRetryRequest.ID, sandbox.OperationUncertain)
 	resultResumed.awaitHostPoll(t)
 	resultResumed.stop(t, true, controlVerify, hostSigning1)
@@ -128,7 +133,7 @@ func TestReferenceHostMultiProcessLostAckQuarantineCleanupAndReassignment(t *tes
 		t.Fatal(err)
 	}
 	rogueConfig := writeHostConfig(t, directory, "host-rogue.json", hostAddress, identities, 1, filepath.Join(directory, "rogue-receipts.json"), false, false, false)
-	rogue := startProcess(t, hostBinary, hostArguments(rogueConfig), map[string]string{"TEST_CONTROL_PUBLIC_KEY": controlVerify, "TEST_HOST_SIGNING_KEY": base64.RawStdEncoding.EncodeToString(roguePrivate)})
+	rogue := startProcess(t, hostBinary, firecrackerHostArguments(rogueConfig), map[string]string{"TEST_CONTROL_PUBLIC_KEY": controlVerify, "TEST_HOST_SIGNING_KEY": base64.RawStdEncoding.EncodeToString(roguePrivate)})
 	rogue.stop(t, false, controlVerify)
 	quarantined, err := ledger.Get(context.Background(), "tenant_01:runtime_01", string(quarantineRequest.ID))
 	if err != nil || quarantined.State != sandboxcontrol.StateUncertain || quarantined.Assignment.HostID != "" {
@@ -148,7 +153,7 @@ func TestReferenceHostMultiProcessLostAckQuarantineCleanupAndReassignment(t *tes
 		t.Fatal(err)
 	}
 	reassignedConfig := writeHostConfig(t, directory, "host-reassigned.json", hostAddress, identities, 2, filepath.Join(directory, "reassigned-receipts.json"), false, false, false)
-	reassigned := startProcess(t, hostBinary, hostArguments(reassignedConfig), map[string]string{"TEST_CONTROL_PUBLIC_KEY": controlVerify, "TEST_HOST_SIGNING_KEY": base64.RawStdEncoding.EncodeToString(hostPrivate2)})
+	reassigned := startProcess(t, hostBinary, firecrackerHostArguments(reassignedConfig), map[string]string{"TEST_CONTROL_PUBLIC_KEY": controlVerify, "TEST_HOST_SIGNING_KEY": base64.RawStdEncoding.EncodeToString(hostPrivate2)})
 	waitForOperationState(t, client, quarantineRequest.ID, sandbox.OperationUncertain)
 	reassigned.awaitHostPoll(t)
 	reassigned.stop(t, true, controlVerify)
@@ -532,6 +537,10 @@ func awaitReady[T any](t *testing.T, process *process, ready <-chan T, role stri
 
 func hostArguments(config string) []string {
 	return []string{"--config", config, "--poll-interval", "100ms"}
+}
+
+func firecrackerHostArguments(config string) []string {
+	return append(hostArguments(config), "--firecracker-control")
 }
 
 func (process *process) stop(t *testing.T, expectSuccess bool, secrets ...string) {

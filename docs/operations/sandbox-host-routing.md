@@ -63,6 +63,25 @@ fields name injected environment values; secret material is never serialized
 in either document. The three `test_fault_*` fields exist only for the reference
 host's recovery test profile and must remain false in normal runs.
 
+### Fail-closed Firecracker control bridge
+
+`cmd/sandbox-host --firecracker-control` routes the same enrolled v1 delivery
+through `firecracker.HostProcessExecutor` after the host has verified the
+canonical control signature and journaled its started intent. The adapter
+rechecks that it received the exact canonical signed wire before every guest,
+secret, proxy, transfer, restore, mount, cancellation, or reaper handoff.
+Output and reference-only data receipts remain host-journaled and acknowledged
+before a terminal result; a failed exchange invokes only exact-envelope
+cleanup and records an `uncertain` terminal, never a replayed effect.
+
+This switch is a control/recovery composition test profile, not a deployment
+shortcut. It constructs no Jailer launch profile, fixture binding, cgroup,
+guest transport, mount, secret, egress, transfer, or snapshot data plane. Its
+`LinuxJailerHost` is intentionally unconfigured, so every capability remains
+unavailable. A protected operator deployment may replace it only with a
+reviewed `NewLinuxJailerHost` composition and retained Linux/amd64 KVM/Jailer
+evidence; command startup must not infer those inputs.
+
 ### Configuration-format v1 to v2 migration
 
 This format change is deliberately not a transparent fallback. A version-1

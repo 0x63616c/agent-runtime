@@ -23,3 +23,12 @@ func TestParseArgumentsRequiresExplicitFinitePollInterval(t *testing.T) {
 		}
 	}
 }
+
+func TestParseArgumentsSelectsTheExplicitFailClosedFirecrackerControlBridge(t *testing.T) {
+	t.Parallel()
+
+	arguments, err := parseArguments([]string{"--config", "/etc/sandbox-host/host.json", "--poll-interval", "2s", "--firecracker-control"})
+	if err != nil || !arguments.firecrackerControl {
+		t.Fatalf("parseArguments(Firecracker bridge) = %#v, %v", arguments, err)
+	}
+}

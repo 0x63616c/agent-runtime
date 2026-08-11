@@ -2,8 +2,10 @@ package firecracker
 
 import (
 	"context"
+	"crypto/ed25519"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -32,4 +34,51 @@ func TestHostProcessExecutorRefusesSecretCommandWithoutAComposedCertifiedLifecyc
 	if !errors.Is(err, ErrCapabilityUnavailable) {
 		t.Fatalf("ExecuteAuthenticatedWithOutput() = %v, want secret profile refusal", err)
 	}
+}
+
+func TestHostProcessExecutorRefusesAReboundAuthenticatedEnvelopeBeforeGuestDispatch(t *testing.T) {
+	plan := mustCompile(t, validProfile())
+	executor := HostProcessExecutor{Host: newLinuxJailerHost(plan, verifiedPlanFixtures(plan), &recordingJailerStarter{}, &recordingFirecrackerHTTP{}, &recordingGuestChannel{})}
+	envelope, wire := authenticatedHostExecutorEnvelope(t, plan)
+	rebound := envelope
+	rebound.FencingToken++
+	err := executor.ExecuteAuthenticated(context.Background(), rebound, wire)
+	if !errors.Is(err, ErrCapabilityUnavailable) || !strings.Contains(err.Error(), "exact canonical envelope") {
+		t.Fatalf("ExecuteAuthenticated(rebound envelope) = %v, want exact-wire refusal", err)
+	}
+}
+
+func authenticatedHostExecutorEnvelope(t *testing.T, plan Plan) (sandboxhostprotocol.Envelope, []byte) {
+	t.Helper()
+	now := time.Date(2026, 8, 11, 0, 0, 0, 0, time.UTC)
+	envelope := sandboxhostprotocol.Envelope{
+		ProtocolVersion:        sandboxhostprotocol.Version,
+		EnvelopeID:             "envelope_01",
+		DeliveryID:             "delivery_01",
+		Nonce:                  "nonce_01",
+		IssuedAt:               now,
+		ExpiresAt:              now.Add(time.Minute),
+		HostID:                 "host_01",
+		HostGeneration:         1,
+		AssignmentID:           "assignment_01",
+		LeaseEpoch:             1,
+		FencingToken:           1,
+		Tenant:                 "tenant_01",
+		Principal:              "tenant_01:principal_01",
+		SandboxID:              plan.VMID(),
+		ProcessID:              "process_01",
+		OperationID:            "operation_01",
+		OperationKind:          "generic-command",
+		EffectiveSpecDigest:    sandboxhostprotocol.Digest([]byte("effective-spec")),
+		CapabilityDigest:       sandboxhostprotocol.Digest([]byte("unavailable-capability-profile")),
+		CanonicalRequestDigest: sandboxhostprotocol.Digest([]byte("canonical-request")),
+		SequenceContract:       "host-proposed/control-owned-v1",
+		Payload:                []byte(`{"command":"bounded"}`),
+	}
+	envelope.PayloadDigest = sandboxhostprotocol.Digest(envelope.Payload)
+	wire, err := sandboxhostprotocol.SignEnvelope(envelope, "control_01", ed25519.NewKeyFromSeed(make([]byte, ed25519.SeedSize)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return envelope, wire
 }
