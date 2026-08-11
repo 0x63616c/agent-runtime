@@ -601,7 +601,7 @@ type ExecProcessRequest struct { SandboxID SandboxID; Command Command }
 type SignalProcessRequest struct { ProcessID ProcessID; Signal Signal }
 type KillProcessRequest struct { ProcessID ProcessID }
 type CopyInRequest struct { SandboxID SandboxID; Source ArtifactRef; Destination GuestPath; Options TransferOptions }
-type CopyOutRequest struct { SandboxID SandboxID; Source GuestPath; Options TransferOptions }
+type CopyOutRequest struct { SandboxID SandboxID; Source GuestPath; MediaType string; Options TransferOptions }
 type SnapshotSandboxRequest struct { SandboxID SandboxID; RiskAttestation *SnapshotRiskAttestation }
 type CloseSandboxRequest struct { SandboxID SandboxID }
 type ReconcileSandboxRequest struct { SandboxID SandboxID }
@@ -1198,7 +1198,8 @@ dot-dot, NUL, reserved roots, Unicode ambiguity and overlap reject. Production
 uses descriptor-relative opened roots and rejects symlink/replacement/
 mount-crossing escape.
 
-Copy-in/out is required portable workspace path before mounts. It transfers
+Copy-in/out is the required portable workspace path before mounts. Copy-out
+declares its output media type rather than inferring it from a host pathname. It transfers
 files or bounded directory archives via authorized immutable artifacts:
 
 - source has known size/SHA-256; unknown/short/excess/mismatch rejects;
