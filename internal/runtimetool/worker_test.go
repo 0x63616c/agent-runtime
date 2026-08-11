@@ -240,6 +240,29 @@ func TestWorkerRefusesOversizedToolOutputBeforeDurablePersistence(t *testing.T) 
 	}
 }
 
+func TestWorkerRedactsCredentialShapedOutputBeforeArtifactPersistence(t *testing.T) {
+	ctx := context.Background()
+	now := time.Date(2026, 8, 11, 12, 0, 0, 0, time.UTC)
+	objects := &toolObjects{values: map[string][]byte{}}
+	content, _ := runtimecontent.New("runtime-content", objects)
+	tenant, _ := runtimecontent.ParseTenantID("tenant-a")
+	principal, _ := runtimecontent.ParsePrincipalID("principal-a")
+	compiler, _ := runtimestate.NewCompiler(content)
+	source, _ := clock.NewFake(now)
+	planner, _ := runtimestate.NewRuntimeStatePlanner(source, &toolIDs{})
+	store, _ := runtimestate.NewMemoryRuntimeStateStore(planner)
+	createToolExecution(t, ctx, content, compiler, store, tenant, principal, now)
+	worker, err := runtimetool.NewWorker(runtimetool.Config{Store: store, Tenants: store, Compiler: compiler, Planner: planner, Clock: source, Content: content, Adapter: &recordingAdapter{response: runtimetool.Response{Output: []byte("token=real-secret password:another")}}, Claimer: "tool-worker"})
+	if err != nil || worker.ScanOnce(ctx) != nil {
+		t.Fatalf("finalize redacted output: %v", err)
+	}
+	for _, value := range objects.values {
+		if bytes.Contains(value, []byte("real-secret")) || bytes.Contains(value, []byte("another")) {
+			t.Fatalf("credential leaked to object: %q", value)
+		}
+	}
+}
+
 func TestWorkerNeverDispatchesExpiredOrCancelledApprovedGrants(t *testing.T) {
 	for _, test := range []struct {
 		name    string
