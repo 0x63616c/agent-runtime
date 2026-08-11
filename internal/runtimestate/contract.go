@@ -686,6 +686,17 @@ type ExpireCapabilityGrantCommand struct {
 // Owned returns a value-owned expiry command.
 func (command ExpireCapabilityGrantCommand) Owned() ExpireCapabilityGrantCommand { return command }
 
+// DenyToolAdmissionCommand retains only the correlation of a broker refusal.
+type DenyToolAdmissionCommand struct {
+	Scope                      MutationScope
+	IdempotencyKey, ToolCallID string
+	SessionID                  agentruntime.SessionID
+	TurnID                     agentruntime.TurnID
+}
+
+// Owned returns a value-owned denial command.
+func (command DenyToolAdmissionCommand) Owned() DenyToolAdmissionCommand { return command }
+
 // BeginToolExecutionCommand records one granted external tool operation before
 // an adapter receives its runtime-owned idempotency key.
 type BeginToolExecutionCommand struct {
