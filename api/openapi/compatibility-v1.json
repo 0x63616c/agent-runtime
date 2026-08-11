@@ -1,0 +1,19 @@
+{
+  "openapi": "3.1.0",
+  "operations": [
+    {"id": "createAgent", "method": "post", "path": "/v1/admin/agents", "status": "201"},
+    {"id": "reviseAgent", "method": "post", "path": "/v1/admin/agents/{agent_id}/revisions", "status": "201"},
+    {"id": "getAgentRevision", "method": "get", "path": "/v1/admin/agents/{agent_id}/revisions/{revision_id}", "status": "200"},
+    {"id": "createPolicy", "method": "post", "path": "/v1/admin/policies", "status": "201"},
+    {"id": "revisePolicy", "method": "post", "path": "/v1/admin/policies/{policy_name}/revisions", "status": "201"},
+    {"id": "getPolicy", "method": "get", "path": "/v1/admin/policies/{policy_name}/revisions/{revision}", "status": "200"}
+  ],
+  "schemas": {
+    "AgentSpecification": {"required": ["id", "revision_id", "revision", "name", "model_profile", "instructions", "created_at"]},
+    "ToolDefinition": {"required": ["name", "description"]},
+    "Policy": {"required": ["name", "revision", "digest", "rules", "created_at"]},
+    "PolicyRule": {"required": ["tool_name", "decision"], "enums": {"decision": ["denied", "requires_approval"]}},
+    "Event": {"required": ["id", "cursor", "sequence", "kind", "session_id", "occurred_at"], "enums": {"kind": ["session.created", "input.accepted", "turn.queued", "turn.started", "turn.succeeded", "turn.failed", "turn.cancelled", "session.closing", "session.completed"]}},
+    "Failure": {"required": ["code", "message", "retryable"], "enums": {"code": ["invalid_input", "conflict", "not_found", "unavailable", "internal"]}}
+  }
+}
