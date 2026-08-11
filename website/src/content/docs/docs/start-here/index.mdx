@@ -3,6 +3,8 @@ title: Start here
 description: What Agent Runtime is, what exists today, and where to go next.
 ---
 
+import DocLink from '../../../../components/DocLink.astro';
+
 # Agent Runtime
 
 Agent Runtime is being built as one Go monorepo for durable, session-based
@@ -18,12 +20,12 @@ infrastructure Stack with trust-scoped API/orchestration/codec runtime roles,
 and the first Temporal-free public Go contract plus deterministic Agent kernel.
 It does not yet ship the HTTP transport, PostgreSQL runtime authority, private
 Temporal orchestration, three examples, production payload deployment, or
-verified Firecracker isolation. See the [runtime Go contract](../reference/runtime-go-contract.mdx)
-and [local Stack guide](../build-and-run/local-stack.mdx) for the exact current
+verified Firecracker isolation. See the <DocLink href="/docs/reference/runtime-go-contract">runtime Go contract</DocLink>
+and <DocLink href="/docs/build-and-run/local-stack">local Stack guide</DocLink> for the exact current
 boundaries.
 :::
 
-Start with [the domain language](../concepts/runtime-language.mdx), then read
-[the verified safety boundary](../security/verified-boundaries.mdx). The
-[source inventory](../reference/generated/source-inventory.mdx) records the
+Start with <DocLink href="/docs/concepts/runtime-language">the domain language</DocLink>, then read
+<DocLink href="/docs/security/verified-boundaries">the verified safety boundary</DocLink>. The
+<DocLink href="/docs/reference/generated/source-inventory">source inventory</DocLink> records the
 declared inputs behind this documentation snapshot.

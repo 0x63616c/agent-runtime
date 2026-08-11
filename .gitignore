@@ -1,4 +1,6 @@
 website/.astro/
 website/dist/
 website/node_modules/
+.astro/
+node_modules/
 .runtime/

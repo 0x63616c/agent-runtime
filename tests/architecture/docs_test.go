@@ -35,12 +35,15 @@ var _ = Describe("public documentation foundation", func() {
 		config := read("website/astro.config.mjs")
 		for _, required := range []string{
 			"site: 'https://0x63616c.github.io'",
-			"base: '/agent-runtime'",
+			"const projectBase = '/agent-runtime'",
+			"base: projectBase",
 			"trailingSlash: 'never'",
 			"starlight({",
 			"docs/start-here",
 			"docs/reference/sandbox-host-control",
-			"'/start-here': '/docs/start-here'",
+			"'/start-here': `${projectBase}/docs/start-here`",
+			"'/docs/security/dependency-audit-exception': `${projectBase}/docs/security/verified-boundaries#documentation-security-audit`",
+			"edit/main/website/'",
 		} {
 			Expect(config).To(ContainSubstring(required))
 		}
@@ -48,8 +51,16 @@ var _ = Describe("public documentation foundation", func() {
 		Expect(startHere).To(ContainSubstring(":::caution[Implementation status]"))
 		Expect(startHere).NotTo(ContainSubstring(":::caution Implementation status"))
 		routes := read("website/route-manifest.json")
+		checker := read("website/scripts/check-routes.mjs")
+		link := read("website/src/components/DocLink.astro")
 		Expect(routes).To(ContainSubstring("/docs/start-here"))
 		Expect(routes).To(ContainSubstring("/start-here"))
+		Expect(routes).To(ContainSubstring("\"schemaVersion\": 2"))
+		Expect(routes).To(ContainSubstring("/docs/security/dependency-audit-exception"))
+		Expect(checker).To(ContainSubstring("static hrefs, anchors, sidebar navigation, and edit targets"))
+		Expect(checker).To(ContainSubstring("assertLinksAndAnchors"))
+		Expect(checker).To(ContainSubstring("assertRedirect"))
+		Expect(link).To(ContainSubstring("DocLink requires one canonical /docs/ route"))
 	})
 
 	It("declares least-privilege Pages deployment independently of main CI", func() {

@@ -58,6 +58,8 @@
         "website/package.json",
         "website/route-manifest.json",
         "website/scripts/check-routes.mjs",
+        "website/public/favicon.svg",
+        "website/src/components/DocLink.astro",
         "website/src/content.config.ts",
         "website/src/content/docs/docs/build-and-run/local-foundation.mdx",
         "website/src/content/docs/docs/build-and-run/local-stack.mdx",

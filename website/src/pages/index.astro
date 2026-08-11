@@ -1,5 +1,6 @@
 ---
 const base = import.meta.env.BASE_URL;
+const withBase = (path: string) => `${base.replace(/\/$/, '')}${path}`;
 ---
 
 <!doctype html>
@@ -31,8 +32,8 @@ const base = import.meta.env.BASE_URL;
       <h1>Build agents that can survive the real world.</h1>
       <p>Agent Runtime is a monorepo for durable sessions, governed tools, human approvals, artifacts, and isolated execution.</p>
       <div class="actions">
-        <a class="primary" href={`${base}docs/start-here`}>Explore the foundation</a>
-        <a href={`${base}docs/security/verified-boundaries`}>Read the safety boundary</a>
+        <a class="primary" href={withBase('/docs/start-here')}>Explore the foundation</a>
+        <a href={withBase('/docs/security/verified-boundaries')}>Read the safety boundary</a>
       </div>
       <section class="grid" aria-label="Project principles">
         <article><h2>Durable by design</h2><p>Sessions and Turns are designed around durable state, resumable observation, and explicit terminal outcomes.</p></article>

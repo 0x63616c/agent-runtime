@@ -1,16 +1,19 @@
 import {defineConfig} from 'astro/config';
 import starlight from '@astrojs/starlight';
 
+const projectBase = '/agent-runtime';
+
 export default defineConfig({
   site: 'https://0x63616c.github.io',
-  base: '/agent-runtime',
+  base: projectBase,
   trailingSlash: 'never',
   redirects: {
-    '/start-here': '/docs/start-here',
-    '/reference/overview': '/docs/reference/overview',
-    '/reference/postgresql-data-authority': '/docs/reference/postgresql-data-authority',
-    '/reference/runtime-go-contract': '/docs/reference/runtime-go-contract',
-    '/reference/temporal-payloads': '/docs/reference/temporal-payloads',
+    '/start-here': `${projectBase}/docs/start-here`,
+    '/reference/overview': `${projectBase}/docs/reference/overview`,
+    '/reference/postgresql-data-authority': `${projectBase}/docs/reference/postgresql-data-authority`,
+    '/reference/runtime-go-contract': `${projectBase}/docs/reference/runtime-go-contract`,
+    '/reference/temporal-payloads': `${projectBase}/docs/reference/temporal-payloads`,
+    '/docs/security/dependency-audit-exception': `${projectBase}/docs/security/verified-boundaries#documentation-security-audit`,
   },
   integrations: [
     starlight({
@@ -18,7 +21,7 @@ export default defineConfig({
       description: 'Durable sessions, explicit authority, honest evidence.',
       customCss: ['./src/styles/custom.css'],
       editLink: {
-        baseUrl: 'https://github.com/0x63616c/agent-runtime/edit/main/website/src/content/docs/',
+        baseUrl: 'https://github.com/0x63616c/agent-runtime/edit/main/website/',
       },
       social: [
         {icon: 'github', label: 'GitHub', href: 'https://github.com/0x63616c/agent-runtime'},

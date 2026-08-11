@@ -22,3 +22,11 @@ Tilt E2E, or Linux/KVM E2E. A local macOS process adapter can demonstrate
 developer workflow only; it can never serve as Firecracker security evidence.
 Operators remain responsible for declared infrastructure, credentials,
 retention, backup, and environment-specific controls.
+
+## Documentation security audit
+
+The temporary Docusaurus dependency-audit exception is retired. Astro
+Starlight's locked production dependency graph is checked directly by
+`npm audit --omit=dev --audit-level=high` in `just docs-check`; it must remain
+clean for documentation publication. The retired route remains only as a
+compatibility redirect to this section.

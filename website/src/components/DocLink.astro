@@ -1,0 +1,16 @@
+---
+interface Props {
+  href: string;
+}
+
+const {href} = Astro.props;
+
+if (!href.startsWith('/docs/') || href.includes('..') || href.includes('\\')) {
+  throw new Error(`DocLink requires one canonical /docs/ route, got ${JSON.stringify(href)}`);
+}
+
+const base = import.meta.env.BASE_URL.replace(/\/$/, '');
+const target = `${base}${href}`;
+---
+
+<a href={target}><slot /></a>
