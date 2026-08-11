@@ -37,7 +37,12 @@ postgres_port=$(docker compose --project-name "$project_name" --env-file "$envir
 minio_port=$(docker compose --project-name "$project_name" --env-file "$environment_file" --file "$compose_file" port minio 9000 | sed 's/.*://')
 postgres_password=$(awk -F= '/^AR_RUNTIME_API_POSTGRES_PASSWORD=/{print $2}' "$environment_file")
 minio_password=$(awk -F= '/^AR_RUNTIME_API_MINIO_PASSWORD=/{print $2}' "$environment_file")
-export AR_RUNTIME_API_POSTGRES_DSN="postgres://runtime_api:${postgres_password}@127.0.0.1:${postgres_port}/agent_runtime?sslmode=disable"
+runtime_admin_dsn="postgres://runtime_api:${postgres_password}@127.0.0.1:${postgres_port}/agent_runtime?sslmode=disable"
+runtime_application_user=runtime_integration_app
+runtime_application_password=$(openssl rand -hex 24)
+docker compose --project-name "$project_name" --env-file "$environment_file" --file "$compose_file" exec --no-TTY postgres \
+  psql -v ON_ERROR_STOP=1 -U runtime_api -d agent_runtime --command "CREATE ROLE ${runtime_application_user} LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE INHERIT NOREPLICATION NOBYPASSRLS PASSWORD '${runtime_application_password}'; GRANT runtime_state_app, runtime_state_operator TO ${runtime_application_user};"
+export AR_RUNTIME_API_POSTGRES_DSN="postgres://${runtime_application_user}:${runtime_application_password}@127.0.0.1:${postgres_port}/agent_runtime?sslmode=disable"
 export AR_RUNTIME_API_MINIO_ENDPOINT="127.0.0.1:${minio_port}"
 export AR_RUNTIME_API_MINIO_ACCESS_KEY=agent-runtime-api
 export AR_RUNTIME_API_MINIO_SECRET_KEY="$minio_password"
@@ -51,10 +56,10 @@ restore_database="agent_runtime_restore_${RANDOM}${RANDOM}"
 backup_file="$backup_directory/runtime.dump"
 admin_dsn="postgres://runtime_api:${postgres_password}@127.0.0.1:${postgres_port}/postgres?sslmode=disable"
 restore_dsn="postgres://runtime_api:${postgres_password}@127.0.0.1:${postgres_port}/${restore_database}?sslmode=disable"
-psql "$AR_RUNTIME_API_POSTGRES_DSN" --set=ON_ERROR_STOP=1 --command "INSERT INTO runtime.tenants (tenant_id, created_at) VALUES ('backup_drill_tenant', now())"
+psql "$runtime_admin_dsn" --set=ON_ERROR_STOP=1 --command "INSERT INTO runtime.tenants (tenant_id, created_at) VALUES ('backup_drill_tenant', now())"
 docker compose --project-name "$project_name" --env-file "$environment_file" --file "$compose_file" exec --no-TTY postgres \
   pg_dump -U runtime_api -d agent_runtime --format=custom > "$backup_file"
-psql "$AR_RUNTIME_API_POSTGRES_DSN" --set=ON_ERROR_STOP=1 --command "DELETE FROM runtime.tenants WHERE tenant_id = 'backup_drill_tenant'"
+psql "$runtime_admin_dsn" --set=ON_ERROR_STOP=1 --command "DELETE FROM runtime.tenants WHERE tenant_id = 'backup_drill_tenant'"
 psql "$admin_dsn" --set=ON_ERROR_STOP=1 --command "CREATE DATABASE ${restore_database}"
 docker compose --project-name "$project_name" --env-file "$environment_file" --file "$compose_file" exec --no-TTY postgres \
   pg_restore -U runtime_api -d "$restore_database" --exit-on-error < "$backup_file"
@@ -65,7 +70,7 @@ fi
 psql "$admin_dsn" --set=ON_ERROR_STOP=1 --command "DROP DATABASE ${restore_database}"
 
 reset_runtime_schema
-AR_RUNTIME_POSTGRES_DSN="$AR_RUNTIME_API_POSTGRES_DSN" \
+AR_RUNTIME_POSTGRES_DSN="$runtime_admin_dsn" \
   go test -race -tags=integration ./internal/runtimepostgres -count=1
 
 reset_runtime_schema

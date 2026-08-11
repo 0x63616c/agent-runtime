@@ -82,6 +82,8 @@ CREATE TABLE runtime.tenant_retention_jobs_p1 PARTITION OF runtime.tenant_retent
 CREATE TABLE runtime.tenant_retention_jobs_p2 PARTITION OF runtime.tenant_retention_jobs FOR VALUES WITH (MODULUS 4, REMAINDER 2);
 CREATE TABLE runtime.tenant_retention_jobs_p3 PARTITION OF runtime.tenant_retention_jobs FOR VALUES WITH (MODULUS 4, REMAINDER 3);
 CREATE INDEX tenant_retention_jobs_due_index ON runtime.tenant_retention_jobs (next_collection_at, tenant_id);
+INSERT INTO runtime.tenant_retention_jobs (tenant_id, next_collection_at)
+  SELECT tenant_id, now() + interval '24 hours' FROM runtime.runtime_state_snapshots;
 ALTER TABLE runtime.tenant_retention_jobs ENABLE ROW LEVEL SECURITY;
 ALTER TABLE runtime.tenant_retention_jobs FORCE ROW LEVEL SECURITY;
 CREATE POLICY tenant_retention_job_isolation ON runtime.tenant_retention_jobs

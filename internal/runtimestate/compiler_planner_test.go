@@ -392,6 +392,66 @@ func TestPlannerCancelsQueuedWorkClosesAfterDrainAndFencesOutboxLeases(t *testin
 	}
 }
 
+func TestPlannerDoesNotRecursivelyAuditAuditFactRouteLifecycle(t *testing.T) {
+	now := time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC)
+	content, _, tenant, _ := testRuntimeContent(t)
+	compiler, err := runtimestate.NewCompiler(content)
+	if err != nil {
+		t.Fatalf("new compiler: %v", err)
+	}
+	planner, err := runtimestate.NewRuntimeStatePlanner(fixedPlannerClock{now: now}, &uniquePlannerIDs{})
+	if err != nil {
+		t.Fatalf("new planner: %v", err)
+	}
+	handoff, err := content.StageAgentSpecificationBody(context.Background(), tenant, runtimecontent.AgentSpecificationBody{Name: "audit-route", ModelProfile: "balanced", Instructions: "avoid recursive audit routes"})
+	if err != nil {
+		t.Fatalf("stage registration body: %v", err)
+	}
+	registration, err := compiler.CompileRegisterAgentRevision(runtimestate.RegisterAgentRevisionCommand{
+		Scope: runtimestate.MutationScope{Tenant: tenant, Authority: runtimestate.AuthorityTenantAdministrator}, IdempotencyKey: "audit-route-registration",
+		Specification: handoff,
+	})
+	if err != nil {
+		t.Fatalf("compile registration: %v", err)
+	}
+	initial, err := planner.Plan(context.Background(), runtimestate.RuntimeState{}, registration)
+	if err != nil {
+		t.Fatalf("plan registration: %v", err)
+	}
+	var route runtimestate.OutboxRecord
+	for _, candidate := range initial.State().Outbox {
+		if candidate.Aggregate == "audit_fact" {
+			route = candidate
+			break
+		}
+	}
+	if route.OutboxID == "" || route.AuditFactID == "" {
+		t.Fatalf("registration did not create an audit route: %#v", initial.State().Outbox)
+	}
+	claim, err := compiler.CompileClaimOutbox(runtimestate.ClaimOutboxCommand{Scope: runtimestate.MutationScope{Tenant: tenant, Authority: runtimestate.AuthorityOutboxPublisher}, IdempotencyKey: "claim-audit-route", OutboxID: route.OutboxID, ExpectedVersion: route.Version, Claimer: "audit-publisher", ClaimUntil: now.Add(time.Minute)})
+	if err != nil {
+		t.Fatalf("compile audit route claim: %v", err)
+	}
+	claimed, err := planner.Plan(context.Background(), initial.State(), claim)
+	if err != nil {
+		t.Fatalf("plan audit route claim: %v", err)
+	}
+	if len(claimed.Effects().Audit) != 0 || len(claimed.Effects().Outbox) != 0 || len(claimed.State().Audit) != len(initial.State().Audit) || len(claimed.State().Outbox) != len(initial.State().Outbox) {
+		t.Fatalf("audit route claim recursively created lifecycle records: %#v", claimed.Effects())
+	}
+	ack, err := compiler.CompileAcknowledgeOutbox(runtimestate.AcknowledgeOutboxCommand{Scope: runtimestate.MutationScope{Tenant: tenant, Authority: runtimestate.AuthorityOutboxPublisher}, IdempotencyKey: "ack-audit-route", OutboxID: route.OutboxID, ExpectedVersion: claimed.Result().Outbox.Version, Claimer: "audit-publisher", PublishedAt: now})
+	if err != nil {
+		t.Fatalf("compile audit route acknowledgement: %v", err)
+	}
+	acknowledged, err := planner.Plan(context.Background(), claimed.State(), ack)
+	if err != nil {
+		t.Fatalf("plan audit route acknowledgement: %v", err)
+	}
+	if len(acknowledged.Effects().Audit) != 0 || len(acknowledged.Effects().Outbox) != 0 || len(acknowledged.State().Audit) != len(claimed.State().Audit) || len(acknowledged.State().Outbox) != len(claimed.State().Outbox) {
+		t.Fatalf("audit route acknowledgement recursively created lifecycle records: %#v", acknowledged.Effects())
+	}
+}
+
 func TestPlannerRegistersWorkerArtifactWithAuthorizationAuditOutboxAndReplay(t *testing.T) {
 	now := time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC)
 	content, _, tenant, principal := testRuntimeContent(t)

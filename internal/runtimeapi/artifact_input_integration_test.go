@@ -25,6 +25,60 @@ import (
 	"github.com/minio/minio-go/v7/pkg/credentials"
 )
 
+func TestDurableRuntimeUsesNonSuperApplicationLoginWithTenantRLS(t *testing.T) {
+	ctx := context.Background()
+	dsn := requiredArtifactInputEnvironment(t, "AR_RUNTIME_API_POSTGRES_DSN")
+	pool, err := pgxpool.New(ctx, dsn)
+	if err != nil {
+		t.Fatalf("open application PostgreSQL pool: %v", err)
+	}
+	defer pool.Close()
+	var user string
+	var superuser, bypassRLS bool
+	if err := pool.QueryRow(ctx, `SELECT current_user, rolsuper, rolbypassrls FROM pg_roles WHERE rolname = current_user`).Scan(&user, &superuser, &bypassRLS); err != nil {
+		t.Fatalf("read application login privileges: %v", err)
+	}
+	if user == "" || superuser || bypassRLS {
+		t.Fatalf("application login = %q superuser=%t bypass_rls=%t, want constrained RLS subject", user, superuser, bypassRLS)
+	}
+	var unbound int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM runtime.runtime_state_snapshots`).Scan(&unbound); err != nil {
+		t.Fatalf("read unbound application state: %v", err)
+	}
+	if unbound != 0 {
+		t.Fatalf("unbound application state rows = %d, want 0", unbound)
+	}
+	transaction, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin application RLS transaction: %v", err)
+	}
+	defer func() { _ = transaction.Rollback(ctx) }()
+	for _, tenant := range []string{"application-rls-a", "application-rls-b"} {
+		if _, err := transaction.Exec(ctx, `SELECT set_config('runtime.tenant_id', $1, true)`, tenant); err != nil {
+			t.Fatalf("bind application tenant %s: %v", tenant, err)
+		}
+		if _, err := transaction.Exec(ctx, `INSERT INTO runtime.tenants (tenant_id, created_at) VALUES ($1, now())`, tenant); err != nil {
+			t.Fatalf("insert application tenant %s: %v", tenant, err)
+		}
+		if _, err := transaction.Exec(ctx, `INSERT INTO runtime.runtime_state_snapshots (tenant_id, generation, state, updated_at) VALUES ($1, 1, '{}'::jsonb, now())`, tenant); err != nil {
+			t.Fatalf("insert application tenant state %s: %v", tenant, err)
+		}
+	}
+	if _, err := transaction.Exec(ctx, `SELECT set_config('runtime.tenant_id', 'application-rls-a', true)`); err != nil {
+		t.Fatalf("bind application tenant A: %v", err)
+	}
+	var own, foreign int
+	if err := transaction.QueryRow(ctx, `SELECT count(*) FROM runtime.runtime_state_snapshots WHERE tenant_id = 'application-rls-a'`).Scan(&own); err != nil {
+		t.Fatalf("read own application tenant state: %v", err)
+	}
+	if err := transaction.QueryRow(ctx, `SELECT count(*) FROM runtime.runtime_state_snapshots WHERE tenant_id = 'application-rls-b'`).Scan(&foreign); err != nil {
+		t.Fatalf("read cross-tenant application state: %v", err)
+	}
+	if own != 1 || foreign != 0 {
+		t.Fatalf("application RLS own=%d foreign=%d, want 1/0", own, foreign)
+	}
+}
+
 // TestDurableStateRuntimeAuthorizesArtifactInputReferences proves DAT-002's
 // authorization boundary against the disposable PostgreSQL/MinIO authority.
 // A fresh runtime composition can admit only the owner's exact immutable

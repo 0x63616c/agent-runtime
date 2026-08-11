@@ -212,6 +212,40 @@ func TestRuntimeV5PartitionsAndRLSRejectUnboundOrCrossTenantStateAccess(t *testi
 	if partitions != 4 { t.Fatalf("runtime state partitions = %d, want 4", partitions) }
 }
 
+func TestRuntimeV5PreservesExistingStateAndBackfillsTenantRetentionSchedule(t *testing.T) {
+	pool := openRuntimePool(t)
+	ctx := context.Background()
+	resetRuntimeV2(t, ctx, pool)
+	for _, migration := range []string{"runtime-v1.up.sql", "runtime-v2.up.sql", "runtime-v3.up.sql", "runtime-v4.up.sql"} {
+		if err := applyMigration(t, ctx, pool, migration); err != nil {
+			t.Fatalf("apply pre-v5 %s: %v", migration, err)
+		}
+	}
+	if _, err := pool.Exec(ctx, `INSERT INTO runtime.tenants (tenant_id, created_at) VALUES ('v5-migration-tenant', now())`); err != nil {
+		t.Fatalf("insert v4 tenant: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `INSERT INTO runtime.runtime_state_snapshots (tenant_id, generation, state, updated_at) VALUES ('v5-migration-tenant', 7, '{"revisions":[]}'::jsonb, now())`); err != nil {
+		t.Fatalf("insert v4 snapshot: %v", err)
+	}
+	if err := applyMigration(t, ctx, pool, "runtime-v5.up.sql"); err != nil {
+		t.Fatalf("apply runtime v5: %v", err)
+	}
+	var generation int
+	if err := pool.QueryRow(ctx, `SELECT generation FROM runtime.runtime_state_snapshots WHERE tenant_id = 'v5-migration-tenant'`).Scan(&generation); err != nil {
+		t.Fatalf("read migrated v5 snapshot: %v", err)
+	}
+	if generation != 7 {
+		t.Fatalf("migrated v5 snapshot generation = %d, want 7", generation)
+	}
+	var scheduled bool
+	if err := pool.QueryRow(ctx, `SELECT next_collection_at IS NOT NULL FROM runtime.tenant_retention_jobs WHERE tenant_id = 'v5-migration-tenant'`).Scan(&scheduled); err != nil {
+		t.Fatalf("read migrated v5 retention schedule: %v", err)
+	}
+	if !scheduled {
+		t.Fatal("migrated v5 tenant has no retention schedule")
+	}
+}
+
 func TestRuntimeMigrationResetRemovesV5RetentionSchedulingAuthorityBeforeReapplication(t *testing.T) {
 	pool := openRuntimePool(t)
 	ctx := context.Background()

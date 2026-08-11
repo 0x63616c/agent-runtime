@@ -101,9 +101,10 @@ func (store *RuntimeStateStore) CollectExpiredAndContent(ctx context.Context, au
 	if _, err := tx.Exec(ctx, `UPDATE runtime.runtime_state_snapshots SET generation = generation + 1, state = $2::jsonb, updated_at = now() WHERE tenant_id = $1`, string(request.Tenant), encoded); err != nil {
 		return result, runtimestate.ErrUnavailable
 	}
-	if _, err := tx.Exec(ctx, `UPDATE runtime.tenant_retention_jobs
+	updated, err := tx.Exec(ctx, `UPDATE runtime.tenant_retention_jobs
 		SET last_collection_at = $2, last_authorization_id = $3, next_collection_at = $4
-		WHERE tenant_id = $1`, string(request.Tenant), request.EvaluatedAt.UTC(), request.AuthorizationID, request.EvaluatedAt.UTC().Add(24*time.Hour)); err != nil {
+		WHERE tenant_id = $1`, string(request.Tenant), request.EvaluatedAt.UTC(), request.AuthorizationID, request.EvaluatedAt.UTC().Add(24*time.Hour))
+	if err != nil || updated.RowsAffected() != 1 {
 		return result, runtimestate.ErrUnavailable
 	}
 	if err := tx.Commit(ctx); err != nil {
