@@ -59,12 +59,12 @@ func TestDurableToolLifecyclePersistsDescriptorApprovalAndFinalization(t *testin
 		t.Fatal(err)
 	}
 	defer pool.Close()
-	store, err := runtimepostgres.NewRuntimeStateStore(pool)
+	now := time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC)
+	source, _ := clock.NewFake(now)
+	store, err := runtimepostgres.NewRuntimeStateStore(pool, source)
 	if err != nil {
 		t.Fatal(err)
 	}
-	now := time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC)
-	source, _ := clock.NewFake(now)
 	planner, err := runtimestate.NewRuntimeStatePlanner(source, &durableToolIDs{})
 	if err != nil {
 		t.Fatal(err)
@@ -187,7 +187,7 @@ func TestDurableToolLifecyclePersistsDescriptorApprovalAndFinalization(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
-	store, err = runtimepostgres.NewRuntimeStateStore(pool)
+	store, err = runtimepostgres.NewRuntimeStateStore(pool, source)
 	if err != nil {
 		t.Fatal(err)
 	}

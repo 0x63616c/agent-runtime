@@ -6,8 +6,8 @@ import (
 	"encoding/json"
 	"errors"
 	"reflect"
-	"time"
 
+	"github.com/0x63616c/agent-runtime/internal/clock"
 	"github.com/0x63616c/agent-runtime/internal/runtimecontent"
 	"github.com/0x63616c/agent-runtime/internal/runtimestate"
 	agentruntime "github.com/0x63616c/agent-runtime/sdk/go"
@@ -17,17 +17,23 @@ import (
 
 // RuntimeStateStore is the plans-only PostgreSQL authority under construction.
 // It is intentionally not wired to a public runtime until full conformance lands.
-type RuntimeStateStore struct{ pool *pgxpool.Pool }
+type RuntimeStateStore struct {
+	pool  *pgxpool.Pool
+	clock clock.Clock
+}
 
 var _ runtimestate.RuntimeStateStore = (*RuntimeStateStore)(nil)
 var _ runtimestate.OutboxTenantSource = (*RuntimeStateStore)(nil)
 
-// NewRuntimeStateStore constructs the PostgreSQL authority from an explicit pool.
-func NewRuntimeStateStore(pool *pgxpool.Pool) (*RuntimeStateStore, error) {
+// NewRuntimeStateStore constructs the PostgreSQL authority from explicit pool and clock dependencies.
+func NewRuntimeStateStore(pool *pgxpool.Pool, timeSource clock.Clock) (*RuntimeStateStore, error) {
 	if pool == nil {
 		return nil, errors.New("create PostgreSQL runtime state store: pool is required")
 	}
-	return &RuntimeStateStore{pool: pool}, nil
+	if timeSource == nil {
+		return nil, errors.New("create PostgreSQL runtime state store: clock is required")
+	}
+	return &RuntimeStateStore{pool: pool, clock: timeSource}, nil
 }
 
 // LoadRuntimeState returns the complete independent metadata state for one tenant.
@@ -310,7 +316,7 @@ func (store *RuntimeStateStore) GetMutationReceipt(ctx context.Context, query ru
 	}
 	for _, receipt := range state.Receipts {
 		if receipt.Scope == query.Scope && receipt.IdempotencyKey == query.IdempotencyKey {
-			if !receipt.RetentionUntil.After(time.Now().UTC()) {
+			if !receipt.RetentionUntil.After(store.clock.Now().UTC()) {
 				return runtimestate.MutationReceipt{}, runtimestate.ErrReceiptExpired
 			}
 			return receipt.Clone(), nil

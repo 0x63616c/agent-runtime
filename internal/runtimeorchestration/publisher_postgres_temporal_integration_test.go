@@ -60,17 +60,17 @@ func TestPostgresOutboxReclaimsLiveTemporalRouteAfterAcknowledgementLoss(t *test
 		t.Fatal(err)
 	}
 	defer pool.Close()
-	store, err := runtimepostgres.NewRuntimeStateStore(pool)
+	now := time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC)
+	timeSource, err := clock.NewFake(now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := runtimepostgres.NewRuntimeStateStore(pool, timeSource)
 	if err != nil {
 		t.Fatal(err)
 	}
 	content := publisherIntegrationContent(t, endpoint, accessKey, secretKey, contentBucket)
 	compiler, err := runtimestate.NewCompiler(content)
-	if err != nil {
-		t.Fatal(err)
-	}
-	now := time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC)
-	timeSource, err := clock.NewFake(now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -200,7 +200,11 @@ func TestPostgresOutboxRecoversAcrossActualPublisherProcessKills(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer pool.Close()
-	store, err := runtimepostgres.NewRuntimeStateStore(pool)
+	storeClock, err := clock.NewFake(time.Date(2026, 8, 10, 16, 0, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := runtimepostgres.NewRuntimeStateStore(pool, storeClock)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -345,12 +349,12 @@ func TestPostgresOutboxReclaimsAuditExportAfterSinkOutage(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer pool.Close()
-	store, err := runtimepostgres.NewRuntimeStateStore(pool)
+	now := time.Date(2026, 8, 11, 3, 0, 0, 0, time.UTC)
+	timeSource, err := clock.NewFake(now)
 	if err != nil {
 		t.Fatal(err)
 	}
-	now := time.Date(2026, 8, 11, 3, 0, 0, 0, time.UTC)
-	timeSource, err := clock.NewFake(now)
+	store, err := runtimepostgres.NewRuntimeStateStore(pool, timeSource)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -612,7 +616,7 @@ func TestPublisherProcessKillHelper(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	store, err := runtimepostgres.NewRuntimeStateStore(pool)
+	store, err := runtimepostgres.NewRuntimeStateStore(pool, timeSource)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -8,8 +8,8 @@ import (
 )
 
 func TestNewRuntimeStateStoreRequiresAPool(t *testing.T) {
-	if _, err := runtimepostgres.NewRuntimeStateStore(nil); err == nil {
-		t.Fatal("NewRuntimeStateStore(nil) error = nil")
+	if _, err := runtimepostgres.NewRuntimeStateStore(nil, nil); err == nil {
+		t.Fatal("NewRuntimeStateStore(nil, nil) error = nil")
 	}
 }
 

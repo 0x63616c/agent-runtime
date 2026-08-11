@@ -138,7 +138,7 @@ func composeRuntime(ctx context.Context, config Config, lookup SecretLookup, ids
 		cleanup()
 		return nil, nil, errors.Wrap(err, "compose runtime API process: ping PostgreSQL")
 	}
-	state, err := runtimepostgres.NewRuntimeStateStore(pool)
+	state, err := runtimepostgres.NewRuntimeStateStore(pool, systemClock{})
 	if err != nil {
 		cleanup()
 		return nil, nil, err

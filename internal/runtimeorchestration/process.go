@@ -73,7 +73,8 @@ func RunWithWait(ctx context.Context, config ProcessConfig, wait Wait) error {
 	if err := pool.Ping(ctx); err != nil {
 		return errors.Wrap(err, "run runtime orchestration worker: ping PostgreSQL")
 	}
-	state, err := runtimepostgres.NewRuntimeStateStore(pool)
+	timeSource := processClock{}
+	state, err := runtimepostgres.NewRuntimeStateStore(pool, timeSource)
 	if err != nil {
 		return err
 	}
@@ -110,7 +111,7 @@ func RunWithWait(ctx context.Context, config ProcessConfig, wait Wait) error {
 		return err
 	}
 	ids := processIDs{}
-	planner, err := runtimestate.NewRuntimeStatePlanner(processClock{}, &ids)
+	planner, err := runtimestate.NewRuntimeStatePlanner(timeSource, &ids)
 	if err != nil {
 		return err
 	}
@@ -118,7 +119,7 @@ func RunWithWait(ctx context.Context, config ProcessConfig, wait Wait) error {
 	if err != nil {
 		return err
 	}
-	publisher, err := NewPublisher(PublisherConfig{Store: state, Tenants: state, Compiler: compiler, Planner: planner, Clock: processClock{}, Publisher: temporalSessionPublisher{client: owned, taskQueue: config.TaskQueue}, AuditExporter: audit, Claimer: "orchestration-codec"})
+	publisher, err := NewPublisher(PublisherConfig{Store: state, Tenants: state, Compiler: compiler, Planner: planner, Clock: timeSource, Publisher: temporalSessionPublisher{client: owned, taskQueue: config.TaskQueue}, AuditExporter: audit, Claimer: "orchestration-codec"})
 	if err != nil {
 		return err
 	}

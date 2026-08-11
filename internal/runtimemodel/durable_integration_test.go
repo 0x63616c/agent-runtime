@@ -63,7 +63,7 @@ func TestDurableModelProducerLossFinalizesGapAndReplays(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	store, err := runtimepostgres.NewRuntimeStateStore(pool)
+	store, err := runtimepostgres.NewRuntimeStateStore(pool, clockSource)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -133,7 +133,7 @@ func TestDurableModelProducerLossFinalizesGapAndReplays(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer pool.Close()
-	store, err = runtimepostgres.NewRuntimeStateStore(pool)
+	store, err = runtimepostgres.NewRuntimeStateStore(pool, clockSource)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -247,7 +247,7 @@ func TestDurableModelNormalizedStreamFinalizesOwnerReadableOutput(t *testing.T) 
 		t.Fatal(err)
 	}
 	defer pool.Close()
-	store, err := runtimepostgres.NewRuntimeStateStore(pool)
+	store, err := runtimepostgres.NewRuntimeStateStore(pool, clockSource)
 	if err != nil {
 		t.Fatal(err)
 	}

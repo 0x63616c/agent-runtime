@@ -49,11 +49,11 @@ func TestDurableStateRuntimeAuthorizesArtifactInputReferences(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer pool.Close()
-	store, err := runtimepostgres.NewRuntimeStateStore(pool)
+	clockSource, err := clock.NewFake(time.Date(2026, 8, 10, 13, 0, 0, 0, time.UTC))
 	if err != nil {
 		t.Fatal(err)
 	}
-	clockSource, err := clock.NewFake(time.Date(2026, 8, 10, 13, 0, 0, 0, time.UTC))
+	store, err := runtimepostgres.NewRuntimeStateStore(pool, clockSource)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -189,12 +189,12 @@ func TestDurablePostgresMinIOCollectorDeletesExpiredUnreferencedArtifact(t *test
 		t.Fatal(err)
 	}
 	defer pool.Close()
-	store, err := runtimepostgres.NewRuntimeStateStore(pool)
+	now := time.Date(2026, 8, 10, 15, 0, 0, 0, time.UTC)
+	clockSource, err := clock.NewFake(now)
 	if err != nil {
 		t.Fatal(err)
 	}
-	now := time.Date(2026, 8, 10, 15, 0, 0, 0, time.UTC)
-	clockSource, err := clock.NewFake(now)
+	store, err := runtimepostgres.NewRuntimeStateStore(pool, clockSource)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -299,11 +299,11 @@ func TestDurablePostgresMinIOTenantErasurePreservesAnotherTenant(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer pool.Close()
-	store, err := runtimepostgres.NewRuntimeStateStore(pool)
+	clockSource, err := clock.NewFake(time.Date(2026, 8, 11, 1, 0, 0, 0, time.UTC))
 	if err != nil {
 		t.Fatal(err)
 	}
-	clockSource, err := clock.NewFake(time.Date(2026, 8, 11, 1, 0, 0, 0, time.UTC))
+	store, err := runtimepostgres.NewRuntimeStateStore(pool, clockSource)
 	if err != nil {
 		t.Fatal(err)
 	}

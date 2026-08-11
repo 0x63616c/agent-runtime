@@ -116,7 +116,11 @@ func seedDurableSessionAndCancellation(t *testing.T, dsn, endpoint, accessKey, s
 		t.Fatalf("open durable state pool: %v", err)
 	}
 	defer pool.Close()
-	state, err := runtimepostgres.NewRuntimeStateStore(pool)
+	stamp, err := clock.NewFake(time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatal(err)
+	}
+	state, err := runtimepostgres.NewRuntimeStateStore(pool, stamp)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -137,10 +141,6 @@ func seedDurableSessionAndCancellation(t *testing.T, dsn, endpoint, accessKey, s
 		t.Fatal(err)
 	}
 	compiler, err := runtimestate.NewCompiler(content)
-	if err != nil {
-		t.Fatal(err)
-	}
-	stamp, err := clock.NewFake(time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -179,7 +179,11 @@ func assertOutboxPublished(t *testing.T, dsn, tenant string) {
 		t.Fatal(err)
 	}
 	defer pool.Close()
-	state, err := runtimepostgres.NewRuntimeStateStore(pool)
+	stamp, err := clock.NewFake(time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatal(err)
+	}
+	state, err := runtimepostgres.NewRuntimeStateStore(pool, stamp)
 	if err != nil {
 		t.Fatal(err)
 	}

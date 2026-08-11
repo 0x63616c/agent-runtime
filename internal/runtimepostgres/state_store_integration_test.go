@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/0x63616c/agent-runtime/internal/clock"
 	"github.com/0x63616c/agent-runtime/internal/runtimecontent"
 	"github.com/0x63616c/agent-runtime/internal/runtimepostgres"
 	"github.com/0x63616c/agent-runtime/internal/runtimestate"
@@ -42,11 +43,15 @@ func TestPostgresRuntimeStateStorePersistsASealedPlanAndRejectsItsStaleBase(t *t
 	if err != nil {
 		t.Fatalf("compile register: %v", err)
 	}
-	planner, err := runtimestate.NewRuntimeStatePlanner(stateStoreClock{now: time.Date(2026, 8, 10, 16, 0, 0, 0, time.UTC)}, &stateStoreIDs{})
+	receiptClock, err := clock.NewFake(time.Date(2026, 8, 10, 16, 0, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatalf("new receipt clock: %v", err)
+	}
+	planner, err := runtimestate.NewRuntimeStatePlanner(receiptClock, &stateStoreIDs{})
 	if err != nil {
 		t.Fatalf("new planner: %v", err)
 	}
-	store, err := runtimepostgres.NewRuntimeStateStore(pool)
+	store, err := runtimepostgres.NewRuntimeStateStore(pool, receiptClock)
 	if err != nil {
 		t.Fatalf("new PostgreSQL store: %v", err)
 	}
@@ -72,6 +77,19 @@ func TestPostgresRuntimeStateStorePersistsASealedPlanAndRejectsItsStaleBase(t *t
 	}
 	if err := store.PersistTransitionPlan(ctx, plan); err != nil {
 		t.Fatalf("persist plan: %v", err)
+	}
+	receipt, err := store.GetMutationReceipt(ctx, runtimestate.MutationReceiptQuery{Scope: mutation.ReceiptBinding().Scope, IdempotencyKey: mutation.ReceiptBinding().IdempotencyKey})
+	if err != nil {
+		t.Fatalf("get unexpired receipt: %v", err)
+	}
+	if !reflect.DeepEqual(receipt, plan.Result().Receipt) {
+		t.Fatalf("receipt = %#v, want planned receipt %#v", receipt, plan.Result().Receipt)
+	}
+	if err := receiptClock.Advance(plan.Result().Receipt.RetentionUntil.Sub(receiptClock.Now())); err != nil {
+		t.Fatalf("advance receipt clock to expiry: %v", err)
+	}
+	if _, err := store.GetMutationReceipt(ctx, runtimestate.MutationReceiptQuery{Scope: mutation.ReceiptBinding().Scope, IdempotencyKey: mutation.ReceiptBinding().IdempotencyKey}); !errors.Is(err, runtimestate.ErrReceiptExpired) {
+		t.Fatalf("get expired receipt error = %v, want ErrReceiptExpired", err)
 	}
 	loaded, err := store.LoadRuntimeState(ctx, mutation.ReceiptBinding().Scope)
 	if err != nil {
@@ -131,7 +149,7 @@ func TestPostgresTenantErasureDeletesOnlyAuthorizedStateReferencedContent(t *tes
 	if err != nil {
 		t.Fatalf("plan registration: %v", err)
 	}
-	store, err := runtimepostgres.NewRuntimeStateStore(pool)
+	store, err := runtimepostgres.NewRuntimeStateStore(pool, stateStoreClock{now: time.Date(2026, 8, 10, 17, 0, 0, 0, time.UTC)})
 	if err != nil {
 		t.Fatalf("new PostgreSQL store: %v", err)
 	}
@@ -208,7 +226,7 @@ func TestPostgresRetentionCollectionDeletesOnlyExpiredUnpinnedContent(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	store, err := runtimepostgres.NewRuntimeStateStore(pool)
+	store, err := runtimepostgres.NewRuntimeStateStore(pool, stateStoreClock{now: now})
 	if err != nil {
 		t.Fatal(err)
 	}
