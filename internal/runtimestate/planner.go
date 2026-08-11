@@ -964,11 +964,16 @@ func (planner *RuntimeStatePlanner) effects(state *RuntimeState, binding Receipt
 	}
 	state.Audit = append(state.Audit, fact)
 	effects.Audit = append(effects.Audit, fact)
+	for index := range effects.Outbox {
+		effects.Outbox[index].AuditFactID = fact.AuditFactID
+		state.Outbox[len(state.Outbox)-len(effects.Outbox)+index].AuditFactID = fact.AuditFactID
+	}
 	if len(kinds) == 0 {
 		outbox, err := planner.outbox(session, turn, invocation, agentruntime.EventID(""), "", 0, now, planner.retain(now, DataClassOutbox))
 		if err != nil {
 			return EffectSet{}, err
 		}
+		outbox.AuditFactID = fact.AuditFactID
 		state.Outbox = append(state.Outbox, outbox)
 		effects.Outbox = append(effects.Outbox, outbox)
 	}
@@ -980,7 +985,20 @@ func (planner *RuntimeStatePlanner) auditOnly(state *RuntimeState, binding Recei
 		return EffectSet{}, err
 	}
 	state.Audit = append(state.Audit, fact)
-	return EffectSet{Audit: []AuditFactRecord{fact}}, nil
+	effects := EffectSet{Audit: []AuditFactRecord{fact}}
+	// Claim and acknowledgement facts describe this publisher's own durable
+	// export bookkeeping. Routing them again would create an infinite audit
+	// outbox chain; they remain locally append-only and queryable instead.
+	if binding.Scope.Authority == AuthorityOutboxPublisher {
+		return effects, nil
+	}
+	outbox, err := planner.auditOutbox(fact, now, planner.retain(now, DataClassOutbox))
+	if err != nil {
+		return EffectSet{}, err
+	}
+	state.Outbox = append(state.Outbox, outbox)
+	effects.Outbox = append(effects.Outbox, outbox)
+	return effects, nil
 }
 func (planner *RuntimeStatePlanner) event(state *RuntimeState, session SessionRecord, turn TurnRecord, invocation InvocationRecord, binding ReceiptBinding, kind agentruntime.EventKind, now, until time.Time) (ProductEventRecord, error) {
 	sequence := uint64(1)
@@ -1019,6 +1037,13 @@ func (planner *RuntimeStatePlanner) outbox(session SessionRecord, turn TurnRecor
 		return OutboxRecord{}, err
 	}
 	return OutboxRecord{Tenant: session.Tenant, Principal: session.Principal, OutboxID: id, Aggregate: "session", AggregateVersion: session.Version, Version: 1, EventID: eventID, EventKind: eventKind, EventSequence: eventSequence, OperationID: invocation.OperationID, SessionID: session.SessionID, TurnID: turn.TurnID, InvocationID: invocation.InvocationID, InvocationOrdinal: invocation.Ordinal, InvocationFence: invocation.Fence, SessionVersion: session.Version, TurnVersion: turn.Version, State: OutboxPending, CommittedAt: now, RetentionUntil: until}, nil
+}
+func (planner *RuntimeStatePlanner) auditOutbox(fact AuditFactRecord, now, until time.Time) (OutboxRecord, error) {
+	id, err := planner.outboxID()
+	if err != nil {
+		return OutboxRecord{}, err
+	}
+	return OutboxRecord{Tenant: fact.Tenant, Principal: fact.Actor, OutboxID: id, Aggregate: "audit_fact", AggregateVersion: 1, Version: 1, AuditFactID: fact.AuditFactID, OperationID: fact.OperationID, SessionID: fact.SessionID, TurnID: fact.TurnID, State: OutboxPending, CommittedAt: now, RetentionUntil: until}, nil
 }
 func (planner *RuntimeStatePlanner) catalogOutbox(binding ReceiptBinding, revision AgentRevisionRecord, now, until time.Time) (OutboxRecord, error) {
 	id, err := planner.outboxID()

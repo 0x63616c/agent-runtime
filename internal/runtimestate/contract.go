@@ -432,8 +432,11 @@ type OutboxRecord struct {
 	// EventKind is the closed product-event route. It lets a private publisher
 	// select work from durable state without loading an event payload or a
 	// runtime-content object.
-	EventKind         agentruntime.EventKind `json:",omitempty"`
-	EventSequence     uint64                 `json:",omitempty"`
+	EventKind     agentruntime.EventKind `json:",omitempty"`
+	EventSequence uint64                 `json:",omitempty"`
+	// AuditFactID binds this route to the exact concurrently committed audit
+	// fact when the route has an external audit-delivery obligation.
+	AuditFactID       AuditFactID `json:",omitempty"`
 	OperationID       OperationID
 	ToolCallID        string
 	SessionID         agentruntime.SessionID `json:",omitempty"`

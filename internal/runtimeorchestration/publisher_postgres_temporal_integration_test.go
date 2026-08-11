@@ -4,8 +4,11 @@ package runtimeorchestration
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"strings"
@@ -317,6 +320,117 @@ func TestPostgresOutboxRecoversAcrossActualPublisherProcessKills(t *testing.T) {
 	}
 }
 
+// TestPostgresOutboxReclaimsAuditExportAfterSinkOutage proves the DAT-006/007
+// boundary with PostgreSQL as the audit/outbox authority and a real HTTP sink.
+// A rejected export stays durably claimed without acknowledgement; a rebuilt
+// publisher reclaims its lease, exports the exact retained fact once, then
+// records publication. This is explicitly at-least-once, never fail-closed.
+func TestPostgresOutboxReclaimsAuditExportAfterSinkOutage(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	postgresDSN := requiredPublisherEnvironment(t, "AR_RUNTIME_API_POSTGRES_DSN")
+	endpoint := requiredPublisherEnvironment(t, "AR_RUNTIME_API_MINIO_ENDPOINT")
+	accessKey := requiredPublisherEnvironment(t, "AR_RUNTIME_API_MINIO_ACCESS_KEY")
+	secretKey := requiredPublisherEnvironment(t, "AR_RUNTIME_API_MINIO_SECRET_KEY")
+	contentBucket := requiredPublisherEnvironment(t, "AR_RUNTIME_API_MINIO_BUCKET")
+	objects, err := minio.New(endpoint, &minio.Options{Creds: credentials.NewStaticV4(accessKey, secretKey, ""), Secure: false})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := objects.MakeBucket(ctx, contentBucket, minio.MakeBucketOptions{}); err != nil && minio.ToErrorResponse(err).Code != "BucketAlreadyOwnedByYou" {
+		t.Fatal(err)
+	}
+	pool, err := pgxpool.New(ctx, postgresDSN)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	store, err := runtimepostgres.NewRuntimeStateStore(pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 8, 11, 3, 0, 0, 0, time.UTC)
+	timeSource, err := clock.NewFake(now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	content := publisherIntegrationContent(t, endpoint, accessKey, secretKey, contentBucket)
+	compiler, err := runtimestate.NewCompiler(content)
+	if err != nil {
+		t.Fatal(err)
+	}
+	planner, err := runtimestate.NewRuntimeStatePlanner(timeSource, &publisherIntegrationIDs{}, runtimestate.WithRetentionPolicy(auditPublisherRetention{}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tenant, _, _ := seedPublisherIntegrationSessionForTenant(t, ctx, content, compiler, planner, store, "audit-export-outage")
+
+	var attempts, accepted []runtimestate.AuditFactRecord
+	outage := true
+	sink := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.Method != http.MethodPost || request.Header.Get("Content-Type") != "application/json" {
+			writer.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		var fact runtimestate.AuditFactRecord
+		if err := json.NewDecoder(request.Body).Decode(&fact); err != nil {
+			writer.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		attempts = append(attempts, fact)
+		if outage {
+			writer.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
+		accepted = append(accepted, fact)
+		writer.WriteHeader(http.StatusAccepted)
+	}))
+	defer sink.Close()
+	exporter, err := NewHTTPAuditExporter(sink.URL, sink.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	publisher, err := NewPublisher(PublisherConfig{Store: store, Tenants: publisherIntegrationTenants{tenant: tenant}, Compiler: compiler, Planner: planner, Clock: timeSource, Publisher: auditNoopSessionPublisher{}, AuditExporter: exporter, Claimer: "audit-export-publisher"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := publisher.ScanOnce(ctx); err == nil {
+		t.Fatal("publish during audit-sink outage = nil, want durable retryable failure")
+	}
+	if len(attempts) != 1 || len(accepted) != 0 {
+		t.Fatalf("audit sink during outage attempts=%#v accepted=%#v, want one rejected exact fact", attempts, accepted)
+	}
+	claimed := loadPublisherIntegrationState(t, ctx, store, tenant)
+	claimedRoute := publisherIntegrationAuditExportRoute(t, claimed)
+	if claimedRoute.State != runtimestate.OutboxClaimed || claimedRoute.AuditFactID == "" || !hasPublisherIntegrationAudit(claimed.Audit, "outbox.claimed", "temporal-claim-"+string(claimedRoute.OutboxID)+"-") || hasPublisherIntegrationAudit(claimed.Audit, "outbox.published", "temporal-ack-"+string(claimedRoute.OutboxID)+"-") {
+		t.Fatalf("audit route after sink outage = %#v / %#v, want claimed exact audit route without publication", claimedRoute, claimed.Audit)
+	}
+	fact := publisherIntegrationAuditFact(t, claimed, claimedRoute.AuditFactID)
+	if !fact.RetentionUntil.After(claimedRoute.RetentionUntil) {
+		t.Fatalf("audit retention %s must independently exceed outbox retention %s", fact.RetentionUntil, claimedRoute.RetentionUntil)
+	}
+
+	outage = false
+	if err := timeSource.Advance(2*time.Minute + time.Nanosecond); err != nil {
+		t.Fatal(err)
+	}
+	restarted, err := NewPublisher(PublisherConfig{Store: store, Tenants: publisherIntegrationTenants{tenant: tenant}, Compiler: compiler, Planner: planner, Clock: timeSource, Publisher: auditNoopSessionPublisher{}, AuditExporter: exporter, Claimer: "audit-export-publisher"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := restarted.ScanOnce(ctx); err != nil {
+		t.Fatalf("reclaim audit export after sink recovery: %v", err)
+	}
+	recovered := loadPublisherIntegrationState(t, ctx, store, tenant)
+	recoveredRoute := publisherIntegrationOutbox(t, recovered, string(claimedRoute.OutboxID))
+	if recoveredRoute.State != runtimestate.OutboxPublished || !hasPublisherIntegrationAudit(recovered.Audit, "outbox.published", "temporal-ack-"+string(recoveredRoute.OutboxID)+"-") {
+		t.Fatalf("audit route after sink recovery = %#v / %#v, want published", recoveredRoute, recovered.Audit)
+	}
+	if got := countPublisherIntegrationAuditFact(accepted, fact.AuditFactID); got != 1 {
+		t.Fatalf("accepted audit exports for %s = %d, want exactly one after outage recovery; attempts=%#v", fact.AuditFactID, got, attempts)
+	}
+}
+
 func publisherIntegrationContent(t *testing.T, endpoint, accessKey, secretKey, bucket string) *runtimecontent.Store {
 	t.Helper()
 	objects, err := minio.New(endpoint, &minio.Options{Creds: credentials.NewStaticV4(accessKey, secretKey, ""), Secure: false})
@@ -398,6 +512,38 @@ func publisherIntegrationInputRoute(t *testing.T, state runtimestate.RuntimeStat
 	}
 	t.Fatalf("input route for Session %s = absent from %#v", sessionID, state.Outbox)
 	return runtimestate.OutboxRecord{}
+}
+
+func publisherIntegrationAuditExportRoute(t *testing.T, state runtimestate.RuntimeState) runtimestate.OutboxRecord {
+	t.Helper()
+	for _, record := range state.Outbox {
+		if record.Aggregate == "audit_fact" && record.AuditFactID != "" {
+			return record
+		}
+	}
+	t.Fatalf("audit export route = absent from %#v", state.Outbox)
+	return runtimestate.OutboxRecord{}
+}
+
+func publisherIntegrationAuditFact(t *testing.T, state runtimestate.RuntimeState, id runtimestate.AuditFactID) runtimestate.AuditFactRecord {
+	t.Helper()
+	for _, fact := range state.Audit {
+		if fact.AuditFactID == id {
+			return fact
+		}
+	}
+	t.Fatalf("audit fact %s = absent from %#v", id, state.Audit)
+	return runtimestate.AuditFactRecord{}
+}
+
+func countPublisherIntegrationAuditFact(facts []runtimestate.AuditFactRecord, id runtimestate.AuditFactID) int {
+	count := 0
+	for _, fact := range facts {
+		if fact.AuditFactID == id {
+			count++
+		}
+	}
+	return count
 }
 
 func hasPublisherIntegrationAudit(facts []runtimestate.AuditFactRecord, kind, prefix string) bool {
@@ -642,4 +788,27 @@ type publisherIntegrationTenants struct{ tenant runtimecontent.TenantID }
 
 func (source publisherIntegrationTenants) ListOutboxTenants(context.Context) ([]runtimecontent.TenantID, error) {
 	return []runtimecontent.TenantID{source.tenant}, nil
+}
+
+type auditPublisherRetention struct{}
+
+func (auditPublisherRetention) RetainUntil(now time.Time) time.Time { return now.Add(time.Hour) }
+
+func (auditPublisherRetention) RetainClassUntil(class runtimestate.DataClass, now time.Time) time.Time {
+	switch class {
+	case runtimestate.DataClassAudit:
+		return now.Add(48 * time.Hour)
+	case runtimestate.DataClassOutbox:
+		return now.Add(24 * time.Hour)
+	default:
+		return now.Add(time.Hour)
+	}
+}
+
+type auditNoopSessionPublisher struct{}
+
+func (auditNoopSessionPublisher) StartSession(context.Context, SessionStart) error { return nil }
+
+func (auditNoopSessionPublisher) SignalSession(context.Context, SessionStart, Command) error {
+	return nil
 }

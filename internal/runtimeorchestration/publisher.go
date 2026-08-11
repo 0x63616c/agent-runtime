@@ -42,7 +42,11 @@ type PublisherConfig struct {
 	Planner   *runtimestate.RuntimeStatePlanner
 	Clock     clock.Clock
 	Publisher SessionWorkflowPublisher
-	Claimer   string
+	// AuditExporter is optional because the base runtime does not claim a
+	// mandatory external audit sink. When configured, its delivery is fenced by
+	// the exact committed audit fact and the same outbox lease as the route.
+	AuditExporter AuditExporter
+	Claimer       string
 }
 
 // Publisher claims durable outbox records, performs the private Temporal
@@ -55,6 +59,7 @@ type Publisher struct {
 	planner   *runtimestate.RuntimeStatePlanner
 	clock     clock.Clock
 	publisher SessionWorkflowPublisher
+	audit     AuditExporter
 	claimer   string
 }
 
@@ -63,7 +68,7 @@ func NewPublisher(config PublisherConfig) (*Publisher, error) {
 	if config.Store == nil || config.Tenants == nil || config.Compiler == nil || config.Planner == nil || config.Clock == nil || config.Publisher == nil || config.Claimer == "" {
 		return nil, errors.New("create runtime outbox publisher: complete state and Temporal authority is required")
 	}
-	return &Publisher{store: config.Store, tenants: config.Tenants, compiler: config.Compiler, planner: config.Planner, clock: config.Clock, publisher: config.Publisher, claimer: config.Claimer}, nil
+	return &Publisher{store: config.Store, tenants: config.Tenants, compiler: config.Compiler, planner: config.Planner, clock: config.Clock, publisher: config.Publisher, audit: config.AuditExporter, claimer: config.Claimer}, nil
 }
 
 // ScanOnce drains currently visible durable work. It intentionally has no
@@ -186,6 +191,15 @@ func (publisher *Publisher) apply(ctx context.Context, target runtimestate.Outbo
 }
 
 func (publisher *Publisher) route(ctx context.Context, record runtimestate.OutboxRecord) error {
+	if record.AuditFactID != "" && publisher.audit != nil {
+		fact, err := publisher.auditFact(ctx, record)
+		if err != nil {
+			return err
+		}
+		if err := publisher.audit.Export(ctx, fact); err != nil {
+			return err
+		}
+	}
 	start := SessionStart{Tenant: string(record.Tenant), SessionID: string(record.SessionID)}
 	switch record.EventKind {
 	case agentruntime.EventSessionCreated:
@@ -195,6 +209,19 @@ func (publisher *Publisher) route(ctx context.Context, record runtimestate.Outbo
 	default:
 		return nil
 	}
+}
+
+func (publisher *Publisher) auditFact(ctx context.Context, record runtimestate.OutboxRecord) (runtimestate.AuditFactRecord, error) {
+	state, err := publisher.store.LoadRuntimeState(ctx, runtimestate.MutationScope{Tenant: record.Tenant, Authority: runtimestate.AuthorityOutboxPublisher})
+	if err != nil {
+		return runtimestate.AuditFactRecord{}, err
+	}
+	for _, fact := range state.Audit {
+		if fact.AuditFactID == record.AuditFactID && fact.Tenant == record.Tenant {
+			return fact.Clone(), nil
+		}
+	}
+	return runtimestate.AuditFactRecord{}, runtimestate.ErrIntegrity
 }
 
 func commandKind(event agentruntime.EventKind) CommandKind {

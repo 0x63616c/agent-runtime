@@ -109,7 +109,7 @@ func TestCompilerCreatesTheOnlyReceiptBoundMutationAndPlannerCreatesRevision(t *
 	if result.Revision.Revision != 1 || result.Revision.Name != "planner" || result.Receipt.RequestDigest != compiled.ReceiptBinding().RequestDigest {
 		t.Fatalf("plan result = %#v, want compiled revision metadata and receipt", result)
 	}
-	if len(plan.State().Revisions) != 1 || len(plan.Effects().Audit) != 1 || len(plan.Effects().Outbox) != 1 {
+	if len(plan.State().Revisions) != 1 || len(plan.Effects().Audit) != 1 || len(plan.Effects().Outbox) != 2 || plan.Effects().Outbox[0].AuditFactID != plan.Effects().Audit[0].AuditFactID {
 		t.Fatalf("plan failed to atomically derive revision/effects: %#v", plan)
 	}
 	if len(plan.BaseState().Revisions) != 0 {
@@ -418,7 +418,7 @@ func TestPlannerRegistersWorkerArtifactWithAuthorizationAuditOutboxAndReplay(t *
 		t.Fatalf("plan artifact: %v", err)
 	}
 	result := plan.Result()
-	if result.Artifact.ArtifactID == "" || result.Artifact.Reference.Digest == "" || len(plan.Effects().Audit) != 1 || len(plan.Effects().Outbox) != 1 {
+	if result.Artifact.ArtifactID == "" || result.Artifact.Reference.Digest == "" || len(plan.Effects().Audit) != 1 || len(plan.Effects().Outbox) != 2 || plan.Effects().Outbox[0].AuditFactID != plan.Effects().Audit[0].AuditFactID {
 		t.Fatalf("artifact plan = %#v / %#v, want metadata plus audit/outbox", result, plan.Effects())
 	}
 	replay, err := planner.Plan(context.Background(), plan.State(), command)
@@ -463,7 +463,7 @@ func TestPlannerAppendsConversationOnlyAtExpectedVersionAndReplaysIdempotently(t
 	if err != nil {
 		t.Fatalf("plan conversation: %v", err)
 	}
-	if result := plan.Result(); result.Conversation.Version != 1 || len(plan.Effects().Audit) != 1 || len(plan.Effects().Outbox) != 1 {
+	if result := plan.Result(); result.Conversation.Version != 1 || len(plan.Effects().Audit) != 1 || len(plan.Effects().Outbox) != 2 || plan.Effects().Outbox[0].AuditFactID != plan.Effects().Audit[0].AuditFactID {
 		t.Fatalf("conversation plan = %#v / %#v", result, plan.Effects())
 	}
 	if replay, err := planner.Plan(context.Background(), plan.State(), command); err != nil || replay.Result().Conversation != plan.Result().Conversation {
@@ -492,7 +492,9 @@ func TestPlannerPersistsToolIntentBeforeApprovalDecision(t *testing.T) {
 	state := runtimestate.RuntimeState{Sessions: []runtimestate.SessionRecord{{Tenant: tenant, Principal: principal, SessionID: session, State: agentruntime.SessionOpen, CreatedAt: now, UpdatedAt: now}}, Turns: []runtimestate.TurnRecord{{Tenant: tenant, Principal: principal, SessionID: session, TurnID: turn, State: agentruntime.TurnRunning}}}
 	digest := "sha256:" + strings.Repeat("a", 64)
 	descriptor, err := content.StageToolActionDescriptor(context.Background(), tenant, []byte("canonical tool action"))
-	if err != nil { t.Fatal(err) }
+	if err != nil {
+		t.Fatal(err)
+	}
 	intent, err := compiler.CompileRecordToolIntent(runtimestate.RecordToolIntentCommand{Scope: workerScope(tenant, principal), IdempotencyKey: "intent", SessionID: session, TurnID: turn, ToolCallID: "tcall_1234567890ABCDEF", ToolName: "write", ActionDigest: digest, PolicyRevisionDigest: digest, Descriptor: descriptor})
 	if err != nil {
 		t.Fatal(err)
@@ -553,7 +555,7 @@ func TestPlannerConsumesApprovedCapabilityOnlyWithinItsPolicyAndExpiry(t *testin
 		t.Fatal(err)
 	}
 	toolPlan, err := planner.Plan(context.Background(), plan.State(), begin)
-	if err != nil || len(toolPlan.State().ToolExecutions) != 1 || toolPlan.State().ToolExecutions[0].State != runtimestate.ToolExecutionIntent || len(toolPlan.Effects().Outbox) != 1 || toolPlan.Effects().Outbox[0].ToolCallID != "tcall_1234567890ABCDEF" {
+	if err != nil || len(toolPlan.State().ToolExecutions) != 1 || toolPlan.State().ToolExecutions[0].State != runtimestate.ToolExecutionIntent || len(toolPlan.Effects().Outbox) != 2 || toolPlan.Effects().Outbox[0].AuditFactID != toolPlan.Effects().Audit[0].AuditFactID || toolPlan.Effects().Outbox[1].ToolCallID != "tcall_1234567890ABCDEF" {
 		t.Fatalf("tool execution intent = %#v / %#v, %v", toolPlan.State().ToolExecutions, toolPlan.Effects(), err)
 	}
 	if _, err := planner.Plan(context.Background(), plan.State(), consume); err != nil {
