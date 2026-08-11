@@ -265,6 +265,138 @@ func TestPostgresRetentionCollectionDeletesOnlyExpiredUnpinnedContent(t *testing
 	}
 }
 
+func TestPostgresNoOpRetentionCollectionRecordsSchedule(t *testing.T) {
+	ctx := context.Background()
+	pool := openRuntimePool(t)
+	resetRuntimeV2(t, ctx, pool)
+	applyRuntimeMigrations(t, ctx, pool)
+	now := time.Date(2026, 8, 10, 19, 0, 0, 0, time.UTC)
+	tenant, err := runtimecontent.ParseTenantID("retention-noop-tenant")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `INSERT INTO runtime.tenants (tenant_id, created_at) VALUES ($1, now())`, string(tenant)); err != nil {
+		t.Fatalf("insert retention tenant: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `INSERT INTO runtime.runtime_state_snapshots (tenant_id, generation, state, updated_at) VALUES ($1, 0, '{}'::jsonb, now())`, string(tenant)); err != nil {
+		t.Fatalf("insert empty runtime state: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `INSERT INTO runtime.tenant_retention_jobs (tenant_id, next_collection_at) VALUES ($1, $2)`, string(tenant), now); err != nil {
+		t.Fatalf("insert retention schedule: %v", err)
+	}
+	objects := &stateStoreObjects{values: map[string][]byte{}}
+	content, err := runtimecontent.New("retention-noop-content", objects)
+	if err != nil {
+		t.Fatal(err)
+	}
+	controller, err := runtimecontent.NewTenantErasureController(content, erasureAuthorizer{allowed: true}, objects)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := runtimepostgres.NewRuntimeStateStore(pool, stateStoreClock{now: now})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := runtimepostgres.LifecycleRequest{Action: runtimepostgres.LifecycleCollectExpired, Tenant: tenant, AuthorizationID: "operator-noop-retention-0001", EvaluatedAt: now}
+	receipt, err := store.CollectExpiredAndContent(ctx, lifecycleAuthorizer{allowed: true}, request, controller)
+	if err != nil {
+		t.Fatalf("collect no-op retention state: %v", err)
+	}
+	if receipt.RemovedMetadata != 0 || len(receipt.Content.Deleted) != 0 || receipt.CollectionAt != now {
+		t.Fatalf("no-op retention receipt = %#v", receipt)
+	}
+	var collectedAt, nextAt time.Time
+	var authorizationID string
+	if err := pool.QueryRow(ctx, `SELECT last_collection_at, last_authorization_id, next_collection_at FROM runtime.tenant_retention_jobs WHERE tenant_id = $1`, string(tenant)).Scan(&collectedAt, &authorizationID, &nextAt); err != nil {
+		t.Fatalf("read no-op retention schedule: %v", err)
+	}
+	if !collectedAt.Equal(now) || authorizationID != request.AuthorizationID || !nextAt.Equal(now.Add(24*time.Hour)) {
+		t.Fatalf("no-op retention schedule collected_at=%s authorization=%q next_at=%s", collectedAt, authorizationID, nextAt)
+	}
+}
+
+func TestPostgresDirectTenantErasureRemovesV5RetentionSchedule(t *testing.T) {
+	ctx := context.Background()
+	pool := openRuntimePool(t)
+	resetRuntimeV2(t, ctx, pool)
+	applyRuntimeMigrations(t, ctx, pool)
+	tenant, err := runtimecontent.ParseTenantID("direct-erasure-tenant")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `INSERT INTO runtime.tenants (tenant_id, created_at) VALUES ($1, now())`, string(tenant)); err != nil {
+		t.Fatalf("insert direct erasure tenant: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `INSERT INTO runtime.runtime_state_snapshots (tenant_id, generation, state, updated_at) VALUES ($1, 0, '{}'::jsonb, now())`, string(tenant)); err != nil {
+		t.Fatalf("insert direct erasure state: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `INSERT INTO runtime.tenant_retention_jobs (tenant_id, next_collection_at) VALUES ($1, now())`, string(tenant)); err != nil {
+		t.Fatalf("insert direct erasure schedule: %v", err)
+	}
+	store, err := runtimepostgres.NewRuntimeStateStore(pool, stateStoreClock{now: time.Date(2026, 8, 10, 20, 0, 0, 0, time.UTC)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := runtimepostgres.LifecycleRequest{Action: runtimepostgres.LifecycleEraseTenant, Tenant: tenant, AuthorizationID: "operator-direct-erasure-0001"}
+	if err := store.EraseTenant(ctx, lifecycleAuthorizer{allowed: true}, request); err != nil {
+		t.Fatalf("erase direct tenant state: %v", err)
+	}
+	var tenants, schedules int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM runtime.tenants WHERE tenant_id = $1`, string(tenant)).Scan(&tenants); err != nil {
+		t.Fatal(err)
+	}
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM runtime.tenant_retention_jobs WHERE tenant_id = $1`, string(tenant)).Scan(&schedules); err != nil {
+		t.Fatal(err)
+	}
+	if tenants != 0 || schedules != 0 {
+		t.Fatalf("direct erasure left tenants=%d schedules=%d", tenants, schedules)
+	}
+}
+
+func TestPostgresContentlessTenantErasureSucceeds(t *testing.T) {
+	ctx := context.Background()
+	pool := openRuntimePool(t)
+	resetRuntimeV2(t, ctx, pool)
+	applyRuntimeMigrations(t, ctx, pool)
+	tenant, err := runtimecontent.ParseTenantID("contentless-erasure-tenant")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `INSERT INTO runtime.tenants (tenant_id, created_at) VALUES ($1, now())`, string(tenant)); err != nil {
+		t.Fatalf("insert contentless tenant: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `INSERT INTO runtime.runtime_state_snapshots (tenant_id, generation, state, updated_at) VALUES ($1, 0, '{}'::jsonb, now())`, string(tenant)); err != nil {
+		t.Fatalf("insert contentless state: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `INSERT INTO runtime.tenant_retention_jobs (tenant_id, next_collection_at) VALUES ($1, now())`, string(tenant)); err != nil {
+		t.Fatalf("insert contentless schedule: %v", err)
+	}
+	objects := &stateStoreObjects{values: map[string][]byte{}}
+	content, err := runtimecontent.New("contentless-erasure-content", objects)
+	if err != nil {
+		t.Fatal(err)
+	}
+	controller, err := runtimecontent.NewTenantErasureController(content, erasureAuthorizer{allowed: true}, objects)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := runtimepostgres.NewRuntimeStateStore(pool, stateStoreClock{now: time.Date(2026, 8, 10, 21, 0, 0, 0, time.UTC)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := runtimepostgres.LifecycleRequest{Action: runtimepostgres.LifecycleEraseTenant, Tenant: tenant, AuthorizationID: "operator-contentless-erasure-0001"}
+	if _, err := store.EraseTenantAndContent(ctx, lifecycleAuthorizer{allowed: true}, request, controller); err != nil {
+		t.Fatalf("erase contentless tenant: %v", err)
+	}
+	var remaining int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM runtime.tenants WHERE tenant_id = $1`, string(tenant)).Scan(&remaining); err != nil {
+		t.Fatal(err)
+	}
+	if remaining != 0 {
+		t.Fatalf("contentless erasure retained tenant rows=%d", remaining)
+	}
+}
+
 type stateStoreClock struct{ now time.Time }
 
 func (clock stateStoreClock) Now() time.Time { return clock.now }

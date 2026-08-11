@@ -41,13 +41,6 @@ func TestDurableRuntimeUsesNonSuperApplicationLoginWithTenantRLS(t *testing.T) {
 	if user == "" || superuser || bypassRLS || !applicationMember || operatorMember {
 		t.Fatalf("application login = %q superuser=%t bypass_rls=%t app_member=%t operator_member=%t, want app-only constrained RLS subject", user, superuser, bypassRLS, applicationMember, operatorMember)
 	}
-	var unbound int
-	if err := pool.QueryRow(ctx, `SELECT count(*) FROM runtime.runtime_state_snapshots`).Scan(&unbound); err != nil {
-		t.Fatalf("read unbound application state: %v", err)
-	}
-	if unbound != 0 {
-		t.Fatalf("unbound application state rows = %d, want 0", unbound)
-	}
 	transaction, err := pool.Begin(ctx)
 	if err != nil {
 		t.Fatalf("begin application RLS transaction: %v", err)
@@ -63,6 +56,16 @@ func TestDurableRuntimeUsesNonSuperApplicationLoginWithTenantRLS(t *testing.T) {
 		if _, err := transaction.Exec(ctx, `INSERT INTO runtime.runtime_state_snapshots (tenant_id, generation, state, updated_at) VALUES ($1, 1, '{}'::jsonb, now())`, tenant); err != nil {
 			t.Fatalf("insert application tenant state %s: %v", tenant, err)
 		}
+	}
+	if _, err := transaction.Exec(ctx, `RESET runtime.tenant_id`); err != nil {
+		t.Fatalf("clear application tenant binding: %v", err)
+	}
+	var unbound int
+	if err := transaction.QueryRow(ctx, `SELECT count(*) FROM runtime.runtime_state_snapshots`).Scan(&unbound); err != nil {
+		t.Fatalf("read unbound application state: %v", err)
+	}
+	if unbound != 0 {
+		t.Fatalf("unbound application state rows = %d, want 0", unbound)
 	}
 	if _, err := transaction.Exec(ctx, `SELECT set_config('runtime.tenant_id', 'application-rls-a', true)`); err != nil {
 		t.Fatalf("bind application tenant A: %v", err)

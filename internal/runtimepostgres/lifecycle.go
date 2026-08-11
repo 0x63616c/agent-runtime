@@ -82,24 +82,23 @@ func (store *RuntimeStateStore) CollectExpiredAndContent(ctx context.Context, au
 	}
 	compacted, candidates, removed := compactExpiredContentMetadata(state, request.EvaluatedAt.UTC())
 	result := RetentionCollectionReceipt{Tenant: request.Tenant, RemovedMetadata: removed, CollectionAt: request.EvaluatedAt.UTC()}
-	if removed == 0 {
-		return result, nil
-	}
-	remaining := referenceSet(stateReferences(compacted))
-	toDelete := unreferenced(candidates, remaining)
-	if len(toDelete) > 0 {
-		receipt, err := content.Erase(ctx, runtimecontent.ErasureRequest{Tenant: request.Tenant, AuthorizationID: request.AuthorizationID, References: toDelete})
-		result.Content = receipt
-		if err != nil {
-			return result, err
+	if removed > 0 {
+		remaining := referenceSet(stateReferences(compacted))
+		toDelete := unreferenced(candidates, remaining)
+		if len(toDelete) > 0 {
+			receipt, err := content.Erase(ctx, runtimecontent.ErasureRequest{Tenant: request.Tenant, AuthorizationID: request.AuthorizationID, References: toDelete})
+			result.Content = receipt
+			if err != nil {
+				return result, err
+			}
 		}
-	}
-	encoded, err := json.Marshal(compacted)
-	if err != nil {
-		return result, runtimestate.ErrIntegrity
-	}
-	if _, err := tx.Exec(ctx, `UPDATE runtime.runtime_state_snapshots SET generation = generation + 1, state = $2::jsonb, updated_at = now() WHERE tenant_id = $1`, string(request.Tenant), encoded); err != nil {
-		return result, runtimestate.ErrUnavailable
+		encoded, err := json.Marshal(compacted)
+		if err != nil {
+			return result, runtimestate.ErrIntegrity
+		}
+		if _, err := tx.Exec(ctx, `UPDATE runtime.runtime_state_snapshots SET generation = generation + 1, state = $2::jsonb, updated_at = now() WHERE tenant_id = $1`, string(request.Tenant), encoded); err != nil {
+			return result, runtimestate.ErrUnavailable
+		}
 	}
 	updated, err := tx.Exec(ctx, `UPDATE runtime.tenant_retention_jobs
 		SET last_collection_at = $2, last_authorization_id = $3, next_collection_at = $4
@@ -233,14 +232,14 @@ func (store *RuntimeStateStore) EraseTenantAndContent(ctx context.Context, autho
 	if err != nil {
 		return CoordinatedErasureReceipt{}, err
 	}
-	if len(state.Revisions)+len(state.Inputs)+len(state.Artifacts)+len(state.Conversations) == 0 {
-		return CoordinatedErasureReceipt{}, runtimestate.ErrNotFoundOrDenied
-	}
 	references := stateReferences(state)
-	receipt, err := content.Erase(ctx, runtimecontent.ErasureRequest{Tenant: request.Tenant, AuthorizationID: request.AuthorizationID, References: references})
-	result := CoordinatedErasureReceipt{Tenant: request.Tenant, Content: receipt}
-	if err != nil {
-		return result, err
+	result := CoordinatedErasureReceipt{Tenant: request.Tenant}
+	if len(references) > 0 {
+		receipt, err := content.Erase(ctx, runtimecontent.ErasureRequest{Tenant: request.Tenant, AuthorizationID: request.AuthorizationID, References: references})
+		result.Content = receipt
+		if err != nil {
+			return result, err
+		}
 	}
 	if _, err := tx.Exec(ctx, `DELETE FROM runtime.runtime_state_snapshots WHERE tenant_id = $1`, string(request.Tenant)); err != nil {
 		return result, runtimestate.ErrUnavailable
@@ -311,6 +310,9 @@ func (store *RuntimeStateStore) EraseTenant(ctx context.Context, authorizer Life
 		return runtimestate.ErrUnavailable
 	}
 	if _, err := tx.Exec(ctx, `DELETE FROM runtime.runtime_state_snapshots WHERE tenant_id = $1`, string(request.Tenant)); err != nil {
+		return runtimestate.ErrUnavailable
+	}
+	if _, err := tx.Exec(ctx, `DELETE FROM runtime.tenant_retention_jobs WHERE tenant_id = $1`, string(request.Tenant)); err != nil {
 		return runtimestate.ErrUnavailable
 	}
 	result, err := tx.Exec(ctx, `DELETE FROM runtime.tenants WHERE tenant_id = $1`, string(request.Tenant))
