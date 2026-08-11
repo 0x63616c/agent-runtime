@@ -228,6 +228,22 @@ func TestPostgresRetentionCollectionDeletesOnlyExpiredUnpinnedContent(t *testing
 	if _, found := objects.values[objectKey]; !found {
 		t.Fatal("unauthorized retention collection deleted immutable content")
 	}
+	// Verify the v5 retention row remains tenant-writable before exercising
+	// the composed lifecycle transaction; this keeps a future RLS regression
+	// diagnosable at the exact SQL boundary.
+	transaction, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = transaction.Exec(ctx, `SELECT set_config('runtime.tenant_id', $1, true)`, string(tenant)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = transaction.Exec(ctx, `UPDATE runtime.tenant_retention_jobs SET next_collection_at = next_collection_at WHERE tenant_id = $1`, string(tenant)); err != nil {
+		t.Fatalf("v5 retention row is not tenant-writable: %v", err)
+	}
+	if err = transaction.Rollback(ctx); err != nil {
+		t.Fatal(err)
+	}
 	receipt, err := store.CollectExpiredAndContent(ctx, lifecycleAuthorizer{allowed: true}, request, controller)
 	if err != nil {
 		t.Fatalf("collect expired content: %v", err)

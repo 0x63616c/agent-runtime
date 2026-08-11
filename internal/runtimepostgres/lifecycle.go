@@ -102,7 +102,7 @@ func (store *RuntimeStateStore) CollectExpiredAndContent(ctx context.Context, au
 		return result, runtimestate.ErrUnavailable
 	}
 	if _, err := tx.Exec(ctx, `UPDATE runtime.tenant_retention_jobs
-		SET last_collection_at = $2, last_authorization_id = $3, next_collection_at = $2 + interval '24 hours'
+		SET last_collection_at = $2::timestamptz, last_authorization_id = $3, next_collection_at = $2::timestamptz + interval '24 hours'
 		WHERE tenant_id = $1`, string(request.Tenant), request.EvaluatedAt.UTC(), request.AuthorizationID); err != nil {
 		return result, runtimestate.ErrUnavailable
 	}
@@ -244,6 +244,13 @@ func (store *RuntimeStateStore) EraseTenantAndContent(ctx context.Context, autho
 	if _, err := tx.Exec(ctx, `DELETE FROM runtime.runtime_state_snapshots WHERE tenant_id = $1`, string(request.Tenant)); err != nil {
 		return result, runtimestate.ErrUnavailable
 	}
+	// V5 retention scheduling is tenant-owned metadata. Remove it in the same
+	// bound transaction before deleting the catalog row; leaving it would make
+	// the foreign-key restriction turn an authorized erase into an unavailable
+	// outcome after content had already been erased.
+	if _, err := tx.Exec(ctx, `DELETE FROM runtime.tenant_retention_jobs WHERE tenant_id = $1`, string(request.Tenant)); err != nil {
+		return result, runtimestate.ErrUnavailable
+	}
 	deleted, err := tx.Exec(ctx, `DELETE FROM runtime.tenants WHERE tenant_id = $1`, string(request.Tenant))
 	if err != nil {
 		return result, runtimestate.ErrUnavailable
@@ -307,6 +314,9 @@ func (store *RuntimeStateStore) EraseTenant(ctx context.Context, authorizer Life
 		return runtimestate.ErrUnavailable
 	}
 	if _, err := tx.Exec(ctx, `DELETE FROM runtime.runtime_state_snapshots WHERE tenant_id = $1`, string(request.Tenant)); err != nil {
+		return runtimestate.ErrUnavailable
+	}
+	if _, err := tx.Exec(ctx, `DELETE FROM runtime.tenant_retention_jobs WHERE tenant_id = $1`, string(request.Tenant)); err != nil {
 		return runtimestate.ErrUnavailable
 	}
 	result, err := tx.Exec(ctx, `DELETE FROM runtime.tenants WHERE tenant_id = $1`, string(request.Tenant))
