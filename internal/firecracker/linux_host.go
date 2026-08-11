@@ -151,6 +151,8 @@ type LinuxJailerHost struct {
 	configuredPlan       Plan
 	secretContainment    SecretContainmentManifest
 	hasSecretContainment bool
+	noRouteProxy         NoRouteProxyTopologyManifest
+	hasNoRouteProxy      bool
 	plan                 Plan
 	fixtures             FixtureSet
 	authority            JailerExecutionAuthority
@@ -179,6 +181,21 @@ func (host *LinuxJailerHost) SecretContainmentManifest() (SecretContainmentManif
 		return SecretContainmentManifest{}, false
 	}
 	return cloneSecretContainmentManifest(host.secretContainment), true
+}
+
+// NoRouteProxyTopologyManifest returns the fixed unavailable-profile topology
+// configuration when the host was explicitly composed with one. It is not
+// evidence of an applied no-NIC/no-route guest topology or permitted egress.
+func (host *LinuxJailerHost) NoRouteProxyTopologyManifest() (NoRouteProxyTopologyManifest, bool) {
+	if host == nil {
+		return NoRouteProxyTopologyManifest{}, false
+	}
+	host.mu.Lock()
+	defer host.mu.Unlock()
+	if !host.hasNoRouteProxy {
+		return NoRouteProxyTopologyManifest{}, false
+	}
+	return host.noRouteProxy, true
 }
 
 // ExecuteDispatch is the only Firecracker handoff for an already authenticated
@@ -262,29 +279,35 @@ func (host *LinuxJailerHost) DispatchAuthenticatedSecret(ctx context.Context, en
 }
 
 // DispatchAuthenticatedProxy is the only future egress composition door. It
-// creates one exact lease/fence session after host control authentication and
-// remains unavailable until the no-route profile has protected evidence.
-func (host *LinuxJailerHost) DispatchAuthenticatedProxy(ctx context.Context, envelope sandboxhostprotocol.Envelope, authenticatedEnvelope []byte, authority *ProxyExecutionAuthority) (GuestDispatchResult, error) {
+// accepts a narrow host-control issuer which must bind the same no-route
+// topology, plan, lease, DNS request, and fence before it can create a session.
+// It remains unavailable until the no-route profile has protected evidence.
+func (host *LinuxJailerHost) DispatchAuthenticatedProxy(ctx context.Context, envelope sandboxhostprotocol.Envelope, authenticatedEnvelope []byte, issuer *ProxyAuthorityIssuer) (GuestDispatchResult, error) {
 	if err := contextError(ctx); err != nil {
 		return GuestDispatchResult{}, err
 	}
-	if host == nil || authority == nil || len(authenticatedEnvelope) == 0 || envelope.OperationKind != GuestProxyOperationKind || envelope.HostID == "" || envelope.AssignmentID == "" || envelope.FencingToken == 0 || envelope.CapabilityDigest == "" {
+	if host == nil || issuer == nil || len(authenticatedEnvelope) == 0 || envelope.OperationKind != GuestProxyOperationKind || envelope.HostID == "" || envelope.AssignmentID == "" || envelope.FencingToken == 0 || envelope.CapabilityDigest == "" {
 		return GuestDispatchResult{}, fmt.Errorf("%w: authenticated fenced proxy command is required", ErrCapabilityUnavailable)
 	}
 	host.mu.Lock()
-	launched, cleaning, plan, guest := host.launched, host.cleaning || host.cleaned, cloneLinuxJailerPlan(host.plan), host.Guest
+	launched, cleaning, plan, guest, topology, hasTopology, boundAuthority := host.launched, host.cleaning || host.cleaned, cloneLinuxJailerPlan(host.plan), host.Guest, host.noRouteProxy, host.hasNoRouteProxy, cloneJailerExecutionAuthority(host.authority)
 	host.mu.Unlock()
-	if !launched || cleaning || !validCompiledPlan(plan) || envelope.SandboxID != plan.VMID() || sandbox.Digest(envelope.CapabilityDigest) != plan.Capabilities().Digest || firecrackerProfilesUnavailable(plan.Capabilities()) {
+	if !launched || cleaning || !validCompiledPlan(plan) || envelope.SandboxID != plan.VMID() || sandbox.Digest(envelope.CapabilityDigest) != plan.Capabilities().Digest || !hasTopology || !validNoRouteProxyTopologyManifest(topology, plan, boundAuthority) || !issuer.BoundTo(plan, boundAuthority, topology) || firecrackerProfilesUnavailable(plan.Capabilities()) {
 		return GuestDispatchResult{}, fmt.Errorf("%w: certified mandatory-proxy profile is unavailable", ErrCapabilityUnavailable)
 	}
 	channel, ok := guest.(AuthenticatedGuestProxyChannel)
 	if !ok {
 		return GuestDispatchResult{}, fmt.Errorf("%w: certified proxy guest channel is not composed", ErrCapabilityUnavailable)
 	}
+	authority, err := issuer.Issue(envelope, authenticatedEnvelope)
+	if err != nil {
+		return GuestDispatchResult{}, err
+	}
 	session, err := authority.Begin(envelope)
 	if err != nil {
 		return GuestDispatchResult{}, err
 	}
+	defer session.Close(context.Background())
 	return channel.ProxyAuthenticated(ctx, envelope, authenticatedEnvelope, session, authority.now(), authority.resolve(), authority.dial())
 }
 

@@ -16,6 +16,7 @@ type LinuxJailerHostConfig struct {
 	RootFSCopyPath    string
 	Authority         JailerExecutionAuthority
 	SecretContainment *SecretContainmentManifest
+	NoRouteProxy      *NoRouteProxyTopologyManifest
 	UnixDialer        unixSocketDialer
 }
 
@@ -29,6 +30,9 @@ func NewLinuxJailerHost(config LinuxJailerHostConfig) (*LinuxJailerHost, error) 
 	}
 	if config.SecretContainment != nil && !validSecretContainmentManifest(*config.SecretContainment, config.Plan, config.Authority) {
 		return nil, fmt.Errorf("%w: exact unavailable secret-containment launch profile is required", ErrSmokeUnavailable)
+	}
+	if config.NoRouteProxy != nil && !validNoRouteProxyTopologyManifest(*config.NoRouteProxy, config.Plan, config.Authority) {
+		return nil, fmt.Errorf("%w: exact unavailable no-route proxy launch profile is required", ErrSmokeUnavailable)
 	}
 	if err := config.PreflightState.Validate(); err != nil {
 		return nil, err
@@ -55,6 +59,10 @@ func NewLinuxJailerHost(config LinuxJailerHostConfig) (*LinuxJailerHost, error) 
 	if config.SecretContainment != nil {
 		host.secretContainment = cloneSecretContainmentManifest(*config.SecretContainment)
 		host.hasSecretContainment = true
+	}
+	if config.NoRouteProxy != nil {
+		host.noRouteProxy = *config.NoRouteProxy
+		host.hasNoRouteProxy = true
 	}
 	return host, nil
 }
