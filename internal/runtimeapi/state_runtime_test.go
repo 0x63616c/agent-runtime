@@ -698,6 +698,113 @@ func TestStateRuntimeHTTPAndSDKExposeExpiredApprovalAndItsDurableReceipt(t *test
 	}
 }
 
+func TestStateRuntimeHTTPAndSDKAuthorizationMatrixUsesFakeApprovalClock(t *testing.T) {
+	runtime, content, compiler, store, fakeClock := newMemoryStateAuthority(t)
+	ctx := context.Background()
+	admin := runtimeapi.Identity{Tenant: "tenant-a", Principal: "admin", Admin: true}
+	alice := runtimeapi.Identity{Tenant: "tenant-a", Principal: "alice"}
+	bob := runtimeapi.Identity{Tenant: "tenant-a", Principal: "bob"}
+	agent, err := runtime.CreateAgent(ctx, admin, agentruntime.CreateAgentRequest{IdempotencyKey: "matrix-agent", Name: "assistant", ModelProfile: "balanced", Instructions: "safe"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tenant, _ := runtimecontent.ParseTenantID("tenant-a")
+	principal, _ := runtimecontent.ParsePrincipalID("alice")
+	workerScope := runtimestate.MutationScope{Tenant: tenant, Principal: principal, Authority: runtimestate.AuthorityRuntimeWorker}
+	digest := "sha256:" + strings.Repeat("d", 64)
+	type seeded struct {
+		approval agentruntime.ApprovalID
+		session  agentruntime.SessionID
+		turn     agentruntime.TurnID
+	}
+	seed := func(label, suffix string, expiresAt time.Time) seeded {
+		session, e := runtime.CreateSession(ctx, alice, agentruntime.CreateSessionRequest{IdempotencyKey: "matrix-session-" + label, AgentRevision: agent.RevisionID})
+		if e != nil {
+			t.Fatal(e)
+		}
+		accepted, e := runtime.SendInput(ctx, alice, agentruntime.SendInputRequest{SessionID: session.ID, IdempotencyKey: "matrix-input-" + label, Parts: []agentruntime.ContentPart{{Kind: agentruntime.ContentText, Text: label}}})
+		if e != nil {
+			t.Fatal(e)
+		}
+		descriptor, e := content.StageToolActionDescriptor(ctx, tenant, []byte("write "+label))
+		if e != nil {
+			t.Fatal(e)
+		}
+		toolCallID, approvalID := "tcall_"+suffix, "appr_"+suffix
+		intent, e := compiler.CompileRecordToolIntent(runtimestate.RecordToolIntentCommand{Scope: workerScope, IdempotencyKey: "matrix-intent-" + label, SessionID: session.ID, TurnID: accepted.Turn.ID, ToolCallID: toolCallID, ToolName: "write", ActionDigest: digest, PolicyRevisionDigest: digest, Descriptor: descriptor})
+		if e != nil {
+			t.Fatal(e)
+		}
+		if _, e = store.Apply(ctx, intent); e != nil {
+			t.Fatal(e)
+		}
+		request, e := compiler.CompileRequestApproval(runtimestate.RequestApprovalCommand{Scope: workerScope, IdempotencyKey: "matrix-approval-" + label, SessionID: session.ID, TurnID: accepted.Turn.ID, ToolCallID: toolCallID, ApprovalID: approvalID, ActionDigest: digest, PolicyRevisionDigest: digest, CapabilityDigest: digest, MaximumUses: 1, ExpiresAt: expiresAt})
+		if e != nil {
+			t.Fatal(e)
+		}
+		if _, e = store.Apply(ctx, request); e != nil {
+			t.Fatal(e)
+		}
+		id, _ := agentruntime.ParseApprovalID(approvalID)
+		return seeded{approval: id, session: session.ID, turn: accepted.Turn.ID}
+	}
+	handler, err := runtimeapi.NewHandler(runtimeapi.Config{Runtime: runtime, Authenticator: staticAuth{identities: map[string]runtimeapi.Identity{"alice-token-000000": alice, "bob-token-00000000": bob}}, RequestIDs: &requestIDs{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(handler)
+	defer server.Close()
+	aliceClient, bobClient := newStateRuntimeHTTPClient(t, server.URL, "alice-token-000000"), newStateRuntimeHTTPClient(t, server.URL, "bob-token-00000000")
+	approved := seed("approved", "1234567890ABCDEA", fakeClock.Now().Add(time.Minute))
+	if _, err := bobClient.InspectApproval(ctx, approved.approval); !hasFailure(err, agentruntime.FailureNotFound) {
+		t.Fatalf("cross-principal inspection = %v, want safe not-found", err)
+	}
+	if _, err := bobClient.DecideApproval(ctx, agentruntime.DecideApprovalRequest{ApprovalID: approved.approval, Decision: agentruntime.ApprovalApproved, IdempotencyKey: "matrix-bob"}); !hasFailure(err, agentruntime.FailureNotFound) {
+		t.Fatalf("cross-principal decision = %v, want safe not-found", err)
+	}
+	raw, err := http.NewRequestWithContext(ctx, http.MethodPost, server.URL+"/v1/approvals/"+approved.approval.String()+"/decide", strings.NewReader(`{"decision":"approved","scope":{"maximum_uses":2}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw.Header.Set("Authorization", "Bearer alice-token-000000")
+	raw.Header.Set("Idempotency-Key", "matrix-scope")
+	raw.Header.Set("X-Request-ID", "req_0000000000000001")
+	response, err := http.DefaultClient.Do(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response.Body.Close()
+	if response.StatusCode != http.StatusBadRequest {
+		t.Fatalf("scope-bearing public decision status = %d, want %d", response.StatusCode, http.StatusBadRequest)
+	}
+	decision, err := aliceClient.DecideApproval(ctx, agentruntime.DecideApprovalRequest{ApprovalID: approved.approval, Decision: agentruntime.ApprovalApproved, IdempotencyKey: "matrix-approve"})
+	if err != nil || decision.State != agentruntime.ApprovalApproved {
+		t.Fatalf("owner approve = %#v, %v", decision, err)
+	}
+	if replay, e := aliceClient.DecideApproval(ctx, agentruntime.DecideApprovalRequest{ApprovalID: approved.approval, Decision: agentruntime.ApprovalApproved, IdempotencyKey: "matrix-approve"}); e != nil || !reflect.DeepEqual(replay, decision) {
+		t.Fatalf("approve replay = %#v, %v", replay, e)
+	}
+	denied := seed("denied", "1234567890ABCDEB", fakeClock.Now().Add(time.Minute))
+	if result, e := aliceClient.DecideApproval(ctx, agentruntime.DecideApprovalRequest{ApprovalID: denied.approval, Decision: agentruntime.ApprovalDenied, IdempotencyKey: "matrix-deny"}); e != nil || result.State != agentruntime.ApprovalDenied {
+		t.Fatalf("owner deny = %#v, %v", result, e)
+	}
+	expired := seed("expired", "1234567890ABCDEC", fakeClock.Now().Add(time.Minute))
+	if err := fakeClock.Advance(time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := aliceClient.DecideApproval(ctx, agentruntime.DecideApprovalRequest{ApprovalID: expired.approval, Decision: agentruntime.ApprovalApproved, IdempotencyKey: "matrix-expired"}); !hasFailure(err, agentruntime.FailureConflict) {
+		t.Fatalf("late decision = %v, want conflict", err)
+	}
+	if result, e := aliceClient.InspectApproval(ctx, expired.approval); e != nil || result.State != agentruntime.ApprovalExpired || result.DecidedAt != nil {
+		t.Fatalf("expired public approval = %#v, %v", result, e)
+	}
+	for _, value := range []seeded{approved, denied, expired} {
+		if page, e := aliceClient.InspectToolCalls(ctx, value.session, value.turn); e != nil || len(page.Calls) != 1 || page.Calls[0].Execution != nil {
+			t.Fatalf("public decision dispatched Tool = %#v, %v", page, e)
+		}
+	}
+}
+
 func TestStateRuntimeHTTPAndSDKExposeProviderNeutralUsageAndSafeModelFailure(t *testing.T) {
 	runtime, _, compiler, store, _ := newMemoryStateAuthority(t)
 	ctx := context.Background()
