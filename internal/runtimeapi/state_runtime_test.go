@@ -322,12 +322,58 @@ func TestStateRuntimeHTTPAndSDKExposeExpiredApprovalAndItsDurableReceipt(t *test
 	}
 }
 
+func TestStateRuntimeHTTPAndSDKRejectExpiredMutationReceiptWithoutReplayingWork(t *testing.T) {
+	runtime, _, _, _, fakeClock := newMemoryStateAuthorityWithRetention(t, testRetention{duration: time.Minute})
+	handler, err := runtimeapi.NewHandler(runtimeapi.Config{Runtime: runtime, Authenticator: staticAuth{identities: map[string]runtimeapi.Identity{
+		"admin-token-000000": {Tenant: "tenant-a", Principal: "admin", Admin: true},
+		"alice-token-000000": {Tenant: "tenant-a", Principal: "alice"},
+	}}, RequestIDs: &requestIDs{}})
+	if err != nil {
+		t.Fatalf("new handler: %v", err)
+	}
+	server := httptest.NewServer(handler)
+	defer server.Close()
+	admin := newStateRuntimeHTTPClient(t, server.URL, "admin-token-000000")
+	alice := newStateRuntimeHTTPClient(t, server.URL, "alice-token-000000")
+	ctx := context.Background()
+	agent, err := admin.CreateAgent(ctx, agentruntime.CreateAgentRequest{IdempotencyKey: "receipt-expiry-agent", Name: "assistant", ModelProfile: "balanced", Instructions: "safe"})
+	if err != nil {
+		t.Fatalf("create Agent: %v", err)
+	}
+	session, err := alice.CreateSession(ctx, agentruntime.CreateSessionRequest{IdempotencyKey: "receipt-expiry-session", AgentRevision: agent.RevisionID})
+	if err != nil {
+		t.Fatalf("create Session: %v", err)
+	}
+	request := agentruntime.SendInputRequest{SessionID: session.ID, IdempotencyKey: "receipt-expiry-input", Parts: []agentruntime.ContentPart{{Kind: agentruntime.ContentText, Text: "accepted once"}}}
+	accepted, err := alice.SendInput(ctx, request)
+	if err != nil {
+		t.Fatalf("send Input: %v", err)
+	}
+	if err := fakeClock.Advance(time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := alice.SendInput(ctx, request); !hasFailure(err, agentruntime.FailureConflict) {
+		t.Fatalf("expired replay error = %v, want safe conflict", err)
+	}
+	if _, err := alice.IdempotencyStatus(ctx, request.IdempotencyKey); !hasFailure(err, agentruntime.FailureConflict) {
+		t.Fatalf("expired receipt status error = %v, want safe conflict", err)
+	}
+	fresh, err := alice.SendInput(ctx, agentruntime.SendInputRequest{SessionID: session.ID, IdempotencyKey: "receipt-expiry-input-fresh", Parts: request.Parts})
+	if err != nil || fresh.Turn.ID == accepted.Turn.ID {
+		t.Fatalf("fresh post-expiry Input = %#v, %v; want a distinct accepted Turn", fresh, err)
+	}
+}
+
 func newMemoryStateRuntime(t *testing.T) *runtimeapi.StateRuntime {
 	runtime, _, _, _, _ := newMemoryStateAuthority(t)
 	return runtime
 }
 
 func newMemoryStateAuthority(t *testing.T) (*runtimeapi.StateRuntime, *runtimecontent.Store, *runtimestate.Compiler, *runtimestate.MemoryRuntimeStateStore, *clock.Fake) {
+	return newMemoryStateAuthorityWithRetention(t, nil)
+}
+
+func newMemoryStateAuthorityWithRetention(t *testing.T, retention runtimestate.RetentionPolicy) (*runtimeapi.StateRuntime, *runtimecontent.Store, *runtimestate.Compiler, *runtimestate.MemoryRuntimeStateStore, *clock.Fake) {
 	t.Helper()
 	objects := &stateRuntimeObjects{values: map[string][]byte{}}
 	content, err := runtimecontent.New("runtime-content", objects)
@@ -342,7 +388,11 @@ func newMemoryStateAuthority(t *testing.T) (*runtimeapi.StateRuntime, *runtimeco
 	if err != nil {
 		t.Fatal(err)
 	}
-	planner, err := runtimestate.NewRuntimeStatePlanner(fakeClock, &stateRuntimeIDs{})
+	options := []runtimestate.PlannerOption{}
+	if retention != nil {
+		options = append(options, runtimestate.WithRetentionPolicy(retention))
+	}
+	planner, err := runtimestate.NewRuntimeStatePlanner(fakeClock, &stateRuntimeIDs{}, options...)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -355,6 +405,25 @@ func newMemoryStateAuthority(t *testing.T) (*runtimeapi.StateRuntime, *runtimeco
 		t.Fatal(err)
 	}
 	return runtime, content, compiler, store, fakeClock
+}
+
+func newStateRuntimeHTTPClient(t *testing.T, baseURL, token string) *agentruntime.Client {
+	t.Helper()
+	credential, err := agentruntime.NewStaticBearerCredential(token)
+	if err != nil {
+		t.Fatalf("new credential: %v", err)
+	}
+	client, err := agentruntime.NewClient(agentruntime.ClientConfig{BaseURL: baseURL, HTTPClient: http.DefaultClient, Credentials: credential, RequestIDs: &requestIDs{}})
+	if err != nil {
+		t.Fatalf("new SDK client: %v", err)
+	}
+	return client
+}
+
+type testRetention struct{ duration time.Duration }
+
+func (retention testRetention) RetainUntil(now time.Time) time.Time {
+	return now.Add(retention.duration)
 }
 
 type stateRuntimeObjects struct{ values map[string][]byte }

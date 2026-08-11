@@ -18,7 +18,10 @@ resources return the same safe `not_found` classification.
 
 `GET /v1/idempotency` requires an `Idempotency-Key` header and returns only the
 caller-scoped retained receipt status. It never replays a command or exposes
-the canonical request body.
+the canonical request body. Receipt retention is configured at the durable
+state authority. Once it expires, both a replay using that key and status
+lookup fail with the same safe `conflict` classification; callers must submit
+a fresh mutation key and must not infer whether expired work was re-executed.
 
 Every `/v1` request is authenticated with a bearer credential and correlated by a
 typed `X-Request-ID`. Mutations require `Idempotency-Key`. Request and response
