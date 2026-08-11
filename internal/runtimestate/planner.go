@@ -815,6 +815,15 @@ func (planner *RuntimeStatePlanner) recordToolExecutionOutcome(state *RuntimeSta
 		}
 		record.State, record.Result, record.Failure, record.UpdatedAt = c.Outcome, c.Result, c.Failure.Clone(), now
 		state.ToolExecutions[index] = record
+		for grantIndex := range state.Grants {
+			grant := state.Grants[grantIndex]
+			if grant.GrantID == record.GrantID && grant.RevokedAt == nil {
+				value := now
+				grant.RevokedAt = &value
+				state.Grants[grantIndex] = grant
+				break
+			}
+		}
 		effects, err := planner.effects(state, binding, state.Sessions[sessionIndex], state.Turns[turnIndex], InvocationRecord{OperationID: record.OperationID}, []agentruntime.EventKind{agentruntime.EventSandboxOperationFinalized}, now)
 		if err != nil {
 			return PlanResult{}, effects, err
@@ -1480,7 +1489,7 @@ func validateState(state RuntimeState) error {
 		}
 	}
 	for _, record := range state.Grants {
-		if duplicate(grants, record.GrantID) || record.MaximumUses == 0 || record.Uses > record.MaximumUses || record.ExpiresAt.IsZero() || (record.RevokedAt != nil && (record.RevokedAt.IsZero() || record.RevokedAt.Location() != time.UTC || record.Uses != 0)) {
+		if duplicate(grants, record.GrantID) || record.MaximumUses == 0 || record.Uses > record.MaximumUses || record.ExpiresAt.IsZero() || (record.RevokedAt != nil && (record.RevokedAt.IsZero() || record.RevokedAt.Location() != time.UTC)) {
 			return ErrIntegrity
 		}
 	}
