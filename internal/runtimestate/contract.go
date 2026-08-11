@@ -688,10 +688,10 @@ func (command ExpireCapabilityGrantCommand) Owned() ExpireCapabilityGrantCommand
 
 // DenyToolAdmissionCommand retains only the correlation of a broker refusal.
 type DenyToolAdmissionCommand struct {
-	Scope                      MutationScope
-	IdempotencyKey, ToolCallID string
-	SessionID                  agentruntime.SessionID
-	TurnID                     agentruntime.TurnID
+	Scope                                MutationScope
+	IdempotencyKey, ToolCallID, Decision string
+	SessionID                            agentruntime.SessionID
+	TurnID                               agentruntime.TurnID
 }
 
 // Owned returns a value-owned denial command.
