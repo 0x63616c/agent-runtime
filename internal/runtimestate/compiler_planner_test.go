@@ -504,7 +504,7 @@ func TestPlannerPersistsToolIntentBeforeApprovalDecision(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	approval, err := compiler.CompileRequestApproval(runtimestate.RequestApprovalCommand{Scope: workerScope(tenant, principal), IdempotencyKey: "approval", SessionID: session, TurnID: turn, ToolCallID: "tcall_1234567890ABCDEF", ApprovalID: "appr_1234567890ABCDEF", ActionDigest: digest, PolicyRevisionDigest: digest, CapabilityDigest: digest, MaximumUses: 1, ExpiresAt: now.Add(time.Hour)})
+	approval, err := compiler.CompileRequestApproval(runtimestate.RequestApprovalCommand{Scope: workerScope(tenant, principal), IdempotencyKey: "approval", SessionID: session, TurnID: turn, ToolCallID: "tcall_1234567890ABCDEF", ApprovalID: "appr_1234567890ABCDEF", ActionDigest: digest, PolicyRevisionDigest: digest, CapabilityDigest: digest, ActionVerb: "write", ActionTarget: "workspace-service", MaximumUses: 1, ExpiresAt: now.Add(time.Hour)})
 	if err != nil {
 		t.Fatal(err)
 	}

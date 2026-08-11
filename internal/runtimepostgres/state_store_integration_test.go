@@ -7,10 +7,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http/httptest"
 	"reflect"
 	"testing"
 	"time"
 
+	"github.com/0x63616c/agent-runtime/internal/runtimeapi"
 	"github.com/0x63616c/agent-runtime/internal/runtimecontent"
 	"github.com/0x63616c/agent-runtime/internal/runtimepostgres"
 	"github.com/0x63616c/agent-runtime/internal/runtimestate"
@@ -173,6 +175,110 @@ func TestPostgresRuntimeStateStoreBackfillsUnambiguousLegacyGrantScopeOnRestart(
 	if err != nil || len(loaded.Grants) != 1 || loaded.Grants[0].SessionID != session || loaded.Grants[0].TurnID != turn || loaded.Grants[0].RevokedAt == nil {
 		t.Fatalf("restarted upgraded grant = %#v, %v", loaded.Grants, err)
 	}
+}
+
+func TestPostgresRuntimeStateStoreFailsClosedForLegacyApprovalOnRestartAndPublicRead(t *testing.T) {
+	ctx := context.Background()
+	pool := openRuntimePool(t)
+	resetRuntimeV2(t, ctx, pool)
+	applyRuntimeMigrations(t, ctx, pool)
+	now := time.Date(2026, 8, 11, 12, 0, 0, 0, time.UTC)
+	tenant, _ := runtimecontent.ParseTenantID("legacy-approval-tenant")
+	principal, _ := runtimecontent.ParsePrincipalID("legacy-approval-owner")
+	legacy := runtimestate.RuntimeState{
+		Sessions:  []runtimestate.SessionRecord{{Tenant: tenant, Principal: principal, SessionID: "sess_1234567890ABCDEF", State: agentruntime.SessionOpen, Version: 1, CreatedAt: now, UpdatedAt: now}},
+		Turns:     []runtimestate.TurnRecord{{Tenant: tenant, Principal: principal, SessionID: "sess_1234567890ABCDEF", TurnID: "turn_1234567890ABCDEF", State: agentruntime.TurnWaitingForApproval, Version: 1}},
+		Approvals: []runtimestate.ApprovalRecord{{Tenant: tenant, Principal: principal, ApprovalID: "appr_1234567890ABCDEF", SessionID: "sess_1234567890ABCDEF", TurnID: "turn_1234567890ABCDEF", ToolCallID: "tcall_1234567890ABCDEF", ActionDigest: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", PolicyRevisionDigest: "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", State: "pending", CapabilityDigest: "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc", MaximumUses: 1, ExpiresAt: now.Add(time.Hour), CreatedAt: now}},
+	}
+	encoded, err := json.Marshal(legacy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if _, err = tx.Exec(ctx, `SELECT set_config('runtime.tenant_id', $1, true)`, string(tenant)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = tx.Exec(ctx, `INSERT INTO runtime.tenants (tenant_id, created_at) VALUES ($1, now())`, string(tenant)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = tx.Exec(ctx, `INSERT INTO runtime.runtime_state_snapshots (tenant_id, generation, state, updated_at) VALUES ($1, 1, $2::jsonb, now())`, string(tenant), encoded); err != nil {
+		t.Fatal(err)
+	}
+	if err = tx.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	pool.Close()
+	restartedPool := openRuntimePool(t)
+	store, err := runtimepostgres.NewRuntimeStateStore(restartedPool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ownerScope := runtimestate.MutationScope{Tenant: tenant, Principal: principal, Authority: runtimestate.AuthoritySessionOwner}
+	if _, err = store.LoadRuntimeState(ctx, ownerScope); !errors.Is(err, runtimestate.ErrIntegrity) {
+		t.Fatalf("restart loaded legacy Approval without a safe summary: %v", err)
+	}
+	content, err := runtimecontent.New("legacy-approval-content", &stateStoreObjects{values: map[string][]byte{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	compiler, err := runtimestate.NewCompiler(content)
+	if err != nil {
+		t.Fatal(err)
+	}
+	planner, err := runtimestate.NewRuntimeStatePlanner(stateStoreClock{now: now}, &stateStoreIDs{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime, err := runtimeapi.NewStateRuntime(runtimeapi.StateRuntimeConfig{Content: content, Compiler: compiler, Planner: planner, Store: store, ModelProfiles: []string{"balanced"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler, err := runtimeapi.NewHandler(runtimeapi.Config{Runtime: runtime, Authenticator: legacyApprovalAuthenticator{identity: runtimeapi.Identity{Tenant: string(tenant), Principal: string(principal)}}, RequestIDs: &legacyApprovalRequestIDs{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(handler)
+	defer server.Close()
+	credential, err := agentruntime.NewStaticBearerCredential("legacy-approval-token")
+	if err != nil {
+		t.Fatal(err)
+	}
+	client, err := agentruntime.NewClient(agentruntime.ClientConfig{BaseURL: server.URL, HTTPClient: server.Client(), Credentials: credential, RequestIDs: &legacyApprovalRequestIDs{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = client.ListApprovals(ctx); err == nil {
+		t.Fatal("public SDK read returned an invalid legacy Approval projection")
+	} else {
+		var failure *agentruntime.Error
+		if !errors.As(err, &failure) || failure.Failure.Code != agentruntime.FailureInternal {
+			t.Fatalf("public SDK legacy Approval read error = %v, want safe internal failure", err)
+		}
+	}
+}
+
+type legacyApprovalAuthenticator struct{ identity runtimeapi.Identity }
+
+func (auth legacyApprovalAuthenticator) Authenticate(ctx context.Context, token string) (runtimeapi.Identity, error) {
+	if err := ctx.Err(); err != nil {
+		return runtimeapi.Identity{}, err
+	}
+	if token != "legacy-approval-token" {
+		return runtimeapi.Identity{}, errors.New("invalid credential")
+	}
+	return auth.identity, nil
+}
+
+type legacyApprovalRequestIDs struct{ next uint64 }
+
+func (source *legacyApprovalRequestIDs) NextRequestID() (agentruntime.RequestID, error) {
+	source.next++
+	return agentruntime.ParseRequestID(fmt.Sprintf("req_%016d", source.next))
 }
 
 func TestPostgresTenantErasureDeletesOnlyAuthorizedStateReferencedContent(t *testing.T) {

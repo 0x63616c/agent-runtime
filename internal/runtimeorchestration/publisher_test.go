@@ -107,6 +107,8 @@ func TestPublisherDerivesTemporalRoutesOnlyFromClaimedDurableOutbox(t *testing.T
 		ActionDigest:         digest,
 		PolicyRevisionDigest: digest,
 		CapabilityDigest:     digest,
+		ActionVerb:           "write",
+		ActionTarget:         "workspace-service",
 		MaximumUses:          1,
 		ExpiresAt:            now.Add(time.Hour),
 	})

@@ -36,3 +36,24 @@ func TestUpgradeLegacyGrantScopesRejectsIncompleteIntentCorrelation(t *testing.T
 		t.Fatal("incomplete legacy intent correlation upgraded")
 	}
 }
+
+func TestRejectLegacyApprovalSummariesFailsClosedWithoutSafeAction(t *testing.T) {
+	tenant, _ := runtimecontent.ParseTenantID("legacy-approval-tenant")
+	principal, _ := runtimecontent.ParsePrincipalID("legacy-approval-owner")
+	now := time.Date(2026, 8, 11, 12, 0, 0, 0, time.UTC)
+	state := runtimestate.RuntimeState{Approvals: []runtimestate.ApprovalRecord{{
+		Tenant:               tenant,
+		Principal:            principal,
+		ApprovalID:           "appr_1234567890ABCDEF",
+		SessionID:            "sess_1234567890ABCDEF",
+		TurnID:               "turn_1234567890ABCDEF",
+		ToolCallID:           "tcall_1234567890ABCDEF",
+		State:                "pending",
+		MaximumUses:          1,
+		ExpiresAt:            now.Add(time.Hour),
+		PolicyRevisionDigest: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+	}}}
+	if err := rejectLegacyApprovalSummaries(state); err == nil {
+		t.Fatal("legacy Approval without a safe action summary was accepted")
+	}
+}

@@ -211,7 +211,7 @@ func validApprovalSummary(verb, target string) bool {
 }
 func (compiler *Compiler) CompileRequestApproval(command RequestApprovalCommand) (CompiledMutation, error) {
 	command = command.Owned()
-	if _, parseErr := agentruntime.ParseApprovalID(command.ApprovalID); parseErr != nil || validateWorkerCommand(command.Scope, command.SessionID, command.TurnID, OperationID(command.ToolCallID)) != nil || !validDigest(command.ActionDigest) || !validDigest(command.PolicyRevisionDigest) || !validDigest(command.CapabilityDigest) || command.MaximumUses == 0 || command.MaximumUses > 32 || command.ExpiresAt.IsZero() {
+	if _, parseErr := agentruntime.ParseApprovalID(command.ApprovalID); parseErr != nil || validateWorkerCommand(command.Scope, command.SessionID, command.TurnID, OperationID(command.ToolCallID)) != nil || !validDigest(command.ActionDigest) || !validDigest(command.PolicyRevisionDigest) || !validDigest(command.CapabilityDigest) || !validApprovalSummary(command.ActionVerb, command.ActionTarget) || command.MaximumUses == 0 || command.MaximumUses > 32 || command.ExpiresAt.IsZero() {
 		return CompiledMutation{}, errors.New("compile approval request: invalid command")
 	}
 	return compiler.compile(CommandRequestApproval, command.Scope, command.IdempotencyKey, command, command)

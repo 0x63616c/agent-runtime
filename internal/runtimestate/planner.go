@@ -634,7 +634,7 @@ func (planner *RuntimeStatePlanner) requestApproval(state *RuntimeState, binding
 			return PlanResult{}, EffectSet{}, ErrConflict
 		}
 	}
-	r := ApprovalRecord{Tenant: binding.Scope.Tenant, Principal: binding.Scope.Principal, ApprovalID: c.ApprovalID, SessionID: c.SessionID, TurnID: c.TurnID, ToolCallID: c.ToolCallID, ActionDigest: c.ActionDigest, PolicyRevisionDigest: c.PolicyRevisionDigest, State: "pending", CapabilityDigest: c.CapabilityDigest, MaximumUses: c.MaximumUses, ExpiresAt: c.ExpiresAt, CreatedAt: now, RetainUntil: planner.retain(now, DataClassAuthorization)}
+	r := ApprovalRecord{Tenant: binding.Scope.Tenant, Principal: binding.Scope.Principal, ApprovalID: c.ApprovalID, SessionID: c.SessionID, TurnID: c.TurnID, ToolCallID: c.ToolCallID, ActionDigest: c.ActionDigest, PolicyRevisionDigest: c.PolicyRevisionDigest, State: "pending", CapabilityDigest: c.CapabilityDigest, ActionVerb: c.ActionVerb, ActionTarget: c.ActionTarget, MaximumUses: c.MaximumUses, ExpiresAt: c.ExpiresAt, CreatedAt: now, RetainUntil: planner.retain(now, DataClassAuthorization)}
 	state.Turns[turnIndex].State = agentruntime.TurnWaitingForApproval
 	state.Turns[turnIndex].Version++
 	state.Approvals = append(state.Approvals, r)
