@@ -992,6 +992,74 @@ func TestPlannerConsumesApprovedCapabilityOnlyWithinItsPolicyAndExpiry(t *testin
 	}
 }
 
+func TestPlannerAuditsEachCapabilityGrantWithItsOwnCorrelationWithinOneTurn(t *testing.T) {
+	now := time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC)
+	content, _, tenant, principal := testRuntimeContent(t)
+	compiler, _ := runtimestate.NewCompiler(content)
+	planner, _ := runtimestate.NewRuntimeStatePlanner(fixedPlannerClock{now: now}, &uniquePlannerIDs{})
+	session, turn := validSessionID(t), agentruntime.TurnID("turn_1234567890ABCDEF")
+	revision := validRevisionID(t)
+	policyA, policyB := "sha256:"+strings.Repeat("a", 64), "sha256:"+strings.Repeat("b", 64)
+	capabilityA, capabilityB := "sha256:"+strings.Repeat("c", 64), "sha256:"+strings.Repeat("d", 64)
+	state := runtimestate.RuntimeState{
+		Sessions: []runtimestate.SessionRecord{{Tenant: tenant, Principal: principal, SessionID: session, RevisionID: revision, State: agentruntime.SessionOpen, CreatedAt: now, UpdatedAt: now}},
+		Turns:    []runtimestate.TurnRecord{{Tenant: tenant, Principal: principal, SessionID: session, TurnID: turn, State: agentruntime.TurnRunning}},
+		Grants: []runtimestate.CapabilityGrantRecord{
+			{Tenant: tenant, Principal: principal, SessionID: session, TurnID: turn, GrantID: "grant_1234567890ABCDE", ToolCallID: "tcall_1234567890ABCDEF", CapabilityDigest: capabilityA, MaximumUses: 1, ExpiresAt: now.Add(time.Hour), PolicyRevisionDigest: policyA, CreatedAt: now},
+			{Tenant: tenant, Principal: principal, SessionID: session, TurnID: turn, GrantID: "grant_1234567890ABCDEG", ToolCallID: "tcall_1234567890ABCDEG", CapabilityDigest: capabilityB, MaximumUses: 1, ExpiresAt: now.Add(time.Hour), PolicyRevisionDigest: policyB, CreatedAt: now},
+		},
+	}
+	first, err := compiler.CompileConsumeCapabilityGrant(runtimestate.ConsumeCapabilityGrantCommand{Scope: workerScope(tenant, principal), IdempotencyKey: "consume-first-tool", SessionID: session, TurnID: turn, ToolCallID: "tcall_1234567890ABCDEF", GrantID: "grant_1234567890ABCDE", PolicyRevisionDigest: policyA})
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstPlan, err := planner.Plan(context.Background(), state, first)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := compiler.CompileConsumeCapabilityGrant(runtimestate.ConsumeCapabilityGrantCommand{Scope: workerScope(tenant, principal), IdempotencyKey: "consume-second-tool", SessionID: session, TurnID: turn, ToolCallID: "tcall_1234567890ABCDEG", GrantID: "grant_1234567890ABCDEG", PolicyRevisionDigest: policyB})
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondPlan, err := planner.Plan(context.Background(), firstPlan.State(), second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertToolAuditCorrelation(t, firstPlan.Effects().Audit, revision, "tcall_1234567890ABCDEF", policyA, capabilityA)
+	assertToolAuditCorrelation(t, secondPlan.Effects().Audit, revision, "tcall_1234567890ABCDEG", policyB, capabilityB)
+	assertToolAuditRoutesMatchFacts(t, firstPlan.Effects())
+	assertToolAuditRoutesMatchFacts(t, secondPlan.Effects())
+}
+
+func assertToolAuditCorrelation(t *testing.T, facts []runtimestate.AuditFactRecord, revision agentruntime.AgentRevisionID, toolCallID, policyDigest, capabilityDigest string) {
+	t.Helper()
+	if len(facts) == 0 {
+		t.Fatal("tool audit facts were empty")
+	}
+	for _, fact := range facts {
+		if fact.AgentRevisionID != revision || fact.ToolCallID != toolCallID || fact.PolicyRevisionDigest != policyDigest || fact.CapabilityScopeDigest != capabilityDigest || fact.OperationID == "" {
+			t.Fatalf("tool audit correlation = %#v, want revision=%q tool=%q policy=%q capability=%q", fact, revision, toolCallID, policyDigest, capabilityDigest)
+		}
+	}
+}
+
+func assertToolAuditRoutesMatchFacts(t *testing.T, effects runtimestate.EffectSet) {
+	t.Helper()
+	facts := make(map[runtimestate.AuditFactID]runtimestate.AuditFactRecord, len(effects.Audit))
+	for _, fact := range effects.Audit {
+		facts[fact.AuditFactID] = fact
+	}
+	for _, route := range effects.Outbox {
+		fact, exists := facts[route.AuditFactID]
+		if !exists {
+			continue
+		}
+		if route.OperationID != fact.OperationID {
+			t.Fatalf("audit route correlation = %#v, want operation=%q", route, fact.OperationID)
+		}
+	}
+}
+
 func TestCompilerRejectsForgedScopeAndCompilesOnlyStateScopedContentReaders(t *testing.T) {
 	content, _, tenant, principal := testRuntimeContent(t)
 	compiler, err := runtimestate.NewCompiler(content)

@@ -610,8 +610,10 @@ func (planner *RuntimeStatePlanner) admitToolApproval(state *RuntimeState, bindi
 	state.Turns[turnIndex].State = agentruntime.TurnWaitingForApproval
 	state.Turns[turnIndex].Version++
 	state.ToolIntents = append(state.ToolIntents, ToolIntentRecord{Tenant: binding.Scope.Tenant, Principal: binding.Scope.Principal, SessionID: c.SessionID, TurnID: c.TurnID, ToolCallID: c.ToolCallID, ToolName: c.ToolName, ActionDigest: c.ActionDigest, ActionDescriptor: compiled.descriptor, PolicyRevisionDigest: c.PolicyRevisionDigest, CreatedAt: now, RetainUntil: planner.retain(now, DataClassAuthorization)})
-	state.Approvals = append(state.Approvals, ApprovalRecord{Tenant: binding.Scope.Tenant, Principal: binding.Scope.Principal, ApprovalID: c.ApprovalID, SessionID: c.SessionID, TurnID: c.TurnID, ToolCallID: c.ToolCallID, ActionDigest: c.ActionDigest, PolicyRevisionDigest: c.PolicyRevisionDigest, State: "pending", CapabilityDigest: c.CapabilityDigest, ActionVerb: c.ActionVerb, ActionTarget: c.ActionTarget, MaximumUses: c.MaximumUses, ExpiresAt: c.ExpiresAt, CreatedAt: now, RetainUntil: planner.retain(now, DataClassAuthorization)})
+	approval := ApprovalRecord{Tenant: binding.Scope.Tenant, Principal: binding.Scope.Principal, ApprovalID: c.ApprovalID, SessionID: c.SessionID, TurnID: c.TurnID, ToolCallID: c.ToolCallID, ActionDigest: c.ActionDigest, PolicyRevisionDigest: c.PolicyRevisionDigest, State: "pending", CapabilityDigest: c.CapabilityDigest, ActionVerb: c.ActionVerb, ActionTarget: c.ActionTarget, MaximumUses: c.MaximumUses, ExpiresAt: c.ExpiresAt, CreatedAt: now, RetainUntil: planner.retain(now, DataClassAuthorization)}
+	state.Approvals = append(state.Approvals, approval)
 	effects, err := planner.auditOnly(state, binding, "tool.approval_requested", c.SessionID, c.TurnID, now)
+	decorateToolAuditFacts(state, &effects, auditContextForApproval(approval))
 	return PlanResult{}, effects, err
 }
 func (planner *RuntimeStatePlanner) requestApproval(state *RuntimeState, binding ReceiptBinding, c RequestApprovalCommand, now time.Time) (PlanResult, EffectSet, error) {
@@ -641,6 +643,7 @@ func (planner *RuntimeStatePlanner) requestApproval(state *RuntimeState, binding
 	state.Turns[turnIndex].Version++
 	state.Approvals = append(state.Approvals, r)
 	e, err := planner.auditOnly(state, binding, "approval.requested", c.SessionID, c.TurnID, now)
+	decorateToolAuditFacts(state, &e, auditContextForApproval(r))
 	return PlanResult{}, e, err
 }
 func (planner *RuntimeStatePlanner) decideApproval(state *RuntimeState, binding ReceiptBinding, c DecideApprovalCommand, now time.Time) (PlanResult, EffectSet, error) {
@@ -709,7 +712,8 @@ func (planner *RuntimeStatePlanner) approvalEffects(state *RuntimeState, binding
 	}
 	kind := "approval." + approval.State
 	effects.Audit[0].Kind = kind
-	state.Audit[len(state.Audit)-1].Kind = kind
+	state.Audit[len(state.Audit)-len(effects.Audit)].Kind = kind
+	decorateToolAuditFacts(state, &effects, auditContextForApproval(approval))
 	return effects, nil
 }
 
@@ -736,6 +740,7 @@ func (planner *RuntimeStatePlanner) consumeCapabilityGrant(state *RuntimeState, 
 		grant.Uses++
 		state.Grants[index] = grant
 		effects, err := planner.auditOnly(state, binding, "capability_grant.consumed", c.SessionID, c.TurnID, now)
+		decorateToolAuditFacts(state, &effects, auditContextForGrant(grant))
 		return PlanResult{}, effects, err
 	}
 	return PlanResult{}, EffectSet{}, ErrNotFoundOrDenied
@@ -763,6 +768,7 @@ func (planner *RuntimeStatePlanner) revokeCapabilityGrant(state *RuntimeState, b
 		grant.RevokedAt = &value
 		state.Grants[index] = grant
 		effects, err := planner.auditOnly(state, binding, "capability_grant.revoked", c.SessionID, c.TurnID, now)
+		decorateToolAuditFacts(state, &effects, auditContextForGrant(grant))
 		return PlanResult{}, effects, err
 	}
 	return PlanResult{}, EffectSet{}, ErrNotFoundOrDenied
@@ -784,6 +790,7 @@ func (planner *RuntimeStatePlanner) expireCapabilityGrant(state *RuntimeState, b
 		grant.RevokedAt = &value
 		state.Grants[index] = grant
 		effects, err := planner.auditOnly(state, binding, "capability_grant.expired", c.SessionID, c.TurnID, now)
+		decorateToolAuditFacts(state, &effects, auditContextForGrant(grant))
 		return PlanResult{}, effects, err
 	}
 	return PlanResult{}, EffectSet{}, ErrNotFoundOrDenied
@@ -794,6 +801,7 @@ func (planner *RuntimeStatePlanner) denyToolAdmission(state *RuntimeState, bindi
 		return PlanResult{}, EffectSet{}, ErrNotFoundOrDenied
 	}
 	effects, err := planner.auditOnly(state, binding, "tool.admission_denied", c.SessionID, c.TurnID, now)
+	decorateToolAuditFacts(state, &effects, toolAuditContext{policyRevisionDigest: c.PolicyRevisionDigest, capabilityScopeDigest: c.CapabilityScopeDigest, toolCallID: c.ToolCallID})
 	return PlanResult{}, effects, err
 }
 
@@ -824,6 +832,7 @@ func (planner *RuntimeStatePlanner) beginToolExecution(state *RuntimeState, bind
 		record := ToolExecutionRecord{Tenant: binding.Scope.Tenant, Principal: binding.Scope.Principal, SessionID: c.SessionID, TurnID: c.TurnID, ToolCallID: c.ToolCallID, GrantID: c.GrantID, OperationID: c.OperationID, State: ToolExecutionIntent, CreatedAt: now, UpdatedAt: now, RetentionUntil: planner.retain(now, DataClassAuthorization)}
 		state.ToolExecutions = append(state.ToolExecutions, record)
 		effects, err := planner.auditOnly(state, binding, "tool.execution_intended", c.SessionID, c.TurnID, now)
+		decorateToolAuditFacts(state, &effects, auditContextForExecution(record, grant))
 		if err != nil {
 			return PlanResult{}, effects, err
 		}
@@ -854,12 +863,17 @@ func (planner *RuntimeStatePlanner) recordToolExecutionOutcome(state *RuntimeSta
 		}
 		record.State, record.Result, record.Failure, record.UpdatedAt = c.Outcome, c.Result, c.Failure.Clone(), now
 		state.ToolExecutions[index] = record
+		var executionGrant CapabilityGrantRecord
 		for grantIndex := range state.Grants {
 			grant := state.Grants[grantIndex]
-			if grant.GrantID == record.GrantID && grant.RevokedAt == nil {
-				value := now
-				grant.RevokedAt = &value
-				state.Grants[grantIndex] = grant
+			if grant.GrantID == record.GrantID {
+				executionGrant = grant
+				if grant.RevokedAt == nil {
+					value := now
+					grant.RevokedAt = &value
+					state.Grants[grantIndex] = grant
+					executionGrant = grant
+				}
 				break
 			}
 		}
@@ -867,12 +881,14 @@ func (planner *RuntimeStatePlanner) recordToolExecutionOutcome(state *RuntimeSta
 		if err != nil {
 			return PlanResult{}, effects, err
 		}
+		decorateToolAuditFacts(state, &effects, auditContextForExecution(record, executionGrant))
 		for _, grant := range state.Grants {
 			if grant.GrantID == record.GrantID && grant.Uses >= grant.MaximumUses {
 				extra, auditErr := planner.auditOnly(state, binding, "capability_grant.exhausted", c.SessionID, c.TurnID, now)
 				if auditErr != nil {
 					return PlanResult{}, effects, auditErr
 				}
+				decorateToolAuditFacts(state, &extra, auditContextForExecution(record, grant))
 				effects.Audit = append(effects.Audit, extra.Audit...)
 				effects.Outbox = append(effects.Outbox, extra.Outbox...)
 				break
@@ -1008,19 +1024,19 @@ func (planner *RuntimeStatePlanner) cancel(state *RuntimeState, binding ReceiptB
 	priorState := turn.State
 	turn.State, turn.Version, turn.CompletedAt = agentruntime.TurnCancelled, turn.Version+1, &now
 	state.Turns[turnIndex] = turn
-	cancelledApprovals := 0
+	cancelledApprovals := []ApprovalRecord{}
 	for index := range state.Approvals {
 		approval := state.Approvals[index]
 		if approval.SessionID == command.SessionID && approval.TurnID == command.TurnID && approval.Tenant == binding.Scope.Tenant && approval.Principal == binding.Scope.Principal && approval.State == "pending" {
 			approval.State = string(agentruntime.ApprovalCancelled)
 			state.Approvals[index] = approval
-			cancelledApprovals++
+			cancelledApprovals = append(cancelledApprovals, approval)
 		}
 	}
 	// A cancellation withdraws any still-unused authority for this Turn before
 	// the worker can commit an execution intent. A consumed grant has already
 	// crossed that boundary and must instead reconcile its exact operation.
-	revokedGrants := 0
+	revokedGrants := []CapabilityGrantRecord{}
 	for index := range state.Grants {
 		grant := state.Grants[index]
 		if grant.Tenant != binding.Scope.Tenant || grant.Principal != binding.Scope.Principal || grant.SessionID != command.SessionID || grant.TurnID != command.TurnID || grant.Uses != 0 || grant.RevokedAt != nil {
@@ -1029,7 +1045,7 @@ func (planner *RuntimeStatePlanner) cancel(state *RuntimeState, binding ReceiptB
 		value := now
 		grant.RevokedAt = &value
 		state.Grants[index] = grant
-		revokedGrants++
+		revokedGrants = append(revokedGrants, grant)
 	}
 	session.Version++
 	session.UpdatedAt = now
@@ -1049,19 +1065,21 @@ func (planner *RuntimeStatePlanner) cancel(state *RuntimeState, binding ReceiptB
 	if err != nil {
 		return PlanResult{}, EffectSet{}, err
 	}
-	for range cancelledApprovals {
+	for _, approval := range cancelledApprovals {
 		approvalEffects, auditErr := planner.auditOnly(state, binding, "approval.cancelled", command.SessionID, command.TurnID, now)
 		if auditErr != nil {
 			return PlanResult{}, EffectSet{}, auditErr
 		}
+		decorateToolAuditFacts(state, &approvalEffects, auditContextForApproval(approval))
 		effects.Audit = append(effects.Audit, approvalEffects.Audit...)
 		effects.Outbox = append(effects.Outbox, approvalEffects.Outbox...)
 	}
-	for range revokedGrants {
+	for _, grant := range revokedGrants {
 		revocationEffects, auditErr := planner.auditOnly(state, binding, "capability_grant.revoked", command.SessionID, command.TurnID, now)
 		if auditErr != nil {
 			return PlanResult{}, EffectSet{}, auditErr
 		}
+		decorateToolAuditFacts(state, &revocationEffects, auditContextForGrant(grant))
 		effects.Audit = append(effects.Audit, revocationEffects.Audit...)
 		effects.Outbox = append(effects.Outbox, revocationEffects.Outbox...)
 	}
@@ -1197,7 +1215,7 @@ func (planner *RuntimeStatePlanner) effects(state *RuntimeState, binding Receipt
 		state.Outbox = append(state.Outbox, outbox)
 		effects.Outbox = append(effects.Outbox, outbox)
 	}
-	fact, err := planner.fact(binding, session, turn, now, planner.retain(now, DataClassAudit))
+	fact, err := planner.fact(*state, binding, session, turn, now, planner.retain(now, DataClassAudit))
 	if err != nil {
 		return EffectSet{}, err
 	}
@@ -1224,7 +1242,7 @@ func (planner *RuntimeStatePlanner) effects(state *RuntimeState, binding Receipt
 	return effects, nil
 }
 func (planner *RuntimeStatePlanner) auditOnly(state *RuntimeState, binding ReceiptBinding, kind string, sessionID agentruntime.SessionID, turnID agentruntime.TurnID, now time.Time) (EffectSet, error) {
-	fact, err := planner.factKind(binding, kind, sessionID, turnID, now, planner.retain(now, DataClassAudit))
+	fact, err := planner.factKind(*state, binding, kind, sessionID, turnID, now, planner.retain(now, DataClassAudit))
 	if err != nil {
 		return EffectSet{}, err
 	}
@@ -1252,7 +1270,7 @@ func (planner *RuntimeStatePlanner) appendAuditLifecycle(state *RuntimeState, ef
 		return ErrIntegrity
 	}
 	for _, kind := range auditLifecycleKinds(binding.Command) {
-		fact, err := planner.factKind(binding, kind, sessionID, turnID, now, planner.retain(now, DataClassAudit))
+		fact, err := planner.factKind(*state, binding, kind, sessionID, turnID, now, planner.retain(now, DataClassAudit))
 		if err != nil {
 			return err
 		}
@@ -1301,15 +1319,80 @@ func (planner *RuntimeStatePlanner) event(state *RuntimeState, session SessionRe
 	}
 	return ProductEventRecord{Tenant: session.Tenant, Principal: session.Principal, SessionID: session.SessionID, Sequence: sequence, Cursor: cursor, EventID: id, Kind: kind, InputID: turn.InputID, TurnID: turn.TurnID, OperationID: operationID, OccurredAt: now, RetentionUntil: until}, nil
 }
-func (planner *RuntimeStatePlanner) fact(binding ReceiptBinding, session SessionRecord, turn TurnRecord, now, until time.Time) (AuditFactRecord, error) {
-	return planner.factKind(binding, string(binding.Command), session.SessionID, turn.TurnID, now, until)
+func (planner *RuntimeStatePlanner) fact(state RuntimeState, binding ReceiptBinding, session SessionRecord, turn TurnRecord, now, until time.Time) (AuditFactRecord, error) {
+	return planner.factKind(state, binding, string(binding.Command), session.SessionID, turn.TurnID, now, until)
 }
-func (planner *RuntimeStatePlanner) factKind(binding ReceiptBinding, kind string, sessionID agentruntime.SessionID, turnID agentruntime.TurnID, now, until time.Time) (AuditFactRecord, error) {
+func (planner *RuntimeStatePlanner) factKind(state RuntimeState, binding ReceiptBinding, kind string, sessionID agentruntime.SessionID, turnID agentruntime.TurnID, now, until time.Time) (AuditFactRecord, error) {
 	id, err := planner.auditID()
 	if err != nil {
 		return AuditFactRecord{}, err
 	}
-	return AuditFactRecord{Tenant: binding.Scope.Tenant, AuditFactID: id, OperationID: OperationID(binding.IdempotencyKey), Actor: binding.Scope.Principal, Kind: kind, SessionID: sessionID, TurnID: turnID, OccurredAt: now, RetentionUntil: until}, nil
+	return AuditFactRecord{Tenant: binding.Scope.Tenant, AuditFactID: id, OperationID: OperationID(binding.IdempotencyKey), Actor: binding.Scope.Principal, Kind: kind, SessionID: sessionID, TurnID: turnID, AgentRevisionID: auditAgentRevisionID(state, sessionID), OccurredAt: now, RetentionUntil: until}, nil
+}
+
+type toolAuditContext struct {
+	policyRevisionDigest  string
+	capabilityScopeDigest string
+	toolCallID            string
+	operationID           OperationID
+}
+
+func auditAgentRevisionID(state RuntimeState, sessionID agentruntime.SessionID) agentruntime.AgentRevisionID {
+	for _, session := range state.Sessions {
+		if session.SessionID == sessionID {
+			return session.RevisionID
+		}
+	}
+	return ""
+}
+
+func auditContextForApproval(approval ApprovalRecord) toolAuditContext {
+	return toolAuditContext{policyRevisionDigest: approval.PolicyRevisionDigest, capabilityScopeDigest: approval.CapabilityDigest, toolCallID: approval.ToolCallID}
+}
+
+func auditContextForGrant(grant CapabilityGrantRecord) toolAuditContext {
+	return toolAuditContext{policyRevisionDigest: grant.PolicyRevisionDigest, capabilityScopeDigest: grant.CapabilityDigest, toolCallID: grant.ToolCallID}
+}
+
+func auditContextForExecution(execution ToolExecutionRecord, grant CapabilityGrantRecord) toolAuditContext {
+	context := auditContextForGrant(grant)
+	context.toolCallID, context.operationID = execution.ToolCallID, execution.OperationID
+	return context
+}
+
+// decorateToolAuditFacts fills the precise bounded correlation carried by the
+// command or record that caused a tool authorization transition. It does not
+// infer an unrelated tool from the surrounding Turn.
+func decorateToolAuditFacts(state *RuntimeState, effects *EffectSet, context toolAuditContext) {
+	if effects == nil || len(effects.Audit) == 0 || len(state.Audit) < len(effects.Audit) {
+		return
+	}
+	decorated := make(map[AuditFactID]AuditFactRecord, len(effects.Audit))
+	start := len(state.Audit) - len(effects.Audit)
+	for index := range effects.Audit {
+		effects.Audit[index].ToolCallID = context.toolCallID
+		effects.Audit[index].PolicyRevisionDigest = context.policyRevisionDigest
+		effects.Audit[index].CapabilityScopeDigest = context.capabilityScopeDigest
+		if context.operationID != "" {
+			effects.Audit[index].OperationID = context.operationID
+		}
+		state.Audit[start+index] = effects.Audit[index]
+		decorated[effects.Audit[index].AuditFactID] = effects.Audit[index]
+	}
+	for index := range effects.Outbox {
+		fact, exists := decorated[effects.Outbox[index].AuditFactID]
+		if !exists {
+			continue
+		}
+		effects.Outbox[index].OperationID = fact.OperationID
+	}
+	for index := range state.Outbox {
+		fact, exists := decorated[state.Outbox[index].AuditFactID]
+		if !exists {
+			continue
+		}
+		state.Outbox[index].OperationID = fact.OperationID
+	}
 }
 func (planner *RuntimeStatePlanner) outbox(session SessionRecord, turn TurnRecord, invocation InvocationRecord, eventID agentruntime.EventID, eventKind agentruntime.EventKind, eventSequence uint64, now, until time.Time) (OutboxRecord, error) {
 	id, err := planner.outboxID()

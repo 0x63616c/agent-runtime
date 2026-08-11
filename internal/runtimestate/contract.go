@@ -403,15 +403,22 @@ func (record ProductEventRecord) Clone() ProductEventRecord { return record }
 
 // AuditFactRecord is an append-only, redacted audit fact independent from transient logs.
 type AuditFactRecord struct {
-	Tenant         runtimecontent.TenantID
-	AuditFactID    AuditFactID
-	OperationID    OperationID
-	Actor          runtimecontent.PrincipalID
-	Kind           string
-	SessionID      agentruntime.SessionID `json:",omitempty"`
-	TurnID         agentruntime.TurnID    `json:",omitempty"`
-	OccurredAt     time.Time
-	RetentionUntil time.Time
+	Tenant      runtimecontent.TenantID
+	AuditFactID AuditFactID
+	OperationID OperationID
+	Actor       runtimecontent.PrincipalID
+	Kind        string
+	SessionID   agentruntime.SessionID `json:",omitempty"`
+	TurnID      agentruntime.TurnID    `json:",omitempty"`
+	// AgentRevisionID, PolicyRevisionDigest, and CapabilityScopeDigest are
+	// immutable, bounded authorization correlations. They deliberately retain
+	// commitments rather than an agent body, policy rules, or capability value.
+	AgentRevisionID       agentruntime.AgentRevisionID `json:",omitempty"`
+	PolicyRevisionDigest  string                       `json:",omitempty"`
+	CapabilityScopeDigest string                       `json:",omitempty"`
+	ToolCallID            string                       `json:",omitempty"`
+	OccurredAt            time.Time
+	RetentionUntil        time.Time
 }
 
 // Clone returns an independent audit metadata snapshot.
@@ -688,12 +695,14 @@ type ExpireCapabilityGrantCommand struct {
 // Owned returns a value-owned expiry command.
 func (command ExpireCapabilityGrantCommand) Owned() ExpireCapabilityGrantCommand { return command }
 
-// DenyToolAdmissionCommand retains only the correlation of a broker refusal.
+// DenyToolAdmissionCommand retains only bounded, non-enumerating correlation
+// metadata for a broker refusal. It never retains a descriptor or secret.
 type DenyToolAdmissionCommand struct {
-	Scope                                MutationScope
-	IdempotencyKey, ToolCallID, Decision string
-	SessionID                            agentruntime.SessionID
-	TurnID                               agentruntime.TurnID
+	Scope                                       MutationScope
+	IdempotencyKey, ToolCallID, Decision        string
+	PolicyRevisionDigest, CapabilityScopeDigest string
+	SessionID                                   agentruntime.SessionID
+	TurnID                                      agentruntime.TurnID
 }
 
 // Owned returns a value-owned denial command.
