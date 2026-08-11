@@ -1,0 +1,25 @@
+{
+  "schema_version": 1,
+  "issue": 37,
+  "started_at_utc": "2026-08-11T04:31:55Z",
+  "observed_at_utc": "2026-08-11T04:34:18Z",
+  "tested_revision": "0991039ac937721f05360d8637c0e3f255220b40",
+  "scope": "Local correction acceptance for the Astro Starlight documentation migration after static-route review findings",
+  "commands": [
+    "just docs-generate",
+    "just check"
+  ],
+  "results": {
+    "generated_reference_refresh": "passed; source inventory was current after deterministic regeneration",
+    "production_dependency_audit": "passed; npm audit --omit=dev --audit-level=high reported 0 vulnerabilities",
+    "typecheck_and_static_build": "passed; Astro typecheck and production static build completed",
+    "static_route_contract": "passed; 24 current and legacy routes, every emitted internal href and anchor, complete Starlight sidebar navigation, edit targets, and base-prefixed redirect outputs validated",
+    "repository_gate": "passed; generation checks, race tests, vet, no-real-wait, and ledger structural validation completed"
+  },
+  "limitations": [
+    "This local evidence ran with Node 26.7.0 while the committed CI workflow pins Node 24.19.0; it is not hosted CI or Pages deployment evidence.",
+    "The migration still requires the existing full-milestone independent re-review and clean origin/main integration before issue #37 or the retired-exception follow-up #36 can close.",
+    "It does not upgrade DOC-001 through DOC-008 ledger rows or claim final M10 release completion."
+  ],
+  "redaction": "No credentials, generated page contents, npm cache paths, or unbounded command output are retained."
+}
