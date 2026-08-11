@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "observed_at_utc": "2026-08-11T20:35:22Z",
+  "proof_level": "integration",
+  "revision": "7b97ffc1f1595b65168c0010062237b8ad333200",
+  "scope": "S5 Tool broker recovery on exclusive disposable PostgreSQL and MinIO. The fixture adapter records application acceptance of the runtime-owned operation ID, then simulates process loss before the worker can persist an outcome or acknowledge its lease. It is not a Workspace service, protected sandbox, Firecracker, or Linux/KVM execution claim.",
+  "commands": [
+    "./deploy/runtimeapi/run-durable-integration.sh",
+    "just docs-check",
+    "just check"
+  ],
+  "result": "passed",
+  "observations": {
+    "initial_effect": "A real broker Worker consumed the approved one-use grant, persisted the execution intent and claim, and supplied the exact runtime Operation ID to the external-effect fixture before the simulated worker loss.",
+    "recovery": "After the ten-second claim lease expired, a fresh PostgreSQL pool and StateRuntime reopened the durable state. The replacement Worker called only Reconcile with the same persisted Operation ID and made no Execute call.",
+    "uncertainty": "The status-only adapter returned an unknown result. The worker persisted ToolExecutionUncertain, retained no Artifact/result, and the owner-scoped public Tool projection and finalization event exposed only the safe uncertain terminal outcome.",
+    "audit": "The retained correlated terminal audit fact and outbox route remain ordered and contain no descriptor credential-shaped value or external backend handle."
+  },
+  "redaction": "No DSNs, object-store credentials, raw tenant/session/turn/grant/operation IDs, descriptor bytes, input bytes, artifact body, backend endpoint, or provider credential are retained."
+}

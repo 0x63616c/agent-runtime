@@ -1307,7 +1307,17 @@
     },
     {
       "id": "TOL-006",
-      "status": "not_started"
+      "status": "completed",
+      "evidence": [
+        {
+          "revision": "7b97ffc1f1595b65168c0010062237b8ad333200",
+          "utc_time": "2026-08-11T20:35:22Z",
+          "proof_level": "integration",
+          "command_id": "m7-s5-durable-tool-uncertain-recovery-postgres-minio",
+          "artifact_ref": "m7-tool-uncertain-recovery-postgres-minio",
+          "result": "passed"
+        }
+      ]
     },
     {
       "id": "TST-001",
