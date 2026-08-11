@@ -368,6 +368,42 @@ var _ = Describe("Public runtime HTTP boundary", func() {
 	})
 })
 
+func FuzzPublicHTTPRejectsMalformedMutationBeforeDispatch(f *testing.F) {
+	f.Add("true")
+	f.Add(`{"nested":["untrusted"]}`)
+	f.Add(`"untrusted"`)
+
+	f.Fuzz(func(t *testing.T, suffix string) {
+		if len(suffix) > 4096 {
+			t.Skip()
+		}
+		runtime := &recordingRuntime{}
+		handler, err := runtimeapi.NewHandler(runtimeapi.Config{
+			Runtime:       runtime,
+			Authenticator: staticAuth{identities: map[string]runtimeapi.Identity{"admin-token-000000": {Tenant: "tenant-a", Principal: "admin", Admin: true}}},
+			RequestIDs:    &requestIDs{},
+		})
+		if err != nil {
+			t.Fatalf("new handler: %v", err)
+		}
+		request := httptest.NewRequest(http.MethodPost, "/v1/admin/agents", strings.NewReader(`{"name":"assistant","model_profile":"balanced","instructions":"safe","untrusted":`+suffix+`}`))
+		request.Header.Set("Authorization", "Bearer admin-token-000000")
+		request.Header.Set("Content-Type", "application/json")
+		request.Header.Set("Idempotency-Key", "fuzz-untrusted")
+		request.Header.Set("X-Request-ID", "req_0000000000000001")
+		response := httptest.NewRecorder()
+
+		handler.ServeHTTP(response, request)
+
+		if response.Code != http.StatusBadRequest {
+			t.Fatalf("status = %d, want %d for untrusted JSON suffix %q", response.Code, http.StatusBadRequest, suffix)
+		}
+		if runtime.createAgentCalls != 0 {
+			t.Fatalf("create Agent calls = %d, want 0", runtime.createAgentCalls)
+		}
+	})
+}
+
 type staticAuth struct {
 	identities map[string]runtimeapi.Identity
 }

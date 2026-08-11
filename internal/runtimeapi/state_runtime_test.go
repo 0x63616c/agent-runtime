@@ -90,6 +90,94 @@ func TestStateRuntimeServesTheCompletePublicLifecycleThroughContentAndMemoryStat
 	}
 }
 
+func TestStateRuntimeHTTPAndSDKRejectUnconfiguredProfilesAndProviderCredentialFields(t *testing.T) {
+	runtime := newMemoryStateRuntime(t)
+	handler, err := runtimeapi.NewHandler(runtimeapi.Config{Runtime: runtime, Authenticator: staticAuth{identities: map[string]runtimeapi.Identity{
+		"admin-token-000000": {Tenant: "tenant-a", Principal: "admin", Admin: true},
+	}}, RequestIDs: &requestIDs{}})
+	if err != nil {
+		t.Fatalf("new handler: %v", err)
+	}
+	server := httptest.NewServer(handler)
+	defer server.Close()
+
+	admin := newStateRuntimeHTTPClient(t, server.URL, "admin-token-000000")
+	if _, err := admin.CreateAgent(context.Background(), agentruntime.CreateAgentRequest{IdempotencyKey: "unconfigured-profile", Name: "assistant", ModelProfile: "provider-direct", Instructions: "safe"}); !hasFailure(err, agentruntime.FailureInvalidInput) {
+		t.Fatalf("SDK create Agent with unconfigured profile error = %v, want invalid input", err)
+	}
+
+	request, err := http.NewRequest(http.MethodPost, server.URL+"/v1/admin/agents", strings.NewReader(`{"name":"assistant","model_profile":"balanced","instructions":"safe","provider_credential":"must-not-cross-the-public-contract"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Header.Set("Authorization", "Bearer admin-token-000000")
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Idempotency-Key", "provider-credential-field")
+	request.Header.Set("X-Request-ID", "req_0000000000000001")
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, readErr := io.ReadAll(response.Body)
+	closeErr := response.Body.Close()
+	if readErr != nil || closeErr != nil {
+		t.Fatalf("read provider-credential rejection = %v, %v", readErr, closeErr)
+	}
+	if response.StatusCode != http.StatusBadRequest || strings.Contains(string(body), "must-not-cross-the-public-contract") {
+		t.Fatalf("provider credential field status/body = %d %q, want bounded non-leaking bad request", response.StatusCode, body)
+	}
+}
+
+func TestStateRuntimeHTTPAndSDKEnforceRequestAndEventLimits(t *testing.T) {
+	runtime := newMemoryStateRuntime(t)
+	handler, err := runtimeapi.NewHandler(runtimeapi.Config{Runtime: runtime, MaxRequestBytes: 3 << 20, Authenticator: staticAuth{identities: map[string]runtimeapi.Identity{
+		"admin-token-000000": {Tenant: "tenant-a", Principal: "admin", Admin: true},
+		"alice-token-000000": {Tenant: "tenant-a", Principal: "alice"},
+	}}, RequestIDs: &requestIDs{}})
+	if err != nil {
+		t.Fatalf("new handler: %v", err)
+	}
+	server := httptest.NewServer(handler)
+	defer server.Close()
+
+	overlong := `{"name":"assistant","model_profile":"balanced","instructions":"` + strings.Repeat("x", 3<<20) + `"}`
+	request, err := http.NewRequest(http.MethodPost, server.URL+"/v1/admin/agents", strings.NewReader(overlong))
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Header.Set("Authorization", "Bearer admin-token-000000")
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Idempotency-Key", "overlong-request")
+	request.Header.Set("X-Request-ID", "req_0000000000000001")
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := response.Body.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if response.StatusCode != http.StatusBadRequest {
+		t.Fatalf("overlong request status = %d, want %d", response.StatusCode, http.StatusBadRequest)
+	}
+
+	ctx := context.Background()
+	admin := newStateRuntimeHTTPClient(t, server.URL, "admin-token-000000")
+	alice := newStateRuntimeHTTPClient(t, server.URL, "alice-token-000000")
+	agent, err := admin.CreateAgent(ctx, agentruntime.CreateAgentRequest{IdempotencyKey: "limit-agent", Name: "assistant", ModelProfile: "balanced", Instructions: "safe"})
+	if err != nil {
+		t.Fatalf("create Agent: %v", err)
+	}
+	session, err := alice.CreateSession(ctx, agentruntime.CreateSessionRequest{IdempotencyKey: "limit-session", AgentRevision: agent.RevisionID})
+	if err != nil {
+		t.Fatalf("create Session: %v", err)
+	}
+	for _, limit := range []int{0, 1001} {
+		if _, err := alice.Events(ctx, session.ID, "", limit); !hasFailure(err, agentruntime.FailureInvalidInput) {
+			t.Fatalf("SDK Events limit %d error = %v, want invalid input", limit, err)
+		}
+	}
+}
+
 func TestStateRuntimeReadsOnlyStateAuthorizedArtifactBytes(t *testing.T) {
 	runtime, content, compiler, store, _ := newMemoryStateAuthority(t)
 	ctx := context.Background()
