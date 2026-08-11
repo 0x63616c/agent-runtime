@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "observed_at_utc": "2026-08-11T22:13:56Z",
+  "proof_level": "integration",
+  "revision": "4945dfc23991f2a35261567b08fdcb598bcf0314",
+  "scope": "S5 durable audit/outbox lifecycle on exclusive disposable PostgreSQL and MinIO using the declared fixture adapter. The proof reads authorized runtime projections and private audit/outbox pages; it does not claim public HTTP, a protected sandbox, Firecracker, Linux/KVM, or EX-002.",
+  "commands": [
+    "AR_RUNTIME_API_POSTGRES_DSN=<redacted> AR_RUNTIME_API_MINIO_ENDPOINT=<redacted> AR_RUNTIME_API_MINIO_ACCESS_KEY=<redacted> AR_RUNTIME_API_MINIO_SECRET_KEY=<redacted> AR_RUNTIME_API_MINIO_BUCKET=<redacted> go test -race -tags=integration ./internal/runtimetool -run '^TestDurableBrokeredToolLifecyclePersistsApprovalAndFinalization$' -count=1",
+    "just check"
+  ],
+  "result": "passed",
+  "observations": {
+    "authorization_chain": "The persisted append-only audit chain covers pending approval, approval, denial, expiry, revocation, cancellation, grant consumption, execution intent, terminal result, and exhaustion in checked durable order.",
+    "correlation": "Each checked lifecycle phase links its audit fact to the durable outbox route and operation correlation. The explicit terminal approval and post-approval finalization product events also link to their audit facts; audit facts retain actor and tenant identity, agent/policy commitments, capability-scope digest, tool-call correlation, and bounded timestamps.",
+    "privacy_and_access": "Owner scope cannot enumerate the private audit or outbox pages, and assertions reject descriptor, input, credential-shaped, and raw output leakage."
+  },
+  "redaction": "No DSNs, object-store credentials, raw audit IDs, operation IDs, descriptors, inputs, artifact bodies, output bodies, or backend endpoints are retained."
+}

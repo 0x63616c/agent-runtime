@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "observed_at_utc": "2026-08-11T22:15:05Z",
+  "proof_level": "unit",
+  "revision": "4945dfc23991f2a35261567b08fdcb598bcf0314",
+  "scope": "S5 brokered adapter contracts. The sandbox adapter is exercised only through its declared control-client seam; this is not a protected Workspace sandbox, Firecracker, Linux/KVM, or EX-002 claim.",
+  "commands": [
+    "go test ./internal/runtimetool -run '^(TestBuiltinAdapterRefusesAnUnsafeExternalEffectContract|TestMCPAdapterRefusesDirectDispatchBeforeNetworkTransport|TestSandboxAdapterRefusesDirectDispatchBeforeControlTransport|TestSandboxAdapterUsesOnlyVerifiedDescriptorAndReconcilesWithoutResubmit|TestMCPAdapterExecutesOnlyThroughWorkerAndReconcilesWithoutResubmit|TestBuiltinAdapterReconcilesLostWorkerClaimWithoutResubmitting)$' -count=1",
+    "just check"
+  ],
+  "result": "passed",
+  "observations": {
+    "broker_boundary": "Builtin, MCP, and sandbox adapter entrypoints reject direct execution or reconciliation contracts before the fixture external-effect seam can run.",
+    "bounded_recovery": "Each adapter receives the Worker-owned operation identity only after brokered authorization; a lost acknowledgement is reconciled by that identity without a replacement submission.",
+    "safe_surface": "The adapter checks do not expose arbitrary event/history data or retain raw descriptors, credentials, or external-effect payloads."
+  },
+  "redaction": "No operation IDs, descriptors, capability values, credentials, endpoints, requests, responses, or external-effect payloads are retained."
+}
