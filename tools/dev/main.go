@@ -21,10 +21,18 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/0x63616c/agent-runtime/internal/roles"
 	"github.com/0x63616c/agent-runtime/internal/stack"
 )
 
 const quotaPolicy = `{"defaults":{"milli_cpu":500,"memory_bytes":536870912,"root_disk_bytes":4294967296,"tmpfs_bytes":268435456,"pids":128,"process_count":64,"open_files":1024,"inodes":100000,"files":50000,"lifetime_seconds":3600,"produced_output_bytes":67108864,"retained_output_bytes":16777216,"transfer_bytes":1073741824,"network_connections":64,"volume_bytes":10737418240,"snapshot_bytes":10737418240},"maximums":{"milli_cpu":4000,"memory_bytes":4294967296,"root_disk_bytes":34359738368,"tmpfs_bytes":2147483648,"pids":1024,"process_count":512,"open_files":8192,"inodes":1000000,"files":500000,"lifetime_seconds":86400,"produced_output_bytes":1073741824,"retained_output_bytes":268435456,"transfer_bytes":10737418240,"network_connections":1024,"volume_bytes":107374182400,"snapshot_bytes":107374182400}}`
+
+type localFixtureScenario = roles.LocalDemoFixtureScenario
+
+const (
+	localFixtureScenarioWorkspaceApprovalReset  = roles.LocalDemoFixtureScenarioWorkspaceApprovalReset
+	localFixtureScenarioWorkspaceApprovalExpiry = roles.LocalDemoFixtureScenarioWorkspaceApprovalExpiry
+)
 
 var (
 	stackPattern         = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9-]{0,38}[a-z0-9])?$`)
@@ -44,11 +52,11 @@ func run(ctx context.Context, arguments []string, output io.Writer) error {
 	}
 	switch arguments[0] {
 	case "render":
-		stack, profile, destination, err := parseRenderArguments(arguments[1:])
+		stack, profile, scenario, destination, err := parseRenderArguments(arguments[1:])
 		if err != nil {
 			return err
 		}
-		document, err := renderStack(stack, profile)
+		document, err := renderStack(stack, profile, scenario)
 		if err != nil {
 			return err
 		}
@@ -77,11 +85,11 @@ func run(ctx context.Context, arguments []string, output io.Writer) error {
 		}
 		return preflight(ctx, root, kubeconfig, output)
 	case "up":
-		stack, root, kubeconfig, actor, err := parseUpArguments(arguments[1:])
+		stack, root, kubeconfig, actor, scenario, err := parseUpArguments(arguments[1:])
 		if err != nil {
 			return err
 		}
-		return up(ctx, stack, root, kubeconfig, actor, output)
+		return up(ctx, stack, root, kubeconfig, actor, scenario, output)
 	case "reconcile":
 		stack, root, err := parseStackAndRoot("reconcile", arguments[1:])
 		if err != nil {
@@ -145,22 +153,36 @@ func parseSecretsArguments(arguments []string) (string, string, string, error) {
 	return *stackName, *profile, absRoot, nil
 }
 
-func parseRenderArguments(arguments []string) (string, string, string, error) {
+func parseRenderArguments(arguments []string) (string, string, localFixtureScenario, string, error) {
 	flags := flag.NewFlagSet("render", flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
 	stack := flags.String("stack", "", "sole validated Stack identity")
 	profile := flags.String("profile", "local", "local, ci, or production")
+	fixtureScenario := flags.String("fixture-scenario", string(localFixtureScenarioWorkspaceApprovalReset), "declared local fixture scenario")
 	destination := flags.String("output", "", "private local output path")
 	if err := flags.Parse(arguments); err != nil || flags.NArg() != 0 {
-		return "", "", "", fmt.Errorf("parse local Stack render arguments: --stack is required")
+		return "", "", localFixtureScenarioWorkspaceApprovalReset, "", fmt.Errorf("parse local Stack render arguments: --stack is required")
 	}
 	if err := validateStack(*stack); err != nil {
-		return "", "", "", err
+		return "", "", localFixtureScenarioWorkspaceApprovalReset, "", err
 	}
 	if *profile != "local" && *profile != "ci" && *profile != "production" {
-		return "", "", "", fmt.Errorf("parse local Stack render arguments: --profile must be local, ci, or production")
+		return "", "", localFixtureScenarioWorkspaceApprovalReset, "", fmt.Errorf("parse local Stack render arguments: --profile must be local, ci, or production")
 	}
-	return *stack, *profile, *destination, nil
+	scenario, err := parseLocalFixtureScenario(*fixtureScenario)
+	if err != nil {
+		return "", "", localFixtureScenarioWorkspaceApprovalReset, "", err
+	}
+	fixtureScenarioProvided := false
+	flags.Visit(func(item *flag.Flag) {
+		if item.Name == "fixture-scenario" {
+			fixtureScenarioProvided = true
+		}
+	})
+	if *profile != "local" && fixtureScenarioProvided {
+		return "", "", localFixtureScenarioWorkspaceApprovalReset, "", fmt.Errorf("parse local Stack render arguments: --fixture-scenario is local-only")
+	}
+	return *stack, *profile, scenario, *destination, nil
 }
 
 func parseStackAndRoot(command string, arguments []string) (string, string, error) {
@@ -187,36 +209,49 @@ func parseStackAndRoot(command string, arguments []string) (string, string, erro
 	return *stack, absRoot, nil
 }
 
-func parseUpArguments(arguments []string) (string, string, string, string, error) {
+func parseUpArguments(arguments []string) (string, string, string, string, localFixtureScenario, error) {
 	flags := flag.NewFlagSet("up", flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
 	stackName := flags.String("stack", "", "sole validated Stack identity")
 	root := flags.String("root", ".", "repository root")
 	kubeconfig := flags.String("kubeconfig", "", "absolute kubeconfig used only with the explicit orbstack context")
 	actor := flags.String("actor", "", "bounded audited local operator identity")
+	fixtureScenario := flags.String("fixture-scenario", string(localFixtureScenarioWorkspaceApprovalReset), "declared local fixture scenario")
 	if err := flags.Parse(arguments); err != nil || flags.NArg() != 0 {
-		return "", "", "", "", fmt.Errorf("parse local development up arguments: --stack, absolute --kubeconfig, and --actor are required")
+		return "", "", "", "", localFixtureScenarioWorkspaceApprovalReset, fmt.Errorf("parse local development up arguments: --stack, absolute --kubeconfig, and --actor are required")
 	}
 	absRoot, err := filepath.Abs(*root)
 	if err != nil {
-		return "", "", "", "", fmt.Errorf("resolve local development root: %w", err)
+		return "", "", "", "", localFixtureScenarioWorkspaceApprovalReset, fmt.Errorf("resolve local development root: %w", err)
 	}
 	if *stackName == "" {
 		*stackName, err = derivedStack(absRoot)
 		if err != nil {
-			return "", "", "", "", err
+			return "", "", "", "", localFixtureScenarioWorkspaceApprovalReset, err
 		}
 	}
 	if err := validateStack(*stackName); err != nil {
-		return "", "", "", "", err
+		return "", "", "", "", localFixtureScenarioWorkspaceApprovalReset, err
 	}
 	if !filepath.IsAbs(*kubeconfig) {
-		return "", "", "", "", fmt.Errorf("parse local development up arguments: absolute --kubeconfig is required")
+		return "", "", "", "", localFixtureScenarioWorkspaceApprovalReset, fmt.Errorf("parse local development up arguments: absolute --kubeconfig is required")
 	}
 	if !operatorActorPattern.MatchString(*actor) {
-		return "", "", "", "", fmt.Errorf("parse local development up arguments: --actor must be a bounded operator identity")
+		return "", "", "", "", localFixtureScenarioWorkspaceApprovalReset, fmt.Errorf("parse local development up arguments: --actor must be a bounded operator identity")
 	}
-	return *stackName, absRoot, *kubeconfig, *actor, nil
+	scenario, err := parseLocalFixtureScenario(*fixtureScenario)
+	if err != nil {
+		return "", "", "", "", localFixtureScenarioWorkspaceApprovalReset, err
+	}
+	return *stackName, absRoot, *kubeconfig, *actor, scenario, nil
+}
+
+func parseLocalFixtureScenario(value string) (localFixtureScenario, error) {
+	scenario, err := roles.ParseLocalDemoFixtureScenario(value)
+	if err != nil {
+		return "", fmt.Errorf("parse local fixture scenario: --fixture-scenario must name one declared local scenario")
+	}
+	return scenario, nil
 }
 
 func parsePreflightArguments(arguments []string) (string, string, string, error) {
@@ -254,20 +289,32 @@ func validateStack(stack string) error {
 	return nil
 }
 
-func renderStack(stack, profile string) ([]byte, error) {
+func renderStack(stack, profile string, scenario localFixtureScenario) ([]byte, error) {
 	if err := validateStack(stack); err != nil {
 		return nil, err
 	}
-	resources, err := reviewedLocalResources(stack)
-	if err != nil {
-		return nil, err
+	if profile != "local" && profile != "ci" && profile != "production" {
+		return nil, fmt.Errorf("render local Stack document: profile must be local, ci, or production")
+	}
+	if profile != "local" && scenario != localFixtureScenarioWorkspaceApprovalReset {
+		return nil, fmt.Errorf("render local Stack document: fixture scenario is local-only")
 	}
 	profiles := make(map[string]any, 3)
 	for _, candidate := range []string{"local", "ci", "production"} {
+		resources, err := reviewedProfileResources(stack, candidate)
+		if err != nil {
+			return nil, err
+		}
+		if candidate == "local" {
+			if err := attachLocalFixtureScenario(resources, scenario); err != nil {
+				return nil, err
+			}
+		}
 		namespace := profileNamespace(stack, candidate)
+		reviewedNamespace := profileNamespace("agent-runtime", candidate)
 		resolved := make([]json.RawMessage, len(resources))
 		for index, resource := range resources {
-			value := strings.ReplaceAll(string(resource), "ar-agent-runtime", namespace)
+			value := strings.ReplaceAll(string(resource), reviewedNamespace, namespace)
 			resolved[index] = json.RawMessage(value)
 		}
 		prerequisites := []any{}
@@ -288,7 +335,7 @@ func renderStack(stack, profile string) ([]byte, error) {
 	return append(encoded, '\n'), nil
 }
 
-func reviewedLocalResources(stackName string) ([]json.RawMessage, error) {
+func reviewedProfileResources(stackName, profile string) ([]json.RawMessage, error) {
 	directory, err := os.Getwd()
 	if err != nil {
 		return nil, fmt.Errorf("locate reviewed local Stack profile: %w", err)
@@ -302,31 +349,33 @@ func reviewedLocalResources(stackName string) ([]json.RawMessage, error) {
 			}
 			_ = reviewed
 			var document struct {
-				Profiles struct {
-					Local struct {
-						Resources []json.RawMessage `json:"resources"`
-					} `json:"local"`
+				Profiles map[string]struct {
+					Resources []json.RawMessage `json:"resources"`
 				} `json:"profiles"`
 			}
 			if err := json.Unmarshal(data, &document); err != nil {
-				return nil, fmt.Errorf("decode reviewed local Stack profile: %w", err)
+				return nil, fmt.Errorf("decode reviewed Stack profile: %w", err)
 			}
-			resources := document.Profiles.Local.Resources
+			reviewedProfile, exists := document.Profiles[profile]
+			if !exists {
+				return nil, fmt.Errorf("decode reviewed Stack profile: %s is missing", profile)
+			}
+			resources := append([]json.RawMessage(nil), reviewedProfile.Resources...)
 			for index, resource := range resources {
 				var object map[string]json.RawMessage
 				if err := json.Unmarshal(resource, &object); err != nil {
-					return nil, fmt.Errorf("decode reviewed local Stack resource: %w", err)
+					return nil, fmt.Errorf("decode reviewed Stack resource: %w", err)
 				}
 				var id stack.ResourceID
 				if err := json.Unmarshal(object["id"], &id); err != nil {
-					return nil, fmt.Errorf("read reviewed local Stack resource identity: %w", err)
+					return nil, fmt.Errorf("read reviewed Stack resource identity: %w", err)
 				}
-				if !tiltBuiltResource(id) {
+				if profile != "local" || !tiltBuiltResource(id) {
 					continue
 				}
 				var kubernetes map[string]json.RawMessage
 				if err := json.Unmarshal(object["kubernetes"], &kubernetes); err != nil {
-					return nil, fmt.Errorf("decode reviewed local Stack workload: %w", err)
+					return nil, fmt.Errorf("decode reviewed Stack workload: %w", err)
 				}
 				image, err := json.Marshal(devImage(stackName, id))
 				if err != nil {
@@ -335,12 +384,12 @@ func reviewedLocalResources(stackName string) ([]json.RawMessage, error) {
 				kubernetes["image"] = image
 				encodedKubernetes, err := json.Marshal(kubernetes)
 				if err != nil {
-					return nil, fmt.Errorf("encode reviewed local Stack workload: %w", err)
+					return nil, fmt.Errorf("encode reviewed Stack workload: %w", err)
 				}
 				object["kubernetes"] = encodedKubernetes
 				encodedResource, err := json.Marshal(object)
 				if err != nil {
-					return nil, fmt.Errorf("encode reviewed local Stack resource: %w", err)
+					return nil, fmt.Errorf("encode reviewed Stack resource: %w", err)
 				}
 				resources[index] = encodedResource
 			}
@@ -352,6 +401,73 @@ func reviewedLocalResources(stackName string) ([]json.RawMessage, error) {
 		}
 		directory = parent
 	}
+}
+
+func attachLocalFixtureScenario(resources []json.RawMessage, scenario localFixtureScenario) error {
+	if scenario != localFixtureScenarioWorkspaceApprovalReset && scenario != localFixtureScenarioWorkspaceApprovalExpiry {
+		return fmt.Errorf("attach local fixture scenario: scenario is not declared")
+	}
+	attached := 0
+	for index, resource := range resources {
+		var object map[string]json.RawMessage
+		if err := json.Unmarshal(resource, &object); err != nil {
+			return fmt.Errorf("attach local fixture scenario: decode resource: %w", err)
+		}
+		var id stack.ResourceID
+		if err := json.Unmarshal(object["id"], &id); err != nil {
+			return fmt.Errorf("attach local fixture scenario: read resource identity: %w", err)
+		}
+		if id != "model" && id != "tool" {
+			continue
+		}
+		var kubernetes map[string]json.RawMessage
+		if err := json.Unmarshal(object["kubernetes"], &kubernetes); err != nil {
+			return fmt.Errorf("attach local fixture scenario: decode %s workload: %w", id, err)
+		}
+		var environments []struct {
+			Name  string `json:"name"`
+			Value string `json:"value"`
+		}
+		if err := json.Unmarshal(kubernetes["environment"], &environments); err != nil {
+			return fmt.Errorf("attach local fixture scenario: decode %s environment: %w", id, err)
+		}
+		found := false
+		for environmentIndex := range environments {
+			environment := &environments[environmentIndex]
+			if environment.Name != "RUNTIME_ROLE_CONFIG" {
+				continue
+			}
+			encoded, err := roles.WithLocalDemoFixtureScenario(environment.Value, scenario)
+			if err != nil {
+				return fmt.Errorf("attach local fixture scenario: set %s role configuration: %w", id, err)
+			}
+			environment.Value = encoded
+			found = true
+			attached++
+		}
+		if !found {
+			return fmt.Errorf("attach local fixture scenario: %s has no runtime role configuration", id)
+		}
+		encodedEnvironment, err := json.Marshal(environments)
+		if err != nil {
+			return fmt.Errorf("attach local fixture scenario: encode %s environment: %w", id, err)
+		}
+		kubernetes["environment"] = encodedEnvironment
+		encodedKubernetes, err := json.Marshal(kubernetes)
+		if err != nil {
+			return fmt.Errorf("attach local fixture scenario: encode %s workload: %w", id, err)
+		}
+		object["kubernetes"] = encodedKubernetes
+		encodedResource, err := json.Marshal(object)
+		if err != nil {
+			return fmt.Errorf("attach local fixture scenario: encode %s resource: %w", id, err)
+		}
+		resources[index] = encodedResource
+	}
+	if attached != 2 {
+		return fmt.Errorf("attach local fixture scenario: exactly model and tool must be attached")
+	}
+	return nil
 }
 
 func tiltBuiltResource(id stack.ResourceID) bool {
@@ -399,6 +515,7 @@ type localState struct {
 	WorktreeFingerprint string `json:"worktree_fingerprint"`
 	Kubeconfig          string `json:"kubeconfig"`
 	OperatorActor       string `json:"operator_actor"`
+	FixtureScenario     string `json:"fixture_scenario,omitempty"`
 }
 
 func materializeSecrets(stack, root string, reader io.Reader) ([]byte, error) {
@@ -541,7 +658,7 @@ type localSecretReference struct {
 }
 
 func localSecretReferences(stackName, profile string) ([]localSecretReference, error) {
-	document, err := renderStack(stackName, profile)
+	document, err := renderStack(stackName, profile, localFixtureScenarioWorkspaceApprovalReset)
 	if err != nil {
 		return nil, err
 	}
@@ -654,12 +771,12 @@ func preflight(ctx context.Context, root, kubeconfig string, output io.Writer) e
 	return nil
 }
 
-func up(ctx context.Context, stack, root, kubeconfig, actor string, output io.Writer) error {
+func up(ctx context.Context, stack, root, kubeconfig, actor string, scenario localFixtureScenario, output io.Writer) error {
 	if err := preflight(ctx, root, kubeconfig, output); err != nil {
 		return err
 	}
 	stackPath := filepath.Join(root, ".runtime", "dev", stack+".stack.json")
-	document, err := renderStack(stack, "local")
+	document, err := renderStack(stack, "local", scenario)
 	if err != nil {
 		return err
 	}
@@ -670,7 +787,7 @@ func up(ctx context.Context, stack, root, kubeconfig, actor string, output io.Wr
 	if err != nil {
 		return err
 	}
-	state, err := encodeState(stack, root, port, kubeconfig, actor)
+	state, err := encodeState(stack, root, port, kubeconfig, actor, scenario)
 	if err != nil {
 		return err
 	}
@@ -847,7 +964,7 @@ func operatorAuditPath(root, stack string) string {
 	return filepath.Join(root, ".runtime", "dev", stack+".operator-audit.jsonl")
 }
 
-func encodeState(stack, root string, port int, kubeconfig, actor string) ([]byte, error) {
+func encodeState(stack, root string, port int, kubeconfig, actor string, scenario localFixtureScenario) ([]byte, error) {
 	if !filepath.IsAbs(kubeconfig) || !operatorActorPattern.MatchString(actor) {
 		return nil, fmt.Errorf("encode local development state: explicit absolute kubeconfig and bounded operator actor are required")
 	}
@@ -856,7 +973,10 @@ func encodeState(stack, root string, port int, kubeconfig, actor string) ([]byte
 		return nil, fmt.Errorf("canonicalize local development worktree: %w", err)
 	}
 	sum := sha256.Sum256([]byte(canonical))
-	return json.Marshal(localState{Stack: stack, Namespace: profileNamespace(stack, "local"), DashboardPort: port, WorktreeFingerprint: fmt.Sprintf("sha256:%x", sum), Kubeconfig: kubeconfig, OperatorActor: actor})
+	if _, err := parseLocalFixtureScenario(string(scenario)); err != nil {
+		return nil, err
+	}
+	return json.Marshal(localState{Stack: stack, Namespace: profileNamespace(stack, "local"), DashboardPort: port, WorktreeFingerprint: fmt.Sprintf("sha256:%x", sum), Kubeconfig: kubeconfig, OperatorActor: actor, FixtureScenario: string(scenario)})
 }
 
 func loadState(root, stack string) (localState, error) {
@@ -865,7 +985,10 @@ func loadState(root, stack string) (localState, error) {
 		return localState{}, fmt.Errorf("read local development Stack state: run dev up for this Stack first: %w", err)
 	}
 	var state localState
-	if err := json.Unmarshal(data, &state); err != nil || state.Stack != stack || state.Namespace != profileNamespace(stack, "local") || state.DashboardPort < 1 || state.WorktreeFingerprint == "" || !filepath.IsAbs(state.Kubeconfig) || !operatorActorPattern.MatchString(state.OperatorActor) {
+	if err := json.Unmarshal(data, &state); err != nil {
+		return localState{}, fmt.Errorf("read local development Stack state: refuse malformed or foreign Stack state")
+	}
+	if _, scenarioErr := parseLocalFixtureScenario(state.FixtureScenario); scenarioErr != nil || state.Stack != stack || state.Namespace != profileNamespace(stack, "local") || state.DashboardPort < 1 || state.WorktreeFingerprint == "" || !filepath.IsAbs(state.Kubeconfig) || !operatorActorPattern.MatchString(state.OperatorActor) {
 		return localState{}, fmt.Errorf("read local development Stack state: refuse malformed or foreign Stack state")
 	}
 	return state, nil

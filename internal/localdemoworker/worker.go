@@ -7,6 +7,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"fmt"
+	"log"
 	"time"
 
 	"github.com/0x63616c/agent-runtime/internal/clock"
@@ -33,6 +34,13 @@ func Run(ctx context.Context, role roles.Config, lookup Lookup) error {
 		return errors.New("run local demo worker: context, lookup, and declared local demo capability are required")
 	}
 	declaration := role.LocalDemoWorker()
+	if declaration.Fixture != "workspace-approval-v1" {
+		return errors.New("run local demo worker: unsupported declared fixture")
+	}
+	approvalTTL, err := approvalTTLForScenario(declaration.FixtureScenario)
+	if err != nil {
+		return err
+	}
 	dsn, ok := lookup(declaration.StateDSNEnvironment)
 	if !ok || dsn == "" {
 		return errors.New("run local demo worker: state credential is unavailable")
@@ -88,7 +96,7 @@ func Run(ctx context.Context, role roles.Config, lookup Lookup) error {
 		if brokerErr != nil {
 			return brokerErr
 		}
-		worker, createErr := runtimemodel.NewWorker(runtimemodel.WorkerConfig{Store: state, Tenants: state, Compiler: compiler, Planner: planner, Clock: systemClock{}, Content: content, Adapter: modelFixture{}, Broker: broker, Claimer: "local-demo-model"})
+		worker, createErr := runtimemodel.NewWorker(runtimemodel.WorkerConfig{Store: state, Tenants: state, Compiler: compiler, Planner: planner, Clock: systemClock{}, Content: content, Adapter: modelFixture{approvalTTL: approvalTTL}, Broker: broker, Claimer: "local-demo-model"})
 		if createErr != nil {
 			return createErr
 		}
@@ -110,11 +118,18 @@ func Run(ctx context.Context, role roles.Config, lookup Lookup) error {
 // stay visible rather than silently turning a broken demo into a healthy role.
 func scanLoop(ctx context.Context, scan func(context.Context) error, interval time.Duration) error {
 	for {
-		if err := scan(ctx); err != nil && !errors.Is(err, runtimestate.ErrUnavailable) {
-			if errors.Is(err, context.Canceled) {
-				return nil
+		if err := scan(ctx); err != nil {
+			if errors.Is(err, runtimestate.ErrUnavailable) {
+				// Worker errors are already capability-sanitized. Retain the
+				// operation stage for local restart diagnosis, never credentials,
+				// object paths, descriptors, or provider responses.
+				log.Printf("local demo worker transient unavailable: %v", err)
+			} else {
+				if errors.Is(err, context.Canceled) {
+					return nil
+				}
+				return errors.Wrap(err, "run local demo worker: scan")
 			}
-			return errors.Wrap(err, "run local demo worker: scan")
 		}
 		// A child deadline makes the poll interval explicit while preserving the
 		// caller's cancellation authority. The normal local deadline is merely
@@ -151,37 +166,55 @@ func (randomIDs) NextIdentifier(kind runtimestate.IdentifierKind) (string, error
 	return fmt.Sprintf("%s_%x", kind, value[:]), nil
 }
 
-// modelFixture emits a synthetic approved-action candidate. The local demo
-// owner must create its matching policy through the public admin contract.
-type modelFixture struct{}
+// modelFixture emits the one declared workspace-approval fixture request. The
+// local demo owner must create its matching policy through the public admin
+// contract. It never receives Agent configuration, raw Input, credentials, or
+// a sandbox capability, so it cannot infer or perform workspace work.
+type modelFixture struct{ approvalTTL time.Duration }
 
-func (modelFixture) Invoke(_ context.Context, request runtimemodel.Request) (runtimemodel.Response, error) {
-	return fixtureModelResponse(request), nil
+func (fixture modelFixture) Invoke(_ context.Context, request runtimemodel.Request) (runtimemodel.Response, error) {
+	return fixtureModelResponseWithTTL(request, fixture.approvalTTL), nil
 }
-func (modelFixture) Reconcile(_ context.Context, request runtimemodel.Request) (runtimemodel.Response, error) {
-	return fixtureModelResponse(request), nil
+func (fixture modelFixture) Reconcile(_ context.Context, request runtimemodel.Request) (runtimemodel.Response, error) {
+	return fixtureModelResponseWithTTL(request, fixture.approvalTTL), nil
 }
+
+func approvalTTLForScenario(scenario roles.LocalDemoFixtureScenario) (time.Duration, error) {
+	switch scenario {
+	case roles.LocalDemoFixtureScenarioWorkspaceApprovalReset:
+		return 10 * time.Minute, nil
+	case roles.LocalDemoFixtureScenarioWorkspaceApprovalExpiry:
+		return 2 * time.Second, nil
+	default:
+		return 0, errors.New("run local demo worker: unsupported declared fixture scenario")
+	}
+}
+
 func fixtureModelResponse(request runtimemodel.Request) runtimemodel.Response {
+	return fixtureModelResponseWithTTL(request, 10*time.Minute)
+}
+
+func fixtureModelResponseWithTTL(request runtimemodel.Request, approvalTTL time.Duration) runtimemodel.Response {
 	sum := sha256.Sum256([]byte(request.OperationID))
 	identity := fmt.Sprintf("%x", sum[:])
 	// Public Approval IDs have an exact sixteen-character opaque payload.
 	// Keep the fixture deterministic while conforming to that public contract.
 	approvalIdentity := identity[:16]
-	descriptor := []byte(`{"kind":"local-demo-research","citation":"https://example.invalid/local-demo"}`)
+	descriptor := []byte(`{"kind":"local-demo-workspace-write","path":"workspace/fixture-report.txt","execution":"artifact-only"}`)
 	return runtimemodel.Response{Tool: &runtimemodel.ToolRequest{
 		ToolCallID:       "tcall_" + approvalIdentity,
 		ApprovalID:       "appr_" + approvalIdentity,
-		PolicyName:       "research-dossier-demo",
+		PolicyName:       "workspace-write-demo",
 		PolicyRevision:   1,
-		ToolName:         "research",
+		ToolName:         "workspace.write",
 		ActionDigest:     fixtureDigest(descriptor),
-		CapabilityDigest: fixtureDigest([]byte("local-demo-capability/" + identity)),
-		// The tool remains named "research", but its bounded fixture output is
-		// committed as an Artifact. The approval summary must use the canonical
-		// closed action vocabulary accepted by the durable policy boundary.
-		Action:      agentruntime.ApprovalAction{Verb: "write", Target: "artifact"},
+		CapabilityDigest: fixtureDigest([]byte("local-demo-workspace-capability/" + identity)),
+		// This describes the requested public Workspace operation. The fixture's
+		// bounded output is an Artifact only; it does not execute a workspace
+		// service or a Firecracker sandbox.
+		Action:      agentruntime.ApprovalAction{Verb: "write", Target: "workspace-service"},
 		MaximumUses: 1,
-		ExpiresAt:   time.Now().UTC().Add(10 * time.Minute),
+		ExpiresAt:   time.Now().UTC().Add(approvalTTL),
 		Descriptor:  descriptor,
 	}}
 }
@@ -203,5 +236,5 @@ func (toolFixture) ExternalEffectContract() runtimetool.ExternalEffectContract {
 	return runtimetool.ExternalEffectContract{IdempotencyKey: "operation_id", Reconciles: true}
 }
 func fixtureToolResponse(request runtimetool.Request) runtimetool.Response {
-	return runtimetool.Response{Output: []byte("Local demo research fixture completed. Citation: https://example.invalid/local-demo/" + string(request.OperationID)), MediaType: "text/plain; charset=utf-8"}
+	return runtimetool.Response{Output: []byte("Local demo workspace.write fixture recorded operation " + string(request.OperationID) + ". No workspace service or sandbox was executed; this owner artifact is topology evidence only."), MediaType: "text/plain; charset=utf-8"}
 }

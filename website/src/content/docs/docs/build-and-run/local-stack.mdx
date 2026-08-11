@@ -26,6 +26,25 @@ not a model-provider integration, Codex subscription path, or production
 provider claim. CI and production profiles do not mount or configure this
 fixture.
 
+## Declared local evidence fixtures
+
+The local profile explicitly declares the normal ten-minute reset/replay
+scenario. A second short-expiry scenario exists only for retained local
+evidence. Both are recorded in private Stack lifecycle state and rejected by
+CI and production rendering. They do not accept a prompt, Stack-name
+convention, ambient environment value, or ConfigMap mutation as a selector.
+
+```text
+go run ./tools/dev up --stack=workspace-reset-proof --root=. --kubeconfig=/absolute/path/to/kubeconfig --actor=local-operator --fixture-scenario=workspace-approval-reset-v1
+go run ./tools/dev up --stack=workspace-expiry-proof --root=. --kubeconfig=/absolute/path/to/kubeconfig --actor=local-operator --fixture-scenario=workspace-approval-expiry-v1
+```
+
+`workspace-approval-reset-v1` keeps the normal ten-minute lifetime for a
+reset/reconnect replay proof. `workspace-approval-expiry-v1` uses only the
+declared short local fixture lifetime for a pending-Approval late-decision
+proof. Both still emit the same bounded artifact-only fixture response and
+never execute a workspace service, a Sandbox, or Firecracker.
+
 Main CI invokes the same two-Stack isolation harness against a checksum-pinned,
 disposable k3d/K3s cluster using the typed `ci` profile. Its twelve-minute
 readiness bound includes a clean node's immutable dependency-image pulls and

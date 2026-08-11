@@ -15,7 +15,7 @@ import (
 )
 
 func TestRenderBuildsOneTypedThreeProfileStack(t *testing.T) {
-	document, err := renderStack("two-stack-a", "local")
+	document, err := renderStack("two-stack-a", "local", localFixtureScenarioWorkspaceApprovalReset)
 	if err != nil {
 		t.Fatalf("render stack: %v", err)
 	}
@@ -40,6 +40,97 @@ func TestRenderBuildsOneTypedThreeProfileStack(t *testing.T) {
 	}
 }
 
+func TestLocalFixtureScenarioIsExplicitAndAttachedOnlyToLocalRoles(t *testing.T) {
+	for _, scenario := range []string{"workspace-approval-reset-v1", "workspace-approval-expiry-v1"} {
+		document, err := renderStack("fixture-proof", "local", localFixtureScenario(scenario))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := fixtureScenarioAttachments(t, document, "local", scenario); got != 2 {
+			t.Fatalf("local Stack render attaches scenario %q to %d roles, want model and tool only", scenario, got)
+		}
+	}
+}
+
+func TestLocalFixtureScenarioIsRejectedOutsideTheDeclaredLocalRender(t *testing.T) {
+	if _, err := renderStack("fixture-proof", "ci", localFixtureScenarioWorkspaceApprovalExpiry); err == nil {
+		t.Fatal("CI render accepted a local fixture scenario")
+	}
+	if _, _, scenario, _, err := parseRenderArguments([]string{"--stack", "fixture-proof", "--profile", "local", "--fixture-scenario", string(localFixtureScenarioWorkspaceApprovalExpiry)}); err != nil || scenario != localFixtureScenarioWorkspaceApprovalExpiry {
+		t.Fatalf("parse declared local fixture scenario = %q, %v", scenario, err)
+	}
+	if _, _, _, _, err := parseRenderArguments([]string{"--stack", "fixture-proof", "--profile", "production", "--fixture-scenario", string(localFixtureScenarioWorkspaceApprovalExpiry)}); err == nil {
+		t.Fatal("production render accepted a local fixture scenario")
+	}
+	if _, _, _, _, err := parseRenderArguments([]string{"--stack", "fixture-proof", "--profile", "ci", "--fixture-scenario", string(localFixtureScenarioWorkspaceApprovalReset)}); err == nil {
+		t.Fatal("CI render accepted the normal local fixture scenario")
+	}
+	if _, _, _, _, err := parseRenderArguments([]string{"--stack", "fixture-proof", "--fixture-scenario", "ambient"}); err == nil {
+		t.Fatal("render accepted an undeclared fixture scenario")
+	}
+}
+
+func fixtureScenarioAttachments(t *testing.T, document []byte, profile, scenario string) int {
+	t.Helper()
+	var rendered struct {
+		Profiles map[string]struct {
+			Resources []json.RawMessage `json:"resources"`
+		} `json:"profiles"`
+	}
+	if err := json.Unmarshal(document, &rendered); err != nil {
+		t.Fatalf("decode rendered Stack: %v", err)
+	}
+	attachments := 0
+	for _, resource := range rendered.Profiles[profile].Resources {
+		var object struct {
+			Kubernetes struct {
+				Environment []struct {
+					Name  string `json:"name"`
+					Value string `json:"value"`
+				} `json:"environment"`
+			} `json:"kubernetes"`
+		}
+		if err := json.Unmarshal(resource, &object); err != nil {
+			t.Fatalf("decode rendered resource: %v", err)
+		}
+		for _, environment := range object.Kubernetes.Environment {
+			if environment.Name != "RUNTIME_ROLE_CONFIG" {
+				continue
+			}
+			configuration, err := roles.Parse(strings.NewReader(environment.Value))
+			if err != nil {
+				t.Fatalf("parse rendered runtime role configuration: %v", err)
+			}
+			if configuration.LocalDemoWorker() != nil && configuration.LocalDemoWorker().FixtureScenario == localFixtureScenario(scenario) {
+				attachments++
+			}
+		}
+	}
+	return attachments
+}
+
+func TestSyntheticNonlocalProfilesExcludeLocalDemoAuthority(t *testing.T) {
+	document, err := renderStack("fixture-parity", "local", localFixtureScenarioWorkspaceApprovalReset)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var rendered struct {
+		Profiles map[string]struct {
+			Resources []json.RawMessage `json:"resources"`
+		} `json:"profiles"`
+	}
+	if err := json.Unmarshal(document, &rendered); err != nil {
+		t.Fatal(err)
+	}
+	for _, profile := range []string{"ci", "production"} {
+		for _, resource := range rendered.Profiles[profile].Resources {
+			if bytes.Contains(resource, []byte(`local_demo_worker`)) {
+				t.Fatalf("synthetic %s resource leaks local demo authority: %s", profile, resource)
+			}
+		}
+	}
+}
+
 func TestLocalStackExactlyMatchesReviewedLocalTopologyAfterInstanceNormalization(t *testing.T) {
 	reviewedDocument, err := os.ReadFile(filepath.Join("..", "..", "deploy", "production", "stack.json"))
 	if err != nil {
@@ -54,7 +145,7 @@ func TestLocalStackExactlyMatchesReviewedLocalTopologyAfterInstanceNormalization
 		t.Fatalf("render reviewed local profile: %v", err)
 	}
 
-	generatedDocument, err := renderStack("topology-proof", "local")
+	generatedDocument, err := renderStack("topology-proof", "local", localFixtureScenarioWorkspaceApprovalReset)
 	if err != nil {
 		t.Fatalf("render generated Stack: %v", err)
 	}
@@ -101,7 +192,7 @@ func TestTwoLocalStackInstancesKeepTopologyStateAndSecretsIsolated(t *testing.T)
 
 	var normalized [][]byte
 	for _, instance := range instances {
-		document, err := renderStack(instance.name, "local")
+		document, err := renderStack(instance.name, "local", localFixtureScenarioWorkspaceApprovalReset)
 		if err != nil {
 			t.Fatalf("render %s: %v", instance.name, err)
 		}
@@ -111,7 +202,7 @@ func TestTwoLocalStackInstancesKeepTopologyStateAndSecretsIsolated(t *testing.T)
 		if _, err := materializeSecrets(instance.name, root, instance.reader); err != nil {
 			t.Fatalf("materialize %s secrets: %v", instance.name, err)
 		}
-		state, err := encodeState(instance.name, root, instance.port, "/explicit/kubeconfig", "local-development")
+		state, err := encodeState(instance.name, root, instance.port, "/explicit/kubeconfig", "local-development", localFixtureScenarioWorkspaceApprovalReset)
 		if err != nil {
 			t.Fatalf("encode %s state: %v", instance.name, err)
 		}
@@ -182,7 +273,7 @@ func TestRetireBootstrapCapabilityRemovesOnlyTheVerifiedLocalCapability(t *testi
 }
 
 func TestLocalStackProjectsTheReviewedEightRoleTopology(t *testing.T) {
-	document, err := renderStack("role-proof", "local")
+	document, err := renderStack("role-proof", "local", localFixtureScenarioWorkspaceApprovalReset)
 	if err != nil {
 		t.Fatalf("render stack: %v", err)
 	}
@@ -383,27 +474,34 @@ func TestMaterializeCISecretsUsesTheCIProfileIdentity(t *testing.T) {
 }
 
 func TestRenderRejectsUnsafeStackIdentity(t *testing.T) {
-	if _, err := renderStack("production; rm", "local"); err == nil {
+	if _, err := renderStack("production; rm", "local", localFixtureScenarioWorkspaceApprovalReset); err == nil {
 		t.Fatal("expected unsafe Stack identity to be rejected")
 	}
 }
 
 func TestLocalLifecycleRequiresAnExplicitKubeconfigAndBoundedActor(t *testing.T) {
-	if _, _, _, _, err := parseUpArguments([]string{"--stack", "safe-stack", "--root", ".", "--actor", "local-development"}); err == nil {
+	if _, _, _, _, _, err := parseUpArguments([]string{"--stack", "safe-stack", "--root", ".", "--actor", "local-development"}); err == nil {
 		t.Fatal("expected local Stack lifecycle to reject an inferred kubeconfig")
 	}
-	if _, _, _, _, err := parseUpArguments([]string{"--stack", "safe-stack", "--root", ".", "--kubeconfig", "/explicit/kubeconfig", "--actor", "operator; rm"}); err == nil {
+	if _, _, _, _, _, err := parseUpArguments([]string{"--stack", "safe-stack", "--root", ".", "--kubeconfig", "/explicit/kubeconfig", "--actor", "operator; rm"}); err == nil {
 		t.Fatal("expected local Stack lifecycle to reject an unsafe actor")
 	}
-	stackName, root, kubeconfig, actor, err := parseUpArguments([]string{"--stack", "safe-stack", "--root", ".", "--kubeconfig", "/explicit/kubeconfig", "--actor", "local-development"})
-	if err != nil || stackName != "safe-stack" || !filepath.IsAbs(root) || kubeconfig != "/explicit/kubeconfig" || actor != "local-development" {
-		t.Fatalf("parse explicit local Stack lifecycle = %q, %q, %q, %q, %v", stackName, root, kubeconfig, actor, err)
+	stackName, root, kubeconfig, actor, scenario, err := parseUpArguments([]string{"--stack", "safe-stack", "--root", ".", "--kubeconfig", "/explicit/kubeconfig", "--actor", "local-development"})
+	if err != nil || stackName != "safe-stack" || !filepath.IsAbs(root) || kubeconfig != "/explicit/kubeconfig" || actor != "local-development" || scenario != localFixtureScenarioWorkspaceApprovalReset {
+		t.Fatalf("parse explicit local Stack lifecycle = %q, %q, %q, %q, %q, %v", stackName, root, kubeconfig, actor, scenario, err)
+	}
+	_, _, _, _, scenario, err = parseUpArguments([]string{"--stack", "safe-stack", "--root", ".", "--kubeconfig", "/explicit/kubeconfig", "--actor", "local-development", "--fixture-scenario", string(localFixtureScenarioWorkspaceApprovalReset)})
+	if err != nil || scenario != localFixtureScenarioWorkspaceApprovalReset {
+		t.Fatalf("parse declared up fixture scenario = %q, %v", scenario, err)
+	}
+	if _, _, _, _, _, err := parseUpArguments([]string{"--stack", "safe-stack", "--root", ".", "--kubeconfig", "/explicit/kubeconfig", "--actor", "local-development", "--fixture-scenario", "ambient"}); err == nil {
+		t.Fatal("up accepted an undeclared fixture scenario")
 	}
 }
 
 func TestLocalLifecyclePinsKubeconfigAndActorInPrivateState(t *testing.T) {
 	root := t.TempDir()
-	encoded, err := encodeState("safe-stack", root, 18432, "/explicit/kubeconfig", "local-development")
+	encoded, err := encodeState("safe-stack", root, 18432, "/explicit/kubeconfig", "local-development", localFixtureScenarioWorkspaceApprovalExpiry)
 	if err != nil {
 		t.Fatalf("encode local lifecycle state: %v", err)
 	}
@@ -411,7 +509,7 @@ func TestLocalLifecyclePinsKubeconfigAndActorInPrivateState(t *testing.T) {
 		t.Fatalf("write local lifecycle state: %v", err)
 	}
 	state, err := loadState(root, "safe-stack")
-	if err != nil || state.Kubeconfig != "/explicit/kubeconfig" || state.OperatorActor != "local-development" {
+	if err != nil || state.Kubeconfig != "/explicit/kubeconfig" || state.OperatorActor != "local-development" || state.FixtureScenario != string(localFixtureScenarioWorkspaceApprovalExpiry) {
 		t.Fatalf("load local lifecycle state = %#v, %v", state, err)
 	}
 	for _, path := range []string{bootstrapCapabilityPath(root, "safe-stack"), operatorAuditPath(root, "safe-stack")} {
@@ -436,7 +534,7 @@ func TestCommandEnvironmentReplacesAmbientKubeconfig(t *testing.T) {
 
 func TestStateBindsOneStackToItsWorktreeAndAllocatedDashboardPort(t *testing.T) {
 	root := t.TempDir()
-	encoded, err := encodeState("safe-stack", root, 18432, "/explicit/kubeconfig", "local-development")
+	encoded, err := encodeState("safe-stack", root, 18432, "/explicit/kubeconfig", "local-development", localFixtureScenarioWorkspaceApprovalReset)
 	if err != nil {
 		t.Fatalf("encode state: %v", err)
 	}

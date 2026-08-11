@@ -46,7 +46,7 @@ def local_demo_fixture($namespace; $profile):
     .kubernetes.environment |= map(
       if .name == "RUNTIME_ROLE_CONFIG" then
         .value |= (fromjson |
-          .local_demo_worker = {enabled:true,mode:"local-demo-v1",state_dsn_environment:"LOCAL_DEMO_STATE_DSN",content_endpoint:("blob." + $namespace + ".svc:9000"),content_access_key_environment:"LOCAL_DEMO_CONTENT_ACCESS_KEY",content_secret_key_environment:"LOCAL_DEMO_CONTENT_SECRET_KEY",content_bucket:$namespace} |
+          .local_demo_worker = {enabled:true,mode:"local-demo-v1",fixture:"workspace-approval-v1",fixture_scenario:"workspace-approval-reset-v1",state_dsn_environment:"LOCAL_DEMO_STATE_DSN",content_endpoint:("blob." + $namespace + ".svc:9000"),content_access_key_environment:"LOCAL_DEMO_CONTENT_ACCESS_KEY",content_secret_key_environment:"LOCAL_DEMO_CONTENT_SECRET_KEY",content_bucket:$namespace} |
           tojson)
       else . end) |
     .kubernetes.secret_environment += (if .id == "model" then
@@ -118,9 +118,6 @@ def profile_resource($namespace; $profile):
   elif .id == "temporal-egress" then
     .dependencies = ["temporal","temporal-state"] |
     .kubernetes.network.allowed_egress = ["temporal-state"]
-  elif .id == "orchestration-egress" then
-    .dependencies = ["orchestration","state","telemetry","temporal"] |
-    .kubernetes.network.allowed_egress = ["state","telemetry","temporal"]
   else . end;
 
 def common($id; $kind; $owner; $profile; $body):
