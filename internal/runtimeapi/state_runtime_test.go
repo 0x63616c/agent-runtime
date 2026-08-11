@@ -1,8 +1,10 @@
 package runtimeapi_test
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -696,6 +698,88 @@ func TestStateRuntimeHTTPAndSDKExposeProviderNeutralUsageAndSafeModelFailure(t *
 	}
 }
 
+func TestStateRuntimeHTTPAndSDKExposeFinalizedModelOutputArtifact(t *testing.T) {
+	runtime, content, compiler, store, _ := newMemoryStateAuthority(t)
+	ctx := context.Background()
+	admin := runtimeapi.Identity{Tenant: "tenant-a", Principal: "admin", Admin: true}
+	alice := runtimeapi.Identity{Tenant: "tenant-a", Principal: "alice"}
+	agent, err := runtime.CreateAgent(ctx, admin, agentruntime.CreateAgentRequest{IdempotencyKey: "output-agent", Name: "assistant", ModelProfile: "balanced", Instructions: "safe"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	session, err := runtime.CreateSession(ctx, alice, agentruntime.CreateSessionRequest{IdempotencyKey: "output-session", AgentRevision: agent.RevisionID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	accepted, err := runtime.SendInput(ctx, alice, agentruntime.SendInputRequest{SessionID: session.ID, IdempotencyKey: "output-input", Parts: []agentruntime.ContentPart{{Kind: agentruntime.ContentText, Text: "persist model output"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tenant, _ := runtimecontent.ParseTenantID("tenant-a")
+	principal, _ := runtimecontent.ParsePrincipalID("alice")
+	workerScope := runtimestate.MutationScope{Tenant: tenant, Principal: principal, Authority: runtimestate.AuthorityRuntimeWorker}
+	state, err := store.LoadRuntimeState(ctx, workerScope)
+	if err != nil {
+		t.Fatal(err)
+	}
+	begin, err := compiler.CompileBeginInvocationAttempt(runtimestate.BeginInvocationAttemptCommand{Scope: workerScope, IdempotencyKey: "output-invocation", SessionID: session.ID, TurnID: accepted.Turn.ID, OperationID: "op_model_output_0001", ExpectedSessionVersion: state.Sessions[0].Version, ExpectedTurnVersion: state.Turns[0].Version})
+	if err != nil {
+		t.Fatal(err)
+	}
+	beginPlan, err := store.Apply(ctx, begin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	handoff, err := content.StageArtifact(ctx, tenant, "text/plain; charset=utf-8", []byte("durably normalized model output"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	registered, err := compiler.CompileRegisterArtifact(runtimestate.RegisterArtifactCommand{Scope: workerScope, IdempotencyKey: "output-artifact", SessionID: session.ID, TurnID: accepted.Turn.ID, Artifact: handoff})
+	if err != nil {
+		t.Fatal(err)
+	}
+	artifactPlan, err := store.Apply(ctx, registered)
+	if err != nil {
+		t.Fatal(err)
+	}
+	invocation := beginPlan.Result().Invocation
+	resultReference := artifactPlan.Result().Artifact.Reference
+	outcome, err := compiler.CompileRecordInvocationOutcome(runtimestate.RecordInvocationOutcomeCommand{Scope: workerScope, IdempotencyKey: "output-outcome", SessionID: session.ID, TurnID: accepted.Turn.ID, OperationID: invocation.OperationID, Ordinal: invocation.Ordinal, Fence: invocation.Fence, Outcome: runtimestate.InvocationSucceeded, Result: &resultReference, ExpectedSessionVersion: beginPlan.Result().Session.Version, ExpectedTurnVersion: beginPlan.Result().Turn.Version})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Apply(ctx, outcome); err != nil {
+		t.Fatal(err)
+	}
+	settle, err := compiler.CompileSettleTurn(runtimestate.SettleTurnCommand{Scope: workerScope, IdempotencyKey: "output-settle", SessionID: session.ID, TurnID: accepted.Turn.ID, ExpectedSessionVersion: beginPlan.Result().Session.Version, ExpectedTurnVersion: beginPlan.Result().Turn.Version, Outcome: runtimestate.TerminalOutcome{OperationID: invocation.OperationID, Ordinal: invocation.Ordinal, Fence: invocation.Fence, State: agentruntime.TurnSucceeded}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Apply(ctx, settle); err != nil {
+		t.Fatal(err)
+	}
+	handler, err := runtimeapi.NewHandler(runtimeapi.Config{Runtime: runtime, Authenticator: staticAuth{identities: map[string]runtimeapi.Identity{"alice-token-000000": alice}}, RequestIDs: &requestIDs{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(handler)
+	defer server.Close()
+	client := newStateRuntimeHTTPClient(t, server.URL, "alice-token-000000")
+	turn, err := client.InspectTurn(ctx, session.ID, accepted.Turn.ID)
+	if err != nil || turn.State != agentruntime.TurnSucceeded || turn.Output == nil || *turn.Output != (agentruntime.ArtifactReference{ID: artifactPlan.Result().Artifact.ArtifactID, MediaType: "text/plain; charset=utf-8", SizeBytes: int64(len("durably normalized model output")), SHA256: strings.TrimPrefix(artifactPlan.Result().Artifact.Reference.Digest, "sha256:")}) {
+		t.Fatalf("SDK finalized model output = %#v, %v", turn, err)
+	}
+	stream, err := client.OpenArtifact(ctx, turn.Output.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, readErr := io.ReadAll(stream.Body)
+	closeErr := stream.Body.Close()
+	if readErr != nil || closeErr != nil || string(body) != "durably normalized model output" {
+		t.Fatalf("SDK read finalized model output = %q read=%v close=%v", body, readErr, closeErr)
+	}
+}
+
 func TestStateRuntimeHTTPAndSDKInspectOwnerScopedToolLifecycle(t *testing.T) {
 	runtime, content, compiler, store, _ := newMemoryStateAuthority(t)
 	ctx := context.Background()
@@ -903,6 +987,14 @@ func (objects *stateRuntimeObjects) PutIfAbsent(_ context.Context, key string, v
 
 func (objects *stateRuntimeObjects) Get(_ context.Context, key string, _ int) ([]byte, error) {
 	return append([]byte(nil), objects.values[key]...), nil
+}
+
+func (objects *stateRuntimeObjects) Open(_ context.Context, key string, _ int) (io.ReadCloser, error) {
+	value, exists := objects.values[key]
+	if !exists {
+		return nil, fmt.Errorf("immutable object %q is unavailable", key)
+	}
+	return io.NopCloser(bytes.NewReader(value)), nil
 }
 
 type stateRuntimeIDs struct{ next uint64 }

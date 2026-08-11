@@ -370,7 +370,7 @@ func (runtime *StateRuntime) InspectTurn(ctx context.Context, identity Identity,
 	if err != nil {
 		return agentruntime.Turn{}, runtimeFailure("inspect Turn usage", err)
 	}
-	return publicTurnWithUsage(record, latestInvocationUsage(state, record)), nil
+	return publicTurnWithUsage(record, latestInvocationUsage(state, record), latestInvocationOutput(state, record)), nil
 }
 
 // InspectToolCalls returns bounded safe projections for one principal-owned Turn.
@@ -632,11 +632,11 @@ func publicPolicy(record runtimestate.PolicyRevisionRecord) agentruntime.Policy 
 }
 
 func publicTurn(record runtimestate.TurnRecord) agentruntime.Turn {
-	return publicTurnWithUsage(record, nil)
+	return publicTurnWithUsage(record, nil, nil)
 }
 
-func publicTurnWithUsage(record runtimestate.TurnRecord, usage *runtimestate.ModelUsage) agentruntime.Turn {
-	return agentruntime.Turn{ID: record.TurnID, InputID: record.InputID, Position: record.Position, State: record.State, StartedAt: record.StartedAt, CompletedAt: record.CompletedAt, Failure: record.Failure.Clone(), Usage: publicModelUsage(usage)}
+func publicTurnWithUsage(record runtimestate.TurnRecord, usage *runtimestate.ModelUsage, output *agentruntime.ArtifactReference) agentruntime.Turn {
+	return agentruntime.Turn{ID: record.TurnID, InputID: record.InputID, Position: record.Position, State: record.State, StartedAt: record.StartedAt, CompletedAt: record.CompletedAt, Failure: record.Failure.Clone(), Usage: publicModelUsage(usage), Output: output}
 }
 
 func latestInvocationUsage(state runtimestate.RuntimeState, turn runtimestate.TurnRecord) *runtimestate.ModelUsage {
@@ -654,6 +654,32 @@ func latestInvocationUsage(state runtimestate.RuntimeState, turn runtimestate.Tu
 		return nil
 	}
 	return latest.Usage.Clone()
+}
+
+// latestInvocationOutput projects only the exact owner-bound Artifact that
+// finalized the latest successful model invocation. References that are not a
+// registered artifact are intentionally invisible on the public surface.
+func latestInvocationOutput(state runtimestate.RuntimeState, turn runtimestate.TurnRecord) *agentruntime.ArtifactReference {
+	var latest *runtimestate.InvocationRecord
+	for index := range state.Invocations {
+		invocation := &state.Invocations[index]
+		if invocation.Tenant != turn.Tenant || invocation.Principal != turn.Principal || invocation.SessionID != turn.SessionID || invocation.TurnID != turn.TurnID || invocation.State != runtimestate.InvocationSucceeded || invocation.Result == nil {
+			continue
+		}
+		if latest == nil || invocation.Ordinal > latest.Ordinal || invocation.Ordinal == latest.Ordinal && invocation.Fence > latest.Fence {
+			latest = invocation
+		}
+	}
+	if latest == nil {
+		return nil
+	}
+	for _, artifact := range state.Artifacts {
+		if artifact.Tenant == turn.Tenant && artifact.Principal == turn.Principal && artifact.SessionID == turn.SessionID && artifact.TurnID == turn.TurnID && artifact.Reference == *latest.Result {
+			result := publicArtifact(artifact)
+			return &result
+		}
+	}
+	return nil
 }
 
 func publicModelUsage(usage *runtimestate.ModelUsage) *agentruntime.ModelUsage {

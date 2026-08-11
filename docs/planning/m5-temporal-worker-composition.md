@@ -48,16 +48,26 @@ credential, so the latter two cases are classification guards rather than a
 claim that it executes those effects. The separate `internal/runtimemodel`
 worker owns only invocation-intent Outbox records: a new record calls its
 provider-neutral adapter once, while an expired claim calls `Reconcile` with
-the same operation ID and never blindly invokes again. It stages a successful
-normalized response as immutable content, records the exact fenced outcome,
-settles the Turn, then acknowledges the intent record. An uncertain outcome
+the same operation ID and never blindly invokes again. The concrete
+`HTTPAdapter` consumes only a bounded `application/x-ndjson` normalized stream:
+ordered nonempty `delta` records followed by exactly one `completed` or safe
+`failed` record. It rejects an oversized line/output, missing terminal record,
+or post-terminal data. Its reconciliation request is a GET of the exact
+operation ID, never a second POST. A successful stream is finalized as an
+owner-readable immutable Artifact before the exact fenced outcome is recorded;
+public Turn inspection then carries only that Artifact metadata and optional
+provider-neutral usage, so a reconnecting caller uses the durable Artifact
+route rather than a live provider connection. An uncertain outcome
 records ordered `producer.gap` then `turn.failed` Events, making a missing
 producer segment visible to public cursor replay. Provider-neutral model usage
 retains optional input/output token counts, preserving unknown values as
-unknown rather than zero. Its deterministic fake
-adapter test proves both new invocation and recovered-claim paths; production
-provider configuration and normalized streaming are still outside this
-evidence. The capability-bound `internal/runtimetool` worker reads an exact
+unknown rather than zero. Unit tests prove bounded protocol parsing and the
+fresh/recovered fence behavior. `TestDurableModelNormalizedStreamFinalizesOwnerReadableOutput`
+runs the concrete HTTP adapter through disposable PostgreSQL/MinIO and then
+reads its finalized output through StateRuntime. The local HTTP server is a
+protocol fixture, not a supported production provider. No model role process
+is yet composed with an approved provider or credential source. The
+capability-bound `internal/runtimetool` worker reads an exact
 state-authorized immutable sandbox-control descriptor before it can call its
 adapter. A missing, corrupt, cancelled, or cross-scope descriptor never reaches
 the adapter; an expired tool-worker claim calls `Reconcile` by that same

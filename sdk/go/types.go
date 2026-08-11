@@ -450,6 +450,9 @@ type Turn struct {
 	CompletedAt *time.Time  `json:"completed_at,omitempty"`
 	Failure     *Failure    `json:"failure,omitempty"`
 	Usage       *ModelUsage `json:"usage,omitempty"`
+	// Output is the owner-readable immutable finalized model output, when the
+	// model invocation reached a durable successful terminal outcome.
+	Output *ArtifactReference `json:"output,omitempty"`
 }
 
 // Clone returns an independent Turn snapshot.
@@ -457,6 +460,10 @@ func (turn Turn) Clone() Turn {
 	clone := turn
 	clone.Failure = turn.Failure.Clone()
 	clone.Usage = turn.Usage.Clone()
+	if turn.Output != nil {
+		output := *turn.Output
+		clone.Output = &output
+	}
 	if turn.StartedAt != nil {
 		value := *turn.StartedAt
 		clone.StartedAt = &value

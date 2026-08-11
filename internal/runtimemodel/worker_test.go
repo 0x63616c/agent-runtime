@@ -92,6 +92,9 @@ func TestWorkerFinalizesNewAndRecoveredModelIntentsWithoutBlindReinvoke(t *testi
 			if test.wantState == runtimestate.InvocationSucceeded && (state.Invocations[0].Usage == nil || state.Invocations[0].Usage.InputTokens == nil || *state.Invocations[0].Usage.InputTokens != inputTokens || state.Invocations[0].Usage.OutputTokens != nil) {
 				t.Fatalf("model usage = %#v, want provider-neutral reported input and unknown output", state.Invocations[0].Usage)
 			}
+			if test.wantState == runtimestate.InvocationSucceeded && (len(state.Artifacts) != 1 || state.Invocations[0].Result == nil || state.Artifacts[0].Reference != *state.Invocations[0].Result || state.Artifacts[0].SessionID != session || state.Artifacts[0].TurnID != turn) {
+				t.Fatalf("finalized model output = artifacts=%#v invocation=%#v, want one owner-bound immutable artifact", state.Artifacts, state.Invocations[0])
+			}
 			if record := invocationOutbox(t, ctx, store, tenant); record.State != runtimestate.OutboxPublished {
 				t.Fatalf("invocation outbox = %#v, want acknowledged after finalization", record)
 			}

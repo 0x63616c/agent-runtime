@@ -5,6 +5,9 @@ package runtimemodel_test
 import (
 	"context"
 	"fmt"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"testing"
 	"time"
@@ -190,6 +193,153 @@ func TestDurableModelProducerLossFinalizesGapAndReplays(t *testing.T) {
 	duplicate, err := apiRuntime.Events(ctx, identity, created.Result().Session.SessionID, beforeGap, 10)
 	if err != nil || len(duplicate.Events) != 2 || duplicate.Events[0] != replay.Events[0] || duplicate.Events[1] != replay.Events[1] {
 		t.Fatalf("duplicate durable replay = %#v, %v; want the same bounded events", duplicate, err)
+	}
+}
+
+// TestDurableModelNormalizedStreamFinalizesOwnerReadableOutput proves the
+// concrete provider-neutral HTTP protocol through disposable PostgreSQL and
+// MinIO. The local endpoint is a protocol fixture, not a claim of a supported
+// external provider; it verifies the adapter request, bounded normalization,
+// durable final Artifact, public turn projection, and replayable terminal
+// event after the worker has returned.
+func TestDurableModelNormalizedStreamFinalizesOwnerReadableOutput(t *testing.T) {
+	ctx := context.Background()
+	dsn := requiredModelEnvironment(t, "AR_RUNTIME_API_POSTGRES_DSN")
+	endpoint := requiredModelEnvironment(t, "AR_RUNTIME_API_MINIO_ENDPOINT")
+	access := requiredModelEnvironment(t, "AR_RUNTIME_API_MINIO_ACCESS_KEY")
+	secret := requiredModelEnvironment(t, "AR_RUNTIME_API_MINIO_SECRET_KEY")
+	bucket := requiredModelEnvironment(t, "AR_RUNTIME_API_MINIO_BUCKET")
+	providerCalls := 0
+	provider := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		providerCalls++
+		if request.Method != http.MethodPost || request.URL.Path != "/v1/invocations/op_model_stream_0001" || request.Header.Get("Authorization") != "Bearer local-integration-token" {
+			t.Fatalf("normalized provider request = method=%s path=%s authorization=%q", request.Method, request.URL.Path, request.Header.Get("Authorization"))
+		}
+		writer.Header().Set("Content-Type", "application/x-ndjson")
+		fmt.Fprint(writer, "{\"type\":\"delta\",\"delta\":\"durable \"}\n{\"type\":\"delta\",\"delta\":\"normalized output\"}\n{\"type\":\"completed\",\"input_tokens\":7,\"output_tokens\":3}\n")
+	}))
+	defer provider.Close()
+	minioClient, err := minio.New(endpoint, &minio.Options{Creds: credentials.NewStaticV4(access, secret, ""), Secure: false})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := minioClient.MakeBucket(ctx, bucket, minio.MakeBucketOptions{}); err != nil && minio.ToErrorResponse(err).Code != "BucketAlreadyOwnedByYou" {
+		t.Fatal(err)
+	}
+	immutable, err := runtimecontent.NewMinIOImmutableClient(minioClient)
+	if err != nil {
+		t.Fatal(err)
+	}
+	objects, err := runtimecontent.NewS3ImmutableObjects(immutable, bucket)
+	if err != nil {
+		t.Fatal(err)
+	}
+	content, err := runtimecontent.New("durable-model-normalized-stream", objects)
+	if err != nil {
+		t.Fatal(err)
+	}
+	clockSource, err := clock.NewFake(time.Date(2026, 8, 11, 9, 0, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatal(err)
+	}
+	pool, err := pgxpool.New(ctx, dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	store, err := runtimepostgres.NewRuntimeStateStore(pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	compiler, err := runtimestate.NewCompiler(content)
+	if err != nil {
+		t.Fatal(err)
+	}
+	planner, err := runtimestate.NewRuntimeStatePlanner(clockSource, &durableModelIDs{next: 1000})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tenant, _ := runtimecontent.ParseTenantID("durable-model-normalized-stream")
+	principal, _ := runtimecontent.ParsePrincipalID("alice")
+	adminScope := runtimestate.MutationScope{Tenant: tenant, Authority: runtimestate.AuthorityTenantAdministrator}
+	ownerScope := runtimestate.MutationScope{Tenant: tenant, Principal: principal, Authority: runtimestate.AuthoritySessionOwner}
+	workerScope := runtimestate.MutationScope{Tenant: tenant, Principal: principal, Authority: runtimestate.AuthorityRuntimeWorker}
+	apply := func(mutation runtimestate.CompiledMutation) runtimestate.TransitionPlan {
+		t.Helper()
+		state, loadErr := store.LoadRuntimeState(ctx, mutation.ReceiptBinding().Scope)
+		if loadErr != nil {
+			t.Fatal(loadErr)
+		}
+		plan, planErr := planner.Plan(ctx, state, mutation)
+		if planErr != nil {
+			t.Fatal(planErr)
+		}
+		if persistErr := store.PersistTransitionPlan(ctx, plan); persistErr != nil {
+			t.Fatal(persistErr)
+		}
+		return plan
+	}
+	must := func(mutation runtimestate.CompiledMutation, compileErr error) runtimestate.CompiledMutation {
+		t.Helper()
+		if compileErr != nil {
+			t.Fatal(compileErr)
+		}
+		return mutation
+	}
+	body, err := content.StageAgentSpecificationBody(ctx, tenant, runtimecontent.AgentSpecificationBody{Name: "durable-model-stream", ModelProfile: "balanced", Instructions: "normalize one stream"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	registered := apply(must(compiler.CompileRegisterAgentRevision(runtimestate.RegisterAgentRevisionCommand{Scope: adminScope, IdempotencyKey: "stream-register", Specification: body})))
+	created := apply(must(compiler.CompileCreateSession(runtimestate.CreateSessionCommand{Scope: ownerScope, IdempotencyKey: "stream-session", RevisionID: registered.Result().Revision.RevisionID})))
+	input, err := content.StageInputEnvelope(ctx, tenant, []agentruntime.ContentPart{{Kind: agentruntime.ContentText, Text: "receive normalized output"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	accepted := apply(must(compiler.CompileAdmitInput(runtimestate.AdmitInputCommand{Scope: ownerScope, IdempotencyKey: "stream-input", SessionID: created.Result().Session.SessionID, Input: input})))
+	intent := apply(must(compiler.CompileBeginInvocationAttempt(runtimestate.BeginInvocationAttemptCommand{Scope: workerScope, IdempotencyKey: "stream-intent", SessionID: created.Result().Session.SessionID, TurnID: accepted.Result().Turn.TurnID, OperationID: "op_model_stream_0001", ExpectedSessionVersion: accepted.Result().Session.Version, ExpectedTurnVersion: accepted.Result().Turn.Version})))
+	adapter, err := runtimemodel.NewHTTPAdapter(runtimemodel.HTTPAdapterConfig{Endpoint: provider.URL, Token: "local-integration-token", HTTPClient: provider.Client()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	worker, err := runtimemodel.NewWorker(runtimemodel.WorkerConfig{Store: store, Tenants: store, Compiler: compiler, Planner: planner, Clock: clockSource, Content: content, Adapter: adapter, Claimer: "durable-stream-worker"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := worker.ScanOnce(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if providerCalls != 1 {
+		t.Fatalf("normalized provider calls = %d, want one", providerCalls)
+	}
+	state, err := store.LoadRuntimeState(ctx, workerScope)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(state.Invocations) != 1 || state.Invocations[0].OperationID != intent.Result().Invocation.OperationID || state.Invocations[0].State != runtimestate.InvocationSucceeded || state.Invocations[0].Result == nil || state.Invocations[0].Usage == nil || state.Invocations[0].Usage.OutputTokens == nil || *state.Invocations[0].Usage.OutputTokens != 3 || len(state.Artifacts) != 1 || state.Artifacts[0].Reference != *state.Invocations[0].Result || len(state.Turns) != 1 || state.Turns[0].State != agentruntime.TurnSucceeded {
+		t.Fatalf("durable normalized model state = invocations=%#v artifacts=%#v turns=%#v", state.Invocations, state.Artifacts, state.Turns)
+	}
+	runtime, err := runtimeapi.NewStateRuntime(runtimeapi.StateRuntimeConfig{Content: content, Compiler: compiler, Planner: planner, Store: store, ModelProfiles: []string{"balanced"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	identity := runtimeapi.Identity{Tenant: string(tenant), Principal: string(principal)}
+	turn, err := runtime.InspectTurn(ctx, identity, created.Result().Session.SessionID, accepted.Result().Turn.TurnID)
+	if err != nil || turn.Output == nil || turn.Output.ID != state.Artifacts[0].ArtifactID || turn.Usage == nil || turn.Usage.InputTokens == nil || *turn.Usage.InputTokens != 7 {
+		t.Fatalf("public finalized model turn = %#v, %v", turn, err)
+	}
+	stream, err := runtime.OpenArtifact(ctx, identity, turn.Output.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	output, readErr := io.ReadAll(stream.Body)
+	closeErr := stream.Body.Close()
+	if readErr != nil || closeErr != nil || string(output) != "durable normalized output" {
+		t.Fatalf("durable normalized model output = %q read=%v close=%v", output, readErr, closeErr)
+	}
+	events, err := runtime.Events(ctx, identity, created.Result().Session.SessionID, "", 20)
+	if err != nil || len(events.Events) < 3 || events.Events[len(events.Events)-1].Kind != agentruntime.EventTurnSucceeded {
+		t.Fatalf("durable normalized model events = %#v, %v", events, err)
 	}
 }
 

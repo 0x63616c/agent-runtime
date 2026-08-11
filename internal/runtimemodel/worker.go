@@ -167,14 +167,26 @@ func (worker *Worker) finalize(ctx context.Context, record runtimestate.OutboxRe
 		state = runtimestate.InvocationUncertain
 	}
 	if len(response.Output) > 0 && failure == nil && !response.Uncertain {
-		handoff, err := worker.content.StageConversationEntry(ctx, record.Tenant, response.Output)
+		// A normalized provider stream is only public after its bounded final
+		// bytes have been committed as an owner-authorized Artifact. This keeps
+		// reconnecting callers on the durable StateRuntime/HTTP/SDK path rather
+		// than on a live provider connection.
+		handoff, err := worker.content.StageArtifact(ctx, record.Tenant, "text/plain; charset=utf-8", response.Output)
 		if err == nil {
-			commitment, validateErr := worker.content.ValidateConversationEntryHandoff(handoff)
-			if validateErr == nil {
-				value := commitment.Reference
-				result, state = &value, runtimestate.InvocationSucceeded
+			artifact, compileErr := worker.compiler.CompileRegisterArtifact(runtimestate.RegisterArtifactCommand{
+				Scope:          runtimestate.MutationScope{Tenant: record.Tenant, Principal: record.Principal, Authority: runtimestate.AuthorityRuntimeWorker},
+				IdempotencyKey: fmt.Sprintf("model-output-%s-%d", record.OperationID, invocation.Fence),
+				SessionID:      record.SessionID,
+				TurnID:         record.TurnID,
+				Artifact:       handoff,
+			})
+			if compileErr != nil {
+				err = compileErr
+			} else if artifactPlan, persistErr := worker.persist(ctx, artifact); persistErr != nil {
+				err = persistErr
 			} else {
-				err = validateErr
+				value := artifactPlan.Result().Artifact.Reference
+				result, state = &value, runtimestate.InvocationSucceeded
 			}
 		}
 		if err != nil {

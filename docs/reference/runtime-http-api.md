@@ -26,7 +26,12 @@ An inspected terminal Turn can additionally include provider-neutral token
 usage from its latest recorded model invocation. Omitted usage fields mean the
 provider did not report them; they never mean zero. Provider error payloads and
 provider-specific diagnostics remain private, while the public Turn exposes
-only the runtime-owned safe Failure contract.
+only the runtime-owned safe Failure contract. A successful normalized model
+stream is finalized before the Turn reaches `succeeded`; the Turn's optional
+`output` field is an owner-readable immutable Artifact reference. Reconnecting
+callers inspect the Turn and use the existing Artifact route, never a live
+provider stream. A missing `output` remains distinct from an empty response
+and from a provider failure.
 
 `GET /v1/idempotency` requires an `Idempotency-Key` header and returns only the
 caller-scoped retained receipt status. It never replays a command or exposes
