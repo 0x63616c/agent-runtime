@@ -641,6 +641,30 @@ type BeginToolExecutionCommand struct {
 // Owned returns a value-owned tool execution intent command.
 func (command BeginToolExecutionCommand) Owned() BeginToolExecutionCommand { return command }
 
+// RecordToolExecutionOutcomeCommand records one exact terminal observation for
+// a capability-bound external tool operation.
+type RecordToolExecutionOutcomeCommand struct {
+	Scope          MutationScope
+	IdempotencyKey string
+	SessionID      agentruntime.SessionID
+	TurnID         agentruntime.TurnID
+	ToolCallID     string
+	OperationID    OperationID
+	Outcome        ToolExecutionState
+	Result         *runtimecontent.Reference
+	Failure        *agentruntime.Failure
+}
+
+// Owned returns a value-owned tool execution outcome command.
+func (command RecordToolExecutionOutcomeCommand) Owned() RecordToolExecutionOutcomeCommand {
+	command.Failure = command.Failure.Clone()
+	if command.Result != nil {
+		value := *command.Result
+		command.Result = &value
+	}
+	return command
+}
+
 // Owned returns a value-owned command. ContentHandoff is opaque and immutable to callers.
 func (command AdmitInputCommand) Owned() AdmitInputCommand {
 	return command

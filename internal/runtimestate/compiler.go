@@ -29,6 +29,7 @@ const (
 	CommandDecideApproval         CommandKind = "decide_approval"
 	CommandConsumeCapabilityGrant CommandKind = "consume_capability_grant"
 	CommandBeginToolExecution     CommandKind = "begin_tool_execution"
+	CommandRecordToolOutcome      CommandKind = "record_tool_execution_outcome"
 	CommandBeginInvocation        CommandKind = "begin_invocation_attempt"
 	CommandRecordOutcome          CommandKind = "record_invocation_outcome"
 	CommandSettleTurn             CommandKind = "settle_turn"
@@ -210,6 +211,16 @@ func (compiler *Compiler) CompileBeginToolExecution(command BeginToolExecutionCo
 		return CompiledMutation{}, errors.New("compile tool execution intent: invalid command")
 	}
 	return compiler.compile(CommandBeginToolExecution, command.Scope, command.IdempotencyKey, command, command)
+}
+
+// CompileRecordToolExecutionOutcome validates a terminal tool observation.
+func (compiler *Compiler) CompileRecordToolExecutionOutcome(command RecordToolExecutionOutcomeCommand) (CompiledMutation, error) {
+	command = command.Owned()
+	valid := command.Outcome == ToolExecutionSucceeded && command.Result != nil && command.Failure == nil && validReference(*command.Result) || (command.Outcome == ToolExecutionFailed || command.Outcome == ToolExecutionUncertain) && command.Result == nil && validFailure(command.Failure)
+	if err := validateWorkerCommand(command.Scope, command.SessionID, command.TurnID, command.OperationID); err != nil || !validOpaque(command.ToolCallID, 128) || !valid {
+		return CompiledMutation{}, errors.New("compile tool execution outcome: invalid command")
+	}
+	return compiler.compile(CommandRecordToolOutcome, command.Scope, command.IdempotencyKey, command, command)
 }
 
 // CompileBeginInvocationAttempt validates a fenced runtime-worker intent command.

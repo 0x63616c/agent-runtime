@@ -309,6 +309,8 @@ func (planner *RuntimeStatePlanner) Plan(ctx context.Context, prior RuntimeState
 		result, effects, err = planner.consumeCapabilityGrant(&state, mutation.mutation.receipt, command, now)
 	case BeginToolExecutionCommand:
 		result, effects, err = planner.beginToolExecution(&state, mutation.mutation.receipt, command, now)
+	case RecordToolExecutionOutcomeCommand:
+		result, effects, err = planner.recordToolExecutionOutcome(&state, mutation.mutation.receipt, command, now)
 	case BeginInvocationAttemptCommand:
 		result, effects, err = planner.begin(&state, mutation.mutation.receipt, command, now)
 	case RecordInvocationOutcomeCommand:
@@ -696,6 +698,23 @@ func (planner *RuntimeStatePlanner) beginToolExecution(state *RuntimeState, bind
 		state.Outbox = append(state.Outbox, outbox)
 		effects.Outbox = append(effects.Outbox, outbox)
 		return PlanResult{}, effects, nil
+	}
+	return PlanResult{}, EffectSet{}, ErrNotFoundOrDenied
+}
+
+func (planner *RuntimeStatePlanner) recordToolExecutionOutcome(state *RuntimeState, binding ReceiptBinding, c RecordToolExecutionOutcomeCommand, now time.Time) (PlanResult, EffectSet, error) {
+	for index := range state.ToolExecutions {
+		record := state.ToolExecutions[index]
+		if record.OperationID != c.OperationID || record.ToolCallID != c.ToolCallID || record.Tenant != binding.Scope.Tenant || record.Principal != binding.Scope.Principal || record.SessionID != c.SessionID || record.TurnID != c.TurnID {
+			continue
+		}
+		if record.State != ToolExecutionIntent {
+			return PlanResult{}, EffectSet{}, ErrConflict
+		}
+		record.State, record.Result, record.Failure, record.UpdatedAt = c.Outcome, c.Result, c.Failure.Clone(), now
+		state.ToolExecutions[index] = record
+		effects, err := planner.auditOnly(state, binding, "tool.execution_"+string(c.Outcome), c.SessionID, c.TurnID, now)
+		return PlanResult{}, effects, err
 	}
 	return PlanResult{}, EffectSet{}, ErrNotFoundOrDenied
 }
