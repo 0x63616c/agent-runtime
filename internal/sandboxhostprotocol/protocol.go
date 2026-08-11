@@ -171,6 +171,33 @@ func VerifyEnvelope(wire []byte, hostID string, generation uint64, now time.Time
 	return envelope, nil
 }
 
+// ValidateAuthenticatedEnvelopeWire proves that a downstream private hop was
+// given the same canonical signed envelope which its caller already verified.
+// It deliberately does not re-verify the signature (the caller owns trust
+// keys); it prevents a verified envelope object from being rebound to another
+// wire before a host-specific data plane consumes it.
+func ValidateAuthenticatedEnvelopeWire(wire []byte, expected Envelope) error {
+	if len(wire) == 0 || len(wire) > maxWireBytes || !validEnvelope(expected) {
+		return errors.New("validate authenticated host envelope: refused")
+	}
+	decoder := json.NewDecoder(bytes.NewReader(wire))
+	decoder.DisallowUnknownFields()
+	var observed Envelope
+	if err := decoder.Decode(&observed); err != nil {
+		return errors.New("validate authenticated host envelope: refused")
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); err != io.EOF {
+		return errors.New("validate authenticated host envelope: refused")
+	}
+	canonical, err := encodeSignedEnvelope(observed)
+	expectedWire, expectedErr := encodeSignedEnvelope(expected)
+	if err != nil || expectedErr != nil || !bytes.Equal(canonical, wire) || !bytes.Equal(expectedWire, wire) {
+		return errors.New("validate authenticated host envelope: refused")
+	}
+	return nil
+}
+
 // SignResult returns exact canonical host-signed result bytes.
 func SignResult(result Result, privateKey ed25519.PrivateKey) ([]byte, error) {
 	result.Signature = ""

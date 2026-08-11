@@ -269,6 +269,51 @@ func (host *LinuxJailerHost) DispatchAuthenticatedProxy(ctx context.Context, env
 	return channel.ProxyAuthenticated(ctx, envelope, authenticatedEnvelope, session, authority.now(), authority.resolve(), authority.dial())
 }
 
+// DispatchAuthenticatedTransfer is the future profile-gated bridge from an
+// exact authenticated host envelope into a descriptor-rooted transfer
+// authority. It has no host-share or raw-byte API and stays unavailable until
+// a protected guest profile has the exact evidence to consume it.
+func (host *LinuxJailerHost) DispatchAuthenticatedTransfer(ctx context.Context, envelope sandboxhostprotocol.Envelope, authenticatedEnvelope []byte, authority *TransferExecutionAuthority, emit TransferReceiptEmitter) (TransferReceipt, error) {
+	if err := contextError(ctx); err != nil {
+		return TransferReceipt{}, err
+	}
+	if host == nil || authority == nil || emit == nil || len(authenticatedEnvelope) == 0 || envelope.OperationKind != GuestTransferOperationKind || envelope.HostID == "" || envelope.AssignmentID == "" || envelope.FencingToken == 0 || envelope.CapabilityDigest == "" {
+		return TransferReceipt{}, fmt.Errorf("%w: authenticated fenced transfer command is required", ErrCapabilityUnavailable)
+	}
+	if err := sandboxhostprotocol.ValidateAuthenticatedEnvelopeWire(authenticatedEnvelope, envelope); err != nil {
+		return TransferReceipt{}, fmt.Errorf("%w: exact authenticated transfer envelope is required", ErrCapabilityUnavailable)
+	}
+	host.mu.Lock()
+	launched, cleaning, plan := host.launched, host.cleaning || host.cleaned, cloneLinuxJailerPlan(host.plan)
+	host.mu.Unlock()
+	if !launched || cleaning || !validCompiledPlan(plan) || envelope.SandboxID != plan.VMID() || sandbox.Digest(envelope.CapabilityDigest) != plan.Capabilities().Digest || firecrackerProfilesUnavailable(plan.Capabilities()) {
+		return TransferReceipt{}, fmt.Errorf("%w: certified descriptor-rooted transfer profile is unavailable", ErrCapabilityUnavailable)
+	}
+	return authority.Execute(ctx, envelope, emit)
+}
+
+// DispatchAuthenticatedSnapshotRestore is the profile-gated private resource
+// restore bridge. It can move only a verified store reader into its fixed sink
+// and returns only a durable snapshot identity receipt.
+func (host *LinuxJailerHost) DispatchAuthenticatedSnapshotRestore(ctx context.Context, envelope sandboxhostprotocol.Envelope, authenticatedEnvelope []byte, authority *SnapshotRestoreExecutionAuthority, emit TransferReceiptEmitter) (TransferReceipt, error) {
+	if err := contextError(ctx); err != nil {
+		return TransferReceipt{}, err
+	}
+	if host == nil || authority == nil || emit == nil || len(authenticatedEnvelope) == 0 || envelope.OperationKind != GuestSnapshotRestoreOperationKind || envelope.HostID == "" || envelope.AssignmentID == "" || envelope.FencingToken == 0 || envelope.CapabilityDigest == "" {
+		return TransferReceipt{}, fmt.Errorf("%w: authenticated fenced snapshot restore is required", ErrCapabilityUnavailable)
+	}
+	if err := sandboxhostprotocol.ValidateAuthenticatedEnvelopeWire(authenticatedEnvelope, envelope); err != nil {
+		return TransferReceipt{}, fmt.Errorf("%w: exact authenticated snapshot restore envelope is required", ErrCapabilityUnavailable)
+	}
+	host.mu.Lock()
+	launched, cleaning, plan := host.launched, host.cleaning || host.cleaned, cloneLinuxJailerPlan(host.plan)
+	host.mu.Unlock()
+	if !launched || cleaning || !validCompiledPlan(plan) || envelope.SandboxID != plan.VMID() || sandbox.Digest(envelope.CapabilityDigest) != plan.Capabilities().Digest || firecrackerProfilesUnavailable(plan.Capabilities()) {
+		return TransferReceipt{}, fmt.Errorf("%w: certified snapshot restore profile is unavailable", ErrCapabilityUnavailable)
+	}
+	return authority.Execute(ctx, envelope, emit)
+}
+
 // CancelDispatch forwards a lease-fenced cancellation only to the exact
 // running guest selected by the immutable compiled plan. It is intentionally
 // unavailable until a future certified guest profile composes a cancellation

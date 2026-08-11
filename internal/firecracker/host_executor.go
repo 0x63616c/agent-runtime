@@ -14,9 +14,30 @@ import (
 // durable started/uncertain journal remain owned by sandboxhostprocess; this
 // adapter receives only a verified fenced Envelope.
 type HostProcessExecutor struct {
-	Host    *LinuxJailerHost
-	Secrets *SecretExecutionAuthority
-	Egress  *ProxyExecutionAuthority
+	Host     *LinuxJailerHost
+	Secrets  *SecretExecutionAuthority
+	Egress   *ProxyExecutionAuthority
+	Transfer *TransferExecutionAuthority
+	Restore  *SnapshotRestoreExecutionAuthority
+}
+
+// ExecuteAuthenticatedTransfer is the private control-to-host data-plane door.
+// It accepts only the original authenticated envelope, returns no bytes, and
+// remains profile-gated until protected guest evidence exists.
+func (executor HostProcessExecutor) ExecuteAuthenticatedTransfer(ctx context.Context, envelope sandboxhostprotocol.Envelope, authenticatedEnvelope []byte, emit TransferReceiptEmitter) (TransferReceipt, error) {
+	if executor.Host == nil || executor.Transfer == nil || emit == nil {
+		return TransferReceipt{}, fmt.Errorf("execute authenticated Firecracker transfer: %w", ErrCapabilityUnavailable)
+	}
+	return executor.Host.DispatchAuthenticatedTransfer(ctx, envelope, authenticatedEnvelope, executor.Transfer, emit)
+}
+
+// ExecuteAuthenticatedSnapshotRestore is the corresponding private resource
+// restore door. The store/sink remain fixed at construction and profile-gated.
+func (executor HostProcessExecutor) ExecuteAuthenticatedSnapshotRestore(ctx context.Context, envelope sandboxhostprotocol.Envelope, authenticatedEnvelope []byte, emit TransferReceiptEmitter) (TransferReceipt, error) {
+	if executor.Host == nil || executor.Restore == nil || emit == nil {
+		return TransferReceipt{}, fmt.Errorf("execute authenticated Firecracker snapshot restore: %w", ErrCapabilityUnavailable)
+	}
+	return executor.Host.DispatchAuthenticatedSnapshotRestore(ctx, envelope, authenticatedEnvelope, executor.Restore, emit)
 }
 
 // Execute hands an already-verified envelope to the sole Firecracker guest-dispatch gate.

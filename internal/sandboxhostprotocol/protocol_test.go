@@ -41,6 +41,29 @@ func TestEnvelopeCanonicalSignatureAndHostBinding(t *testing.T) {
 	}
 }
 
+func TestValidateAuthenticatedEnvelopeWireRefusesRebinding(t *testing.T) {
+	publicKey, privateKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 8, 10, 2, 0, 0, 0, time.UTC)
+	wire, err := SignEnvelope(testEnvelope(now), "control-key-01", privateKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	envelope, err := VerifyEnvelope(wire, "host_01", 7, now.Add(time.Second), map[string]ed25519.PublicKey{"control-key-01": publicKey})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := ValidateAuthenticatedEnvelopeWire(wire, envelope); err != nil {
+		t.Fatalf("ValidateAuthenticatedEnvelopeWire() = %v", err)
+	}
+	envelope.FencingToken++
+	if err := ValidateAuthenticatedEnvelopeWire(wire, envelope); err == nil {
+		t.Fatal("ValidateAuthenticatedEnvelopeWire() accepted a rebound fence")
+	}
+}
+
 func TestEnvelopeTrustPromotesNextKeyThenRefusesRetiredKey(t *testing.T) {
 	t.Parallel()
 
