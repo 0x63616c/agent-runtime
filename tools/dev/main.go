@@ -797,7 +797,7 @@ func up(ctx context.Context, stack, root, kubeconfig, actor string, scenario loc
 	if err := bootstrap(ctx, stack, root, kubeconfig, actor, output); err != nil {
 		return err
 	}
-	command := exec.CommandContext(ctx, "tilt", "up", "--context", "orbstack", "--namespace", profileNamespace(stack, "local"), "--port", fmt.Sprint(port), "--", "--stack="+stack)
+	command := exec.CommandContext(ctx, "tilt", localTiltUpArguments(stack, port, scenario)...)
 	command.Env = commandEnvironment(kubeconfig)
 	command.Dir = root
 	command.Stdout, command.Stderr = output, output
@@ -805,6 +805,10 @@ func up(ctx context.Context, stack, root, kubeconfig, actor string, scenario loc
 		return fmt.Errorf("start isolated local Tilt Stack %s: %w", stack, err)
 	}
 	return nil
+}
+
+func localTiltUpArguments(stack string, port int, scenario localFixtureScenario) []string {
+	return []string{"up", "--context", "orbstack", "--namespace", profileNamespace(stack, "local"), "--port", fmt.Sprint(port), "--", "--stack=" + stack, "--fixture-scenario=" + string(scenario)}
 }
 
 func reconcile(ctx context.Context, stack, root string, output io.Writer) error {

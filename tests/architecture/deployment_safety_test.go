@@ -202,6 +202,8 @@ var _ = Describe("M1 deployment safety boundaries", func() {
 			Expect(workflow).NotTo(ContainSubstring(forbidden))
 		}
 		Expect(read("Tiltfile")).To(ContainSubstring("config.define_string('ci-context'"))
+		Expect(read("Tiltfile")).To(ContainSubstring("config.define_string('fixture-scenario'"))
+		Expect(read("Tiltfile")).To(ContainSubstring("--fixture-scenario=' + fixture_scenario"))
 		Expect(read("Tiltfile")).To(ContainSubstring("config.define_string('ci-registry-host'"))
 		Expect(read("Tiltfile")).To(ContainSubstring("config.define_string('ci-registry-host-from-cluster'"))
 		Expect(read("Tiltfile")).To(ContainSubstring("default_registry(ci_registry_host, host_from_cluster=ci_registry_host_from_cluster)"))
