@@ -4,6 +4,7 @@ package runtimeapiprocess_test
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -66,6 +67,9 @@ func TestDurablePostgresMinIOAPIProcessSurvivesRestart(t *testing.T) {
 	if restored, err := admin.GetPolicy(context.Background(), policy.Name, policy.Revision); err != nil || !reflect.DeepEqual(restored, policy) {
 		t.Fatalf("read restarted Policy = %#v, %v; want %#v", restored, err, policy)
 	}
+	if _, err := alice.GetPolicy(context.Background(), policy.Name, policy.Revision); !isSafeDurablePolicyDenial(err) {
+		t.Fatalf("non-admin restarted Policy read error = %v, want non-enumerating not-found", err)
+	}
 	if view, err := alice.InspectSession(context.Background(), session.ID); err != nil || view.Session.ID != session.ID || view.Session.AgentID != session.AgentID || view.Session.AgentRevision != session.AgentRevision || view.Session.State != agentruntime.SessionOpen {
 		t.Fatalf("inspect restarted Session = %#v, %v; want retained open Session %#v", view.Session, err, session)
 	}
@@ -78,6 +82,11 @@ func TestDurablePostgresMinIOAPIProcessSurvivesRestart(t *testing.T) {
 	if turn, err := alice.CancelTurn(context.Background(), agentruntime.CancelTurnRequest{SessionID: session.ID, TurnID: accepted.Turn.ID, IdempotencyKey: "durable-cancel"}); err != nil || turn.State != agentruntime.TurnCancelled {
 		t.Fatalf("cancel restarted Turn = %#v, %v", turn, err)
 	}
+}
+
+func isSafeDurablePolicyDenial(err error) bool {
+	var runtimeError *agentruntime.Error
+	return errors.As(err, &runtimeError) && runtimeError.Failure.Code == agentruntime.FailureNotFound && !strings.Contains(err.Error(), "workspace-write") && !strings.Contains(err.Error(), "durable-alice-token")
 }
 
 func startDurableRuntimeProcess(t *testing.T, config runtimeapiprocess.Config, secrets map[string]string) (string, func()) {

@@ -21,4 +21,10 @@ are never edited in place.
 
 Before a public contract change, run `just check`, regenerate the OpenAPI and
 documentation indexes, add an explicit compatibility decision to release
-notes, and retain an external-consumer SDK check at release time.
+notes, and retain an external-consumer SDK check at release time. The checked
+release-consumer contract creates a temporary module with `GOWORK=off`, imports
+only `github.com/0x63616c/agent-runtime/sdk/go`, and typechecks the retained
+`RuntimeClient` plus additive `ArtifactStreamer` and `ToolCallInspector`
+capabilities. The same gate retains the OpenAPI vocabulary baseline. Until a
+version is published it checks the release candidate through a local module
+replacement; it does not claim that an immutable remote tag has been tested.

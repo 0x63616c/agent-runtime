@@ -3,6 +3,7 @@ package architecture_test
 import (
 	"go/parser"
 	"go/token"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"sort"
@@ -46,41 +47,16 @@ var _ = Describe("public Agent Runtime Go contract", func() {
 		Expect(imports).To(BeEmpty())
 	})
 
-	It("remains consumable from an independent module without repository workspace state", func() {
+	It("lets a release consumer compile the public SDK and OpenAPI-backed additive capabilities without workspace state", func() {
 		root, err := filepath.Abs(filepath.Join("..", ".."))
 		Expect(err).NotTo(HaveOccurred())
 		consumer := GinkgoT().TempDir()
 		writeConsumerFile(consumer, "go.mod", "module example.com/runtime-consumer\n\ngo 1.26\n\nrequire github.com/0x63616c/agent-runtime v0.0.0\n\nreplace github.com/0x63616c/agent-runtime => "+root+"\n")
-		writeConsumerFile(consumer, "main_test.go", `package consumer
-
-import (
-    "context"
-    "testing"
-
-    agentruntime "github.com/0x63616c/agent-runtime/sdk/go"
-)
-
-func TestPublicRuntimeContract(t *testing.T) {
-    sessionID, err := agentruntime.ParseSessionID("sess_1234567890ABCDEF")
-    if err != nil {
-        t.Fatalf("parse Session ID: %v", err)
-    }
-    request := agentruntime.SendInputRequest{
-        SessionID: sessionID,
-        IdempotencyKey: "consumer-input-1",
-        Parts: []agentruntime.ContentPart{{Kind: agentruntime.ContentText, Text: "hello"}},
-    }
-    if request.SessionID != sessionID {
-        t.Fatal("public request did not retain typed Session ID")
-    }
-    var client agentruntime.Client
-    _ = client
-    _ = context.Background()
-}
-`)
+		writeConsumerFile(consumer, "main_test.go", releaseConsumerSource())
 		for _, arguments := range [][]string{{"mod", "tidy"}, {"test", "."}} {
 			command := exec.Command("go", arguments...)
 			command.Dir = consumer
+			command.Env = append(os.Environ(), "GOWORK=off")
 			output, commandErr := command.CombinedOutput()
 			Expect(commandErr).NotTo(HaveOccurred(), string(output))
 		}
@@ -237,6 +213,64 @@ func TestCommonSessionConsumer(t *testing.T) {
     if err := runCommonSession(context.Background(), &fakeClient{}); err != nil {
         t.Fatal(err)
     }
+}
+`
+}
+
+func releaseConsumerSource() string {
+	return `package consumer
+
+import (
+    "context"
+    "io"
+    "testing"
+
+    agentruntime "github.com/0x63616c/agent-runtime/sdk/go"
+)
+
+var (
+    _ agentruntime.RuntimeClient = (*agentruntime.Client)(nil)
+    _ agentruntime.ArtifactStreamer = (*agentruntime.Client)(nil)
+    _ agentruntime.ToolCallInspector = (*agentruntime.Client)(nil)
+)
+
+func TestPublicRuntimeContract(t *testing.T) {
+    sessionID, err := agentruntime.ParseSessionID("sess_1234567890ABCDEF")
+    if err != nil {
+        t.Fatalf("parse Session ID: %v", err)
+    }
+    turnID, err := agentruntime.ParseTurnID("turn_1234567890ABCDEF")
+    if err != nil {
+        t.Fatalf("parse Turn ID: %v", err)
+    }
+    artifactID, err := agentruntime.ParseArtifactID("art_1234567890ABCDEF")
+    if err != nil {
+        t.Fatalf("parse Artifact ID: %v", err)
+    }
+    request := agentruntime.SendInputRequest{
+        SessionID: sessionID,
+        IdempotencyKey: "consumer-input-1",
+        Parts: []agentruntime.ContentPart{{Kind: agentruntime.ContentText, Text: "hello"}},
+    }
+    if request.SessionID != sessionID {
+        t.Fatal("public request did not retain typed Session ID")
+    }
+    inspectAdditiveContract(context.Background(), artifactID, sessionID, turnID)
+}
+
+func inspectAdditiveContract(ctx context.Context, artifactID agentruntime.ArtifactID, sessionID agentruntime.SessionID, turnID agentruntime.TurnID) {
+    var artifacts agentruntime.ArtifactStreamer
+    var tools agentruntime.ToolCallInspector
+    _ = artifacts
+    _ = tools
+    page := agentruntime.ToolCallPage{}
+    _ = page.Clone()
+    var stream agentruntime.ArtifactStream
+    _ = io.Reader(stream.Body)
+    _ = ctx
+    _ = artifactID
+    _ = sessionID
+    _ = turnID
 }
 `
 }

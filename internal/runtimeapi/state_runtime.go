@@ -187,6 +187,13 @@ func (runtime *StateRuntime) OpenArtifact(ctx context.Context, identity Identity
 	if err != nil {
 		return runtimecontent.ArtifactStream{}, err
 	}
+	// Authorize the exact principal-scoped metadata before constructing the
+	// streaming reader. The reader repeats the authorization before object I/O,
+	// but this first state boundary preserves the public not-found outcome even
+	// when the configured content adapter cannot stream.
+	if _, err := runtime.store.GetArtifact(ctx, runtimestate.ArtifactQuery{Scope: scope, ArtifactID: artifactID}); err != nil {
+		return runtimecontent.ArtifactStream{}, runtimeFailure("open Artifact", err)
+	}
 	reader, err := runtimecontent.NewArtifactReader(runtime.content, stateArtifactRepository{compiler: runtime.compiler, store: runtime.store})
 	if err != nil {
 		return runtimecontent.ArtifactStream{}, runtimeFailure("open Artifact", err)
@@ -522,9 +529,13 @@ type stateAgentBodyRepository struct {
 func (repository stateAgentBodyRepository) AuthorizeAgentSpecificationBodyRead(ctx context.Context, tenant runtimecontent.TenantID, agentID agentruntime.AgentID, revisionID agentruntime.AgentRevisionID) (runtimecontent.AgentSpecificationBodyRecord, error) {
 	authorization, err := repository.compiler.CompileAuthorizeAgentSpecificationBodyRead(runtimestate.AgentSpecificationBodyReadCommand{Scope: runtimestate.MutationScope{Tenant: tenant, Authority: runtimestate.AuthorityTenantAdministrator}, AgentID: agentID, RevisionID: revisionID})
 	if err != nil {
-		return runtimecontent.AgentSpecificationBodyRecord{}, err
+		return runtimecontent.AgentSpecificationBodyRecord{}, contentAuthorizationFailure(err)
 	}
-	return repository.store.AuthorizeAgentSpecificationBodyRead(ctx, authorization)
+	record, err := repository.store.AuthorizeAgentSpecificationBodyRead(ctx, authorization)
+	if err != nil {
+		return runtimecontent.AgentSpecificationBodyRecord{}, contentAuthorizationFailure(err)
+	}
+	return record, nil
 }
 
 type stateInputRepository struct {
@@ -540,9 +551,27 @@ type stateArtifactRepository struct {
 func (repository stateArtifactRepository) AuthorizeArtifactRead(ctx context.Context, tenant runtimecontent.TenantID, principal runtimecontent.PrincipalID, artifactID agentruntime.ArtifactID) (runtimecontent.ArtifactRecord, error) {
 	authorization, err := repository.compiler.CompileAuthorizeArtifactRead(runtimestate.ArtifactReadCommand{Scope: runtimestate.MutationScope{Tenant: tenant, Principal: principal, Authority: runtimestate.AuthoritySessionOwner}, ArtifactID: artifactID})
 	if err != nil {
-		return runtimecontent.ArtifactRecord{}, err
+		return runtimecontent.ArtifactRecord{}, contentAuthorizationFailure(err)
 	}
-	return repository.store.AuthorizeArtifactRead(ctx, authorization)
+	record, err := repository.store.AuthorizeArtifactRead(ctx, authorization)
+	if err != nil {
+		return runtimecontent.ArtifactRecord{}, contentAuthorizationFailure(err)
+	}
+	return record, nil
+}
+
+func contentAuthorizationFailure(err error) error {
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return err
+	}
+	switch {
+	case errors.Is(err, runtimestate.ErrUnavailable):
+		return runtimecontent.ErrUnavailable
+	case errors.Is(err, runtimestate.ErrIntegrity):
+		return runtimecontent.ErrIntegrity
+	default:
+		return runtimecontent.ErrNotFoundOrDenied
+	}
 }
 
 func (repository stateInputRepository) AuthorizeInputEnvelopeRead(ctx context.Context, tenant runtimecontent.TenantID, principal runtimecontent.PrincipalID, sessionID agentruntime.SessionID, inputID agentruntime.InputID) (runtimecontent.InputEnvelopeRecord, error) {

@@ -303,6 +303,223 @@ func TestStateRuntimeAdministratorsManageImmutablePolicyRevisions(t *testing.T) 
 	}
 }
 
+func TestStateRuntimeHTTPAndSDKAuthorizationMatrixKeepsAdminAndOwnerScopesNonEnumerating(t *testing.T) {
+	runtime, content, compiler, store, _ := newMemoryStateAuthority(t)
+	ctx := context.Background()
+	adminIdentity := runtimeapi.Identity{Tenant: "tenant-a", Principal: "admin", Admin: true}
+	aliceIdentity := runtimeapi.Identity{Tenant: "tenant-a", Principal: "alice"}
+	bobIdentity := runtimeapi.Identity{Tenant: "tenant-a", Principal: "bob"}
+	foreignAdminIdentity := runtimeapi.Identity{Tenant: "tenant-b", Principal: "admin", Admin: true}
+
+	agent, err := runtime.CreateAgent(ctx, adminIdentity, agentruntime.CreateAgentRequest{IdempotencyKey: "matrix-create-agent", Name: "matrix-agent", ModelProfile: "balanced", Instructions: "keep matrix-private instructions private"})
+	if err != nil {
+		t.Fatalf("create matrix Agent: %v", err)
+	}
+	if _, err := runtime.ReviseAgent(ctx, adminIdentity, agentruntime.ReviseAgentRequest{AgentID: agent.ID, IdempotencyKey: "matrix-revise-agent", ModelProfile: "balanced", Instructions: "revised private matrix instructions"}); err != nil {
+		t.Fatalf("revise matrix Agent: %v", err)
+	}
+	policy, err := runtime.CreatePolicy(ctx, adminIdentity, agentruntime.CreatePolicyRequest{IdempotencyKey: "matrix-create-policy", Name: "matrix-policy", Rules: []agentruntime.PolicyRule{{ToolName: "write", Decision: agentruntime.PolicyRequiresApproval}}})
+	if err != nil {
+		t.Fatalf("create matrix Policy: %v", err)
+	}
+	if _, err := runtime.RevisePolicy(ctx, adminIdentity, agentruntime.RevisePolicyRequest{IdempotencyKey: "matrix-revise-policy", Name: policy.Name, ExpectedRevision: policy.Revision, Rules: []agentruntime.PolicyRule{{ToolName: "write", Decision: agentruntime.PolicyDenied}}}); err != nil {
+		t.Fatalf("revise matrix Policy: %v", err)
+	}
+
+	session, err := runtime.CreateSession(ctx, aliceIdentity, agentruntime.CreateSessionRequest{IdempotencyKey: "matrix-create-session", AgentRevision: agent.RevisionID})
+	if err != nil {
+		t.Fatalf("create matrix Session: %v", err)
+	}
+	accepted, err := runtime.SendInput(ctx, aliceIdentity, agentruntime.SendInputRequest{SessionID: session.ID, IdempotencyKey: "matrix-send-input", Parts: []agentruntime.ContentPart{{Kind: agentruntime.ContentText, Text: "matrix-private input"}}})
+	if err != nil {
+		t.Fatalf("send matrix Input: %v", err)
+	}
+	tenant, _ := runtimecontent.ParseTenantID("tenant-a")
+	principal, _ := runtimecontent.ParsePrincipalID("alice")
+	workerScope := runtimestate.MutationScope{Tenant: tenant, Principal: principal, Authority: runtimestate.AuthorityRuntimeWorker}
+	handoff, err := content.StageArtifact(ctx, tenant, "text/plain", []byte("matrix-private artifact body"))
+	if err != nil {
+		t.Fatalf("stage matrix Artifact: %v", err)
+	}
+	artifactMutation, err := compiler.CompileRegisterArtifact(runtimestate.RegisterArtifactCommand{Scope: workerScope, IdempotencyKey: "matrix-register-artifact", SessionID: session.ID, TurnID: accepted.Turn.ID, Artifact: handoff})
+	if err != nil {
+		t.Fatalf("compile matrix Artifact: %v", err)
+	}
+	artifactPlan, err := store.Apply(ctx, artifactMutation)
+	if err != nil {
+		t.Fatalf("persist matrix Artifact: %v", err)
+	}
+	digest := "sha256:" + strings.Repeat("a", 64)
+	descriptor, err := content.StageToolActionDescriptor(ctx, tenant, []byte("matrix-private tool descriptor"))
+	if err != nil {
+		t.Fatalf("stage matrix Tool descriptor: %v", err)
+	}
+	intent, err := compiler.CompileRecordToolIntent(runtimestate.RecordToolIntentCommand{Scope: workerScope, IdempotencyKey: "matrix-tool-intent", SessionID: session.ID, TurnID: accepted.Turn.ID, ToolCallID: "tcall_1234567890ABCDEF", ToolName: "write", ActionDigest: digest, PolicyRevisionDigest: digest, Descriptor: descriptor})
+	if err != nil {
+		t.Fatalf("compile matrix Tool intent: %v", err)
+	}
+	if _, err := store.Apply(ctx, intent); err != nil {
+		t.Fatalf("persist matrix Tool intent: %v", err)
+	}
+	approvalMutation, err := compiler.CompileRequestApproval(runtimestate.RequestApprovalCommand{Scope: workerScope, IdempotencyKey: "matrix-approval-request", SessionID: session.ID, TurnID: accepted.Turn.ID, ToolCallID: "tcall_1234567890ABCDEF", ApprovalID: "appr_1234567890ABCDEF", ActionDigest: digest, PolicyRevisionDigest: digest, CapabilityDigest: digest, MaximumUses: 1, ExpiresAt: time.Date(2026, 8, 10, 13, 0, 0, 0, time.UTC)})
+	if err != nil {
+		t.Fatalf("compile matrix Approval: %v", err)
+	}
+	if _, err := store.Apply(ctx, approvalMutation); err != nil {
+		t.Fatalf("persist matrix Approval: %v", err)
+	}
+	approvalID, err := agentruntime.ParseApprovalID("appr_1234567890ABCDEF")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	handler, err := runtimeapi.NewHandler(runtimeapi.Config{Runtime: runtime, Authenticator: staticAuth{identities: map[string]runtimeapi.Identity{
+		"admin-token-000000":   adminIdentity,
+		"alice-token-000000":   aliceIdentity,
+		"bob-token-00000000":   bobIdentity,
+		"foreign-token-000000": foreignAdminIdentity,
+	}}, RequestIDs: &requestIDs{}})
+	if err != nil {
+		t.Fatalf("new authorization-matrix handler: %v", err)
+	}
+	server := httptest.NewServer(handler)
+	defer server.Close()
+	admin := newStateRuntimeHTTPClient(t, server.URL, "admin-token-000000")
+	alice := newStateRuntimeHTTPClient(t, server.URL, "alice-token-000000")
+	bob := newStateRuntimeHTTPClient(t, server.URL, "bob-token-00000000")
+	foreignAdmin := newStateRuntimeHTTPClient(t, server.URL, "foreign-token-000000")
+
+	httpAgent, err := admin.CreateAgent(ctx, agentruntime.CreateAgentRequest{IdempotencyKey: "matrix-http-create-agent", Name: "matrix-http-agent", ModelProfile: "balanced", Instructions: "administrator-owned HTTP catalog entry"})
+	if err != nil {
+		t.Fatalf("admin creates matrix HTTP Agent: %v", err)
+	}
+	if _, err := admin.ReviseAgent(ctx, agentruntime.ReviseAgentRequest{AgentID: httpAgent.ID, IdempotencyKey: "matrix-http-revise-agent", ModelProfile: "balanced", Instructions: "revised administrator-owned HTTP catalog entry"}); err != nil {
+		t.Fatalf("admin revises matrix HTTP Agent: %v", err)
+	}
+	httpPolicy, err := admin.CreatePolicy(ctx, agentruntime.CreatePolicyRequest{IdempotencyKey: "matrix-http-create-policy", Name: "matrix-http-policy", Rules: []agentruntime.PolicyRule{{ToolName: "write", Decision: agentruntime.PolicyRequiresApproval}}})
+	if err != nil {
+		t.Fatalf("admin creates matrix HTTP Policy: %v", err)
+	}
+	if _, err := admin.RevisePolicy(ctx, agentruntime.RevisePolicyRequest{IdempotencyKey: "matrix-http-revise-policy", Name: httpPolicy.Name, ExpectedRevision: httpPolicy.Revision, Rules: []agentruntime.PolicyRule{{ToolName: "write", Decision: agentruntime.PolicyDenied}}}); err != nil {
+		t.Fatalf("admin revises matrix HTTP Policy: %v", err)
+	}
+	if _, err := admin.GetAgentRevision(ctx, agent.ID, agent.RevisionID); err != nil {
+		t.Fatalf("admin reads matrix Agent: %v", err)
+	}
+	if _, err := admin.GetPolicy(ctx, policy.Name, policy.Revision); err != nil {
+		t.Fatalf("admin reads matrix Policy: %v", err)
+	}
+	if download, err := runtime.ReadArtifact(ctx, aliceIdentity, artifactPlan.Result().Artifact.ArtifactID); err != nil || string(download.Body) != "matrix-private artifact body" {
+		t.Fatalf("owner reads matrix Artifact through state authority = %#v, %v", download, err)
+	}
+	if _, err := alice.InspectApproval(ctx, approvalID); err != nil {
+		t.Fatalf("owner inspects matrix Approval: %v", err)
+	}
+	if _, err := alice.IdempotencyStatus(ctx, "matrix-send-input"); err != nil {
+		t.Fatalf("owner reads matrix receipt: %v", err)
+	}
+	if _, err := alice.InspectToolCalls(ctx, session.ID, accepted.Turn.ID); err != nil {
+		t.Fatalf("owner inspects matrix Tool lifecycle: %v", err)
+	}
+
+	type deniedRoute struct {
+		name string
+		call func(*agentruntime.Client) error
+	}
+	deniedForAnyTenant := []deniedRoute{
+		{name: "revise Agent", call: func(client *agentruntime.Client) error {
+			_, err := client.ReviseAgent(ctx, agentruntime.ReviseAgentRequest{AgentID: agent.ID, IdempotencyKey: "matrix-denied-revise-agent", ModelProfile: "balanced", Instructions: "attempted mutation"})
+			return err
+		}},
+		{name: "get Agent revision", call: func(client *agentruntime.Client) error {
+			_, err := client.GetAgentRevision(ctx, agent.ID, agent.RevisionID)
+			return err
+		}},
+		{name: "revise Policy", call: func(client *agentruntime.Client) error {
+			_, err := client.RevisePolicy(ctx, agentruntime.RevisePolicyRequest{IdempotencyKey: "matrix-denied-revise-policy", Name: policy.Name, ExpectedRevision: policy.Revision, Rules: []agentruntime.PolicyRule{{ToolName: "write", Decision: agentruntime.PolicyDenied}}})
+			return err
+		}},
+		{name: "get Policy", call: func(client *agentruntime.Client) error {
+			_, err := client.GetPolicy(ctx, policy.Name, policy.Revision)
+			return err
+		}},
+		{name: "read Artifact", call: func(client *agentruntime.Client) error {
+			_, err := client.ReadArtifact(ctx, artifactPlan.Result().Artifact.ArtifactID)
+			return err
+		}},
+		{name: "inspect Approval", call: func(client *agentruntime.Client) error { _, err := client.InspectApproval(ctx, approvalID); return err }},
+		{name: "decide Approval", call: func(client *agentruntime.Client) error {
+			_, err := client.DecideApproval(ctx, agentruntime.DecideApprovalRequest{ApprovalID: approvalID, Decision: agentruntime.ApprovalDenied, IdempotencyKey: "matrix-denied-decision"})
+			return err
+		}},
+		{name: "read receipt", call: func(client *agentruntime.Client) error {
+			_, err := client.IdempotencyStatus(ctx, "matrix-send-input")
+			return err
+		}},
+		{name: "send Input", call: func(client *agentruntime.Client) error {
+			_, err := client.SendInput(ctx, agentruntime.SendInputRequest{SessionID: session.ID, IdempotencyKey: "matrix-denied-input", Parts: []agentruntime.ContentPart{{Kind: agentruntime.ContentText, Text: "attempted cross-owner input"}}})
+			return err
+		}},
+		{name: "inspect Session", call: func(client *agentruntime.Client) error { _, err := client.InspectSession(ctx, session.ID); return err }},
+		{name: "inspect Turn", call: func(client *agentruntime.Client) error {
+			_, err := client.InspectTurn(ctx, session.ID, accepted.Turn.ID)
+			return err
+		}},
+		{name: "inspect Tool lifecycle", call: func(client *agentruntime.Client) error {
+			_, err := client.InspectToolCalls(ctx, session.ID, accepted.Turn.ID)
+			return err
+		}},
+		{name: "read Events", call: func(client *agentruntime.Client) error { _, err := client.Events(ctx, session.ID, "", 1); return err }},
+		{name: "cancel Turn", call: func(client *agentruntime.Client) error {
+			_, err := client.CancelTurn(ctx, agentruntime.CancelTurnRequest{SessionID: session.ID, TurnID: accepted.Turn.ID, IdempotencyKey: "matrix-denied-cancel"})
+			return err
+		}},
+		{name: "close Session", call: func(client *agentruntime.Client) error {
+			_, err := client.CloseSession(ctx, agentruntime.CloseSessionRequest{SessionID: session.ID, IdempotencyKey: "matrix-denied-close"})
+			return err
+		}},
+	}
+	for _, actor := range []struct {
+		name   string
+		client *agentruntime.Client
+	}{{name: "same-tenant non-admin", client: bob}, {name: "cross-tenant admin", client: foreignAdmin}} {
+		for _, route := range deniedForAnyTenant {
+			expected := agentruntime.FailureNotFound
+			if actor.name == "cross-tenant admin" && route.name == "revise Policy" {
+				// Policy revision uses an expected-version precondition. A tenant
+				// that cannot see the named policy receives the same safe conflict
+				// as a stale revision, never policy metadata.
+				expected = agentruntime.FailureConflict
+			}
+			assertNonEnumeratingMatrixDenial(t, actor.name+" "+route.name, expected, route.call(actor.client))
+		}
+	}
+	for _, route := range []deniedRoute{
+		{name: "create Agent", call: func(client *agentruntime.Client) error {
+			_, err := client.CreateAgent(ctx, agentruntime.CreateAgentRequest{IdempotencyKey: "matrix-denied-create-agent", Name: "forbidden-agent", ModelProfile: "balanced", Instructions: "attempted catalog mutation"})
+			return err
+		}},
+		{name: "create Policy", call: func(client *agentruntime.Client) error {
+			_, err := client.CreatePolicy(ctx, agentruntime.CreatePolicyRequest{IdempotencyKey: "matrix-denied-create-policy", Name: "forbidden-policy", Rules: []agentruntime.PolicyRule{{ToolName: "write", Decision: agentruntime.PolicyDenied}}})
+			return err
+		}},
+	} {
+		assertNonEnumeratingMatrixDenial(t, "same-tenant non-admin "+route.name, agentruntime.FailureNotFound, route.call(bob))
+	}
+}
+
+func assertNonEnumeratingMatrixDenial(t *testing.T, operation string, expected agentruntime.FailureCode, err error) {
+	t.Helper()
+	if !hasFailure(err, expected) {
+		t.Fatalf("%s error = %v, want safe non-enumerating %s", operation, err, expected)
+	}
+	for _, forbidden := range []string{"matrix-private", "alice-token-000000", "bob-token-00000000", "foreign-token-000000"} {
+		if strings.Contains(err.Error(), forbidden) {
+			t.Fatalf("%s error leaked %q: %v", operation, forbidden, err)
+		}
+	}
+}
+
 func TestStateRuntimeHTTPAndSDKKeepPolicyAdministrationSeparateFromSessionCallers(t *testing.T) {
 	runtime := newMemoryStateRuntime(t)
 	handler, err := runtimeapi.NewHandler(runtimeapi.Config{
