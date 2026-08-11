@@ -21,6 +21,10 @@ func runGuestCommandWithSecret(ctx context.Context, payload []byte, manager *san
 	if ctx == nil || manager == nil || sink == nil || verifier == nil {
 		return guestCommandResult{}, fmt.Errorf("run guest secret command: required lifecycle authority is absent")
 	}
+	containment, ok := verifier.(guestProcessContainmentVerifier)
+	if !ok {
+		return guestCommandResult{}, fmt.Errorf("run guest secret command: cgroup process containment verifier is required")
+	}
 	command, err := decodeGuestCommand(payload)
 	if err != nil {
 		return guestCommandResult{}, err
@@ -53,6 +57,12 @@ func runGuestCommandWithSecret(ctx context.Context, payload []byte, manager *san
 		_ = syscall.Kill(-process.Process.Pid, syscall.SIGKILL)
 		_ = process.Wait()
 		return guestCommandResult{}, fmt.Errorf("close inherited guest secret fd: %w", err)
+	}
+	if err := containment.VerifyProcessContained(ctx, process.Process.Pid); err != nil {
+		_ = syscall.Kill(-process.Process.Pid, syscall.SIGKILL)
+		_ = process.Wait()
+		abort = false // the descriptor may have reached the process; retain fail-closed ownership.
+		return guestCommandResult{}, fmt.Errorf("contain typed guest secret command: %w", err)
 	}
 	if err := sink.BindRunningProcess(ctx, request, process.Process.Pid); err != nil {
 		_ = syscall.Kill(-process.Process.Pid, syscall.SIGKILL)
