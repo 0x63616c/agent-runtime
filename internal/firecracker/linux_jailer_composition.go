@@ -18,7 +18,9 @@ type LinuxJailerHostConfig struct {
 	UnixDialer     unixSocketDialer
 }
 
-// NewLinuxJailerHost composes only the reviewed resource stager, Jailer starter, fixed private Unix REST port, and starter-owned serial observer; guest control remains deferred.
+// NewLinuxJailerHost composes the reviewed resource stager, Jailer starter,
+// fixed private Unix REST port, and fixed private guest-vsock transport. The
+// resulting host stays unavailable until profile-specific Linux/KVM evidence.
 // It validates immutable authority before construction but leaves all host I/O to the explicit SmokeHost lifecycle.
 func NewLinuxJailerHost(config LinuxJailerHostConfig) (*LinuxJailerHost, error) {
 	if !validCompiledPlan(config.Plan) || !validJailerExecutionAuthority(config.Authority, config.Plan) || !safeAbsolutePath(config.RootFSCopyPath) {
@@ -31,6 +33,10 @@ func NewLinuxJailerHost(config LinuxJailerHostConfig) (*LinuxJailerHost, error) 
 	if err != nil {
 		return nil, err
 	}
+	guest, err := NewUnixGuestControlChannel(config.UnixDialer)
+	if err != nil {
+		return nil, err
+	}
 	return &LinuxJailerHost{
 		PreflightState: config.PreflightState,
 		RootFSCopyPath: config.RootFSCopyPath,
@@ -38,6 +44,7 @@ func NewLinuxJailerHost(config LinuxJailerHostConfig) (*LinuxJailerHost, error) 
 		Authority:      cloneJailerExecutionAuthority(config.Authority),
 		Jailer:         LinuxJailerStarter{},
 		HTTP:           http,
+		Guest:          guest,
 		configured:     true,
 		configuredPlan: cloneLinuxJailerPlan(config.Plan),
 	}, nil
