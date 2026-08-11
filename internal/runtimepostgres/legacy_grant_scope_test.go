@@ -23,3 +23,16 @@ func TestUpgradeLegacyGrantScopesRejectsAmbiguousToolCallCorrelation(t *testing.
 		t.Fatal("ambiguous legacy grant correlation upgraded")
 	}
 }
+
+func TestUpgradeLegacyGrantScopesRejectsIncompleteIntentCorrelation(t *testing.T) {
+	tenant, _ := runtimecontent.ParseTenantID("legacy-scope-tenant")
+	principal, _ := runtimecontent.ParsePrincipalID("legacy-scope-owner")
+	now := time.Date(2026, 8, 11, 12, 0, 0, 0, time.UTC)
+	state := runtimestate.RuntimeState{
+		ToolIntents: []runtimestate.ToolIntentRecord{{Tenant: tenant, Principal: principal, ToolCallID: "tcall_1234567890ABCDEF"}},
+		Grants:      []runtimestate.CapabilityGrantRecord{{Tenant: tenant, Principal: principal, GrantID: "grant_1234567890ABCDE", ToolCallID: "tcall_1234567890ABCDEF", MaximumUses: 1, ExpiresAt: now.Add(time.Hour)}},
+	}
+	if _, err := upgradeLegacyGrantScopes(state); err == nil {
+		t.Fatal("incomplete legacy intent correlation upgraded")
+	}
+}

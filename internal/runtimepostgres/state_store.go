@@ -176,6 +176,25 @@ func upgradeLegacyGrantScopes(state runtimestate.RuntimeState) (runtimestate.Run
 		if match == nil {
 			return runtimestate.RuntimeState{}, errors.New("upgrade legacy grant scope: missing correlation")
 		}
+		if match.SessionID == "" || match.TurnID == "" {
+			return runtimestate.RuntimeState{}, errors.New("upgrade legacy grant scope: incomplete correlation")
+		}
+		sessionFound, turnFound := false, false
+		for _, session := range upgraded.Sessions {
+			if session.Tenant == grant.Tenant && session.Principal == grant.Principal && session.SessionID == match.SessionID {
+				sessionFound = true
+				break
+			}
+		}
+		for _, turn := range upgraded.Turns {
+			if turn.Tenant == grant.Tenant && turn.Principal == grant.Principal && turn.SessionID == match.SessionID && turn.TurnID == match.TurnID {
+				turnFound = true
+				break
+			}
+		}
+		if !sessionFound || !turnFound {
+			return runtimestate.RuntimeState{}, errors.New("upgrade legacy grant scope: dangling correlation")
+		}
 		grant.SessionID, grant.TurnID = match.SessionID, match.TurnID
 		upgraded.Grants[index] = grant
 	}
