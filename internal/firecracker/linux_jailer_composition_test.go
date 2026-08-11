@@ -8,7 +8,7 @@ import (
 	"testing"
 )
 
-func TestNewLinuxJailerHostComposesOnlyReviewedJailerAndUnixPorts(t *testing.T) {
+func TestNewLinuxJailerHostComposesReviewedJailerAndPrivateUnixPorts(t *testing.T) {
 	plan := mustCompile(t, validProfile())
 	authority := mustCompileJailerExecutionAuthority(t, plan)
 	dialer := &recordingUnixDialer{}
@@ -32,8 +32,9 @@ func TestNewLinuxJailerHostComposesOnlyReviewedJailerAndUnixPorts(t *testing.T) 
 	if !ok || http.socketPath != filepath.Join(expectedJailRoot(plan), "run", "firecracker.socket") || http.dialer != dialer {
 		t.Fatalf("HTTP = %#v, want fixed private Unix REST port", host.HTTP)
 	}
-	if host.Guest != nil {
-		t.Fatalf("Guest = %#v, want deferred control port", host.Guest)
+	guest, ok := host.Guest.(*UnixGuestControlChannel)
+	if !ok || guest.dial != dialer {
+		t.Fatalf("Guest = %#v, want fixed private Unix guest-control port", host.Guest)
 	}
 	authority.arguments[0] = "--mutated"
 	if got, want := host.Authority.Arguments()[0], "--id"; got != want {

@@ -140,7 +140,7 @@ func (host *LinuxJailerHost) ExecuteDispatch(ctx context.Context, envelope sandb
 	host.mu.Lock()
 	launched, cleaning, plan, guest := host.launched, host.cleaning || host.cleaned, cloneLinuxJailerPlan(host.plan), host.Guest
 	host.mu.Unlock()
-	if !launched || cleaning || !validCompiledPlan(plan) || sandbox.Digest(envelope.CapabilityDigest) != plan.Capabilities().Digest {
+	if !launched || cleaning || !validCompiledPlan(plan) || envelope.SandboxID != plan.VMID() || sandbox.Digest(envelope.CapabilityDigest) != plan.Capabilities().Digest {
 		return fmt.Errorf("%w: launch state and exact capability digest are required", ErrCapabilityUnavailable)
 	}
 	if firecrackerProfilesUnavailable(plan.Capabilities()) {
@@ -309,6 +309,13 @@ func (host *LinuxJailerHost) Launch(ctx context.Context, request LaunchRequest) 
 		return host.failLaunch(err)
 	}
 	if guest != nil {
+		if identity, ok := guest.(GuestIdentityBinder); ok {
+			if err := callWithContextFence(ctx, "bind guest identity", func(callCtx context.Context) error {
+				return identity.BindGuestIdentity(callCtx, request.Boot.VMID, stage.FixtureVersion)
+			}); err != nil {
+				return host.failLaunch(err)
+			}
+		}
 		if err := callWithContextFence(ctx, "bind guest control", func(callCtx context.Context) error {
 			return guest.Bind(callCtx, hostJailedPath(stage.JailRoot, stage.VSockUDSPath))
 		}); err != nil {

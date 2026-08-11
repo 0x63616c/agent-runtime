@@ -3,12 +3,16 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"errors"
 	"io"
 	"strings"
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/0x63616c/agent-runtime/internal/firecracker"
+	"github.com/0x63616c/agent-runtime/internal/sandboxhostprotocol"
 )
 
 func TestServeEmitsMarkerAndEchoesOneNonce(t *testing.T) {
@@ -124,6 +128,58 @@ func TestServeGuestControlRefusesAnOverlongPingFrame(t *testing.T) {
 		t.Fatal("serveGuestControl() error = nil, want oversized-frame refusal")
 	}
 	if got, want := connection.String(), "OK sandbox-001 fixture-v1\n"; got != want {
+		t.Fatalf("guest control response = %q, want %q", got, want)
+	}
+}
+
+func TestServeGuestControlReturnsBoundedUnavailableResultForAnAuthenticatedDispatchFrame(t *testing.T) {
+	var serial bytes.Buffer
+	envelope := sandboxhostprotocol.Envelope{
+		EnvelopeID:   "envelope-001",
+		DeliveryID:   "delivery-001",
+		FencingToken: 1,
+		SandboxID:    "sandbox-001",
+		Payload:      []byte("bounded"),
+	}
+	envelope.PayloadDigest = sandboxhostprotocol.Digest(envelope.Payload)
+	frame, err := firecracker.EncodeGuestDispatch(envelope)
+	if err != nil {
+		t.Fatalf("EncodeGuestDispatch() error = %v", err)
+	}
+	connection := &recordingGuestConnection{requests: strings.NewReader("CONNECT sandbox-001 fixture-v1\nDISPATCH " + base64.RawURLEncoding.EncodeToString(frame) + "\n")}
+	listener := &recordingGuestListener{connection: connection}
+
+	err = serveGuestControl(
+		"sandbox-001",
+		"fixture-v1",
+		&serial,
+		func() (guestControlListener, error) { return listener, nil },
+		func(context.Context) error { return nil },
+	)
+	if err != nil {
+		t.Fatalf("serveGuestControl() error = %v", err)
+	}
+	if got, want := connection.String(), "OK sandbox-001 fixture-v1\nRESULT UNAVAILABLE envelope-001\n"; got != want {
+		t.Fatalf("guest control response = %q, want %q", got, want)
+	}
+}
+
+func TestServeGuestControlAcknowledgesABoundedCancellationWithoutStartingWork(t *testing.T) {
+	var serial bytes.Buffer
+	connection := &recordingGuestConnection{requests: strings.NewReader("CONNECT sandbox-001 fixture-v1\nCANCEL envelope-001 7\n")}
+	listener := &recordingGuestListener{connection: connection}
+
+	err := serveGuestControl(
+		"sandbox-001",
+		"fixture-v1",
+		&serial,
+		func() (guestControlListener, error) { return listener, nil },
+		func(context.Context) error { return nil },
+	)
+	if err != nil {
+		t.Fatalf("serveGuestControl() error = %v", err)
+	}
+	if got, want := connection.String(), "OK sandbox-001 fixture-v1\nCANCELLED envelope-001\n"; got != want {
 		t.Fatalf("guest control response = %q, want %q", got, want)
 	}
 }

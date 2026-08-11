@@ -4,16 +4,25 @@ package main
 import (
 	"bufio"
 	"context"
+	"encoding/base64"
 	"fmt"
 	"io"
 	"os"
+	"strconv"
 	"strings"
 	"time"
+
+	"github.com/0x63616c/agent-runtime/internal/firecracker"
 )
 
 const protocolVersion = "agent-runtime-firecracker-guest/v1"
 
 const maximumControlLineBytes = 1024
+
+// A base64url encoded, bounded guest dispatch is larger than the canonical
+// JSON frame it carries. This distinct ceiling keeps the handshake small while
+// leaving command transport explicitly finite.
+const maximumDispatchLineBytes = 96 << 10
 
 const maximumShutdownDuration = 5 * time.Second
 
@@ -122,8 +131,8 @@ func serveGuestControl(vmID, fixtureVersion string, serial io.Writer, listen fun
 }
 
 func serveGuestHandshake(vmID, fixtureVersion string, connection guestControlConnection) error {
-	frames := bufio.NewReaderSize(connection, maximumControlLineBytes+1)
-	connect, err := readControlFrame(frames)
+	frames := bufio.NewReaderSize(connection, maximumDispatchLineBytes+1)
+	connect, err := readControlFrame(frames, maximumControlLineBytes)
 	if err != nil {
 		return err
 	}
@@ -133,22 +142,53 @@ func serveGuestHandshake(vmID, fixtureVersion string, connection guestControlCon
 	if _, err := fmt.Fprintf(connection, "OK %s %s\n", vmID, fixtureVersion); err != nil {
 		return fmt.Errorf("write guest control OK frame: %w", err)
 	}
-	ping, err := readControlFrame(frames)
+	operation, err := readControlFrame(frames, maximumDispatchLineBytes)
 	if err != nil {
 		return err
 	}
-	if len(ping) != 2 || ping[0] != "PING" || !validControlToken(ping[1]) {
-		return fmt.Errorf("invalid guest control PING frame")
-	}
-	if _, err := fmt.Fprintf(connection, "PONG %s %s\n", vmID, ping[1]); err != nil {
-		return fmt.Errorf("write guest control PONG frame: %w", err)
-	}
-	return nil
+	return serveGuestOperation(vmID, connection, operation)
 }
 
-func readControlFrame(reader *bufio.Reader) ([]string, error) {
+func serveGuestOperation(vmID string, connection guestControlConnection, operation []string) error {
+	if len(operation) == 2 && operation[0] == "PING" && len("PING ")+len(operation[1])+1 <= maximumControlLineBytes && validControlToken(operation[1]) {
+		if _, err := fmt.Fprintf(connection, "PONG %s %s\n", vmID, operation[1]); err != nil {
+			return fmt.Errorf("write guest control PONG frame: %w", err)
+		}
+		return nil
+	}
+	if len(operation) == 2 && operation[0] == "DISPATCH" {
+		frame, err := base64.RawURLEncoding.DecodeString(operation[1])
+		if err != nil {
+			return fmt.Errorf("invalid guest dispatch encoding")
+		}
+		envelope, err := firecracker.DecodeGuestDispatch(frame)
+		if err != nil || envelope.SandboxID != vmID || envelope.EnvelopeID == "" || envelope.FencingToken == 0 {
+			return fmt.Errorf("invalid guest dispatch")
+		}
+		// This fixture proves framing, boot identity, bounded input, and the
+		// unavailable result path. It contains no command runner, credentials,
+		// mounted data, or network authority to accidentally widen a profile.
+		if _, err := fmt.Fprintf(connection, "RESULT UNAVAILABLE %s\n", envelope.EnvelopeID); err != nil {
+			return fmt.Errorf("write guest dispatch result: %w", err)
+		}
+		return nil
+	}
+	if len(operation) == 3 && operation[0] == "CANCEL" && validControlToken(operation[1]) {
+		fence, err := strconv.ParseUint(operation[2], 10, 64)
+		if err != nil || fence == 0 {
+			return fmt.Errorf("invalid guest cancellation")
+		}
+		if _, err := fmt.Fprintf(connection, "CANCELLED %s\n", operation[1]); err != nil {
+			return fmt.Errorf("write guest cancellation result: %w", err)
+		}
+		return nil
+	}
+	return fmt.Errorf("invalid guest control operation")
+}
+
+func readControlFrame(reader *bufio.Reader, maximumBytes int) ([]string, error) {
 	line, err := reader.ReadSlice('\n')
-	if err != nil || len(line) == 0 || len(line) > maximumControlLineBytes || line[len(line)-1] != '\n' {
+	if err != nil || len(line) == 0 || len(line) > maximumBytes || line[len(line)-1] != '\n' {
 		return nil, fmt.Errorf("invalid or oversized guest control frame")
 	}
 	fields := strings.Split(string(line[:len(line)-1]), " ")
