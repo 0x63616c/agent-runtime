@@ -148,6 +148,22 @@ type SnapshotLease struct {
 	LeaseExpiresAt time.Time
 }
 
+// SnapshotRestoreRequest binds a restore sink to an exact snapshot lease and
+// an admitted restore ceiling. It never permits a snapshot to widen image,
+// policy, or capability authority.
+type SnapshotRestoreRequest struct {
+	Owner, ID, Holder                                  string
+	Generation                                         uint64
+	SandboxID                                          string
+	EffectiveSpecDigest, CapabilityDigest, ImageDigest string
+}
+
+// SnapshotRestoreSink owns the destination data plane. Store supplies only a
+// verified bounded plaintext reader and never chooses a guest path or mount.
+type SnapshotRestoreSink interface {
+	RestoreSnapshot(context.Context, SnapshotManifest, io.Reader) error
+}
+
 // Config bounds a resource authority instance.  All limits must be explicit.
 type Config struct {
 	MaximumVolumeBytes   uint64
@@ -560,6 +576,45 @@ func (store *Store) ReleaseSnapshotLease(ctx context.Context, owner, id string, 
 	manifest.Lease = nil
 	store.state.Snaps[id] = manifest
 	if err := store.saveLocked(); err != nil {
+		return SnapshotManifest{}, err
+	}
+	return copySnapshot(manifest), nil
+}
+
+// RestoreSnapshot opens exactly one leased, verified disk snapshot and hands
+// it to an admitted sink. The lease remains held on sink failure so reaper
+// reconciliation, rather than a racing delete, remains authoritative.
+func (store *Store) RestoreSnapshot(ctx context.Context, request SnapshotRestoreRequest, sink SnapshotRestoreSink, now time.Time) (SnapshotManifest, error) {
+	if err := contextErr(ctx); err != nil {
+		return SnapshotManifest{}, err
+	}
+	if store == nil || sink == nil || request.Owner == "" || request.ID == "" || request.Holder == "" || request.Generation == 0 || request.SandboxID == "" || request.EffectiveSpecDigest == "" || request.CapabilityDigest == "" || request.ImageDigest == "" {
+		return SnapshotManifest{}, fmt.Errorf("restore sandbox snapshot: %w", ErrConflict)
+	}
+	store.mu.Lock()
+	manifest, ok := store.state.Snaps[request.ID]
+	store.mu.Unlock()
+	if !ok || manifest.Owner != request.Owner {
+		return SnapshotManifest{}, ErrNotFound
+	}
+	if !manifest.TombstonedAt.IsZero() {
+		return SnapshotManifest{}, ErrTombstoned
+	}
+	if manifest.Lease == nil || manifest.Lease.Holder != request.Holder || manifest.Lease.Generation != request.Generation || !manifest.Lease.LeaseExpiresAt.After(now) {
+		return SnapshotManifest{}, fmt.Errorf("restore sandbox snapshot: %w", ErrConflict)
+	}
+	if manifest.SourceSandboxID != request.SandboxID || manifest.SourceEffectiveSpecDigest != request.EffectiveSpecDigest || manifest.CapabilityDigest != request.CapabilityDigest || manifest.ImageDigest != request.ImageDigest {
+		return SnapshotManifest{}, fmt.Errorf("restore sandbox snapshot: %w", ErrSnapshotDenied)
+	}
+	reader, err := store.payloads.Open(ctx, request.ID, manifest)
+	if err != nil {
+		return SnapshotManifest{}, err
+	}
+	defer reader.Close()
+	if err := sink.RestoreSnapshot(ctx, copySnapshot(manifest), reader); err != nil {
+		return SnapshotManifest{}, fmt.Errorf("restore sandbox snapshot: sink unavailable")
+	}
+	if err := contextErr(ctx); err != nil {
 		return SnapshotManifest{}, err
 	}
 	return copySnapshot(manifest), nil

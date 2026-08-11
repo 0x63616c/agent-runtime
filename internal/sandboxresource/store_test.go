@@ -136,6 +136,42 @@ func TestStoreEncryptsPublishesVerifiesAndTombstonesSnapshot(t *testing.T) {
 	}
 }
 
+func TestStoreRestoresOnlyTheExactLeasedPolicyCeiling(t *testing.T) {
+	now := time.Date(2026, 8, 10, 0, 0, 0, 0, time.UTC)
+	store, err := Open(t.TempDir(), Config{MaximumVolumeBytes: 1024, MaximumVolumeInodes: 128, MaximumSnapshotBytes: 1024}, bytesOf(7, 32))
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest, err := store.CreateSnapshot(context.Background(), testSnapshot(now), strings.NewReader("quiesced disk bytes"), now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	leased, err := store.AcquireSnapshotLease(context.Background(), manifest.Owner, manifest.ID, "restore_01", now.Add(time.Minute), now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sink := &recordingRestoreSink{}
+	request := SnapshotRestoreRequest{Owner: manifest.Owner, ID: manifest.ID, Holder: "restore_01", Generation: leased.Lease.Generation, SandboxID: manifest.SourceSandboxID, EffectiveSpecDigest: manifest.SourceEffectiveSpecDigest, CapabilityDigest: manifest.CapabilityDigest, ImageDigest: manifest.ImageDigest}
+	if _, err := store.RestoreSnapshot(context.Background(), request, sink, now); err != nil {
+		t.Fatalf("RestoreSnapshot() error = %v", err)
+	}
+	if got := string(sink.bytes); got != "quiesced disk bytes" {
+		t.Fatalf("restored = %q", got)
+	}
+	request.CapabilityDigest = "sha256:widened"
+	if _, err := store.RestoreSnapshot(context.Background(), request, sink, now); !errors.Is(err, ErrSnapshotDenied) {
+		t.Fatalf("RestoreSnapshot() widened ceiling = %v", err)
+	}
+}
+
+type recordingRestoreSink struct{ bytes []byte }
+
+func (sink *recordingRestoreSink) RestoreSnapshot(_ context.Context, _ SnapshotManifest, reader io.Reader) error {
+	value, err := io.ReadAll(reader)
+	sink.bytes = append([]byte(nil), value...)
+	return err
+}
+
 func TestStoreDeniesTaintedSnapshotWithoutBoundAttestation(t *testing.T) {
 	now := time.Date(2026, 8, 10, 0, 0, 0, 0, time.UTC)
 	store := openTestStore(t, t.TempDir())
