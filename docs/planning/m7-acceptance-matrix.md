@@ -8,7 +8,7 @@ passing evidence entry of the required scope.
 
 | Requirement | Approved seam | Demonstrated implementation coverage | Required acceptance proof still needed | Claim status |
 | --- | --- | --- | --- | --- |
-| TOL-001 | S5 Tool broker | Atomic broker admission, normalized model handoff, tool worker finalization. | Durable broker-to-grant-to-result integration through PostgreSQL/MinIO. | unclaimed |
+| TOL-001 | S5 Tool broker | Atomic broker admission, normalized model handoff, tool worker finalization. | Durable PostgreSQL/MinIO broker-to-grant-to-result proof retained at `evidence/m7-tool-broker-durable-postgres-minio.json` (code revision `168513d8b30e5476d09c7e1d7abd587e563aee1f`). | directly proven |
 | TOL-002 | S5 Tool broker | Builtin wrapper, sandbox adapter, and Streamable HTTP MCP adapter implement the operation-ID recovery contract. | One shared broker-only contract suite across all three adapters. | unclaimed |
 | TOL-003 | S5 Tool broker | Fake-clock unit cases cover expiry, revocation, max use, and cancellation refusal. | Durable integration proving those terminal states prevent dispatch. | unclaimed |
 | TOL-004 | S5 Tool broker | State transitions create audit facts for admission, grant use, expiry, and terminal outcomes. | Durable audit ordering/secret-safety matrix for allow, deny, pending, expiry, exhaustion, and result. | unclaimed |
