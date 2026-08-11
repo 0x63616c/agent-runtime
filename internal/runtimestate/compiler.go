@@ -55,7 +55,7 @@ type ReceiptBinding struct {
 // model handoff has already been normalized. It never retains a descriptor.
 func (compiler *Compiler) CompileDenyToolAdmission(command DenyToolAdmissionCommand) (CompiledMutation, error) {
 	command = command.Owned()
-	if err := validateWorkerCommand(command.Scope, command.SessionID, command.TurnID, OperationID(command.ToolCallID)); err != nil || !validOpaque(command.ToolCallID, 128) || (command.Decision != "denied" && command.Decision != "exhausted") {
+	if err := validateWorkerCommand(command.Scope, command.SessionID, command.TurnID, OperationID(command.ToolCallID)); err != nil || !validOpaque(command.ToolCallID, 128) || !validDigest(command.CapabilityScopeDigest) || (command.PolicyRevisionDigest != "" && !validDigest(command.PolicyRevisionDigest)) || (command.Decision != "denied" && command.Decision != "exhausted") {
 		return CompiledMutation{}, errors.New("compile deny tool admission: invalid command")
 	}
 	return compiler.compile(CommandDenyToolAdmission, command.Scope, command.IdempotencyKey, command, command)

@@ -2,7 +2,9 @@ package runtimetool
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/0x63616c/agent-runtime/internal/clock"
@@ -91,7 +93,11 @@ func (broker *Broker) Admit(ctx context.Context, request AdmissionRequest) (Admi
 		}
 		policy, found := policyRevision(state, request.PolicyName, request.PolicyRevision)
 		if !found || !requiresApproval(policy, request.ToolName) || !request.ExpiresAt.After(broker.clock.Now()) {
-			if err := broker.recordDenial(ctx, state, scope, request, "denied"); err != nil {
+			policyRevisionDigest := policy.Digest
+			if !found {
+				policyRevisionDigest = unavailablePolicyRevisionDigest(request.PolicyName, request.PolicyRevision)
+			}
+			if err := broker.recordDenial(ctx, state, scope, request, policyRevisionDigest, "denied"); err != nil {
 				if errors.Is(err, runtimestate.ErrConflict) {
 					continue
 				}
@@ -124,8 +130,17 @@ func (broker *Broker) Admit(ctx context.Context, request AdmissionRequest) (Admi
 	return Admission{}, runtimestate.ErrConflict
 }
 
-func (broker *Broker) recordDenial(ctx context.Context, state runtimestate.RuntimeState, scope runtimestate.MutationScope, request AdmissionRequest, decision string) error {
-	mutation, err := broker.compiler.CompileDenyToolAdmission(runtimestate.DenyToolAdmissionCommand{Scope: scope, IdempotencyKey: "tool-" + decision + "-" + request.IdempotencyKey, SessionID: request.SessionID, TurnID: request.TurnID, ToolCallID: request.ToolCallID, Decision: decision})
+// unavailablePolicyRevisionDigest is a bounded commitment to the policy
+// revision requested by a refused model handoff. It preserves uniform external
+// denial while allowing the private audit to distinguish a missing revision
+// from a known policy that simply disallows the requested tool.
+func unavailablePolicyRevisionDigest(name string, revision uint64) string {
+	sum := sha256.Sum256([]byte(fmt.Sprintf("unavailable-policy/v1:%s:%d", name, revision)))
+	return fmt.Sprintf("sha256:%x", sum)
+}
+
+func (broker *Broker) recordDenial(ctx context.Context, state runtimestate.RuntimeState, scope runtimestate.MutationScope, request AdmissionRequest, policyRevisionDigest, decision string) error {
+	mutation, err := broker.compiler.CompileDenyToolAdmission(runtimestate.DenyToolAdmissionCommand{Scope: scope, IdempotencyKey: "tool-" + decision + "-" + request.IdempotencyKey, SessionID: request.SessionID, TurnID: request.TurnID, ToolCallID: request.ToolCallID, PolicyRevisionDigest: policyRevisionDigest, CapabilityScopeDigest: request.CapabilityDigest, Decision: decision})
 	if err != nil {
 		return err
 	}
