@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "observed_at_utc": "2026-08-11T18:43:00Z",
+  "code_revision": "e916a7e2e8297332986e83274d3b34495390601e",
+  "proof_level": "integration",
+  "scope": "The shipped Workspace Agent loopback-web and terminal binaries exercised approval behavior only through the public HTTP/SDK contract against a disposable PostgreSQL/MinIO API process. Pending requests are broker-seeded because this API-process harness does not compose the model-to-tool producer. This is not a sandbox, Firecracker, Linux/KVM, or provider claim.",
+  "commands": [
+    "./deploy/runtimeapi/run-durable-integration.sh",
+    "go test -tags=integration ./internal/runtimeapiprocess -run '^TestDurableWorkspaceAgentBinariesUseOnlyThePublicAPI$' -count=1"
+  ],
+  "result": "passed",
+  "observations": {
+    "browser": "The loopback web binary rendered the safe action and unavailable-sandbox boundary, approved once, replayed the same approval idempotency key without a second effect, cancelled a pending request, and rendered the late-expiry refusal.",
+    "terminal": "The owner terminal binary denied a pending request; a non-owner terminal could not list the owner inbox and still displayed the unavailable-sandbox boundary.",
+    "durability": "The API process restarted; a fresh loopback web client reconnected and read retained approval state while the non-owner remained isolated.",
+    "teardown": "The declared durable harness removed its disposable PostgreSQL/MinIO Compose resources after completion."
+  },
+  "redaction": "No bearer tokens, request headers, raw input, approval IDs, database DSNs, MinIO credentials, artifact bytes, or backend handles are retained."
+}
