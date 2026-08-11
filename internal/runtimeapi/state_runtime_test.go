@@ -87,7 +87,7 @@ func TestStateRuntimeServesTheCompletePublicLifecycleThroughContentAndMemoryStat
 }
 
 func TestStateRuntimeReadsOnlyStateAuthorizedArtifactBytes(t *testing.T) {
-	runtime, content, compiler, store := newMemoryStateAuthority(t)
+	runtime, content, compiler, store, _ := newMemoryStateAuthority(t)
 	ctx := context.Background()
 	admin := runtimeapi.Identity{Tenant: "tenant-a", Principal: "admin", Admin: true}
 	alice := runtimeapi.Identity{Tenant: "tenant-a", Principal: "alice"}
@@ -128,7 +128,7 @@ func TestStateRuntimeReadsOnlyStateAuthorizedArtifactBytes(t *testing.T) {
 }
 
 func TestStateRuntimeInspectsAndDecidesOwnerApprovalIdempotently(t *testing.T) {
-	runtime, _, compiler, store := newMemoryStateAuthority(t)
+	runtime, _, compiler, store, _ := newMemoryStateAuthority(t)
 	ctx := context.Background()
 	admin := runtimeapi.Identity{Tenant: "tenant-a", Principal: "admin", Admin: true}
 	alice := runtimeapi.Identity{Tenant: "tenant-a", Principal: "alice"}
@@ -179,12 +179,71 @@ func TestStateRuntimeInspectsAndDecidesOwnerApprovalIdempotently(t *testing.T) {
 	}
 }
 
+func TestStateRuntimePersistsApprovalExpiryBeforeRefusingLateDecision(t *testing.T) {
+	runtime, _, compiler, store, fakeClock := newMemoryStateAuthority(t)
+	ctx := context.Background()
+	admin := runtimeapi.Identity{Tenant: "tenant-a", Principal: "admin", Admin: true}
+	alice := runtimeapi.Identity{Tenant: "tenant-a", Principal: "alice"}
+	agent, err := runtime.CreateAgent(ctx, admin, agentruntime.CreateAgentRequest{IdempotencyKey: "expired-approval-agent", Name: "assistant", ModelProfile: "balanced", Instructions: "safe"})
+	if err != nil {
+		t.Fatalf("create Agent: %v", err)
+	}
+	session, err := runtime.CreateSession(ctx, alice, agentruntime.CreateSessionRequest{IdempotencyKey: "expired-approval-session", AgentRevision: agent.RevisionID})
+	if err != nil {
+		t.Fatalf("create Session: %v", err)
+	}
+	accepted, err := runtime.SendInput(ctx, alice, agentruntime.SendInputRequest{SessionID: session.ID, IdempotencyKey: "expired-approval-input", Parts: []agentruntime.ContentPart{{Kind: agentruntime.ContentText, Text: "write file"}}})
+	if err != nil {
+		t.Fatalf("send Input: %v", err)
+	}
+	tenant, _ := runtimecontent.ParseTenantID("tenant-a")
+	principal, _ := runtimecontent.ParsePrincipalID("alice")
+	digest := "sha256:" + strings.Repeat("b", 64)
+	intent, err := compiler.CompileRecordToolIntent(runtimestate.RecordToolIntentCommand{Scope: runtimestate.MutationScope{Tenant: tenant, Principal: principal, Authority: runtimestate.AuthorityRuntimeWorker}, IdempotencyKey: "expired-approval-intent", SessionID: session.ID, TurnID: accepted.Turn.ID, ToolCallID: "tcall_1234567890ABCDEF", ToolName: "write", ActionDigest: digest, PolicyRevisionDigest: digest})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Apply(ctx, intent); err != nil {
+		t.Fatal(err)
+	}
+	expiresAt := fakeClock.Now().Add(time.Minute)
+	request, err := compiler.CompileRequestApproval(runtimestate.RequestApprovalCommand{Scope: runtimestate.MutationScope{Tenant: tenant, Principal: principal, Authority: runtimestate.AuthorityRuntimeWorker}, IdempotencyKey: "expired-approval-request", SessionID: session.ID, TurnID: accepted.Turn.ID, ToolCallID: "tcall_1234567890ABCDEF", ApprovalID: "appr_1234567890ABCDEF", ActionDigest: digest, PolicyRevisionDigest: digest, CapabilityDigest: digest, MaximumUses: 1, ExpiresAt: expiresAt})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Apply(ctx, request); err != nil {
+		t.Fatal(err)
+	}
+	if err := fakeClock.Advance(time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	approvalID, _ := agentruntime.ParseApprovalID("appr_1234567890ABCDEF")
+	if _, err := runtime.DecideApproval(ctx, alice, agentruntime.DecideApprovalRequest{ApprovalID: approvalID, Decision: agentruntime.ApprovalApproved, IdempotencyKey: "expired-approval-decision"}); !hasFailure(err, agentruntime.FailureConflict) {
+		t.Fatalf("late decision error = %v, want safe conflict", err)
+	}
+	expired, err := runtime.InspectApproval(ctx, alice, approvalID)
+	if err != nil || expired.State != agentruntime.ApprovalExpired || expired.DecidedAt != nil {
+		t.Fatalf("inspect expired Approval = %#v, %v", expired, err)
+	}
+	state, err := store.LoadRuntimeState(ctx, runtimestate.MutationScope{Tenant: tenant})
+	if err != nil {
+		t.Fatalf("load expired Approval state: %v", err)
+	}
+	foundExpiryAudit := false
+	for _, fact := range state.Audit {
+		foundExpiryAudit = foundExpiryAudit || fact.Kind == "approval.expired"
+	}
+	if !foundExpiryAudit {
+		t.Fatalf("expiry audit facts = %#v, want approval.expired", state.Audit)
+	}
+}
+
 func newMemoryStateRuntime(t *testing.T) *runtimeapi.StateRuntime {
-	runtime, _, _, _ := newMemoryStateAuthority(t)
+	runtime, _, _, _, _ := newMemoryStateAuthority(t)
 	return runtime
 }
 
-func newMemoryStateAuthority(t *testing.T) (*runtimeapi.StateRuntime, *runtimecontent.Store, *runtimestate.Compiler, *runtimestate.MemoryRuntimeStateStore) {
+func newMemoryStateAuthority(t *testing.T) (*runtimeapi.StateRuntime, *runtimecontent.Store, *runtimestate.Compiler, *runtimestate.MemoryRuntimeStateStore, *clock.Fake) {
 	t.Helper()
 	objects := &stateRuntimeObjects{values: map[string][]byte{}}
 	content, err := runtimecontent.New("runtime-content", objects)
@@ -211,7 +270,7 @@ func newMemoryStateAuthority(t *testing.T) (*runtimeapi.StateRuntime, *runtimeco
 	if err != nil {
 		t.Fatal(err)
 	}
-	return runtime, content, compiler, store
+	return runtime, content, compiler, store, fakeClock
 }
 
 type stateRuntimeObjects struct{ values map[string][]byte }

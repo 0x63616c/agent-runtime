@@ -511,7 +511,8 @@ func (planner *RuntimeStatePlanner) decideApproval(state *RuntimeState, binding 
 		if !now.Before(a.ExpiresAt) {
 			a.State = "expired"
 			state.Approvals[n] = a
-			return PlanResult{}, EffectSet{}, ErrConflict
+			effects, err := planner.auditOnly(state, binding, "approval.expired", a.SessionID, a.TurnID, now, a.RetainUntil)
+			return PlanResult{}, effects, err
 		}
 		a.State = c.Decision
 		a.Decision = c.Decision

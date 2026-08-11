@@ -172,7 +172,14 @@ func (runtime *StateRuntime) DecideApproval(ctx context.Context, identity Identi
 	if err != nil {
 		return agentruntime.Approval{}, runtimeFailure("decide Approval", err)
 	}
-	return runtime.InspectApproval(ctx, identity, request.ApprovalID)
+	approval, err := runtime.InspectApproval(ctx, identity, request.ApprovalID)
+	if err != nil {
+		return agentruntime.Approval{}, err
+	}
+	if approval.State == agentruntime.ApprovalExpired {
+		return agentruntime.Approval{}, runtimeFailure("decide Approval", runtimestate.ErrConflict)
+	}
+	return approval, nil
 }
 
 // IdempotencyStatus safely returns a retained receipt for the caller's exact
