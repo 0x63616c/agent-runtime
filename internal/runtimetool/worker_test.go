@@ -11,6 +11,7 @@ import (
 
 	"github.com/0x63616c/agent-runtime/internal/clock"
 	"github.com/0x63616c/agent-runtime/internal/runtimecontent"
+	"github.com/0x63616c/agent-runtime/internal/runtimeorchestration"
 	"github.com/0x63616c/agent-runtime/internal/runtimestate"
 	"github.com/0x63616c/agent-runtime/internal/runtimetool"
 	"github.com/0x63616c/agent-runtime/sandbox"
@@ -112,6 +113,18 @@ func TestWorkerFinalizesAuthorizedToolActionsAndReconcilesLostClaims(t *testing.
 			if test.corrupt && (state.ToolExecutions[0].Failure == nil || state.ToolExecutions[0].Failure.Message != "verified tool action descriptor is invalid") {
 				t.Fatalf("corrupt descriptor outcome = %#v", state.ToolExecutions[0])
 			}
+			if len(state.Events) == 0 || state.Events[len(state.Events)-1].Kind != agentruntime.EventSandboxOperationFinalized {
+				t.Fatalf("tool terminal event = %#v, want durable sandbox finalization", state.Events)
+			}
+			foundFinalizationRoute := false
+			for _, record := range state.Outbox {
+				if record.EventKind == agentruntime.EventSandboxOperationFinalized && record.OperationID == execution.OperationID {
+					foundFinalizationRoute = true
+				}
+			}
+			if !foundFinalizationRoute {
+				t.Fatalf("tool terminal outbox = %#v, want sandbox finalization route", state.Outbox)
+			}
 			if record := toolOutbox(t, ctx, store, tenant); record.State != runtimestate.OutboxPublished {
 				t.Fatalf("tool outbox = %#v, want acknowledged after terminal outcome", record)
 			}
@@ -148,6 +161,61 @@ func TestStateAuthorizationRejectsCrossScopeToolDescriptorReads(t *testing.T) {
 		}
 		if _, err := store.AuthorizeToolActionDescriptorRead(ctx, authorization); !errors.Is(err, runtimestate.ErrNotFoundOrDenied) {
 			t.Fatalf("cross-principal descriptor authorization error = %v, want ErrNotFoundOrDenied", err)
+		}
+	}
+}
+
+func TestToolFinalizationPublishesAStateRecheckedTemporalRoute(t *testing.T) {
+	ctx := context.Background()
+	now := time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC)
+	objects := &toolObjects{values: map[string][]byte{}}
+	content, _ := runtimecontent.New("runtime-content", objects)
+	tenant, _ := runtimecontent.ParseTenantID("tenant-a")
+	principal, _ := runtimecontent.ParsePrincipalID("principal-a")
+	compiler, _ := runtimestate.NewCompiler(content)
+	source, _ := clock.NewFake(now)
+	planner, _ := runtimestate.NewRuntimeStatePlanner(source, &toolIDs{})
+	store, _ := runtimestate.NewMemoryRuntimeStateStore(planner)
+	_, _, execution, _ := createToolExecution(t, ctx, content, compiler, store, tenant, principal, now)
+	worker, err := runtimetool.NewWorker(runtimetool.Config{Store: store, Tenants: store, Compiler: compiler, Planner: planner, Clock: source, Content: content, Adapter: &recordingAdapter{response: runtimetool.Response{Output: []byte("complete")}}, Claimer: "tool-worker"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := worker.ScanOnce(ctx); err != nil {
+		t.Fatalf("finalize tool execution: %v", err)
+	}
+	temporal := &temporalPublisher{}
+	publisher, err := runtimeorchestration.NewPublisher(runtimeorchestration.PublisherConfig{Store: store, Tenants: store, Compiler: compiler, Planner: planner, Clock: source, Publisher: temporal, Claimer: "orchestration-codec"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := publisher.ScanOnce(ctx); err != nil {
+		t.Fatalf("publish tool finalization: %v", err)
+	}
+	var finalization runtimeorchestration.Command
+	for _, command := range temporal.commands {
+		if command.Kind == runtimeorchestration.CommandSandboxOperationFinalized {
+			finalization = command
+			break
+		}
+	}
+	if finalization.OutboxID == "" || finalization.Sequence == 0 {
+		t.Fatalf("Temporal commands = %#v, want sandbox finalization", temporal.commands)
+	}
+	dispatcher, err := runtimeorchestration.NewDurableStateDispatcher(store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := dispatcher.Dispatch(ctx, finalization); err != nil {
+		t.Fatalf("recheck published sandbox finalization route: %v", err)
+	}
+	state, err := store.LoadRuntimeState(ctx, runtimestate.MutationScope{Tenant: tenant, Authority: runtimestate.AuthorityOutboxPublisher})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, event := range state.Events {
+		if event.Kind == agentruntime.EventSandboxOperationFinalized && event.OperationID != execution.OperationID {
+			t.Fatalf("sandbox finalization correlation = %s, want %s", event.OperationID, execution.OperationID)
 		}
 	}
 }
@@ -323,6 +391,20 @@ type toolIDs struct{ next uint64 }
 func (ids *toolIDs) NextIdentifier(kind runtimestate.IdentifierKind) (string, error) {
 	ids.next++
 	return fmt.Sprintf("%s_%016d", kind, ids.next), nil
+}
+
+type temporalPublisher struct {
+	starts   []runtimeorchestration.SessionStart
+	commands []runtimeorchestration.Command
+}
+
+func (publisher *temporalPublisher) StartSession(_ context.Context, start runtimeorchestration.SessionStart) error {
+	publisher.starts = append(publisher.starts, start)
+	return nil
+}
+func (publisher *temporalPublisher) SignalSession(_ context.Context, _ runtimeorchestration.SessionStart, command runtimeorchestration.Command) error {
+	publisher.commands = append(publisher.commands, command)
+	return nil
 }
 
 type sandboxClient struct {

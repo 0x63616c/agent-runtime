@@ -704,6 +704,11 @@ func (planner *RuntimeStatePlanner) beginToolExecution(state *RuntimeState, bind
 }
 
 func (planner *RuntimeStatePlanner) recordToolExecutionOutcome(state *RuntimeState, binding ReceiptBinding, c RecordToolExecutionOutcomeCommand, now time.Time) (PlanResult, EffectSet, error) {
+	sessionIndex := findSession(state, binding.Scope, c.SessionID)
+	turnIndex := findTurn(state, binding.Scope, c.SessionID, c.TurnID)
+	if sessionIndex < 0 || turnIndex < 0 {
+		return PlanResult{}, EffectSet{}, ErrNotFoundOrDenied
+	}
 	for index := range state.ToolExecutions {
 		record := state.ToolExecutions[index]
 		if record.OperationID != c.OperationID || record.ToolCallID != c.ToolCallID || record.Tenant != binding.Scope.Tenant || record.Principal != binding.Scope.Principal || record.SessionID != c.SessionID || record.TurnID != c.TurnID {
@@ -714,8 +719,11 @@ func (planner *RuntimeStatePlanner) recordToolExecutionOutcome(state *RuntimeSta
 		}
 		record.State, record.Result, record.Failure, record.UpdatedAt = c.Outcome, c.Result, c.Failure.Clone(), now
 		state.ToolExecutions[index] = record
-		effects, err := planner.auditOnly(state, binding, "tool.execution_"+string(c.Outcome), c.SessionID, c.TurnID, now)
-		return PlanResult{}, effects, err
+		effects, err := planner.effects(state, binding, state.Sessions[sessionIndex], state.Turns[turnIndex], InvocationRecord{OperationID: record.OperationID}, []agentruntime.EventKind{agentruntime.EventSandboxOperationFinalized}, now)
+		if err != nil {
+			return PlanResult{}, effects, err
+		}
+		return PlanResult{}, effects, nil
 	}
 	return PlanResult{}, EffectSet{}, ErrNotFoundOrDenied
 }
@@ -937,7 +945,7 @@ func (planner *RuntimeStatePlanner) promote(state *RuntimeState, sessionID agent
 func (planner *RuntimeStatePlanner) effects(state *RuntimeState, binding ReceiptBinding, session SessionRecord, turn TurnRecord, invocation InvocationRecord, kinds []agentruntime.EventKind, now time.Time) (EffectSet, error) {
 	effects := EffectSet{}
 	for _, kind := range kinds {
-		event, err := planner.event(state, session, turn, binding, kind, now, planner.retain(now, DataClassEvent))
+		event, err := planner.event(state, session, turn, invocation, binding, kind, now, planner.retain(now, DataClassEvent))
 		if err != nil {
 			return EffectSet{}, err
 		}
@@ -974,7 +982,7 @@ func (planner *RuntimeStatePlanner) auditOnly(state *RuntimeState, binding Recei
 	state.Audit = append(state.Audit, fact)
 	return EffectSet{Audit: []AuditFactRecord{fact}}, nil
 }
-func (planner *RuntimeStatePlanner) event(state *RuntimeState, session SessionRecord, turn TurnRecord, binding ReceiptBinding, kind agentruntime.EventKind, now, until time.Time) (ProductEventRecord, error) {
+func (planner *RuntimeStatePlanner) event(state *RuntimeState, session SessionRecord, turn TurnRecord, invocation InvocationRecord, binding ReceiptBinding, kind agentruntime.EventKind, now, until time.Time) (ProductEventRecord, error) {
 	sequence := uint64(1)
 	for _, event := range state.Events {
 		if event.SessionID == session.SessionID && event.Sequence >= sequence {
@@ -989,7 +997,11 @@ func (planner *RuntimeStatePlanner) event(state *RuntimeState, session SessionRe
 	if err != nil {
 		return ProductEventRecord{}, err
 	}
-	return ProductEventRecord{Tenant: session.Tenant, Principal: session.Principal, SessionID: session.SessionID, Sequence: sequence, Cursor: cursor, EventID: id, Kind: kind, InputID: turn.InputID, TurnID: turn.TurnID, OperationID: OperationID(binding.IdempotencyKey), OccurredAt: now, RetentionUntil: until}, nil
+	operationID := invocation.OperationID
+	if operationID == "" {
+		operationID = OperationID(binding.IdempotencyKey)
+	}
+	return ProductEventRecord{Tenant: session.Tenant, Principal: session.Principal, SessionID: session.SessionID, Sequence: sequence, Cursor: cursor, EventID: id, Kind: kind, InputID: turn.InputID, TurnID: turn.TurnID, OperationID: operationID, OccurredAt: now, RetentionUntil: until}, nil
 }
 func (planner *RuntimeStatePlanner) fact(binding ReceiptBinding, session SessionRecord, turn TurnRecord, now, until time.Time) (AuditFactRecord, error) {
 	return planner.factKind(binding, string(binding.Command), session.SessionID, turn.TurnID, now, until)

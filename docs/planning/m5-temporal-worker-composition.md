@@ -57,7 +57,19 @@ retains optional input/output token counts, preserving unknown values as
 unknown rather than zero. Its deterministic fake
 adapter test proves both new invocation and recovered-claim paths; production
 provider configuration and normalized streaming are still outside this
-evidence. The publisher test follows
+evidence. The capability-bound `internal/runtimetool` worker reads an exact
+state-authorized immutable sandbox-control descriptor before it can call its
+adapter. A missing, corrupt, cancelled, or cross-scope descriptor never reaches
+the adapter; an expired tool-worker claim calls `Reconcile` by that same
+operation ID. Every terminal tool outcome creates a correlated
+`sandbox_operation.finalized` product Event and durable outbox route. The
+publisher sends that route only after a lease claim, and the state dispatcher
+rechecks it before the private Workflow accepts it. The concrete sandbox
+adapter strictly decodes the descriptor, requires the descriptor operation ID
+to equal the durable operation ID, submits once, and uses `GetOperation` rather
+than resubmitting during recovery. Its unit evidence uses the sandbox client
+contract fake; a disposable control-process/Temporal retained-history scenario
+remains required before TMP-010 can close. The publisher test follows
 the actual state transition from persisted tool intent through a principal
 approval decision, then through a fenced `uncertain` model invocation caused
 by producer loss and a terminal `turn.failed` outbox route. It verifies that
