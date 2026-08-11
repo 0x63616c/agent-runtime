@@ -16,13 +16,15 @@ The package currently defines:
 - immutable Agent revision and revision-pinned Session snapshots;
 - bounded text and Artifact-reference Input parts;
 - explicit Session (`open`, `closing`, `completed`, `cancelled`, `failed`) and
-  Turn (`queued`, `running`, `succeeded`, `failed`, `cancelled`) states;
+  Turn (`queued`, `running`, `waiting_for_approval`, `succeeded`, `failed`,
+  `cancelled`) states; `waiting_for_approval` is non-terminal and cancellable;
 - stable safe Failure codes and an `errors.As`-compatible public Error;
 - optional provider-neutral token usage on an inspected Turn; a missing token
   value remains unknown rather than becoming zero, and provider diagnostics are
   never public data;
 - bounded owner-scoped Tool-call inspection projections: model intent name and
-  lifecycle, Approval, grant use counters/expiry, and safe execution failure;
+  lifecycle, Approval (including opaque Tool-call linkage), grant use
+  counters/expiry, and safe execution failure;
   an Approval admitted through the broker additionally exposes only its fixed
   action verb/target and maximum-use bound, never raw arguments or capability
   material;

@@ -12,7 +12,7 @@ import (
 )
 
 func TestInboxUsesOnlyOwnerScopedPublicApprovalAndTurnCommands(t *testing.T) {
-	approval := agentruntime.Approval{ID: "appr_1234567890ABCDEF", SessionID: "sess_1234567890ABCDEF", TurnID: "turn_1234567890ABCDEF", State: agentruntime.ApprovalPending, Action: &agentruntime.ApprovalAction{Verb: "write", Target: "workspace-service"}, Scope: &agentruntime.ApprovalScope{MaximumUses: 1}, ExpiresAt: time.Date(2026, 8, 11, 20, 0, 0, 0, time.UTC)}
+	approval := agentruntime.Approval{ID: "appr_1234567890ABCDEF", SessionID: "sess_1234567890ABCDEF", TurnID: "turn_1234567890ABCDEF", ToolCallID: "tcall_1234567890ABCDEF", State: agentruntime.ApprovalPending, Action: &agentruntime.ApprovalAction{Verb: "write", Target: "workspace-service"}, Scope: &agentruntime.ApprovalScope{MaximumUses: 1}, ExpiresAt: time.Date(2026, 8, 11, 20, 0, 0, 0, time.UTC)}
 	client := &approvalClient{approval: approval}
 	inbox, err := NewInbox(client)
 	if err != nil {
@@ -37,7 +37,7 @@ func TestInboxUsesOnlyOwnerScopedPublicApprovalAndTurnCommands(t *testing.T) {
 }
 
 func TestWorkspaceApprovalWebAndTerminalStayPublicAndBlocked(t *testing.T) {
-	approval := agentruntime.Approval{ID: "appr_1234567890ABCDEF", SessionID: "sess_1234567890ABCDEF", TurnID: "turn_1234567890ABCDEF", State: agentruntime.ApprovalPending, Action: &agentruntime.ApprovalAction{Verb: "write", Target: "workspace-service"}, ExpiresAt: time.Date(2026, 8, 11, 20, 0, 0, 0, time.UTC)}
+	approval := agentruntime.Approval{ID: "appr_1234567890ABCDEF", SessionID: "sess_1234567890ABCDEF", TurnID: "turn_1234567890ABCDEF", ToolCallID: "tcall_1234567890ABCDEF", State: agentruntime.ApprovalPending, Action: &agentruntime.ApprovalAction{Verb: "write", Target: "workspace-service"}, ExpiresAt: time.Date(2026, 8, 11, 20, 0, 0, 0, time.UTC)}
 	inbox, err := NewInbox(&approvalClient{approval: approval})
 	if err != nil {
 		t.Fatal(err)

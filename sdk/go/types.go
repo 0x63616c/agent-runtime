@@ -368,6 +368,9 @@ type Approval struct {
 	ID        ApprovalID `json:"id"`
 	SessionID SessionID  `json:"session_id"`
 	TurnID    TurnID     `json:"turn_id"`
+	// ToolCallID links this decision to the single model Tool call it governs.
+	// It is an opaque caller-safe correlation value, never a capability.
+	ToolCallID string `json:"tool_call_id"`
 	// Requester is the principal that owns the requested effect. It is visible
 	// only through the already owner-scoped approval projection.
 	Requester string `json:"requester,omitempty"`

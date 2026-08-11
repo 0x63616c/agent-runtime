@@ -28,3 +28,17 @@ only `github.com/0x63616c/agent-runtime/sdk/go`, and typechecks the retained
 capabilities. The same gate retains the OpenAPI vocabulary baseline. Until a
 version is published it checks the release candidate through a local module
 replacement; it does not claim that an immutable remote tag has been tested.
+
+## Unreleased compatibility decisions
+
+### M7 approval lifecycle projection
+
+`Approval.tool_call_id` and the `waiting_for_approval` Turn state are additive
+v1 response vocabulary. The field makes the already durable Approval-to-Tool
+call relationship observable without exposing a descriptor, capability,
+credential, grant ID, or backend handle. The state makes the existing
+non-terminal, cancellable approval wait observable. Existing SDK callers keep
+the string-backed `TurnState` type and may continue ignoring additional
+response fields; clients that validate response JSON must accept documented
+additive fields and enum values. No existing route, request field, response
+field, ID grammar, or enum member is removed or redefined.
