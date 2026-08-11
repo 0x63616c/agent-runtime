@@ -124,6 +124,22 @@ func TestStateRuntimeReadsOnlyStateAuthorizedArtifactBytes(t *testing.T) {
 	if err != nil || string(artifact.Body) != "approved report" || artifact.Artifact.SHA256 == "" {
 		t.Fatalf("read artifact = %#v, %v", artifact, err)
 	}
+	artifactInput, err := runtime.SendInput(ctx, alice, agentruntime.SendInputRequest{SessionID: session.ID, IdempotencyKey: "artifact-reference-input", Parts: []agentruntime.ContentPart{{Kind: agentruntime.ContentArtifact, Artifact: &artifact.Artifact}}})
+	if err != nil || len(artifactInput.Input.Parts) != 1 || artifactInput.Input.Parts[0].Artifact == nil || *artifactInput.Input.Parts[0].Artifact != artifact.Artifact {
+		t.Fatalf("send authorized Artifact Input = %#v, %v", artifactInput, err)
+	}
+	forged := artifact.Artifact
+	forged.SHA256 = strings.Repeat("0", 64)
+	if _, err := runtime.SendInput(ctx, alice, agentruntime.SendInputRequest{SessionID: session.ID, IdempotencyKey: "forged-artifact-reference", Parts: []agentruntime.ContentPart{{Kind: agentruntime.ContentArtifact, Artifact: &forged}}}); !hasFailure(err, agentruntime.FailureNotFound) {
+		t.Fatalf("send forged Artifact Input error = %v, want safe not-found", err)
+	}
+	bobSession, err := runtime.CreateSession(ctx, bob, agentruntime.CreateSessionRequest{IdempotencyKey: "artifact-bob-session", AgentRevision: agent.RevisionID})
+	if err != nil {
+		t.Fatalf("create cross-principal Artifact Session: %v", err)
+	}
+	if _, err := runtime.SendInput(ctx, bob, agentruntime.SendInputRequest{SessionID: bobSession.ID, IdempotencyKey: "cross-principal-artifact-reference", Parts: []agentruntime.ContentPart{{Kind: agentruntime.ContentArtifact, Artifact: &artifact.Artifact}}}); !hasFailure(err, agentruntime.FailureNotFound) {
+		t.Fatalf("send cross-principal Artifact Input error = %v, want safe not-found", err)
+	}
 	if _, err := runtime.ReadArtifact(ctx, bob, plan.Result().Artifact.ArtifactID); !hasFailure(err, agentruntime.FailureNotFound) {
 		t.Fatalf("cross-principal artifact read error = %v, want safe not-found", err)
 	}

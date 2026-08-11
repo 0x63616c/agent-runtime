@@ -269,6 +269,9 @@ func (runtime *StateRuntime) SendInput(ctx context.Context, identity Identity, r
 	if err != nil {
 		return agentruntime.SendInputResult{}, err
 	}
+	if err := runtime.authorizeInputArtifacts(ctx, scope, request.Parts); err != nil {
+		return agentruntime.SendInputResult{}, err
+	}
 	handoff, err := runtime.content.StageInputEnvelope(ctx, scope.Tenant, request.Parts)
 	if err != nil {
 		return agentruntime.SendInputResult{}, stageFailure(err)
@@ -285,6 +288,26 @@ func (runtime *StateRuntime) SendInput(ctx context.Context, identity Identity, r
 		return agentruntime.SendInputResult{}, err
 	}
 	return agentruntime.SendInputResult{Input: agentruntime.Input{ID: result.Input.InputID, Parts: parts, AcceptedAt: result.Input.AcceptedAt}, Turn: publicTurn(result.Turn)}, nil
+}
+
+// authorizeInputArtifacts accepts an Artifact reference only when the caller
+// owns the exact immutable metadata already recorded by runtime state. The
+// public reference is not an authority token: a forged digest, size, media
+// type, or cross-principal ID is deliberately indistinguishable from absence.
+func (runtime *StateRuntime) authorizeInputArtifacts(ctx context.Context, scope runtimestate.MutationScope, parts []agentruntime.ContentPart) error {
+	for _, part := range parts {
+		if part.Kind != agentruntime.ContentArtifact || part.Artifact == nil {
+			continue
+		}
+		record, err := runtime.store.GetArtifact(ctx, runtimestate.ArtifactQuery{Scope: scope, ArtifactID: part.Artifact.ID})
+		if err != nil {
+			return runtimeFailure("authorize Input Artifact", err)
+		}
+		if publicArtifact(record) != *part.Artifact {
+			return runtimeFailure("authorize Input Artifact", runtimestate.ErrNotFoundOrDenied)
+		}
+	}
+	return nil
 }
 
 // InspectSession returns the bounded principal-scoped public projection.
