@@ -245,7 +245,10 @@ func (proxy Proxy) dialResolved(ctx context.Context, network, address string) (n
 	return nil, errors.New("dial egress proxy: declared target has no reachable public address")
 }
 
-func publicAddress(address net.IP) bool {
+// IsPublicAddress reports whether an IP is globally routable under the proxy's
+// reviewed special-use denylist. It is shared by sandbox command egress
+// authorization; callers still must resolve and pin each connection themselves.
+func IsPublicAddress(address net.IP) bool {
 	parsed, valid := netip.AddrFromSlice(address)
 	if !valid {
 		return false
@@ -258,6 +261,8 @@ func publicAddress(address net.IP) bool {
 	}
 	return parsed.IsGlobalUnicast()
 }
+
+func publicAddress(address net.IP) bool { return IsPublicAddress(address) }
 
 func closeConnection(connection io.Closer) {
 	if err := connection.Close(); err != nil {
