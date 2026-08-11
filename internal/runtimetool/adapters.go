@@ -11,7 +11,7 @@ type BuiltinAdapter struct{ adapter ContractAdapter }
 
 // NewBuiltinAdapter constructs a broker-only builtin adapter seam.
 func NewBuiltinAdapter(adapter ContractAdapter) (*BuiltinAdapter, error) {
-	if adapter == nil {
+	if adapter == nil || adapter.ExternalEffectContract() != (ExternalEffectContract{IdempotencyKey: "operation_id", Reconciles: true}) {
 		return nil, errors.New("create builtin tool adapter: recovery contract is required")
 	}
 	return &BuiltinAdapter{adapter: adapter}, nil
