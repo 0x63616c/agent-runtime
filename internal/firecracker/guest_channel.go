@@ -170,6 +170,9 @@ func (channel *UnixGuestControlChannel) ExecuteAuthenticatedDispatch(ctx context
 	if err != nil {
 		return err
 	}
+	if result.State == "SUCCEEDED" {
+		return nil
+	}
 	if result.State != "UNAVAILABLE" {
 		return fmt.Errorf("authenticated guest dispatch state: %w", ErrCapabilityUnavailable)
 	}
@@ -335,7 +338,7 @@ func readGuestDispatchResult(reader *bufio.Reader, envelopeID string) (GuestDisp
 			result.Outputs = append(result.Outputs, GuestOutput{Stream: fields[2], Sequence: sequence, Digest: fields[4], Data: append([]byte(nil), chunk...)})
 			continue
 		}
-		if len(fields) == 3 && fields[0] == "RESULT" && fields[1] == "UNAVAILABLE" && fields[2] == envelopeID {
+		if len(fields) == 3 && fields[0] == "RESULT" && (fields[1] == "UNAVAILABLE" || fields[1] == "SUCCEEDED" || fields[1] == "FAILED") && fields[2] == envelopeID {
 			result.State = fields[1]
 			return result, nil
 		}
