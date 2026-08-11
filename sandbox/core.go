@@ -879,6 +879,9 @@ func normalizeRequest(request OperationRequest, limits limitPolicy) (OperationRe
 		if request.CreateSandbox.Spec.Image.Digest == "" || !validDigest(request.CreateSandbox.Spec.Image.Digest) {
 			return OperationRequest{}, "", newFailure(FailureInvalidArgument, "create sandbox requires an immutable image digest", RetryNever)
 		}
+		if !validSandboxSpecGuestPaths(request.CreateSandbox.Spec) {
+			return OperationRequest{}, "", newFailure(FailureInvalidArgument, "create sandbox contains an invalid guest path", RetryNever)
+		}
 		request.CreateSandbox.Spec.Resources = resolveLimits(request.CreateSandbox.Spec.Resources, limits.defaults)
 		if !withinLimits(request.CreateSandbox.Spec.Resources, limits.maximum) {
 			return OperationRequest{}, "", newFailure(FailureResourceLimitExceeded, "sandbox resources exceed policy maximum", RetryNever)
@@ -911,6 +914,25 @@ func normalizeRequest(request OperationRequest, limits limitPolicy) (OperationRe
 	}
 	frozen := copyRequest(request)
 	return frozen, canonicalRequestDigest(frozen), nil
+}
+
+func validSandboxSpecGuestPaths(spec SandboxSpec) bool {
+	for _, attachment := range spec.VolumeAttachments {
+		if !validGuestPath(attachment.Target) {
+			return false
+		}
+	}
+	for _, mount := range spec.Mounts {
+		if !validGuestPath(mount.Target) {
+			return false
+		}
+	}
+	for _, tmpfs := range spec.Tmpfs {
+		if !validGuestPath(tmpfs.Target) {
+			return false
+		}
+	}
+	return true
 }
 
 func validTaggedTarget(request OperationRequest) bool {
