@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"strings"
 	"sync"
 	"testing"
@@ -167,6 +168,155 @@ func TestPostgresOutboxReclaimsLiveTemporalRouteAfterAcknowledgementLoss(t *test
 	}
 }
 
+// TestPostgresOutboxRecoversAcrossActualPublisherProcessKills proves the
+// DAT-012/DAT-013 boundary with a real child publisher process. It kills the
+// process after durable claim and after Temporal accepts the route before the
+// PostgreSQL acknowledgement, then rebuilds the publisher and proves the
+// exact at-least-once/reconciled outcomes and audit facts.
+func TestPostgresOutboxRecoversAcrossActualPublisherProcessKills(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+	postgresDSN := requiredPublisherEnvironment(t, "AR_RUNTIME_API_POSTGRES_DSN")
+	endpoint := requiredPublisherEnvironment(t, "AR_RUNTIME_API_MINIO_ENDPOINT")
+	accessKey := requiredPublisherEnvironment(t, "AR_RUNTIME_API_MINIO_ACCESS_KEY")
+	secretKey := requiredPublisherEnvironment(t, "AR_RUNTIME_API_MINIO_SECRET_KEY")
+	contentBucket := requiredPublisherEnvironment(t, "AR_RUNTIME_API_MINIO_BUCKET")
+	payloadBucket := contentBucket + "-temporal-payload-process-kill"
+
+	objects, err := minio.New(endpoint, &minio.Options{Creds: credentials.NewStaticV4(accessKey, secretKey, ""), Secure: false})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, bucket := range []string{contentBucket, payloadBucket} {
+		if err := objects.MakeBucket(ctx, bucket, minio.MakeBucketOptions{}); err != nil && minio.ToErrorResponse(err).Code != "BucketAlreadyOwnedByYou" {
+			t.Fatalf("create integration bucket %q: %v", bucket, err)
+		}
+	}
+	pool, err := pgxpool.New(ctx, postgresDSN)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	store, err := runtimepostgres.NewRuntimeStateStore(pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server, err := testsuite.StartDevServer(ctx, testsuite.DevServerOptions{})
+	if err != nil {
+		t.Fatalf("start Temporal development server: %v", err)
+	}
+	defer func() { _ = server.Stop() }()
+	factory, err := temporalpayloadruntime.NewS3Factory(temporalpayloadruntime.S3Config{Endpoint: endpoint, Bucket: payloadBucket, Prefix: "postgres-temporal-process-kill", AccessKey: accessKey, SecretKey: secretKey})
+	if err != nil {
+		t.Fatal(err)
+	}
+	taskQueue := "postgres-temporal-process-kill"
+	workerClient, err := factory.NewClient(ctx, client.Options{HostPort: server.FrontendHostPort()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer workerClient.Close()
+	workerRuntime, err := factory.NewWorker(workerClient, taskQueue, worker.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	durableDispatcher, err := NewDurableStateDispatcher(store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dispatcher := &publisherIntegrationDispatcher{StateDispatcher: durableDispatcher}
+	activities, err := NewActivities(dispatcher)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := Register(workerRuntime, activities); err != nil {
+		t.Fatal(err)
+	}
+	if err := workerRuntime.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer workerRuntime.Stop()
+
+	for _, scenario := range []struct {
+		name                 string
+		mode                 string
+		deliveredBeforeDeath bool
+	}{
+		{name: "after_claim_before_temporal_route", mode: "after_claim"},
+		{name: "after_temporal_route_before_postgres_ack", mode: "after_route", deliveredBeforeDeath: true},
+	} {
+		scenario := scenario
+		t.Run(scenario.name, func(t *testing.T) {
+			now := time.Date(2026, 8, 10, 16, 0, 0, 0, time.UTC)
+			timeSource, err := clock.NewFake(now)
+			if err != nil {
+				t.Fatal(err)
+			}
+			content := publisherIntegrationContent(t, endpoint, accessKey, secretKey, contentBucket)
+			compiler, err := runtimestate.NewCompiler(content)
+			if err != nil {
+				t.Fatal(err)
+			}
+			planner, err := runtimestate.NewRuntimeStatePlanner(timeSource, &publisherIntegrationIDs{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			tenantName := "process-kill-" + strings.ReplaceAll(scenario.mode, "_", "-")
+			tenant, session, _ := seedPublisherIntegrationSessionForTenant(t, ctx, content, compiler, planner, store, tenantName)
+			before := loadPublisherIntegrationState(t, ctx, store, tenant)
+			inputRoute := publisherIntegrationInputRoute(t, before, session.ID)
+
+			output, err := runKilledPublisherProcess(ctx, scenario.mode, tenant, postgresDSN, endpoint, accessKey, secretKey, contentBucket, payloadBucket, server.FrontendHostPort(), taskQueue)
+			if err == nil {
+				t.Fatal("publisher child exited successfully, want forced process death")
+			}
+			if _, ok := err.(*exec.ExitError); !ok || !strings.Contains(string(output), "publisher-process-kill:"+scenario.mode) {
+				t.Fatalf("publisher child result = %v output=%q, want forced %s death", err, output, scenario.mode)
+			}
+
+			claimed := loadPublisherIntegrationState(t, ctx, store, tenant)
+			inputRoute = publisherIntegrationOutbox(t, claimed, string(inputRoute.OutboxID))
+			if inputRoute.State != runtimestate.OutboxClaimed || !hasPublisherIntegrationAudit(claimed.Audit, "outbox.claimed", "temporal-claim-"+string(inputRoute.OutboxID)+"-") || hasPublisherIntegrationAudit(claimed.Audit, "outbox.published", "temporal-ack-"+string(inputRoute.OutboxID)+"-") {
+				t.Fatalf("state after %s process death = %#v / %#v, want claimed route without acknowledgement", scenario.mode, inputRoute, claimed.Audit)
+			}
+			if scenario.deliveredBeforeDeath {
+				if !dispatcher.waitForSession(ctx, CommandInputAccepted, tenant, session.ID) {
+					t.Fatal("Temporal did not receive the input route before forced death")
+				}
+			} else if got := dispatcher.countForSession(CommandInputAccepted, tenant, session.ID); got != 0 {
+				t.Fatalf("Temporal input dispatches before claim-boundary recovery = %d, want 0", got)
+			}
+
+			if err := timeSource.Advance(2*time.Minute + time.Nanosecond); err != nil {
+				t.Fatal(err)
+			}
+			restartedClient, err := factory.NewClient(ctx, client.Options{HostPort: server.FrontendHostPort()})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer restartedClient.Close()
+			restartedPublisher, err := NewPublisher(PublisherConfig{Store: store, Tenants: publisherIntegrationTenants{tenant: tenant}, Compiler: compiler, Planner: planner, Clock: timeSource, Publisher: temporalSessionPublisher{client: restartedClient, taskQueue: taskQueue}, Claimer: "postgres-temporal-publisher"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := restartedPublisher.ScanOnce(ctx); err != nil {
+				t.Fatalf("recover %s publisher route: %v", scenario.mode, err)
+			}
+			if !dispatcher.waitForSession(ctx, CommandInputAccepted, tenant, session.ID) {
+				t.Fatal("recovered publisher did not deliver the durable input route")
+			}
+			recovered := loadPublisherIntegrationState(t, ctx, store, tenant)
+			inputRoute = publisherIntegrationOutbox(t, recovered, string(inputRoute.OutboxID))
+			if inputRoute.State != runtimestate.OutboxPublished || !hasPublisherIntegrationAudit(recovered.Audit, "outbox.published", "temporal-ack-"+string(inputRoute.OutboxID)+"-") {
+				t.Fatalf("state after %s process recovery = %#v / %#v, want published route", scenario.mode, inputRoute, recovered.Audit)
+			}
+			if got := dispatcher.countForSession(CommandInputAccepted, tenant, session.ID); got != 1 {
+				t.Fatalf("Temporal input dispatches after %s process recovery = %d, want exactly one", scenario.mode, got)
+			}
+		})
+	}
+}
+
 func publisherIntegrationContent(t *testing.T, endpoint, accessKey, secretKey, bucket string) *runtimecontent.Store {
 	t.Helper()
 	objects, err := minio.New(endpoint, &minio.Options{Creds: credentials.NewStaticV4(accessKey, secretKey, ""), Secure: false})
@@ -189,26 +339,30 @@ func publisherIntegrationContent(t *testing.T, endpoint, accessKey, secretKey, b
 }
 
 func seedPublisherIntegrationSession(t *testing.T, ctx context.Context, content *runtimecontent.Store, compiler *runtimestate.Compiler, planner *runtimestate.RuntimeStatePlanner, store runtimestate.RuntimeStateStore) (runtimecontent.TenantID, agentruntime.Session, agentruntime.SendInputResult) {
+	return seedPublisherIntegrationSessionForTenant(t, ctx, content, compiler, planner, store, "postgres-temporal")
+}
+
+func seedPublisherIntegrationSessionForTenant(t *testing.T, ctx context.Context, content *runtimecontent.Store, compiler *runtimestate.Compiler, planner *runtimestate.RuntimeStatePlanner, store runtimestate.RuntimeStateStore, tenantName string) (runtimecontent.TenantID, agentruntime.Session, agentruntime.SendInputResult) {
 	t.Helper()
 	runtime, err := runtimeapi.NewStateRuntime(runtimeapi.StateRuntimeConfig{Content: content, Compiler: compiler, Planner: planner, Store: store, ModelProfiles: []string{"balanced"}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	admin := runtimeapi.Identity{Tenant: "postgres-temporal", Principal: "admin", Admin: true}
-	owner := runtimeapi.Identity{Tenant: "postgres-temporal", Principal: "owner"}
-	agent, err := runtime.CreateAgent(ctx, admin, agentruntime.CreateAgentRequest{IdempotencyKey: "postgres-temporal-agent", Name: "reclaim", ModelProfile: "balanced", Instructions: "durably reclaim"})
+	admin := runtimeapi.Identity{Tenant: tenantName, Principal: "admin", Admin: true}
+	owner := runtimeapi.Identity{Tenant: tenantName, Principal: "owner"}
+	agent, err := runtime.CreateAgent(ctx, admin, agentruntime.CreateAgentRequest{IdempotencyKey: tenantName + "-agent", Name: "reclaim", ModelProfile: "balanced", Instructions: "durably reclaim"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	session, err := runtime.CreateSession(ctx, owner, agentruntime.CreateSessionRequest{IdempotencyKey: "postgres-temporal-session", AgentRevision: agent.RevisionID})
+	session, err := runtime.CreateSession(ctx, owner, agentruntime.CreateSessionRequest{IdempotencyKey: tenantName + "-session", AgentRevision: agent.RevisionID})
 	if err != nil {
 		t.Fatal(err)
 	}
-	accepted, err := runtime.SendInput(ctx, owner, agentruntime.SendInputRequest{SessionID: session.ID, IdempotencyKey: "postgres-temporal-input", Parts: []agentruntime.ContentPart{{Kind: agentruntime.ContentText, Text: "recover one exact durable route"}}})
+	accepted, err := runtime.SendInput(ctx, owner, agentruntime.SendInputRequest{SessionID: session.ID, IdempotencyKey: tenantName + "-input", Parts: []agentruntime.ContentPart{{Kind: agentruntime.ContentText, Text: "recover one exact durable route"}}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	tenant, err := runtimecontent.ParseTenantID("postgres-temporal")
+	tenant, err := runtimecontent.ParseTenantID(tenantName)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -235,6 +389,17 @@ func publisherIntegrationOutbox(t *testing.T, state runtimestate.RuntimeState, o
 	return runtimestate.OutboxRecord{}
 }
 
+func publisherIntegrationInputRoute(t *testing.T, state runtimestate.RuntimeState, sessionID agentruntime.SessionID) runtimestate.OutboxRecord {
+	t.Helper()
+	for _, record := range state.Outbox {
+		if record.SessionID == sessionID && record.EventKind == agentruntime.EventInputAccepted {
+			return record
+		}
+	}
+	t.Fatalf("input route for Session %s = absent from %#v", sessionID, state.Outbox)
+	return runtimestate.OutboxRecord{}
+}
+
 func hasPublisherIntegrationAudit(facts []runtimestate.AuditFactRecord, kind, prefix string) bool {
 	for _, fact := range facts {
 		if fact.Kind == kind && len(prefix) <= len(string(fact.OperationID)) && string(fact.OperationID)[:len(prefix)] == prefix {
@@ -256,6 +421,109 @@ func requiredPublisherEnvironment(t *testing.T, name string) string {
 type failFirstPostgresAcknowledgementStore struct {
 	runtimestate.RuntimeStateStore
 	failed bool
+}
+
+const publisherProcessKillMarker = "publisher-process-kill:"
+
+// TestPublisherProcessKillHelper is run only as a child test process by the
+// process-kill integration matrix. It deliberately terminates without running
+// defers at one named durable acknowledgement boundary.
+func TestPublisherProcessKillHelper(t *testing.T) {
+	if os.Getenv("AR_PUBLISHER_PROCESS_KILL_HELPER") != "1" {
+		return
+	}
+	ctx := context.Background()
+	mode := os.Getenv("AR_PUBLISHER_PROCESS_KILL_MODE")
+	tenant, err := runtimecontent.ParseTenantID(os.Getenv("AR_PUBLISHER_PROCESS_KILL_TENANT"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	postgresDSN := requiredPublisherEnvironment(t, "AR_RUNTIME_API_POSTGRES_DSN")
+	endpoint := requiredPublisherEnvironment(t, "AR_RUNTIME_API_MINIO_ENDPOINT")
+	accessKey := requiredPublisherEnvironment(t, "AR_RUNTIME_API_MINIO_ACCESS_KEY")
+	secretKey := requiredPublisherEnvironment(t, "AR_RUNTIME_API_MINIO_SECRET_KEY")
+	contentBucket := requiredPublisherEnvironment(t, "AR_RUNTIME_API_MINIO_BUCKET")
+	payloadBucket := os.Getenv("AR_PUBLISHER_PROCESS_KILL_PAYLOAD_BUCKET")
+	temporalEndpoint := os.Getenv("AR_PUBLISHER_PROCESS_KILL_TEMPORAL_ENDPOINT")
+	taskQueue := os.Getenv("AR_PUBLISHER_PROCESS_KILL_TASK_QUEUE")
+	if payloadBucket == "" || temporalEndpoint == "" || taskQueue == "" || (mode != "after_claim" && mode != "after_route") {
+		t.Fatal("process-kill helper has incomplete bounded configuration")
+	}
+	pool, err := pgxpool.New(ctx, postgresDSN)
+	if err != nil {
+		t.Fatal(err)
+	}
+	content := publisherIntegrationContent(t, endpoint, accessKey, secretKey, contentBucket)
+	compiler, err := runtimestate.NewCompiler(content)
+	if err != nil {
+		t.Fatal(err)
+	}
+	timeSource, err := clock.NewFake(time.Date(2026, 8, 10, 16, 0, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatal(err)
+	}
+	planner, err := runtimestate.NewRuntimeStatePlanner(timeSource, &publisherIntegrationIDs{next: 10000})
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := runtimepostgres.NewRuntimeStateStore(pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	factory, err := temporalpayloadruntime.NewS3Factory(temporalpayloadruntime.S3Config{Endpoint: endpoint, Bucket: payloadBucket, Prefix: "postgres-temporal-process-kill", AccessKey: accessKey, SecretKey: secretKey})
+	if err != nil {
+		t.Fatal(err)
+	}
+	temporalClient, err := factory.NewClient(ctx, client.Options{HostPort: temporalEndpoint})
+	if err != nil {
+		t.Fatal(err)
+	}
+	publisher, err := NewPublisher(PublisherConfig{Store: &processKillingStore{RuntimeStateStore: store, mode: mode}, Tenants: publisherIntegrationTenants{tenant: tenant}, Compiler: compiler, Planner: planner, Clock: timeSource, Publisher: temporalSessionPublisher{client: temporalClient, taskQueue: taskQueue}, Claimer: "postgres-temporal-publisher"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := publisher.ScanOnce(ctx); err != nil {
+		t.Fatalf("process-kill helper returned before forced death: %v", err)
+	}
+	t.Fatal("process-kill helper returned without reaching the requested death boundary")
+}
+
+func runKilledPublisherProcess(ctx context.Context, mode string, tenant runtimecontent.TenantID, postgresDSN, endpoint, accessKey, secretKey, contentBucket, payloadBucket, temporalEndpoint, taskQueue string) ([]byte, error) {
+	command := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestPublisherProcessKillHelper$")
+	command.Env = append(os.Environ(),
+		"AR_PUBLISHER_PROCESS_KILL_HELPER=1",
+		"AR_PUBLISHER_PROCESS_KILL_MODE="+mode,
+		"AR_PUBLISHER_PROCESS_KILL_TENANT="+string(tenant),
+		"AR_RUNTIME_API_POSTGRES_DSN="+postgresDSN,
+		"AR_RUNTIME_API_MINIO_ENDPOINT="+endpoint,
+		"AR_RUNTIME_API_MINIO_ACCESS_KEY="+accessKey,
+		"AR_RUNTIME_API_MINIO_SECRET_KEY="+secretKey,
+		"AR_RUNTIME_API_MINIO_BUCKET="+contentBucket,
+		"AR_PUBLISHER_PROCESS_KILL_PAYLOAD_BUCKET="+payloadBucket,
+		"AR_PUBLISHER_PROCESS_KILL_TEMPORAL_ENDPOINT="+temporalEndpoint,
+		"AR_PUBLISHER_PROCESS_KILL_TASK_QUEUE="+taskQueue,
+	)
+	return command.CombinedOutput()
+}
+
+type processKillingStore struct {
+	runtimestate.RuntimeStateStore
+	mode string
+}
+
+func (store *processKillingStore) PersistTransitionPlan(ctx context.Context, plan runtimestate.TransitionPlan) error {
+	if store.mode == "after_route" && plan.Kind() == runtimestate.CommandAcknowledgeOutbox && plan.Result().Outbox.EventKind == agentruntime.EventInputAccepted {
+		fmt.Fprintln(os.Stdout, publisherProcessKillMarker+store.mode)
+		os.Exit(86)
+	}
+	if err := store.RuntimeStateStore.PersistTransitionPlan(ctx, plan); err != nil {
+		return err
+	}
+	if store.mode == "after_claim" && plan.Kind() == runtimestate.CommandClaimOutbox && plan.Result().Outbox.EventKind == agentruntime.EventInputAccepted {
+		fmt.Fprintln(os.Stdout, publisherProcessKillMarker+store.mode)
+		os.Exit(86)
+	}
+	return nil
 }
 
 func (store *failFirstPostgresAcknowledgementStore) PersistTransitionPlan(ctx context.Context, plan runtimestate.TransitionPlan) error {
@@ -314,6 +582,38 @@ func (dispatcher *publisherIntegrationDispatcher) count(kind CommandKind) int {
 	count := 0
 	for _, command := range dispatcher.commands {
 		if command.Kind == kind {
+			count++
+		}
+	}
+	return count
+}
+
+func (dispatcher *publisherIntegrationDispatcher) waitForSession(ctx context.Context, kind CommandKind, tenant runtimecontent.TenantID, sessionID agentruntime.SessionID) bool {
+	for {
+		if dispatcher.countForSession(kind, tenant, sessionID) > 0 {
+			return true
+		}
+		dispatcher.mu.Lock()
+		notify := dispatcher.notify
+		if notify == nil {
+			notify = make(chan struct{})
+			dispatcher.notify = notify
+		}
+		dispatcher.mu.Unlock()
+		select {
+		case <-notify:
+		case <-ctx.Done():
+			return false
+		}
+	}
+}
+
+func (dispatcher *publisherIntegrationDispatcher) countForSession(kind CommandKind, tenant runtimecontent.TenantID, sessionID agentruntime.SessionID) int {
+	dispatcher.mu.Lock()
+	defer dispatcher.mu.Unlock()
+	count := 0
+	for _, command := range dispatcher.commands {
+		if command.Kind == kind && command.Tenant == string(tenant) && command.SessionID == string(sessionID) {
 			count++
 		}
 	}
