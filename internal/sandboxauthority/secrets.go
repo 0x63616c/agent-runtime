@@ -50,6 +50,13 @@ type SecretSink interface {
 	RevokeAfterTreeReap(context.Context, SecretRequest) error
 }
 
+// SecretPrestartAborter is an optional ephemeral-sink extension used when a
+// secret was delivered but the recipient process never started. It must close
+// the ephemeral delivery without pretending a process tree existed.
+type SecretPrestartAborter interface {
+	AbortBeforeStart(context.Context, SecretRequest) error
+}
+
 // SecretAudit receives safe authority facts only; values and binding names are excluded.
 type SecretAudit interface {
 	RecordSecretDelivery(context.Context, SecretAuditFact) error
@@ -185,6 +192,44 @@ func (manager *Manager) RevokeAfterTreeReap(ctx context.Context, processID strin
 	manager.mu.Unlock()
 	if err := manager.audit.RecordSecretDelivery(ctx, SecretAuditFact{Principal: active.request.Principal, SandboxID: active.request.SandboxID, ProcessID: active.request.ProcessID, OperationID: active.request.OperationID, Version: active.version, ExpiresAt: active.request.ExpiresAt.UTC(), Event: "revoked-after-tree-reap"}); err != nil {
 		return fmt.Errorf("revoke command secret: audit unavailable")
+	}
+	return nil
+}
+
+// AbortBeforeStart closes and zeroizes a delivered secret only when its sink
+// proves that no recipient process was ever bound. It is not a substitute for
+// RevokeAfterTreeReap after a process has started.
+func (manager *Manager) AbortBeforeStart(ctx context.Context, processID string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if manager == nil {
+		return fmt.Errorf("abort command secret: %w", ErrLifecycle)
+	}
+	manager.mu.Lock()
+	active, ok := manager.active[processID]
+	manager.mu.Unlock()
+	if !ok {
+		return fmt.Errorf("abort command secret: %w", ErrLifecycle)
+	}
+	aborter, ok := manager.sink.(SecretPrestartAborter)
+	if !ok {
+		return fmt.Errorf("abort command secret: sink cannot prove prestart abort")
+	}
+	if err := aborter.AbortBeforeStart(ctx, active.request); err != nil {
+		return fmt.Errorf("abort command secret: sink did not confirm prestart abort")
+	}
+	manager.mu.Lock()
+	current, ok := manager.active[processID]
+	if !ok || current.request != active.request {
+		manager.mu.Unlock()
+		return fmt.Errorf("abort command secret: %w", ErrLifecycle)
+	}
+	zero(current.bytes)
+	delete(manager.active, processID)
+	manager.mu.Unlock()
+	if err := manager.audit.RecordSecretDelivery(ctx, SecretAuditFact{Principal: active.request.Principal, SandboxID: active.request.SandboxID, ProcessID: active.request.ProcessID, OperationID: active.request.OperationID, Version: active.version, ExpiresAt: active.request.ExpiresAt.UTC(), Event: "aborted-before-start"}); err != nil {
+		return fmt.Errorf("abort command secret: audit unavailable")
 	}
 	return nil
 }

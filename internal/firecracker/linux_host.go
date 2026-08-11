@@ -77,7 +77,9 @@ type FirecrackerHTTPPort interface {
 	Put(context.Context, string, any) error
 }
 
-// GuestControlChannel carries a future private guest-control transport. No concrete control transport is composed yet.
+// GuestControlChannel carries the private guest-control transport. Concrete
+// AF_VSOCK composition remains profile-gated and unavailable until its Linux/KVM
+// authority/evidence requirements are met.
 type GuestControlChannel interface {
 	Bind(context.Context, string) error
 	Ping(context.Context, string) error
@@ -105,6 +107,15 @@ type AuthenticatedGuestDispatchChannel interface {
 type AuthenticatedGuestResultChannel interface {
 	AuthenticatedGuestDispatchChannel
 	DispatchAuthenticated(context.Context, sandboxhostprotocol.Envelope, []byte) (GuestDispatchResult, error)
+}
+
+// AuthenticatedGuestSecretChannel is the private extension that consumes a
+// SecretExecutionAuthority only while an exact authenticated guest command is
+// live. Implementations must not serialize Manager-held secret bytes into the
+// host journal, output owner, or a new host-selected transport.
+type AuthenticatedGuestSecretChannel interface {
+	AuthenticatedGuestResultChannel
+	DispatchAuthenticatedSecret(context.Context, sandboxhostprotocol.Envelope, []byte, *SecretExecutionAuthority, sandboxhostprotocol.GuestOutputEmitter) error
 }
 
 // LinuxJailerHost is the Linux/KVM-only SmokeHost adapter composed from real host ports.
@@ -196,6 +207,29 @@ func (host *LinuxJailerHost) DispatchAuthenticated(ctx context.Context, envelope
 		return GuestDispatchResult{}, fmt.Errorf("%w: authenticated guest result channel is not composed", ErrCapabilityUnavailable)
 	}
 	return dispatch.DispatchAuthenticated(ctx, envelope, authenticatedEnvelope)
+}
+
+// DispatchAuthenticatedSecret is the only future Firecracker secret-command
+// composition door. It remains unavailable until the same protected profile
+// can prove guest PID/FD/proc/ptrace/tree-reap containment.
+func (host *LinuxJailerHost) DispatchAuthenticatedSecret(ctx context.Context, envelope sandboxhostprotocol.Envelope, authenticatedEnvelope []byte, authority *SecretExecutionAuthority, emit sandboxhostprotocol.GuestOutputEmitter) error {
+	if err := contextError(ctx); err != nil {
+		return err
+	}
+	if host == nil || authority == nil || emit == nil || len(authenticatedEnvelope) == 0 || envelope.OperationKind != GuestSecretCommandOperationKind || envelope.HostID == "" || envelope.AssignmentID == "" || envelope.FencingToken == 0 || envelope.CapabilityDigest == "" {
+		return fmt.Errorf("%w: authenticated fenced secret command is required", ErrCapabilityUnavailable)
+	}
+	host.mu.Lock()
+	launched, cleaning, plan, guest := host.launched, host.cleaning || host.cleaned, cloneLinuxJailerPlan(host.plan), host.Guest
+	host.mu.Unlock()
+	if !launched || cleaning || !validCompiledPlan(plan) || envelope.SandboxID != plan.VMID() || sandbox.Digest(envelope.CapabilityDigest) != plan.Capabilities().Digest || firecrackerProfilesUnavailable(plan.Capabilities()) {
+		return fmt.Errorf("%w: certified secret profile is unavailable", ErrCapabilityUnavailable)
+	}
+	channel, ok := guest.(AuthenticatedGuestSecretChannel)
+	if !ok {
+		return fmt.Errorf("%w: certified secret guest channel is not composed", ErrCapabilityUnavailable)
+	}
+	return channel.DispatchAuthenticatedSecret(ctx, envelope, authenticatedEnvelope, authority, emit)
 }
 
 // CancelDispatch forwards a lease-fenced cancellation only to the exact
