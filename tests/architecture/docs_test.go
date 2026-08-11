@@ -76,11 +76,17 @@ var _ = Describe("public documentation foundation", func() {
 			"path: website/dist",
 			"actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0",
 			"go-version-file: go.mod",
+			"if: github.ref == 'refs/heads/main'",
 		} {
 			Expect(workflow).To(ContainSubstring(required))
 		}
+		Expect(workflow).NotTo(ContainSubstring("github.event_name == 'workflow_dispatch'"))
 		Expect(workflow).NotTo(ContainSubstring("pull_request:"))
 		Expect(read(".github/workflows/ci.yml")).NotTo(ContainSubstring("pages: write"))
+	})
+
+	It("links the public Pages site from the repository landing page", func() {
+		Expect(read("README.md")).To(ContainSubstring("https://0x63616c.github.io/agent-runtime/"))
 	})
 
 	It("documents versioning, local search, accessibility, permissions, rollback, and the clean audit policy", func() {

@@ -37,10 +37,12 @@ before publication; the production build alone is not that proof.
 
 The Pages workflow has least-privilege read access while building. Only its
 deployment job receives `pages: write` and `id-token: write`, and it targets the
-protected `github-pages` environment. The Pages source is GitHub Actions and the
+protected `github-pages` environment. Every docs-affecting push to `main`
+uploads and deploys the immutable artifact; a manually dispatched run also
+deploys only when it targets `main`. The Pages source is GitHub Actions and the
 M0 project-site deployment has been verified publicly. #34 still owns the final
-default-branch publication, accessibility, search, navigation, and rollback
-evidence. Main CI cannot deploy.
+accessibility, search, navigation, and rollback evidence. Main CI cannot
+deploy.
 
 GitHub retains deployments and their immutable source revisions. A rollback is
 a reviewed revert or an explicit redeployment of a previously verified

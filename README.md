@@ -1,6 +1,8 @@
 # Agent Runtime
 
 Agent Runtime is a Go monorepo for a durable, session-based agent platform.
+Public documentation is available at
+[0x63616c.github.io/agent-runtime](https://0x63616c.github.io/agent-runtime/).
 M0 and the M2 payload milestone are complete. M1 declarative infrastructure
 and M3 sandbox-control work are active. The repository now exposes a runnable
 isolated Tilt infrastructure foundation and the reusable `temporalpayload`
