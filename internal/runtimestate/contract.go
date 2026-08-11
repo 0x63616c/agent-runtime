@@ -191,12 +191,20 @@ type CapabilityGrantRecord struct {
 	MaximumUses          uint32
 	Uses                 uint32
 	ExpiresAt            time.Time
+	RevokedAt            *time.Time
 	PolicyRevisionDigest string
 	CreatedAt            time.Time
 	RetainUntil          time.Time
 }
 
-func (record CapabilityGrantRecord) Clone() CapabilityGrantRecord { return record }
+func (record CapabilityGrantRecord) Clone() CapabilityGrantRecord {
+	clone := record
+	if record.RevokedAt != nil {
+		value := *record.RevokedAt
+		clone.RevokedAt = &value
+	}
+	return clone
+}
 
 // ToolExecutionState is the durable lifecycle of one externally visible tool
 // operation. It is deliberately distinct from model intent and Approval.
@@ -654,6 +662,18 @@ type ConsumeCapabilityGrantCommand struct {
 
 // Owned returns a value-owned capability grant consumption command.
 func (command ConsumeCapabilityGrantCommand) Owned() ConsumeCapabilityGrantCommand { return command }
+
+// RevokeCapabilityGrantCommand irreversibly withdraws one unused approved
+// grant before an execution intent has been committed.
+type RevokeCapabilityGrantCommand struct {
+	Scope                               MutationScope
+	IdempotencyKey, GrantID, ToolCallID string
+	SessionID                           agentruntime.SessionID
+	TurnID                              agentruntime.TurnID
+}
+
+// Owned returns a value-owned revocation command.
+func (command RevokeCapabilityGrantCommand) Owned() RevokeCapabilityGrantCommand { return command }
 
 // BeginToolExecutionCommand records one granted external tool operation before
 // an adapter receives its runtime-owned idempotency key.
