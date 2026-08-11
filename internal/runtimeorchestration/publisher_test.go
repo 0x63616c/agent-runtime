@@ -68,8 +68,131 @@ func TestPublisherDerivesTemporalRoutesOnlyFromClaimedDurableOutbox(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.Apply(ctx, accepted); err != nil {
+	acceptedPlan, err := store.Apply(ctx, accepted)
+	if err != nil {
 		t.Fatal(err)
+	}
+	state := acceptedPlan.State()
+	digest := "sha256:" + strings.Repeat("a", 64)
+	intent, err := compiler.CompileRecordToolIntent(runtimestate.RecordToolIntentCommand{
+		Scope:                runtimestate.MutationScope{Tenant: tenant, Principal: principal, Authority: runtimestate.AuthorityRuntimeWorker},
+		IdempotencyKey:       "tool-intent",
+		SessionID:            sessionPlan.Result().Session.SessionID,
+		TurnID:               state.Turns[0].TurnID,
+		ToolCallID:           "tcall_1234567890ABCDEF",
+		ToolName:             "write",
+		ActionDigest:         digest,
+		PolicyRevisionDigest: digest,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	intentPlan, err := store.Apply(ctx, intent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state = intentPlan.State()
+	approval, err := compiler.CompileRequestApproval(runtimestate.RequestApprovalCommand{
+		Scope:                runtimestate.MutationScope{Tenant: tenant, Principal: principal, Authority: runtimestate.AuthorityRuntimeWorker},
+		IdempotencyKey:       "request-approval",
+		SessionID:            sessionPlan.Result().Session.SessionID,
+		TurnID:               state.Turns[0].TurnID,
+		ToolCallID:           "tcall_1234567890ABCDEF",
+		ApprovalID:           "appr_1234567890ABCDEF",
+		ActionDigest:         digest,
+		PolicyRevisionDigest: digest,
+		CapabilityDigest:     digest,
+		MaximumUses:          1,
+		ExpiresAt:            now.Add(time.Hour),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = store.Apply(ctx, approval)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decision, err := compiler.CompileDecideApproval(runtimestate.DecideApprovalCommand{
+		Scope:          runtimestate.MutationScope{Tenant: tenant, Principal: principal, Authority: runtimestate.AuthoritySessionOwner},
+		IdempotencyKey: "approve-tool-intent",
+		ApprovalID:     "appr_1234567890ABCDEF",
+		Decision:       "approved",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	decisionPlan, err := store.Apply(ctx, decision)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if effects := decisionPlan.Effects(); len(effects.Events) != 1 || effects.Events[0].Kind != agentruntime.EventApprovalResolved || len(effects.Outbox) != 1 {
+		t.Fatalf("approval decision effects = %#v, want one durable safe approval route", effects)
+	}
+	state = decisionPlan.State()
+	begin, err := compiler.CompileBeginInvocationAttempt(runtimestate.BeginInvocationAttemptCommand{
+		Scope:                  runtimestate.MutationScope{Tenant: tenant, Principal: principal, Authority: runtimestate.AuthorityRuntimeWorker},
+		IdempotencyKey:         "begin-model-operation",
+		SessionID:              sessionPlan.Result().Session.SessionID,
+		TurnID:                 state.Turns[0].TurnID,
+		OperationID:            "model-operation-1",
+		ExpectedSessionVersion: state.Sessions[0].Version,
+		ExpectedTurnVersion:    state.Turns[0].Version,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	beginPlan, err := store.Apply(ctx, begin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state = beginPlan.State()
+	invocation := beginPlan.Result().Invocation
+	producerLoss := &agentruntime.Failure{Code: agentruntime.FailureUnavailable, Message: "producer lost before a model operation outcome was recorded"}
+	uncertain, err := compiler.CompileRecordInvocationOutcome(runtimestate.RecordInvocationOutcomeCommand{
+		Scope:                  runtimestate.MutationScope{Tenant: tenant, Principal: principal, Authority: runtimestate.AuthorityRuntimeWorker},
+		IdempotencyKey:         "model-operation-producer-loss",
+		SessionID:              sessionPlan.Result().Session.SessionID,
+		TurnID:                 state.Turns[0].TurnID,
+		OperationID:            invocation.OperationID,
+		Ordinal:                invocation.Ordinal,
+		Fence:                  invocation.Fence,
+		Outcome:                runtimestate.InvocationUncertain,
+		Failure:                producerLoss,
+		ExpectedSessionVersion: state.Sessions[0].Version,
+		ExpectedTurnVersion:    state.Turns[0].Version,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	uncertainPlan, err := store.Apply(ctx, uncertain)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state = uncertainPlan.State()
+	settle, err := compiler.CompileSettleTurn(runtimestate.SettleTurnCommand{
+		Scope:                  runtimestate.MutationScope{Tenant: tenant, Principal: principal, Authority: runtimestate.AuthorityRuntimeWorker},
+		IdempotencyKey:         "finalize-producer-loss",
+		SessionID:              sessionPlan.Result().Session.SessionID,
+		TurnID:                 state.Turns[0].TurnID,
+		ExpectedSessionVersion: state.Sessions[0].Version,
+		ExpectedTurnVersion:    state.Turns[0].Version,
+		Outcome: runtimestate.TerminalOutcome{
+			OperationID: invocation.OperationID,
+			Ordinal:     invocation.Ordinal,
+			Fence:       invocation.Fence,
+			State:       agentruntime.TurnFailed,
+			Failure:     producerLoss,
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	settledPlan, err := store.Apply(ctx, settle)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if final := settledPlan.State(); len(final.Invocations) != 1 || final.Invocations[0].State != runtimestate.InvocationUncertain || settledPlan.Result().Turn.State != agentruntime.TurnFailed || len(settledPlan.Effects().Events) != 1 || settledPlan.Effects().Events[0].Kind != agentruntime.EventTurnFailed {
+		t.Fatalf("producer-loss finalization = %#v / %#v, want retained uncertain invocation and terminal failed route", settledPlan.Result(), settledPlan.Effects())
 	}
 	temporal := &recordingPublisher{}
 	publisher, err := runtimeorchestration.NewPublisher(runtimeorchestration.PublisherConfig{Store: store, Tenants: store, Compiler: compiler, Planner: planner, Clock: timeSource, Publisher: temporal, Claimer: "orchestration-codec"})
@@ -82,15 +205,20 @@ func TestPublisherDerivesTemporalRoutesOnlyFromClaimedDurableOutbox(t *testing.T
 	if len(temporal.starts) != 1 || temporal.starts[0].SessionID != sessionPlan.Result().Session.SessionID.String() {
 		t.Fatalf("starts = %#v, want durable Session start", temporal.starts)
 	}
-	if len(temporal.commands) != 1 || temporal.commands[0].Kind != runtimeorchestration.CommandInputAccepted || temporal.commands[0].OutboxID == "" {
-		t.Fatalf("commands = %#v, want one state-derived input route", temporal.commands)
+	if got, want := len(temporal.commands), 3; got != want || temporal.commands[0].Kind != runtimeorchestration.CommandInputAccepted || temporal.commands[1].Kind != runtimeorchestration.CommandApprovalResolved || temporal.commands[2].Kind != runtimeorchestration.CommandTurnFailed {
+		t.Fatalf("commands = %#v, want durable input, approval, and producer-loss finalization routes", temporal.commands)
+	}
+	if temporal.commands[1].Sequence >= temporal.commands[2].Sequence {
+		t.Fatalf("terminal command ordering = %#v, want approval before finalization", temporal.commands)
 	}
 	dispatcher, err := runtimeorchestration.NewDurableStateDispatcher(store)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := dispatcher.Dispatch(ctx, temporal.commands[0]); err != nil {
-		t.Fatalf("recheck published durable route: %v", err)
+	for _, command := range temporal.commands {
+		if err := dispatcher.Dispatch(ctx, command); err != nil {
+			t.Fatalf("recheck published durable route %s: %v", command.Kind, err)
+		}
 	}
 	if err := dispatcher.Dispatch(ctx, runtimeorchestration.Command{Tenant: "tenant-a", OutboxID: "forged", SessionID: sessionPlan.Result().Session.SessionID.String(), Kind: runtimeorchestration.CommandInputAccepted, Sequence: 999}); err == nil {
 		t.Fatal("forged Temporal command was accepted without a durable outbox route")
@@ -98,7 +226,7 @@ func TestPublisherDerivesTemporalRoutesOnlyFromClaimedDurableOutbox(t *testing.T
 	if err := publisher.ScanOnce(ctx); err != nil {
 		t.Fatalf("rescan published durable outbox: %v", err)
 	}
-	if len(temporal.starts) != 1 || len(temporal.commands) != 1 {
+	if len(temporal.starts) != 1 || len(temporal.commands) != 3 {
 		t.Fatalf("rescan redelivered published routes: starts=%#v commands=%#v", temporal.starts, temporal.commands)
 	}
 }

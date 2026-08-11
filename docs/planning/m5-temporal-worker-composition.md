@@ -25,10 +25,11 @@ count while retaining only Session ID, the last durable sequence, and the
 small in-chain command count.
 
 `session.created` starts a chain. `input.accepted`, `turn.cancelled`,
-`session.closing`, and `session.completed` are rechecked signals; the final
-completed route ends the private workflow only after its durable outbox record
-is accepted. Other safe outbox events are acknowledged without inventing a
-new effect.
+`turn.succeeded`, `turn.failed`, `approval.resolved`,
+`sandbox_operation.finalized`, `session.closing`, and `session.completed` are
+rechecked signals; the final completed route ends the private workflow only
+after its durable outbox record is accepted. Other safe outbox events are
+acknowledged without inventing a new effect.
 
 The M5 activity performs only this reversible state-route verification. Its
 retry decision is deliberately closed and covered by
@@ -44,14 +45,17 @@ retry decision is deliberately closed and covered by
 
 The current dispatcher has no model, tool, approval service, or sandbox
 credential, so the latter two cases are classification guards rather than a
-claim that the dispatcher executes those effects. Approval resolution now
-produces a safe `approval.resolved` event/outbox route; terminal operation
-routes include `turn.succeeded`, `turn.failed`, and the safe
-`sandbox_operation.finalized` vocabulary. The Temporal test environment
-retains an ordered Input → Approval → sandbox-finalization → Session-complete
-scenario. TMP-010 still needs its full durable-state and retained-history
-evidence bundle; M6/M7 consume these foundations later but do not own their
-acceptance rows.
+claim that the dispatcher executes those effects. The publisher test follows
+the actual state transition from persisted tool intent through a principal
+approval decision, then through a fenced `uncertain` model invocation caused
+by producer loss and a terminal `turn.failed` outbox route. It verifies that
+both routes are accepted only after their durable records are claimed and
+published. The Temporal test environment separately retains an ordered Input
+→ Approval → sandbox-finalization → Session-complete scenario; sandbox
+finalization is still a safe vocabulary/worker-lifecycle test, not external
+sandbox-execution evidence. TMP-010 still needs its full durable-state and
+retained-history evidence bundle; M6/M7 consume these foundations later but
+do not own their acceptance rows.
 
 Required retained evidence:
 
