@@ -861,6 +861,17 @@ func (planner *RuntimeStatePlanner) recordToolExecutionOutcome(state *RuntimeSta
 		if err != nil {
 			return PlanResult{}, effects, err
 		}
+		for _, grant := range state.Grants {
+			if grant.GrantID == record.GrantID && grant.Uses >= grant.MaximumUses {
+				extra, auditErr := planner.auditOnly(state, binding, "capability_grant.exhausted", c.SessionID, c.TurnID, now)
+				if auditErr != nil {
+					return PlanResult{}, effects, auditErr
+				}
+				effects.Audit = append(effects.Audit, extra.Audit...)
+				effects.Outbox = append(effects.Outbox, extra.Outbox...)
+				break
+			}
+		}
 		return PlanResult{}, effects, nil
 	}
 	return PlanResult{}, EffectSet{}, ErrNotFoundOrDenied

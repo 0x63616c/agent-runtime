@@ -130,6 +130,9 @@ func TestWorkerFinalizesAuthorizedToolActionsAndReconcilesLostClaims(t *testing.
 			if !test.corrupt && !test.missing && !test.cancel && (len(state.Artifacts) != 1 || state.ToolExecutions[0].Result == nil || state.Artifacts[0].Reference != *state.ToolExecutions[0].Result) {
 				t.Fatalf("tool output must be owner-readable artifact = artifacts=%#v execution=%#v", state.Artifacts, state.ToolExecutions[0])
 			}
+			if !test.corrupt && !test.missing && !test.cancel && !hasAuditKind(state.Audit, "capability_grant.exhausted") {
+				t.Fatalf("terminal max-use grant lacks exhausted audit: %#v", state.Audit)
+			}
 			if len(state.Events) == 0 || state.Events[len(state.Events)-1].Kind != agentruntime.EventSandboxOperationFinalized {
 				t.Fatalf("tool terminal event = %#v, want durable sandbox finalization", state.Events)
 			}
