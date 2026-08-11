@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"regexp"
 	"time"
 
 	"github.com/0x63616c/agent-runtime/internal/clock"
@@ -14,6 +15,8 @@ import (
 )
 
 const maximumRetainedToolOutputBytes = 8 << 20
+
+var sensitiveToolOutput = regexp.MustCompile(`(?i)(authorization|token|secret|password)(\s*[=:]\s*)([^\s,;"}]+)`)
 
 type Request struct {
 	Tenant      runtimecontent.TenantID
@@ -258,6 +261,7 @@ func (w *Worker) process(ctx context.Context, r runtimestate.OutboxRecord, recov
 		state = runtimestate.ToolExecutionFailed
 	}
 	if len(out.Output) > 0 && failure == nil && !out.Uncertain {
+		out.Output = redactToolOutput(out.Output)
 		mediaType := out.MediaType
 		if mediaType == "" {
 			mediaType = "text/plain"
@@ -296,6 +300,13 @@ func (w *Worker) process(ctx context.Context, r runtimestate.OutboxRecord, recov
 		return e
 	}
 	return w.persist(ctx, m)
+}
+
+func redactToolOutput(value []byte) []byte {
+	// Adapter output is treated as untrusted diagnostic data. Preserve bounded
+	// useful text while replacing common credential assignments before content
+	// storage, events, or any owner-readable Artifact registration.
+	return sensitiveToolOutput.ReplaceAll(value, []byte("$1$2[REDACTED]"))
 }
 
 func (w *Worker) executionDispatchAllowed(state runtimestate.RuntimeState, execution runtimestate.ToolExecutionRecord) bool {
