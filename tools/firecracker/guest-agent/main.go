@@ -30,8 +30,8 @@ const maximumShutdownDuration = 5 * time.Second
 const guestControlPort uint32 = 10777
 
 // guestControlConnection is the one private, one-shot connection accepted by
-// the static init. It deliberately has no facility for proxying arbitrary
-// guest traffic.
+// the static init. It supports only the bounded signed proxy operation below;
+// it has no socket, listener, resolver, or arbitrary-tunnel facility.
 type guestControlConnection interface {
 	io.Reader
 	io.Writer
@@ -139,10 +139,10 @@ func serveGuestHandshake(vmID, fixtureVersion string, connection guestControlCon
 	if err != nil {
 		return err
 	}
-	return serveGuestOperation(vmID, connection, operation)
+	return serveGuestOperation(vmID, connection, frames, operation)
 }
 
-func serveGuestOperation(vmID string, connection guestControlConnection, operation []string) error {
+func serveGuestOperation(vmID string, connection guestControlConnection, frames *bufio.Reader, operation []string) error {
 	if len(operation) == 2 && operation[0] == "PING" && len("PING ")+len(operation[1])+1 <= maximumControlLineBytes && validControlToken(operation[1]) {
 		if _, err := fmt.Fprintf(connection, "PONG %s %s\n", vmID, operation[1]); err != nil {
 			return fmt.Errorf("write guest control PONG frame: %w", err)
@@ -195,6 +195,21 @@ func serveGuestOperation(vmID string, connection guestControlConnection, operati
 		}
 		return nil
 	}
+	if len(operation) == 2 && operation[0] == "PROXY" {
+		frame, err := base64.RawURLEncoding.DecodeString(operation[1])
+		if err != nil {
+			return fmt.Errorf("invalid guest proxy dispatch encoding")
+		}
+		envelope, _, err := firecracker.DecodeAuthenticatedGuestDispatch(frame)
+		if err != nil || envelope.SandboxID != vmID || envelope.EnvelopeID == "" || envelope.FencingToken == 0 || envelope.OperationKind != firecracker.GuestProxyOperationKind {
+			return fmt.Errorf("invalid guest proxy dispatch")
+		}
+		proxy, err := firecracker.DecodeGuestProxyPayload(envelope.Payload)
+		if err != nil || proxy.Request.SandboxID != envelope.SandboxID || proxy.Request.ProcessID != envelope.ProcessID || proxy.Request.OperationID != envelope.OperationID || proxy.Request.FencingToken != envelope.FencingToken || proxy.Request.VMID != vmID {
+			return fmt.Errorf("invalid guest proxy payload")
+		}
+		return serveGuestProxyOperation(connection, frames, envelope.EnvelopeID, proxy)
+	}
 	if len(operation) == 3 && operation[0] == "CANCEL" && validControlToken(operation[1]) {
 		fence, err := strconv.ParseUint(operation[2], 10, 64)
 		if err != nil || fence == 0 {
@@ -206,6 +221,75 @@ func serveGuestOperation(vmID string, connection guestControlConnection, operati
 		return nil
 	}
 	return fmt.Errorf("invalid guest control operation")
+}
+
+func serveGuestProxyOperation(connection guestControlConnection, frames *bufio.Reader, envelopeID string, proxy firecracker.GuestProxyPayload) error {
+	open, err := firecracker.EncodeGuestProxyOpen(proxy.Request)
+	if err != nil {
+		return fmt.Errorf("encode guest proxy open: %w", err)
+	}
+	if _, err := fmt.Fprintf(connection, "PROXY_OPEN %s\n", base64.RawURLEncoding.EncodeToString(open)); err != nil {
+		return fmt.Errorf("write guest proxy open: %w", err)
+	}
+	connected, err := readControlFrame(frames, maximumControlLineBytes)
+	if err != nil || len(connected) != 2 || connected[0] != "PROXY_CONNECTED" || connected[1] != envelopeID {
+		return fmt.Errorf("invalid guest proxy connection result")
+	}
+	if _, err := fmt.Fprintf(connection, "PROXY_DATA %s %s\n", envelopeID, base64.RawURLEncoding.EncodeToString(proxy.Input)); err != nil {
+		return fmt.Errorf("write guest proxy input: %w", err)
+	}
+	sequence := uint64(0)
+	var outputs [][]byte
+	for {
+		result, err := readGuestProxyResponse(frames)
+		if err != nil {
+			return err
+		}
+		if len(result) == 5 && result[0] == "PROXY_OUTPUT" && result[1] == envelopeID {
+			if len(outputs) != 0 {
+				return fmt.Errorf("too many guest proxy output frames")
+			}
+			parsedSequence, parseErr := strconv.ParseUint(result[2], 10, 64)
+			output, decodeErr := base64.RawURLEncoding.DecodeString(result[4])
+			if parseErr != nil || parsedSequence != sequence || decodeErr != nil || len(output) > 32<<10 || result[3] != sandboxhostprotocol.Digest(output) {
+				return fmt.Errorf("invalid guest proxy output")
+			}
+			outputs = append(outputs, output)
+			sequence++
+			continue
+		}
+		if len(result) == 3 && result[0] == "PROXY_RESULT" && result[1] == "SUCCEEDED" && result[2] == envelopeID {
+			for index, output := range outputs {
+				if len(output) > 0 {
+					if err := writeGuestOutput(connection, envelopeID, "stdout", uint64(index), output); err != nil {
+						return err
+					}
+				}
+			}
+			if _, err := fmt.Fprintf(connection, "RESULT SUCCEEDED %s\n", envelopeID); err != nil {
+				return fmt.Errorf("write guest proxy result: %w", err)
+			}
+			return nil
+		}
+		return fmt.Errorf("invalid guest proxy terminal result")
+	}
+}
+
+func readGuestProxyResponse(reader *bufio.Reader) ([]string, error) {
+	line, err := reader.ReadSlice('\n')
+	if err != nil || len(line) == 0 || len(line) > maximumDispatchLineBytes || line[len(line)-1] != '\n' {
+		return nil, fmt.Errorf("invalid or oversized guest proxy response")
+	}
+	fields := strings.Split(string(line[:len(line)-1]), " ")
+	if len(fields) == 0 {
+		return nil, fmt.Errorf("invalid guest proxy response")
+	}
+	for _, field := range fields {
+		if field == "" || strings.ContainsAny(field, "\r\n\x00") {
+			return nil, fmt.Errorf("invalid guest proxy response")
+		}
+	}
+	return fields, nil
 }
 
 func writeGuestOutput(connection guestControlConnection, envelopeID, stream string, sequence uint64, value []byte) error {
