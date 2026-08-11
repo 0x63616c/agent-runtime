@@ -27,6 +27,7 @@
         "deploy/sandboxcontrol/control.example.json",
         "deploy/sandboxhost/reference.example.json",
         "docs/operations/evidence-and-status.md",
+        "docs/adr/0013-temporary-documentation-audit-exception.md",
         "docs/operations/sandbox-control-ledger.md",
         "docs/operations/sandbox-host-routing.md",
         "docs/operations/self-hosted-deployment.md",
@@ -64,6 +65,9 @@
         "website/docs/reference/temporal-payloads.mdx",
         "website/docs/reference/sandbox-control-ledger.mdx",
         "website/docs/security/verified-boundaries.mdx",
+        "website/docs/security/dependency-audit-exception.mdx",
+        "cmd/check-docs-security-audit/main.go",
+        "internal/docssecurityaudit/audit.go",
         "website/docs/start-here/index.mdx",
         "website/docusaurus.config.ts",
         "website/package-lock.json",
@@ -109,6 +113,7 @@
     "website/docs/reference/temporal-payloads.mdx",
     "website/docs/reference/sandbox-control-ledger.mdx",
     "website/docs/security/verified-boundaries.mdx",
+    "website/docs/security/dependency-audit-exception.mdx",
     "website/docs/start-here/index.mdx"
   ]
 }

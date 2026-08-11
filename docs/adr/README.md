@@ -19,3 +19,4 @@ implementation authority unless an accepted ADR explicitly promotes them.
 | [0010](0010-documentation-deployment.md) | Documentation generation and deployment |
 | [0011](0011-runtime-state-authority-and-content-boundary.md) | Runtime state authority and immutable content boundary |
 | [0012](0012-private-firecracker-boot-probe-v2.md) | Private Firecracker boot-probe v2 protocol |
+| [0013](0013-temporary-documentation-audit-exception.md) | Temporary documentation production-dependency audit exception |

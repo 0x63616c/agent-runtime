@@ -45,7 +45,7 @@ docs-generate:
 docs-check:
     go run ./skills/refresh-agent-runtime-docs/scripts/refresh-docs --root . --check
     npm --prefix website ci
-    npm --prefix website audit --omit=dev --audit-level=high
+    go run ./cmd/check-docs-security-audit
     npm --prefix website run typecheck
     npm --prefix website run build
 

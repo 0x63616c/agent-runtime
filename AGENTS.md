@@ -245,8 +245,11 @@ Direct main is not an exemption from review, tests, or evidence.
    evidence. Use additive corrective commits. Preserve unrelated dirty work.
 5. A red `main`, failed required check, failed evidence upload, or missing
    required notification halts unrelated direct-main delivery. Diagnose and
-   repair or explicitly record the blocker before continuing. Do not hide it
-   with a skipped test, weakened assertion, or claimed success.
+   repair or explicitly record the blocker before continuing. A time-bounded
+   exception may alter one named gate only when an accepted ADR and linked
+   issue pin its exact scope, expiry, compensating validation, and removal
+   evidence; the affected audit still runs and reports the exception. Do not
+   hide a failure with a skipped test, weakened assertion, or claimed success.
 6. Completion evidence belongs with the requirement's ledger/evidence record
    and GitHub Issue. Until the machine-readable evidence log exists, include
    the immutable commit, proof level, command/result, limitations, and next

@@ -11,6 +11,15 @@ The site uses one current version until the first compatible public release.
 Node 24, npm's committed lockfile, and Docusaurus 3.10.2 are exact repository
 inputs. Repeatable jobs use `npm ci`; dependency upgrades are reviewed changes.
 
+## Current dependency audit exception
+
+The site has one visible, time-bounded exception for two high-severity
+`image-size` advisories inherited through Docusaurus. The production audit
+still runs on every check and accepts no other high or critical finding. See
+the [documentation dependency audit exception](../security/dependency-audit-exception.mdx)
+for its issue, expiry, scope, and removal criteria. This is a conditional
+release result, not a clean security audit.
+
 ## Search privacy and cost
 
 Search is deliberately disabled while the public site awaits crawler review.
