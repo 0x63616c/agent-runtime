@@ -856,6 +856,32 @@ func TestCreateSandboxRefusesRequestedSecretMountAndVolumeProfilesThatAreUnavail
 	}
 }
 
+func TestCreateSandboxRejectsUnsafeNestedGuestPathsBeforeCapabilityDispatch(t *testing.T) {
+	policy := testLimitPolicy()
+	policy.capabilities.Mounts = CapabilityDescriptor{State: CapabilityEnforced}
+	policy.capabilities.Volumes = CapabilityDescriptor{State: CapabilityEnforced}
+	client, err := newCoreClientWithPolicy("principal-a", time.Date(2026, 8, 10, 0, 0, 0, 0, time.UTC), policy)
+	if err != nil {
+		t.Fatalf("newCoreClientWithPolicy(): %v", err)
+	}
+	for name, mutate := range map[string]func(*SandboxSpec){
+		"mount": func(spec *SandboxSpec) {
+			spec.Mounts = []MountRequest{{Name: "workspace", Target: "/proc/self", Mode: MountReadOnly, View: MountFrozen}}
+		},
+		"volume": func(spec *SandboxSpec) {
+			spec.VolumeAttachments = []VolumeAttachment{{VolumeID: "vol_01", Target: "/workspace/../etc", Mode: AttachmentReadWrite}}
+		},
+		"tmpfs": func(spec *SandboxSpec) { spec.Tmpfs = []TmpfsMount{{Target: "/workspace//tmp", SizeBytes: 1}} },
+	} {
+		t.Run(name, func(t *testing.T) {
+			request := validCreateRequest(OperationID("op_unsafe_nested_path_" + name))
+			mutate(&request.CreateSandbox.Spec)
+			_, err := client.Submit(context.Background(), request)
+			failureCode(t, err, FailureInvalidArgument)
+		})
+	}
+}
+
 func TestRestoreSandboxRefusesARequiredCapabilityThatTheProfileDoesNotAdvertise(t *testing.T) {
 	client := newCoreClient("principal-a", time.Date(2026, 8, 10, 0, 0, 0, 0, time.UTC))
 	request := OperationRequest{ID: "op_restore_requires_snapshot", Kind: OperationRestoreSandbox, RestoreSandbox: &RestoreSandboxRequest{SnapshotID: "snap_01", Overrides: SandboxOverrides{Capabilities: &CapabilityRequirements{Required: []CapabilityRequirement{{Feature: CapabilitySnapshots, Minimum: CapabilityEnforced}}}}}}
