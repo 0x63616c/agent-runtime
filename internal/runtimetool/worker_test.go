@@ -3,13 +3,19 @@ package runtimetool_test
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/0x63616c/agent-runtime/internal/clock"
+	"github.com/0x63616c/agent-runtime/internal/mcptool"
 	"github.com/0x63616c/agent-runtime/internal/runtimecontent"
 	"github.com/0x63616c/agent-runtime/internal/runtimeorchestration"
 	"github.com/0x63616c/agent-runtime/internal/runtimestate"
@@ -548,38 +554,202 @@ func TestToolFinalizationPublishesAStateRecheckedTemporalRoute(t *testing.T) {
 }
 
 func TestSandboxAdapterUsesOnlyVerifiedDescriptorAndReconcilesWithoutResubmit(t *testing.T) {
-	descriptor, err := sandbox.EncodeControlOperationRequest(sandbox.OperationRequest{ID: "op_tool_000000000001", Kind: sandbox.OperationCloseSandbox, CloseSandbox: &sandbox.CloseSandboxRequest{SandboxID: "sbx_tool_000000000001"}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	client := &sandboxClient{operation: sandbox.Operation{Ref: sandbox.OperationRef{ID: "op_tool_000000000001"}, State: sandbox.OperationSucceeded, Result: &sandbox.OperationResult{Kind: sandbox.ResultControl, Control: &sandbox.ControlResult{Action: sandbox.ControlClosed}}}}
-	adapter, err := runtimetool.NewSandboxAdapter(client)
-	if err != nil {
-		t.Fatal(err)
-	}
-	request := runtimetool.Request{OperationID: "op_tool_000000000001", Descriptor: descriptor}
-	response, err := adapter.Execute(context.Background(), request)
-	if err != nil || client.submits != 1 || client.waits != 1 || client.gets != 0 || response.MediaType != "application/json" || !bytes.Contains(response.Output, []byte("op_tool_000000000001")) {
-		t.Fatalf("sandbox execute = %#v, calls submit=%d wait=%d get=%d, err=%v", response, client.submits, client.waits, client.gets, err)
-	}
-	response, err = adapter.Reconcile(context.Background(), request)
-	if err != nil || client.submits != 1 || client.waits != 1 || client.gets != 1 || response.Uncertain || len(response.Output) == 0 {
-		t.Fatalf("sandbox reconcile = %#v, calls submit=%d wait=%d get=%d, err=%v", response, client.submits, client.waits, client.gets, err)
-	}
-	for _, invalid := range []runtimetool.Request{
-		{OperationID: "op_tool_000000000001", Descriptor: []byte("not sandbox.control/v1")},
-		{OperationID: "op_other_000000000001", Descriptor: descriptor},
+	for _, test := range []struct {
+		name                   string
+		recoverLostClaim       bool
+		wantSubmits, wantWaits int
+		wantGets               int
+	}{
+		{name: "fresh intent submits once", wantSubmits: 1, wantWaits: 1},
+		{name: "lost claim observes existing operation", recoverLostClaim: true, wantGets: 1},
 	} {
-		response, err := adapter.Execute(context.Background(), invalid)
-		if err != nil || response.Failure == nil || response.Failure.Code != agentruntime.FailureInvalidInput || client.submits != 1 {
-			t.Fatalf("invalid descriptor execution = %#v, calls=%d, err=%v", response, client.submits, err)
+		t.Run(test.name, func(t *testing.T) {
+			ctx := context.Background()
+			now := time.Date(2026, 8, 11, 12, 0, 0, 0, time.UTC)
+			descriptor, err := sandbox.EncodeControlOperationRequest(sandbox.OperationRequest{ID: "op_tool_000000000001", Kind: sandbox.OperationCloseSandbox, CloseSandbox: &sandbox.CloseSandboxRequest{SandboxID: "sbx_tool_000000000001"}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			client := &sandboxClient{operation: sandbox.Operation{Ref: sandbox.OperationRef{ID: "op_tool_000000000001"}, State: sandbox.OperationSucceeded, Result: &sandbox.OperationResult{Kind: sandbox.ResultControl, Control: &sandbox.ControlResult{Action: sandbox.ControlClosed}}}}
+			adapter, err := runtimetool.NewSandboxAdapter(client)
+			if err != nil {
+				t.Fatal(err)
+			}
+			objects := &toolObjects{values: map[string][]byte{}}
+			content, _ := runtimecontent.New("runtime-content", objects)
+			tenant, _ := runtimecontent.ParseTenantID("tenant-a")
+			principal, _ := runtimecontent.ParsePrincipalID("principal-a")
+			compiler, _ := runtimestate.NewCompiler(content)
+			source, _ := clock.NewFake(now)
+			planner, _ := runtimestate.NewRuntimeStatePlanner(source, &toolIDs{})
+			store, _ := runtimestate.NewMemoryRuntimeStateStore(planner)
+			_, _, execution, _ := createToolExecutionWithDescriptor(t, ctx, content, compiler, store, tenant, principal, now, descriptor)
+			if test.recoverLostClaim {
+				expireToolOutboxClaim(t, ctx, compiler, store, source, tenant, now, "lost-sandbox-claim")
+			}
+			worker, err := runtimetool.NewWorker(runtimetool.Config{Store: store, Tenants: store, Compiler: compiler, Planner: planner, Clock: source, Content: content, Adapter: adapter, Claimer: "tool-worker"})
+			if err != nil || worker.ScanOnce(ctx) != nil || client.submits != test.wantSubmits || client.waits != test.wantWaits || client.gets != test.wantGets {
+				t.Fatalf("brokered sandbox calls submit=%d wait=%d get=%d err=%v", client.submits, client.waits, client.gets, err)
+			}
+			if test.recoverLostClaim && (client.gotID != sandbox.OperationID(execution.OperationID) || client.submits != 0) {
+				t.Fatalf("lost sandbox claim got operation=%q submits=%d, want %q and no resubmit", client.gotID, client.submits, execution.OperationID)
+			}
+			for _, invalid := range []runtimetool.Request{
+				{OperationID: "op_tool_000000000001", Descriptor: []byte("not sandbox.control/v1")},
+				{OperationID: "op_other_000000000001", Descriptor: descriptor},
+			} {
+				response, err := adapter.Execute(context.Background(), invalid)
+				if err != nil || response.Failure == nil || response.Failure.Code != agentruntime.FailureInvalidInput || client.submits != test.wantSubmits {
+					t.Fatalf("invalid descriptor execution = %#v, calls=%d, err=%v", response, client.submits, err)
+				}
+			}
+		})
+	}
+}
+
+func TestMCPAdapterExecutesOnlyThroughWorkerAndReconcilesWithoutResubmit(t *testing.T) {
+	schema := []byte(`{"type":"object","properties":{"operation_id":{"type":"string"}},"required":["operation_id"],"additionalProperties":false}`)
+	var decodedSchema any
+	if err := json.Unmarshal(schema, &decodedSchema); err != nil {
+		t.Fatal(err)
+	}
+	canonicalSchema, err := json.Marshal(decodedSchema)
+	if err != nil {
+		t.Fatal(err)
+	}
+	digest := sha256.Sum256(canonicalSchema)
+	schemaDigest := "sha256:" + hex.EncodeToString(digest[:])
+	var effectCalls, statusCalls int
+	var statusOperationID string
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		var message struct {
+			ID, Method string
+			Params     json.RawMessage `json:"params"`
 		}
+		if json.NewDecoder(request.Body).Decode(&message) != nil {
+			response.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		response.Header().Set("Content-Type", "application/json")
+		switch message.Method {
+		case "initialize":
+			response.Header().Set("MCP-Session-Id", "session-worker")
+			json.NewEncoder(response).Encode(map[string]any{"jsonrpc": "2.0", "id": message.ID, "result": map[string]any{"protocolVersion": "2025-11-25", "capabilities": map[string]any{"tools": map[string]any{}}}})
+		case "notifications/initialized":
+			response.WriteHeader(http.StatusAccepted)
+		case "tools/list":
+			json.NewEncoder(response).Encode(map[string]any{"jsonrpc": "2.0", "id": message.ID, "result": map[string]any{"tools": []any{map[string]any{"name": "effect", "inputSchema": json.RawMessage(schema)}, map[string]any{"name": "status", "inputSchema": json.RawMessage(schema)}}}})
+		case "tools/call":
+			var call struct {
+				Name      string `json:"name"`
+				Arguments struct {
+					OperationID string `json:"operation_id"`
+				} `json:"arguments"`
+			}
+			if err := json.Unmarshal(message.Params, &call); err != nil {
+				response.WriteHeader(http.StatusBadRequest)
+				return
+			}
+			switch call.Name {
+			case "effect":
+				effectCalls++
+				json.NewEncoder(response).Encode(map[string]any{"jsonrpc": "2.0", "id": message.ID, "result": map[string]any{"content": []any{map[string]string{"type": "text", "text": "completed"}}}})
+			case "status":
+				statusCalls++
+				statusOperationID = call.Arguments.OperationID
+				json.NewEncoder(response).Encode(map[string]any{"jsonrpc": "2.0", "id": message.ID, "result": map[string]any{"content": []any{map[string]string{"type": "text", "text": "reconciled"}}, "structuredContent": map[string]string{"operation_id": call.Arguments.OperationID, "state": "succeeded"}}})
+			default:
+				response.WriteHeader(http.StatusBadRequest)
+			}
+		default:
+			response.WriteHeader(http.StatusBadRequest)
+		}
+	}))
+	defer server.Close()
+	for _, test := range []struct {
+		name                       string
+		recoverLostClaim           bool
+		wantEffect, wantStatusCall int
+	}{
+		{name: "fresh intent calls configured effect", wantEffect: 1},
+		{name: "lost claim calls configured status", recoverLostClaim: true, wantStatusCall: 1},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			effectCalls, statusCalls, statusOperationID = 0, 0, ""
+			adapter, err := runtimetool.NewMCPAdapter(mcptool.Config{Servers: []mcptool.ServerConfig{{ID: "configured", Endpoint: server.URL + "/mcp", Credentials: adapterCredentials{}, Tools: []mcptool.ToolConfig{{Name: "effect", InputSchemaDigest: schemaDigest, OperationIDArgument: "operation_id"}, {Name: "status", InputSchemaDigest: schemaDigest, OperationIDArgument: "operation_id"}}, ReconcileTool: "status", ReconcileOperationArgument: "operation_id"}}, RequestTimeout: time.Second, CancelTimeout: time.Second, AllowInsecureLoopbackTests: true})
+			if err != nil {
+				t.Fatal(err)
+			}
+			ctx := context.Background()
+			now := time.Date(2026, 8, 11, 12, 0, 0, 0, time.UTC)
+			objects := &toolObjects{values: map[string][]byte{}}
+			content, _ := runtimecontent.New("runtime-content", objects)
+			tenant, _ := runtimecontent.ParseTenantID("tenant-a")
+			principal, _ := runtimecontent.ParsePrincipalID("principal-a")
+			compiler, _ := runtimestate.NewCompiler(content)
+			source, _ := clock.NewFake(now)
+			planner, _ := runtimestate.NewRuntimeStatePlanner(source, &toolIDs{})
+			store, _ := runtimestate.NewMemoryRuntimeStateStore(planner)
+			descriptor := []byte(`{"version":"mcp.tool/v1","server_id":"configured","tool_name":"effect","arguments":{}}`)
+			_, _, execution, _ := createToolExecutionWithDescriptor(t, ctx, content, compiler, store, tenant, principal, now, descriptor)
+			if test.recoverLostClaim {
+				expireToolOutboxClaim(t, ctx, compiler, store, source, tenant, now, "lost-mcp-claim")
+			}
+			worker, err := runtimetool.NewWorker(runtimetool.Config{Store: store, Tenants: store, Compiler: compiler, Planner: planner, Clock: source, Content: content, Adapter: adapter, Claimer: "tool-worker"})
+			if err != nil || worker.ScanOnce(ctx) != nil || effectCalls != test.wantEffect || statusCalls != test.wantStatusCall {
+				t.Fatalf("brokered MCP calls effect=%d status=%d err=%v", effectCalls, statusCalls, err)
+			}
+			if test.recoverLostClaim && (statusOperationID != string(execution.OperationID) || effectCalls != 0) {
+				t.Fatalf("lost MCP claim status operation=%q effect calls=%d, want %q and no effect resubmit", statusOperationID, effectCalls, execution.OperationID)
+			}
+		})
+	}
+}
+
+func TestBuiltinAdapterReconcilesLostWorkerClaimWithoutResubmitting(t *testing.T) {
+	ctx := context.Background()
+	now := time.Date(2026, 8, 11, 12, 0, 0, 0, time.UTC)
+	objects := &toolObjects{values: map[string][]byte{}}
+	content, _ := runtimecontent.New("runtime-content", objects)
+	tenant, _ := runtimecontent.ParseTenantID("tenant-a")
+	principal, _ := runtimecontent.ParsePrincipalID("principal-a")
+	compiler, _ := runtimestate.NewCompiler(content)
+	source, _ := clock.NewFake(now)
+	planner, _ := runtimestate.NewRuntimeStatePlanner(source, &toolIDs{})
+	store, _ := runtimestate.NewMemoryRuntimeStateStore(planner)
+	_, _, _, _ = createToolExecution(t, ctx, content, compiler, store, tenant, principal, now)
+	record := toolOutbox(t, ctx, store, tenant)
+	claim, err := compiler.CompileClaimOutbox(runtimestate.ClaimOutboxCommand{Scope: runtimestate.MutationScope{Tenant: tenant, Authority: runtimestate.AuthorityOutboxPublisher}, IdempotencyKey: "lost-builtin-claim", OutboxID: record.OutboxID, ExpectedVersion: record.Version, Claimer: "lost", ClaimUntil: now.Add(time.Second)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = store.Apply(ctx, claim); err != nil {
+		t.Fatal(err)
+	}
+	if err = source.Advance(time.Second); err != nil {
+		t.Fatal(err)
+	}
+	inner := &builtinContractAdapter{contract: runtimetool.ExternalEffectContract{IdempotencyKey: "operation_id", Reconciles: true}}
+	adapter, err := runtimetool.NewBuiltinAdapter(inner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	worker, err := runtimetool.NewWorker(runtimetool.Config{Store: store, Tenants: store, Compiler: compiler, Planner: planner, Clock: source, Content: content, Adapter: adapter, Claimer: "tool-worker"})
+	if err != nil || worker.ScanOnce(ctx) != nil {
+		t.Fatalf("recover builtin claim: %v", err)
+	}
+	if inner.executions != 0 || inner.reconciliations != 1 || inner.last.OperationID == "" {
+		t.Fatalf("builtin calls execute=%d reconcile=%d request=%#v", inner.executions, inner.reconciliations, inner.last)
 	}
 }
 
 func createToolExecution(t *testing.T, ctx context.Context, content *runtimecontent.Store, compiler *runtimestate.Compiler, store *runtimestate.MemoryRuntimeStateStore, tenant runtimecontent.TenantID, principal runtimecontent.PrincipalID, now time.Time) (agentruntime.SessionID, agentruntime.TurnID, runtimestate.ToolExecutionRecord, []byte) {
+	return createToolExecutionWithDescriptor(t, ctx, content, compiler, store, tenant, principal, now, []byte("approved immutable tool action"))
+}
+
+func createToolExecutionWithDescriptor(t *testing.T, ctx context.Context, content *runtimecontent.Store, compiler *runtimestate.Compiler, store *runtimestate.MemoryRuntimeStateStore, tenant runtimecontent.TenantID, principal runtimecontent.PrincipalID, now time.Time, descriptor []byte) (agentruntime.SessionID, agentruntime.TurnID, runtimestate.ToolExecutionRecord, []byte) {
 	t.Helper()
-	approved := createApprovedToolGrant(t, ctx, content, compiler, store, tenant, principal, now)
+	approved := createApprovedToolGrantWithDescriptor(t, ctx, content, compiler, store, tenant, principal, now, descriptor)
 	consume, err := compiler.CompileConsumeCapabilityGrant(runtimestate.ConsumeCapabilityGrantCommand{Scope: approved.workerScope, IdempotencyKey: "consume", SessionID: approved.sessionID, TurnID: approved.turnID, ToolCallID: approved.toolCallID, GrantID: approved.grantID, PolicyRevisionDigest: approved.digest})
 	if err != nil {
 		t.Fatal(err)
@@ -604,6 +774,21 @@ func createToolExecution(t *testing.T, ctx context.Context, content *runtimecont
 	return "", "", runtimestate.ToolExecutionRecord{}, nil
 }
 
+func expireToolOutboxClaim(t *testing.T, ctx context.Context, compiler *runtimestate.Compiler, store *runtimestate.MemoryRuntimeStateStore, source *clock.Fake, tenant runtimecontent.TenantID, now time.Time, idempotencyKey string) {
+	t.Helper()
+	record := toolOutbox(t, ctx, store, tenant)
+	claim, err := compiler.CompileClaimOutbox(runtimestate.ClaimOutboxCommand{Scope: runtimestate.MutationScope{Tenant: tenant, Authority: runtimestate.AuthorityOutboxPublisher}, IdempotencyKey: idempotencyKey, OutboxID: record.OutboxID, ExpectedVersion: record.Version, Claimer: "lost-tool-worker", ClaimUntil: now.Add(time.Second)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = store.Apply(ctx, claim); err != nil {
+		t.Fatal(err)
+	}
+	if err = source.Advance(time.Second); err != nil {
+		t.Fatal(err)
+	}
+}
+
 type approvedToolGrant struct {
 	sessionID   agentruntime.SessionID
 	turnID      agentruntime.TurnID
@@ -615,6 +800,10 @@ type approvedToolGrant struct {
 }
 
 func createApprovedToolGrant(t *testing.T, ctx context.Context, content *runtimecontent.Store, compiler *runtimestate.Compiler, store *runtimestate.MemoryRuntimeStateStore, tenant runtimecontent.TenantID, principal runtimecontent.PrincipalID, now time.Time) approvedToolGrant {
+	return createApprovedToolGrantWithDescriptor(t, ctx, content, compiler, store, tenant, principal, now, []byte("approved immutable tool action"))
+}
+
+func createApprovedToolGrantWithDescriptor(t *testing.T, ctx context.Context, content *runtimecontent.Store, compiler *runtimestate.Compiler, store *runtimestate.MemoryRuntimeStateStore, tenant runtimecontent.TenantID, principal runtimecontent.PrincipalID, now time.Time, descriptor []byte) approvedToolGrant {
 	t.Helper()
 	body, err := content.StageAgentSpecificationBody(ctx, tenant, runtimecontent.AgentSpecificationBody{Name: "tool-worker", ModelProfile: "balanced", Instructions: "safe"})
 	if err != nil {
@@ -648,7 +837,6 @@ func createApprovedToolGrant(t *testing.T, ctx context.Context, content *runtime
 	if err != nil {
 		t.Fatal(err)
 	}
-	descriptor := []byte("approved immutable tool action")
 	staged, err := content.StageToolActionDescriptor(ctx, tenant, descriptor)
 	if err != nil {
 		t.Fatal(err)
@@ -754,20 +942,24 @@ func (publisher *temporalPublisher) SignalSession(_ context.Context, _ runtimeor
 }
 
 type sandboxClient struct {
-	operation            sandbox.Operation
-	submits, waits, gets int
+	operation                    sandbox.Operation
+	submits, waits, gets         int
+	submittedID, waitedID, gotID sandbox.OperationID
 }
 
 func (client *sandboxClient) Submit(_ context.Context, request sandbox.OperationRequest) (sandbox.OperationRef, error) {
 	client.submits++
+	client.submittedID = request.ID
 	return sandbox.OperationRef{ID: request.ID}, nil
 }
-func (client *sandboxClient) GetOperation(context.Context, sandbox.OperationID) (sandbox.Operation, error) {
+func (client *sandboxClient) GetOperation(_ context.Context, operationID sandbox.OperationID) (sandbox.Operation, error) {
 	client.gets++
+	client.gotID = operationID
 	return client.operation, nil
 }
-func (client *sandboxClient) WaitOperation(context.Context, sandbox.OperationID) (sandbox.Operation, error) {
+func (client *sandboxClient) WaitOperation(_ context.Context, operationID sandbox.OperationID) (sandbox.Operation, error) {
 	client.waits++
+	client.waitedID = operationID
 	return client.operation, nil
 }
 func (client *sandboxClient) WatchOperation(context.Context, sandbox.OperationID, sandbox.OperationCursor) (sandbox.OperationStream, error) {

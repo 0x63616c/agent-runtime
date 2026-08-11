@@ -22,11 +22,17 @@ func NewBuiltinAdapter(adapter ContractAdapter) (*BuiltinAdapter, error) {
 
 // Execute delegates only after Worker authorization.
 func (adapter *BuiltinAdapter) Execute(ctx context.Context, request Request) (Response, error) {
+	if !dispatchAuthorized(request) {
+		return refusedDirectDispatch(), nil
+	}
 	return adapter.adapter.Execute(ctx, request)
 }
 
 // Reconcile observes the exact existing operation without submission.
 func (adapter *BuiltinAdapter) Reconcile(ctx context.Context, request Request) (Response, error) {
+	if !dispatchAuthorized(request) {
+		return refusedDirectDispatch(), nil
+	}
 	return adapter.adapter.Reconcile(ctx, request)
 }
 
@@ -61,6 +67,9 @@ func (adapter *MCPAdapter) ExternalEffectContract() ExternalEffectContract {
 func (adapter *MCPAdapter) invoke(ctx context.Context, request Request, reconcile bool) (Response, error) {
 	if adapter == nil || adapter.client == nil {
 		return Response{}, errors.New("use MCP tool: client is unavailable")
+	}
+	if !dispatchAuthorized(request) {
+		return refusedDirectDispatch(), nil
 	}
 	descriptor, err := mcptool.DecodeDescriptor(request.Descriptor)
 	if err != nil {

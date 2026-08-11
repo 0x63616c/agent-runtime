@@ -19,11 +19,11 @@ func TestBuiltinAdapterRefusesAnUnsafeExternalEffectContract(t *testing.T) {
 		t.Fatalf("create safe builtin adapter: %v", err)
 	}
 	request := runtimetool.Request{OperationID: "op_tool_000000000001"}
-	if _, err = adapter.Execute(context.Background(), request); err != nil || safe.executions != 1 || safe.last.OperationID != request.OperationID {
-		t.Fatalf("builtin execution = calls=%d request=%#v err=%v", safe.executions, safe.last, err)
-	}
-	if _, err = adapter.Reconcile(context.Background(), request); err != nil || safe.reconciliations != 1 || safe.last.OperationID != request.OperationID {
-		t.Fatalf("builtin recovery = calls=%d request=%#v err=%v", safe.reconciliations, safe.last, err)
+	for _, invoke := range []func(context.Context, runtimetool.Request) (runtimetool.Response, error){adapter.Execute, adapter.Reconcile} {
+		response, invokeErr := invoke(context.Background(), request)
+		if invokeErr != nil || response.Failure == nil || safe.executions != 0 || safe.reconciliations != 0 {
+			t.Fatalf("direct builtin adapter dispatch = %#v, calls=%d/%d err=%v", response, safe.executions, safe.reconciliations, invokeErr)
+		}
 	}
 }
 

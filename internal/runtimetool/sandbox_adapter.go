@@ -29,6 +29,9 @@ func (adapter *SandboxAdapter) ExternalEffectContract() ExternalEffectContract {
 }
 
 func (adapter *SandboxAdapter) Execute(ctx context.Context, request Request) (Response, error) {
+	if !dispatchAuthorized(request) {
+		return refusedDirectDispatch(), nil
+	}
 	action, response := decodeSandboxAction(request)
 	if response.Failure != nil {
 		return response, nil
@@ -44,6 +47,9 @@ func (adapter *SandboxAdapter) Execute(ctx context.Context, request Request) (Re
 }
 
 func (adapter *SandboxAdapter) Reconcile(ctx context.Context, request Request) (Response, error) {
+	if !dispatchAuthorized(request) {
+		return refusedDirectDispatch(), nil
+	}
 	action, response := decodeSandboxAction(request)
 	if response.Failure != nil {
 		return response, nil

@@ -11,15 +11,36 @@ import (
 	"time"
 
 	"github.com/0x63616c/agent-runtime/internal/clock"
+	"github.com/0x63616c/agent-runtime/internal/runtimecontent"
+	"github.com/0x63616c/agent-runtime/internal/runtimestate"
 	"github.com/0x63616c/agent-runtime/internal/runtimetool"
 	"github.com/0x63616c/agent-runtime/internal/sandboxcontrol"
 	"github.com/0x63616c/agent-runtime/internal/sandboxcontrolapi"
 	"github.com/0x63616c/agent-runtime/sandbox"
 )
 
-// This test crosses the concrete HTTPS sandbox control process rather than a
-// Client fake. It proves the runtime adapter submits only its immutable
-// descriptor, then observes the durable control operation to a terminal state.
+func TestSandboxAdapterRefusesDirectDispatchBeforeControlTransport(t *testing.T) {
+	client := &sandboxClient{}
+	adapter, err := runtimetool.NewSandboxAdapter(client)
+	if err != nil {
+		t.Fatal(err)
+	}
+	descriptor, err := sandbox.EncodeControlOperationRequest(sandbox.OperationRequest{ID: "op_tool_000000000001", Kind: sandbox.OperationCloseSandbox, CloseSandbox: &sandbox.CloseSandboxRequest{SandboxID: "sbx_tool_000000000001"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := runtimetool.Request{OperationID: "op_tool_000000000001", Descriptor: descriptor}
+	for _, invoke := range []func(context.Context, runtimetool.Request) (runtimetool.Response, error){adapter.Execute, adapter.Reconcile} {
+		response, err := invoke(context.Background(), request)
+		if err != nil || response.Failure == nil || client.submits != 0 || client.waits != 0 || client.gets != 0 {
+			t.Fatalf("direct sandbox dispatch = %#v calls=%d/%d/%d err=%v", response, client.submits, client.waits, client.gets, err)
+		}
+	}
+}
+
+// This crosses the concrete authenticated TLS sandbox-control process through
+// Worker, preserving the normal brokered path while direct adapter calls stay
+// unable to create an external effect.
 func TestSandboxAdapterExecutesThroughControlProcess(t *testing.T) {
 	now := time.Now().UTC()
 	source, err := clock.NewFake(now)
@@ -29,9 +50,7 @@ func TestSandboxAdapterExecutesThroughControlProcess(t *testing.T) {
 	ledger := sandboxcontrol.NewMemoryLedger()
 	limits := sandbox.ResourceLimits{MilliCPU: 100, MemoryBytes: 1024, RootDiskBytes: 1024, TmpfsBytes: 1024, PIDs: 10, ProcessCount: 10, OpenFiles: 10, Inodes: 10, Files: 10, Lifetime: time.Hour, ProducedOutputBytes: 1024, RetainedOutputBytes: 1024, TransferBytes: 1024, NetworkConnections: 10, VolumeBytes: 1024, SnapshotBytes: 1024}
 	handler, err := sandboxcontrolapi.NewHandler(sandboxcontrolapi.Config{
-		Store:         ledger,
-		Authenticator: controlAuthenticator{},
-		AssertionKey:  bytes.Repeat([]byte{0x42}, 32), Entropy: bytes.NewReader(bytes.Repeat([]byte{0x99}, 128)), Clock: source,
+		Store: ledger, Authenticator: controlAuthenticator{}, AssertionKey: bytes.Repeat([]byte{0x42}, 32), Entropy: bytes.NewReader(bytes.Repeat([]byte{0x99}, 128)), Clock: source,
 		BindingLifetime: time.Hour, Retention: time.Hour, WaitInterval: time.Millisecond,
 		Wait: func(ctx context.Context, _ time.Duration) error {
 			select {
@@ -62,31 +81,41 @@ func TestSandboxAdapterExecutesThroughControlProcess(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	ctx := context.Background()
+	objects := &toolObjects{values: map[string][]byte{}}
+	content, _ := runtimecontent.New("runtime-content", objects)
+	tenant, _ := runtimecontent.ParseTenantID("tenant-a")
+	principal, _ := runtimecontent.ParsePrincipalID("principal-a")
+	compiler, _ := runtimestate.NewCompiler(content)
+	planner, _ := runtimestate.NewRuntimeStatePlanner(source, &toolIDs{})
+	store, _ := runtimestate.NewMemoryRuntimeStateStore(planner)
 	descriptor, err := sandbox.EncodeControlOperationRequest(sandbox.OperationRequest{ID: "op_tool_000000000001", Kind: sandbox.OperationCloseSandbox, CloseSandbox: &sandbox.CloseSandboxRequest{SandboxID: "sbx_tool_000000000001"}})
 	if err != nil {
 		t.Fatal(err)
 	}
+	_, _, _, _ = createToolExecutionWithDescriptor(t, ctx, content, compiler, store, tenant, principal, now, descriptor)
+	worker, err := runtimetool.NewWorker(runtimetool.Config{Store: store, Tenants: store, Compiler: compiler, Planner: planner, Clock: source, Content: content, Adapter: adapter, Claimer: "tool-worker"})
+	if err != nil {
+		t.Fatal(err)
+	}
 	result := make(chan error, 1)
-	go func() {
-		_, err := adapter.Execute(context.Background(), runtimetool.Request{OperationID: "op_tool_000000000001", Descriptor: descriptor})
-		result <- err
-	}()
+	go func() { result <- worker.ScanOnce(ctx) }()
 	var operation sandboxcontrol.Operation
 	for deadline := time.Now().Add(time.Second); time.Now().Before(deadline); {
-		operation, err = ledger.Get(context.Background(), "tenant-a:subject-a", "op_tool_000000000001")
+		operation, err = ledger.Get(ctx, "tenant-a:subject-a", "op_tool_000000000001")
 		if err == nil {
 			break
 		}
 		runtime.Gosched()
 	}
 	if err != nil {
-		t.Fatalf("control process did not retain submitted operation: %v", err)
+		t.Fatalf("control process did not retain Worker-submitted operation: %v", err)
 	}
-	operation, err = ledger.Transition(context.Background(), operation.Principal, operation.ID, operation.Version, sandboxcontrol.StateDispatched)
+	operation, err = ledger.Transition(ctx, operation.Principal, operation.ID, operation.Version, sandboxcontrol.StateDispatched)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = ledger.Transition(context.Background(), operation.Principal, operation.ID, operation.Version, sandboxcontrol.StateSucceeded); err != nil {
+	if _, err = ledger.Transition(ctx, operation.Principal, operation.ID, operation.Version, sandboxcontrol.StateSucceeded); err != nil {
 		t.Fatal(err)
 	}
 	if err := <-result; err != nil {

@@ -12,11 +12,9 @@ import (
 	"github.com/0x63616c/agent-runtime/internal/runtimetool"
 )
 
-// This proves the concrete MCP adapter accepts only the immutable descriptor
-// shape Worker receives after state authorization. A model cannot turn a raw
-// URL into an adapter call, and the adapter still satisfies Worker’s recovery
-// contract rather than creating a second execution path.
-func TestMCPAdapterRefusesRawEndpointDescriptorBeforeNetworkDispatch(t *testing.T) {
+// This proves a valid configured descriptor is still inert without the
+// private Worker dispatch capability.
+func TestMCPAdapterRefusesDirectDispatchBeforeNetworkTransport(t *testing.T) {
 	requests := 0
 	server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { requests++ }))
 	defer server.Close()
@@ -30,9 +28,12 @@ func TestMCPAdapterRefusesRawEndpointDescriptorBeforeNetworkDispatch(t *testing.
 		t.Fatal(err)
 	}
 	var _ runtimetool.ContractAdapter = adapter
-	response, err := adapter.Execute(context.Background(), runtimetool.Request{OperationID: "op_test_000000000001", Descriptor: []byte(`{"version":"mcp.tool/v1","server_id":"https://attacker.invalid/mcp","tool_name":"effect","arguments":{}}`)})
-	if err != nil || response.Failure == nil || requests != 0 {
-		t.Fatalf("raw endpoint descriptor response=%#v err=%v requests=%d", response, err, requests)
+	request := runtimetool.Request{OperationID: "op_test_000000000001", Descriptor: []byte(`{"version":"mcp.tool/v1","server_id":"configured","tool_name":"effect","arguments":{}}`)}
+	for _, invoke := range []func(context.Context, runtimetool.Request) (runtimetool.Response, error){adapter.Execute, adapter.Reconcile} {
+		response, err := invoke(context.Background(), request)
+		if err != nil || response.Failure == nil || requests != 0 {
+			t.Fatalf("direct MCP dispatch response=%#v err=%v requests=%d", response, err, requests)
+		}
 	}
 	if got := adapter.ExternalEffectContract(); got != (runtimetool.ExternalEffectContract{IdempotencyKey: "operation_id", Reconciles: true}) {
 		t.Fatalf("MCP external-effect contract = %#v", got)
