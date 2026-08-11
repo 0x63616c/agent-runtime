@@ -58,6 +58,12 @@ func (runtime kernelRuntime) InspectApproval(context.Context, Identity, agentrun
 	return agentruntime.Approval{}, &agentruntime.Error{Failure: agentruntime.Failure{Code: agentruntime.FailureNotFound, Message: "resource not found"}}
 }
 
+// ListApprovals is unavailable in the legacy memory-only kernel. Durable
+// approval inboxes require the state authority.
+func (runtime kernelRuntime) ListApprovals(context.Context, Identity) (agentruntime.ApprovalPage, error) {
+	return agentruntime.ApprovalPage{}, &agentruntime.Error{Failure: agentruntime.Failure{Code: agentruntime.FailureNotFound, Message: "resource not found"}}
+}
+
 // DecideApproval is unavailable in the legacy memory-only kernel. Durable
 // approval decisions require the state authority.
 func (runtime kernelRuntime) DecideApproval(context.Context, Identity, agentruntime.DecideApprovalRequest) (agentruntime.Approval, error) {

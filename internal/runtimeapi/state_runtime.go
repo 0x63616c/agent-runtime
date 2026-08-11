@@ -224,6 +224,31 @@ func (runtime *StateRuntime) InspectApproval(ctx context.Context, identity Ident
 	return agentruntime.Approval{}, runtimeFailure("inspect Approval", runtimestate.ErrNotFoundOrDenied)
 }
 
+// ListApprovals returns the bounded owner-scoped Approval inbox in durable
+// creation order. It exposes no policy, descriptor, or capability material.
+func (runtime *StateRuntime) ListApprovals(ctx context.Context, identity Identity) (agentruntime.ApprovalPage, error) {
+	scope, err := ownerScope(identity)
+	if err != nil {
+		return agentruntime.ApprovalPage{}, err
+	}
+	state, err := runtime.store.LoadRuntimeState(ctx, scope)
+	if err != nil {
+		return agentruntime.ApprovalPage{}, runtimeFailure("list Approvals", err)
+	}
+	page := agentruntime.ApprovalPage{}
+	for _, record := range state.Approvals {
+		if record.Tenant != scope.Tenant || record.Principal != scope.Principal {
+			continue
+		}
+		if len(page.Approvals) == agentruntime.MaxApprovalsPerPage {
+			page.Truncated = true
+			break
+		}
+		page.Approvals = append(page.Approvals, publicApproval(record))
+	}
+	return page, nil
+}
+
 // DecideApproval atomically records one owner decision. A successful approval
 // creates an internal bounded grant; the public result never carries it.
 func (runtime *StateRuntime) DecideApproval(ctx context.Context, identity Identity, request agentruntime.DecideApprovalRequest) (agentruntime.Approval, error) {

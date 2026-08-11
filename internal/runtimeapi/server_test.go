@@ -487,6 +487,10 @@ func (runtime *recordingRuntime) InspectApproval(context.Context, runtimeapi.Ide
 	return runtime.approval.Clone(), runtime.approvalErr
 }
 
+func (runtime *recordingRuntime) ListApprovals(context.Context, runtimeapi.Identity) (agentruntime.ApprovalPage, error) {
+	return agentruntime.ApprovalPage{Approvals: []agentruntime.Approval{runtime.approval.Clone()}}, runtime.approvalErr
+}
+
 func (runtime *recordingRuntime) DecideApproval(_ context.Context, _ runtimeapi.Identity, request agentruntime.DecideApprovalRequest) (agentruntime.Approval, error) {
 	runtime.decision = request
 	return runtime.approval.Clone(), runtime.approvalErr

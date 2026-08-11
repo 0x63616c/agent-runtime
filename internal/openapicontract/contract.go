@@ -92,6 +92,7 @@ func CollectRoutes(paths map[string]map[string]Operation) ([]Route, error) {
 		"revisePolicy":      {Method: "POST", Path: "/v1/admin/policies/{policy_name}/revisions", Status: "201", Mutation: true},
 		"getPolicy":         {Method: "GET", Path: "/v1/admin/policies/{policy_name}/revisions/{revision}", Status: "200"},
 		"readArtifact":      {Method: "GET", Path: "/v1/artifacts/{artifact_id}", Status: "200"},
+		"listApprovals":     {Method: "GET", Path: "/v1/approvals", Status: "200"},
 		"inspectApproval":   {Method: "GET", Path: "/v1/approvals/{approval_id}", Status: "200"},
 		"decideApproval":    {Method: "POST", Path: "/v1/approvals/{approval_id}/decide", Status: "200", Mutation: true},
 		"idempotencyStatus": {Method: "GET", Path: "/v1/idempotency", Status: "200", Idempotency: true},

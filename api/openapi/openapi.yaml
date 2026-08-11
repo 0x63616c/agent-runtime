@@ -32,6 +32,9 @@
     "/v1/approvals/{approval_id}": {
       "get": {"operationId": "inspectApproval", "parameters": [{"$ref": "#/components/parameters/ApprovalID"}, {"$ref": "#/components/parameters/RequestID"}], "responses": {"200": {"$ref": "#/components/responses/Approval"}, "default": {"$ref": "#/components/responses/Failure"}}}
     },
+    "/v1/approvals": {
+      "get": {"operationId": "listApprovals", "parameters": [{"$ref": "#/components/parameters/RequestID"}], "responses": {"200": {"$ref": "#/components/responses/ApprovalPage"}, "default": {"$ref": "#/components/responses/Failure"}}}
+    },
     "/v1/approvals/{approval_id}/decide": {
       "post": {"operationId": "decideApproval", "parameters": [{"$ref": "#/components/parameters/ApprovalID"}, {"$ref": "#/components/parameters/RequestID"}, {"$ref": "#/components/parameters/IdempotencyKey"}], "requestBody": {"$ref": "#/components/requestBodies/DecideApproval"}, "responses": {"200": {"$ref": "#/components/responses/Approval"}, "default": {"$ref": "#/components/responses/Failure"}}}
     },
@@ -103,6 +106,7 @@
       "ApprovalAction": {"type": "object", "additionalProperties": false, "required": ["verb", "target"], "properties": {"verb": {"type": "string", "enum": ["execute", "restart", "write", "delete"]}, "target": {"type": "string", "enum": ["workspace-service", "sandbox-process", "artifact", "network-request"]}}},
       "ApprovalScope": {"type": "object", "additionalProperties": false, "required": ["maximum_uses"], "properties": {"maximum_uses": {"type": "integer", "minimum": 1, "maximum": 32}}},
       "Approval": {"type": "object", "additionalProperties": false, "required": ["id", "session_id", "turn_id", "state", "expires_at"], "properties": {"id": {"$ref": "#/components/schemas/ApprovalID"}, "session_id": {"$ref": "#/components/schemas/SessionID"}, "turn_id": {"$ref": "#/components/schemas/TurnID"}, "state": {"type": "string", "enum": ["pending", "approved", "denied", "expired"]}, "action": {"$ref": "#/components/schemas/ApprovalAction"}, "scope": {"$ref": "#/components/schemas/ApprovalScope"}, "expires_at": {"type": "string", "format": "date-time"}, "decided_at": {"type": "string", "format": "date-time"}}},
+      "ApprovalPage": {"type": "object", "additionalProperties": false, "required": ["approvals", "truncated"], "properties": {"approvals": {"type": "array", "maxItems": 64, "items": {"$ref": "#/components/schemas/Approval"}}, "truncated": {"type": "boolean"}}},
       "TextContentPart": {"type": "object", "additionalProperties": false, "required": ["kind", "text"], "properties": {"kind": {"const": "text"}, "text": {"type": "string", "minLength": 1, "maxLength": 65536}}},
       "ArtifactContentPart": {"type": "object", "additionalProperties": false, "required": ["kind", "artifact"], "properties": {"kind": {"const": "artifact"}, "artifact": {"$ref": "#/components/schemas/ArtifactReference"}}},
       "ContentPart": {"oneOf": [{"$ref": "#/components/schemas/TextContentPart"}, {"$ref": "#/components/schemas/ArtifactContentPart"}], "discriminator": {"propertyName": "kind"}},
@@ -178,6 +182,7 @@
       "ArtifactDownload": {"description": "Authorized immutable artifact bytes. Streaming responses declare immutable metadata before the body and emit the Digest value as an HTTP trailer after exact bounded transfer verification.", "headers": {"X-Request-ID": {"$ref": "#/components/headers/RequestID"}, "X-Agent-Runtime-Artifact-Size": {"required": true, "description": "Exact immutable byte size for a streaming response.", "schema": {"type": "integer", "minimum": 1}}, "X-Agent-Runtime-Artifact-SHA256": {"required": true, "description": "Exact immutable lowercase SHA-256 hex digest for a streaming response.", "schema": {"type": "string", "pattern": "^[0-9a-f]{64}$"}}, "Digest": {"required": true, "description": "sha-256 digest; emitted as a trailer by the streaming response.", "schema": {"type": "string", "pattern": "^sha-256=[0-9a-f]{64}$"}}}, "content": {"application/octet-stream": {"schema": {"type": "string", "format": "binary"}}, "text/plain": {"schema": {"type": "string"}}}},
       "IdempotencyStatus": {"description": "Safe retained idempotency receipt", "headers": {"X-Request-ID": {"$ref": "#/components/headers/RequestID"}}, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/IdempotencyStatus"}}}},
       "Approval": {"description": "Caller-authorized approval state", "headers": {"X-Request-ID": {"$ref": "#/components/headers/RequestID"}}, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Approval"}}}},
+      "ApprovalPage": {"description": "Caller-authorized bounded approval inbox", "headers": {"X-Request-ID": {"$ref": "#/components/headers/RequestID"}}, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ApprovalPage"}}}},
       "Failure": {"description": "Safe runtime failure", "headers": {"X-Request-ID": {"$ref": "#/components/headers/RequestID"}}, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorEnvelope"}}}}
     }
   }

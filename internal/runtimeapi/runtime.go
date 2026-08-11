@@ -16,6 +16,7 @@ type Runtime interface {
 	GetPolicy(context.Context, Identity, string, uint64) (agentruntime.Policy, error)
 	ReadArtifact(context.Context, Identity, agentruntime.ArtifactID) (agentruntime.ArtifactDownload, error)
 	InspectApproval(context.Context, Identity, agentruntime.ApprovalID) (agentruntime.Approval, error)
+	ListApprovals(context.Context, Identity) (agentruntime.ApprovalPage, error)
 	DecideApproval(context.Context, Identity, agentruntime.DecideApprovalRequest) (agentruntime.Approval, error)
 	IdempotencyStatus(context.Context, Identity, string) (agentruntime.IdempotencyStatus, error)
 	CreateSession(context.Context, Identity, agentruntime.CreateSessionRequest) (agentruntime.Session, error)

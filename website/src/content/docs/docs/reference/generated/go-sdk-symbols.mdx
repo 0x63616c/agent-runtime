@@ -37,6 +37,8 @@ This index is derived only from the declared public `sdk/go` source files. It li
 | `method` | `ApprovalID.Redacted` | Redacted returns a safe diagnostic Approval ID. |
 | `method` | `ApprovalID.String` | String returns the canonical Approval ID. |
 | `method` | `ApprovalID.UnmarshalJSON` | UnmarshalJSON decodes and validates an Approval ID. |
+| `type` | `ApprovalPage` | ApprovalPage is one bounded owner-scoped Approval inbox projection. |
+| `method` | `ApprovalPage.Clone` | Clone returns an independent Approval inbox snapshot. |
 | `const` | `ApprovalPending` | ApprovalPending awaits an owner decision before any tool execution may be authorized. |
 | `type` | `ApprovalScope` | ApprovalScope is the public bounded-use projection of a proposed capability. Capability bytes and digests never cross this boundary. |
 | `type` | `ApprovalState` | ApprovalState is the public lifecycle state of one human decision request. |
@@ -73,6 +75,7 @@ This index is derived only from the declared public `sdk/go` source files. It li
 | `method` | `Client.InspectSession` | InspectSession returns caller-safe Session state without backend identifiers. |
 | `method` | `Client.InspectToolCalls` | InspectToolCalls returns bounded owner-scoped Tool-call lifecycle projections. |
 | `method` | `Client.InspectTurn` | InspectTurn returns one caller-safe Turn snapshot. |
+| `method` | `Client.ListApprovals` | ListApprovals returns the caller-authorized bounded Approval inbox. |
 | `method` | `Client.OpenArtifact` | OpenArtifact opens a bounded Artifact response. Reaching EOF verifies its declared Digest trailer; Close permits cancellation before completion. |
 | `method` | `Client.ReadArtifact` | ReadArtifact downloads bounded immutable content only after the server has authorized the exact tenant/principal/artifact tuple. |
 | `method` | `Client.ReviseAgent` | ReviseAgent creates another immutable Agent revision through the admin surface. |
@@ -140,6 +143,7 @@ This index is derived only from the declared public `sdk/go` source files. It li
 | `method` | `InputID.Redacted` | Redacted returns a safe diagnostic Input ID. |
 | `method` | `InputID.String` | String returns the canonical Input ID. |
 | `method` | `InputID.UnmarshalJSON` | UnmarshalJSON decodes and validates an Input ID. |
+| `const` | `MaxApprovalsPerPage` | MaxApprovalsPerPage bounds one owner-scoped approval inbox response. |
 | `const` | `MaxIdempotencyKeyBytes` | MaxIdempotencyKeyBytes bounds one public idempotency key before transport-specific limits apply. |
 | `const` | `MaxInputParts` | MaxInputParts bounds the number of public Input parts accepted in one request. |
 | `const` | `MaxSessionViewQueuedTurns` | MaxSessionViewQueuedTurns bounds the queued Turns included in one Session inspection. |
@@ -189,6 +193,7 @@ This index is derived only from the declared public `sdk/go` source files. It li
 | `method` | `RuntimeClient.InspectApproval` | InspectApproval returns the caller-authorized state of one Approval. |
 | `method` | `RuntimeClient.InspectSession` | InspectSession returns caller-safe Session state without backend identifiers. |
 | `method` | `RuntimeClient.InspectTurn` | InspectTurn returns one caller-safe Turn snapshot. |
+| `method` | `RuntimeClient.ListApprovals` | ListApprovals returns the caller-authorized bounded Approval inbox. |
 | `method` | `RuntimeClient.ReadArtifact` | ReadArtifact downloads one caller-authorized immutable artifact. |
 | `method` | `RuntimeClient.ReviseAgent` | ReviseAgent creates another immutable Agent revision through the admin surface. |
 | `method` | `RuntimeClient.RevisePolicy` | RevisePolicy creates the next immutable revision of a tenant Policy. |
