@@ -161,7 +161,7 @@ func serveGuestOperation(vmID string, connection guestControlConnection, operati
 		if err != nil {
 			return fmt.Errorf("invalid guest dispatch encoding")
 		}
-		envelope, err := firecracker.DecodeGuestDispatch(frame)
+		envelope, _, err := firecracker.DecodeAuthenticatedGuestDispatch(frame)
 		if err != nil || envelope.SandboxID != vmID || envelope.EnvelopeID == "" || envelope.FencingToken == 0 {
 			return fmt.Errorf("invalid guest dispatch")
 		}

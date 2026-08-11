@@ -31,6 +31,10 @@ func TestUnixGuestControlChannelExchangesOnlyTheBoundIdentityAndUnavailableDispa
 			_, _ = connection.Write([]byte("PONG sandbox-001 bootstrap\n"))
 			return
 		}
+		if operation == "CANCEL envelope-001 9" {
+			_, _ = connection.Write([]byte("CANCELLED envelope-001\n"))
+			return
+		}
 		fields := strings.Fields(operation)
 		if len(fields) != 2 || fields[0] != "DISPATCH" {
 			t.Errorf("operation = %q, want DISPATCH", operation)
@@ -66,8 +70,11 @@ func TestUnixGuestControlChannelExchangesOnlyTheBoundIdentityAndUnavailableDispa
 	if err := channel.ExecuteDispatch(context.Background(), envelope); !errors.Is(err, ErrCapabilityUnavailable) {
 		t.Fatalf("ExecuteDispatch() error = %v, want unavailable guest result", err)
 	}
+	if err := channel.CancelDispatch(context.Background(), envelope); err != nil {
+		t.Fatalf("CancelDispatch() error = %v", err)
+	}
 	dialer.wait()
-	if got, want := dialer.targets(), []string{"unix:/srv/jailer/sandbox-001/root/run/firecracker.vsock", "unix:/srv/jailer/sandbox-001/root/run/firecracker.vsock"}; strings.Join(got, "|") != strings.Join(want, "|") {
+	if got, want := dialer.targets(), []string{"unix:/srv/jailer/sandbox-001/root/run/firecracker.vsock", "unix:/srv/jailer/sandbox-001/root/run/firecracker.vsock", "unix:/srv/jailer/sandbox-001/root/run/firecracker.vsock"}; strings.Join(got, "|") != strings.Join(want, "|") {
 		t.Fatalf("dial targets = %v, want %v", got, want)
 	}
 }
@@ -90,6 +97,9 @@ func TestUnixGuestControlChannelRefusesIdentitySubstitutionAndUseAfterReaperClos
 	if err := channel.Ping(context.Background(), "sandbox-002"); !errors.Is(err, ErrSmokeUnavailable) {
 		t.Fatalf("Ping() substituted identity error = %v, want unavailable", err)
 	}
+	if err := channel.CancelDispatch(context.Background(), sandboxhostprotocol.Envelope{EnvelopeID: "envelope-001", FencingToken: 1, SandboxID: "sandbox-002"}); !errors.Is(err, ErrCapabilityUnavailable) {
+		t.Fatalf("CancelDispatch() substituted identity error = %v, want unavailable", err)
+	}
 	if err := channel.Close(context.Background()); err != nil {
 		t.Fatalf("Close() error = %v", err)
 	}
@@ -99,6 +109,43 @@ func TestUnixGuestControlChannelRefusesIdentitySubstitutionAndUseAfterReaperClos
 	if got := len(dialer.targets()); got != 0 {
 		t.Fatalf("dial calls = %d, want none after local refusals", got)
 	}
+}
+
+func TestUnixGuestControlChannelReaperCloseInterruptsAnActivePrivateExchange(t *testing.T) {
+	peerClosed := make(chan struct{})
+	dialer := &guestChannelDialer{handler: func(connection net.Conn) {
+		defer connection.Close()
+		reader := bufio.NewReader(connection)
+		if line := guestChannelTestReadLine(t, reader); line != "CONNECT sandbox-001 fixture-v1" {
+			t.Errorf("CONNECT = %q, want bound identity", line)
+			return
+		}
+		if _, err := connection.Write([]byte("OK sandbox-001 fixture-v1\n")); err != nil {
+			t.Errorf("write CONNECT reply: %v", err)
+			return
+		}
+		_, _ = reader.ReadByte()
+		close(peerClosed)
+	}}
+	channel, err := NewUnixGuestControlChannel(dialer)
+	if err != nil {
+		t.Fatalf("NewUnixGuestControlChannel() error = %v", err)
+	}
+	if err := channel.BindGuestIdentity(context.Background(), "sandbox-001", "fixture-v1"); err != nil {
+		t.Fatalf("BindGuestIdentity() error = %v", err)
+	}
+	if err := channel.Bind(context.Background(), "/srv/jailer/sandbox-001/root/run/firecracker.vsock"); err != nil {
+		t.Fatalf("Bind() error = %v", err)
+	}
+	_, _, err = channel.open(context.Background())
+	if err != nil {
+		t.Fatalf("open() error = %v", err)
+	}
+	if err := channel.Close(context.Background()); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	<-peerClosed
+	dialer.wait()
 }
 
 type guestChannelDialer struct {

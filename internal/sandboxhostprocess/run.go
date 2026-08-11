@@ -138,7 +138,7 @@ func RunOnceWithExecutor(ctx context.Context, config Config, lookup SecretLookup
 	if config.testFaultAfterReceipt {
 		return ErrInjectedReceiptFault
 	}
-	if err := executeEnvelopeWithAfterTerminalSend(ctx, envelope, source.Now().UTC(), journal, ed25519.PrivateKey(hostPrivate), executor, func(sendCtx context.Context, wire []byte) error {
+	if err := executeEnvelopeWithAfterTerminalSend(ctx, envelope, source.Now().UTC(), journal, ed25519.PrivateKey(hostPrivate), bindAuthenticatedEnvelope(executor, response.body), func(sendCtx context.Context, wire []byte) error {
 		return sendResult(sendCtx, client, config.controlURL, wire)
 	}, context.WithDeadline, func() error {
 		if config.testFaultAfterResultSend {

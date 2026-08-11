@@ -44,6 +44,38 @@ func TestExecuteEnvelopePersistsStartedBeforeCallingTheExecutor(t *testing.T) {
 	}
 }
 
+func TestAuthenticatedExecutorReceivesOnlyTheExactVerifiedControlWire(t *testing.T) {
+	envelope, _ := executionEnvelope()
+	wire := []byte("control-signed-canonical-envelope")
+	executor := &recordingAuthenticatedExecutor{}
+	bound := bindAuthenticatedEnvelope(executor, wire)
+	if err := bound.Execute(context.Background(), envelope); err != nil {
+		t.Fatalf("bound Execute() error = %v", err)
+	}
+	if executor.envelope.EnvelopeID != envelope.EnvelopeID || string(executor.wire) != string(wire) {
+		t.Fatalf("authenticated executor = (%#v, %q), want exact envelope and wire", executor.envelope, executor.wire)
+	}
+	wire[0] = 'x'
+	if string(executor.wire) != "control-signed-canonical-envelope" {
+		t.Fatalf("authenticated executor retained caller wire mutation = %q", executor.wire)
+	}
+}
+
+type recordingAuthenticatedExecutor struct {
+	envelope sandboxhostprotocol.Envelope
+	wire     []byte
+}
+
+func (executor *recordingAuthenticatedExecutor) Execute(context.Context, sandboxhostprotocol.Envelope) error {
+	return nil
+}
+
+func (executor *recordingAuthenticatedExecutor) ExecuteAuthenticated(_ context.Context, envelope sandboxhostprotocol.Envelope, wire []byte) error {
+	executor.envelope = envelope
+	executor.wire = append([]byte(nil), wire...)
+	return nil
+}
+
 func TestExecuteEnvelopeNeverReexecutesAfterRestartWithOnlyStartedIntent(t *testing.T) {
 	t.Parallel()
 
