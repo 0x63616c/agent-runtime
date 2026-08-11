@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"net"
+	"path"
 	"reflect"
 	"strconv"
 	"strings"
@@ -889,6 +890,20 @@ func normalizeRequest(request OperationRequest, limits limitPolicy) (OperationRe
 		if err := validateCommand(request.ExecProcess.Command); err != nil {
 			return OperationRequest{}, "", err
 		}
+	case OperationCopyIn:
+		if request.CopyIn.Options.Overwrite == "" {
+			request.CopyIn.Options.Overwrite = OverwriteFailIfExists
+		}
+		if !validTaggedTarget(request) || !validTransferOptions(request.CopyIn.Options) {
+			return OperationRequest{}, "", newFailure(FailureInvalidArgument, "copy-in transfer options are invalid", RetryNever)
+		}
+	case OperationCopyOut:
+		if request.CopyOut.Options.Overwrite == "" {
+			request.CopyOut.Options.Overwrite = OverwriteFailIfExists
+		}
+		if !validTaggedTarget(request) || !validTransferOptions(request.CopyOut.Options) {
+			return OperationRequest{}, "", newFailure(FailureInvalidArgument, "copy-out transfer options are invalid", RetryNever)
+		}
 	default:
 		if !validTaggedTarget(request) {
 			return OperationRequest{}, "", newFailure(FailureInvalidArgument, "operation target is required", RetryNever)
@@ -907,9 +922,9 @@ func validTaggedTarget(request OperationRequest) bool {
 	case OperationKillProcess:
 		return validProcessID(request.KillProcess.ProcessID)
 	case OperationCopyIn:
-		return validSandboxID(request.CopyIn.SandboxID) && validArtifactID(request.CopyIn.Source.ID) && request.CopyIn.Source.SizeBytes > 0 && request.CopyIn.Destination != ""
+		return validSandboxID(request.CopyIn.SandboxID) && validArtifactRef(request.CopyIn.Source) && validGuestPath(request.CopyIn.Destination)
 	case OperationCopyOut:
-		return validSandboxID(request.CopyOut.SandboxID) && request.CopyOut.Source != ""
+		return validSandboxID(request.CopyOut.SandboxID) && validGuestPath(request.CopyOut.Source) && validMediaType(request.CopyOut.MediaType)
 	case OperationSnapshotSandbox:
 		return validSandboxID(request.SnapshotSandbox.SandboxID)
 	case OperationCloseSandbox:
@@ -919,7 +934,7 @@ func validTaggedTarget(request OperationRequest) bool {
 	case OperationCreateVolume:
 		return request.CreateVolume.Spec.SizeBytes > 0 && request.CreateVolume.Spec.Inodes > 0
 	case OperationAttachVolume:
-		return validSandboxID(request.AttachVolume.SandboxID) && validVolumeID(request.AttachVolume.VolumeID) && request.AttachVolume.Target != ""
+		return validSandboxID(request.AttachVolume.SandboxID) && validVolumeID(request.AttachVolume.VolumeID) && validGuestPath(request.AttachVolume.Target)
 	case OperationDetachVolume:
 		return validSandboxID(request.DetachVolume.SandboxID) && validVolumeID(request.DetachVolume.VolumeID)
 	case OperationDeleteVolume:
@@ -1365,6 +1380,9 @@ func validSnapshotID(id SnapshotID) bool {
 func validArtifactID(id ArtifactID) bool {
 	return validOpaqueID(string(id), "art_")
 }
+func validArtifactRef(reference ArtifactRef) bool {
+	return validArtifactID(reference.ID) && validMediaType(reference.MediaType) && reference.SizeBytes > 0 && validDigest(reference.Digest)
+}
 func validOpaqueID(id, prefix string) bool {
 	return len(id) > len(prefix) && len(id) <= 128 && strings.HasPrefix(id, prefix)
 }
@@ -1380,13 +1398,13 @@ func validDigest(digest Digest) bool {
 	return true
 }
 func validateCommand(command Command) error {
-	if !strings.HasPrefix(string(command.Executable), "/") || strings.Contains(string(command.Executable), "..") {
+	if !validGuestPath(command.Executable) {
 		return newFailure(FailureInvalidArgument, "command executable must be an absolute clean path", RetryNever)
 	}
 	if len(command.Argv) == 0 || command.Argv[0] == "" {
 		return newFailure(FailureInvalidArgument, "command argv is required", RetryNever)
 	}
-	if !strings.HasPrefix(string(command.WorkDir), "/") || strings.Contains(string(command.WorkDir), "..") {
+	if !validGuestPath(command.WorkDir) {
 		return newFailure(FailureInvalidArgument, "command work directory must be an absolute clean path", RetryNever)
 	}
 	if command.StartDeadline < 0 || command.RuntimeLimit < 0 {
@@ -1396,6 +1414,49 @@ func validateCommand(command Command) error {
 		return err
 	}
 	return nil
+}
+
+// validGuestPath accepts the portable part of a guest path at the public
+// control boundary. A backend still selects its permitted root and resolves
+// descriptor-relatively; this common grammar keeps ambiguous or host-like
+// targets out of the durable request before that backend is involved.
+func validGuestPath(value GuestPath) bool {
+	raw := string(value)
+	if len(raw) < 2 || len(raw) > 4096 || !path.IsAbs(raw) || path.Clean(raw) != raw || strings.ContainsRune(raw, '\\') {
+		return false
+	}
+	for _, character := range raw {
+		if character < 0x21 || character > 0x7e {
+			return false
+		}
+	}
+	first, _, _ := strings.Cut(strings.TrimPrefix(raw, "/"), "/")
+	switch first {
+	case "dev", "proc", "sys", "run":
+		return false
+	}
+	return true
+}
+
+func validMediaType(value string) bool {
+	if len(value) < 3 || len(value) > 255 || strings.Count(value, "/") != 1 || strings.ContainsAny(value, " ;\\\t\r\n") {
+		return false
+	}
+	for _, character := range value {
+		if (character >= 'a' && character <= 'z') || (character >= '0' && character <= '9') || strings.ContainsRune("!#$&^_.+-/", character) {
+			continue
+		}
+		return false
+	}
+	parts := strings.Split(value, "/")
+	return parts[0] != "" && parts[1] != ""
+}
+
+func validTransferOptions(options TransferOptions) bool {
+	if options.Overwrite != OverwriteFailIfExists && options.Overwrite != OverwriteAtomicReplace || uint32(options.Mode)&^uint32(0o777) != 0 {
+		return false
+	}
+	return options.Owner == nil || (options.Owner.UID != 0 && options.Owner.GID != 0)
 }
 
 func validateGrant(grant Grant) error {

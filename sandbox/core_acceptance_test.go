@@ -118,6 +118,38 @@ func TestCoreRejectsCrossTypeOpaqueIDsBeforeAcceptance(t *testing.T) {
 	}
 }
 
+// S9 behavior matrix for SBX-027: an operation accepts one canonical guest
+// path, rejects an escaping/reserved/ambiguous path before durable acceptance,
+// and leaves a valid absolute non-reserved path available for the configured
+// backend to resolve beneath its own permitted roots.
+func TestCoreAdmitsOnlyCanonicalNonReservedGuestPaths(t *testing.T) {
+	client := newCoreClient("principal-a", time.Date(2026, 8, 6, 12, 0, 0, 0, time.UTC))
+	valid := OperationRequest{ID: "op_guest_path_valid", Kind: OperationCopyOut, CopyOut: &CopyOutRequest{SandboxID: "sbx_01", Source: "/workspace/output.txt", MediaType: "text/plain"}}
+	if _, err := client.Submit(context.Background(), valid); err != nil {
+		t.Fatalf("Submit(valid guest path): %v", err)
+	}
+	missingMedia := valid
+	missingMedia.ID = "op_guest_path_missing_media"
+	missingMedia.CopyOut = &CopyOutRequest{SandboxID: "sbx_01", Source: "/workspace/output.txt"}
+	if _, err := client.Submit(context.Background(), missingMedia); err == nil {
+		t.Fatal("Submit(copy-out without media type) error = nil, want refusal")
+	}
+	missingDigest := OperationRequest{ID: "op_guest_path_missing_digest", Kind: OperationCopyIn, CopyIn: &CopyInRequest{SandboxID: "sbx_01", Source: ArtifactRef{ID: "art_01", MediaType: "application/octet-stream", SizeBytes: 1}, Destination: "/workspace/input.txt"}}
+	if _, err := client.Submit(context.Background(), missingDigest); err == nil {
+		t.Fatal("Submit(copy-in without immutable digest) error = nil, want refusal")
+	}
+	for _, value := range []GuestPath{
+		"", "workspace/output.txt", "/workspace/../etc/passwd", "/workspace//output.txt", "/proc/self/status", "/dev/null", "/workspace/na\u00efve.txt", "/workspace/line\nfeed",
+	} {
+		request := valid
+		request.ID = OperationID("op_guest_path_" + strings.ReplaceAll(strings.ReplaceAll(string(value), "/", "_"), "\n", "_"))
+		request.CopyOut = &CopyOutRequest{SandboxID: "sbx_01", Source: value, MediaType: "text/plain"}
+		if _, err := client.Submit(context.Background(), request); err == nil {
+			t.Fatalf("Submit(%q) error = nil, want invalid guest path refusal", value)
+		}
+	}
+}
+
 func TestCanonicalRequestIsStableForMapOrderAndDistinctForNilEmpty(t *testing.T) {
 	first := validCreateRequest("op_canonical")
 	first.CreateSandbox.Spec.Environment = map[string]string{"B": "two", "A": "one"}
@@ -866,8 +898,8 @@ func operationMatrixRequests() []OperationRequest {
 		{Kind: OperationExecProcess, ExecProcess: &ExecProcessRequest{SandboxID: "sbx_01", Command: Command{Executable: "/bin/echo", Argv: []string{"echo"}, WorkDir: "/work"}}},
 		{Kind: OperationSignalProcess, SignalProcess: &SignalProcessRequest{ProcessID: "prc_01", Signal: SignalInterrupt}},
 		{Kind: OperationKillProcess, KillProcess: &KillProcessRequest{ProcessID: "prc_01"}},
-		{Kind: OperationCopyIn, CopyIn: &CopyInRequest{SandboxID: "sbx_01", Source: ArtifactRef{ID: "art_01", SizeBytes: 1}, Destination: "/work/in"}},
-		{Kind: OperationCopyOut, CopyOut: &CopyOutRequest{SandboxID: "sbx_01", Source: "/work/out"}},
+		{Kind: OperationCopyIn, CopyIn: &CopyInRequest{SandboxID: "sbx_01", Source: ArtifactRef{ID: "art_01", MediaType: "application/octet-stream", SizeBytes: 1, Digest: "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"}, Destination: "/work/in"}},
+		{Kind: OperationCopyOut, CopyOut: &CopyOutRequest{SandboxID: "sbx_01", Source: "/work/out", MediaType: "application/octet-stream"}},
 		{Kind: OperationSnapshotSandbox, SnapshotSandbox: &SnapshotSandboxRequest{SandboxID: "sbx_01"}},
 		{Kind: OperationCloseSandbox, CloseSandbox: &CloseSandboxRequest{SandboxID: "sbx_01"}},
 		{Kind: OperationReconcileSandbox, ReconcileSandbox: &ReconcileSandboxRequest{SandboxID: "sbx_01"}},

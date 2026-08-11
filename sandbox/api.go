@@ -210,6 +210,7 @@ type CopyInRequest struct {
 type CopyOutRequest struct {
 	SandboxID SandboxID
 	Source    GuestPath
+	MediaType string
 	Options   TransferOptions
 }
 type SnapshotSandboxRequest struct {
