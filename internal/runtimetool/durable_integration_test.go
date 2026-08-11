@@ -246,6 +246,97 @@ func TestDurableBrokeredToolLifecyclePersistsApprovalAndFinalization(t *testing.
 	if err != nil || len(state.ToolExecutions) != 1 || adapter.executes != 1 || adapter.reconciles != 0 || !durableHasAuditKind(state.Audit, "capability_grant.expired") {
 		t.Fatalf("expired durable grant = executions=%#v calls=%d/%d audit=%#v err=%v", state.ToolExecutions, adapter.executes, adapter.reconciles, state.Audit, err)
 	}
+	// Owner revocation before the worker records an execution intent is also a
+	// durable terminal boundary.  The worker must see the persisted withdrawal,
+	// retain it in the audit history, and never hand this operation to the
+	// external adapter.
+	revokedInput, err := content.StageInputEnvelope(ctx, tenant, []agentruntime.ContentPart{{Kind: agentruntime.ContentText, Text: "revoked action must not run"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	revokedMutation, err := compiler.CompileAdmitInput(runtimestate.AdmitInputCommand{Scope: ownerScope, IdempotencyKey: "durable-tool-revoked-input", SessionID: session, Input: revokedInput})
+	if err != nil {
+		t.Fatal(err)
+	}
+	revokedTurn := apply(revokedMutation).Result().Turn.TurnID
+	revokedDescriptor, err := content.StageToolActionDescriptor(ctx, tenant, descriptorBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	revoked, err := broker.Admit(ctx, runtimetool.AdmissionRequest{Tenant: tenant, Principal: principal, SessionID: session, TurnID: revokedTurn, ToolCallID: "tcall_1234567890ABCDEI", ApprovalID: "appr_1234567890ABCDEI", PolicyName: "durable-tool-policy", PolicyRevision: 1, ToolName: "sandbox", ActionDigest: digest, CapabilityDigest: digest, Action: agentruntime.ApprovalAction{Verb: "write", Target: "workspace-service"}, MaximumUses: 1, ExpiresAt: source.Now().Add(time.Hour), Descriptor: revokedDescriptor, IdempotencyKey: "durable-tool-revoked-admission"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := publicRuntime.DecideApproval(ctx, runtimeapi.Identity{Tenant: string(tenant), Principal: string(principal)}, agentruntime.DecideApprovalRequest{ApprovalID: revoked.ApprovalID, Decision: agentruntime.ApprovalApproved, IdempotencyKey: "durable-tool-revoked-approve"}); err != nil {
+		t.Fatal(err)
+	}
+	state, err = store.LoadRuntimeState(ctx, workerScope)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var revokedGrant runtimestate.CapabilityGrantRecord
+	for _, grant := range state.Grants {
+		if grant.ToolCallID == revoked.ToolCallID {
+			revokedGrant = grant
+			break
+		}
+	}
+	if revokedGrant.GrantID == "" {
+		t.Fatalf("approved revoked grant was not persisted: %#v", state.Grants)
+	}
+	revokeBeforeIntent, err := compiler.CompileRevokeCapabilityGrant(runtimestate.RevokeCapabilityGrantCommand{Scope: ownerScope, IdempotencyKey: "durable-tool-revoke-before-intent", SessionID: session, TurnID: revokedTurn, ToolCallID: revoked.ToolCallID, GrantID: revokedGrant.GrantID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	apply(revokeBeforeIntent)
+	if err := worker.ScanOnce(ctx); err != nil {
+		t.Fatal(err)
+	}
+	state, err = store.LoadRuntimeState(ctx, workerScope)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(state.ToolExecutions) != 1 || adapter.executes != 1 || adapter.reconciles != 0 || !durableGrantRevokedWithoutUse(state.Grants, revoked.ToolCallID) || !durableHasAuditKind(state.Audit, "capability_grant.revoked") || !durableHasAuditKind(state.Audit, "revoke_capability_grant.terminal") {
+		t.Fatalf("revoked durable grant dispatched or lost terminal audit: executions=%#v calls=%d/%d grants=%#v audit=%#v", state.ToolExecutions, adapter.executes, adapter.reconciles, state.Grants, state.Audit)
+	}
+	// Cancellation reaches the same worker through the public owner API.  It
+	// may leave the bounded grant as retained metadata, but the cancelled Turn
+	// is authoritative: no consumption, execution intent, or adapter dispatch
+	// can occur after its durable terminal transition.
+	cancelledInput, err := content.StageInputEnvelope(ctx, tenant, []agentruntime.ContentPart{{Kind: agentruntime.ContentText, Text: "cancelled action must not run"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cancelledMutation, err := compiler.CompileAdmitInput(runtimestate.AdmitInputCommand{Scope: ownerScope, IdempotencyKey: "durable-tool-cancelled-input", SessionID: session, Input: cancelledInput})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cancelledTurn := apply(cancelledMutation).Result().Turn.TurnID
+	cancelledDescriptor, err := content.StageToolActionDescriptor(ctx, tenant, descriptorBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cancelled, err := broker.Admit(ctx, runtimetool.AdmissionRequest{Tenant: tenant, Principal: principal, SessionID: session, TurnID: cancelledTurn, ToolCallID: "tcall_1234567890ABCDEJ", ApprovalID: "appr_1234567890ABCDEJ", PolicyName: "durable-tool-policy", PolicyRevision: 1, ToolName: "sandbox", ActionDigest: digest, CapabilityDigest: digest, Action: agentruntime.ApprovalAction{Verb: "write", Target: "workspace-service"}, MaximumUses: 1, ExpiresAt: source.Now().Add(time.Hour), Descriptor: cancelledDescriptor, IdempotencyKey: "durable-tool-cancelled-admission"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := publicRuntime.DecideApproval(ctx, runtimeapi.Identity{Tenant: string(tenant), Principal: string(principal)}, agentruntime.DecideApprovalRequest{ApprovalID: cancelled.ApprovalID, Decision: agentruntime.ApprovalApproved, IdempotencyKey: "durable-tool-cancelled-approve"}); err != nil {
+		t.Fatal(err)
+	}
+	cancelledTurnState, err := publicRuntime.CancelTurn(ctx, runtimeapi.Identity{Tenant: string(tenant), Principal: string(principal)}, agentruntime.CancelTurnRequest{SessionID: session, TurnID: cancelledTurn, IdempotencyKey: "durable-tool-cancel-before-intent"})
+	if err != nil || cancelledTurnState.State != agentruntime.TurnCancelled {
+		t.Fatalf("cancel approved durable turn = %#v, %v", cancelledTurnState, err)
+	}
+	if err := worker.ScanOnce(ctx); err != nil {
+		t.Fatal(err)
+	}
+	state, err = store.LoadRuntimeState(ctx, workerScope)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(state.ToolExecutions) != 1 || adapter.executes != 1 || adapter.reconciles != 0 || !durableGrantUnused(state.Grants, cancelled.ToolCallID) || !durableHasAuditKind(state.Audit, "cancel_turn.terminal") {
+		t.Fatalf("cancelled durable turn dispatched or lost terminal audit: executions=%#v calls=%d/%d grants=%#v audit=%#v", state.ToolExecutions, adapter.executes, adapter.reconciles, state.Grants, state.Audit)
+	}
 	lateSessionMutation, err := compiler.CompileCreateSession(runtimestate.CreateSessionCommand{Scope: ownerScope, IdempotencyKey: "durable-tool-late-session", RevisionID: registered.Result().Revision.RevisionID})
 	if err != nil {
 		t.Fatal(err)
@@ -328,6 +419,24 @@ func durableHasAuditKind(facts []runtimestate.AuditFactRecord, want string) bool
 	for _, fact := range facts {
 		if fact.Kind == want {
 			return true
+		}
+	}
+	return false
+}
+
+func durableGrantRevokedWithoutUse(grants []runtimestate.CapabilityGrantRecord, toolCallID string) bool {
+	for _, grant := range grants {
+		if grant.ToolCallID == toolCallID {
+			return grant.RevokedAt != nil && grant.Uses == 0
+		}
+	}
+	return false
+}
+
+func durableGrantUnused(grants []runtimestate.CapabilityGrantRecord, toolCallID string) bool {
+	for _, grant := range grants {
+		if grant.ToolCallID == toolCallID {
+			return grant.RevokedAt == nil && grant.Uses == 0
 		}
 	}
 	return false

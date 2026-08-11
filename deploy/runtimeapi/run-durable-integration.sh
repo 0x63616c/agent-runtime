@@ -95,7 +95,7 @@ AR_RUNTIME_API_POSTGRES_DSN="$runtime_worker_dsn" \
 
 reset_runtime_schema
 AR_RUNTIME_API_POSTGRES_DSN="$runtime_worker_dsn" \
-  go test -race -tags=integration ./internal/runtimetool -run 'TestDurableToolLifecyclePersistsDescriptorApprovalAndFinalization' -count=1
+  go test -race -tags=integration ./internal/runtimetool -run 'TestDurableBrokeredToolLifecyclePersistsApprovalAndFinalization' -count=1
 
 reset_runtime_schema
 go test -race -tags=integration ./examples/durable-chat -run 'Test(DurableChatReconnectsAndCancelsThroughRestartedDurableAPIProcess|DurableChatTerminalAndWebBinariesUseOnlyPublicPathAcrossRestart)' -count=1
