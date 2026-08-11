@@ -95,6 +95,16 @@ func NewMountExecutionAuthority(store *sandboxresource.Store, lease sandboxresou
 	return &MountExecutionAuthority{store: store, lease: lease, processID: processID, operationID: operationID, fence: fence, clock: sourceClock, observer: observer, daemon: daemon, journal: journal}, nil
 }
 
+// NewLinuxMountExecutionAuthority composes one Linux descriptor observer and
+// daemon as the same fixed data-plane owner. The host never accepts a separate
+// observer that could inspect one export while another daemon mounts a path.
+func NewLinuxMountExecutionAuthority(store *sandboxresource.Store, lease sandboxresource.MountLease, processID, operationID string, fence uint64, sourceClock clock.Clock, daemon *LinuxJailedSharingDaemon, journal *sandboxhostjournal.Journal) (*MountExecutionAuthority, error) {
+	if daemon == nil {
+		return nil, fmt.Errorf("create Linux guest mount authority: %w", ErrCapabilityUnavailable)
+	}
+	return NewMountExecutionAuthority(store, lease, processID, operationID, fence, sourceClock, daemon, daemon, journal)
+}
+
 // DecodeGuestMountCommand accepts only one canonical lease/fence request.
 func DecodeGuestMountCommand(payload []byte) (GuestMountCommand, error) {
 	if len(payload) == 0 || len(payload) > maximumGuestDispatchBytes {
