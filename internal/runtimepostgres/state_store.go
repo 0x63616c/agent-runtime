@@ -145,7 +145,31 @@ func (store *RuntimeStateStore) load(ctx context.Context, query stateLoader, ten
 	if err != nil {
 		return runtimestate.RuntimeState{}, runtimestate.ErrIntegrity
 	}
+	if err := rejectLegacyApprovalSummaries(state); err != nil {
+		return runtimestate.RuntimeState{}, runtimestate.ErrIntegrity
+	}
 	return state.Clone(), nil
+}
+
+// rejectLegacyApprovalSummaries prevents a pre-v1 Approval snapshot from
+// crossing the strict public projection without its original safe action
+// summary. The old record has only opaque digests, so inventing a verb/target
+// would let callers approve a meaning we cannot prove. It remains fail-closed
+// until an operator can reconcile the durable source of truth.
+func rejectLegacyApprovalSummaries(state runtimestate.RuntimeState) error {
+	for _, approval := range state.Approvals {
+		if approval.ActionVerb == "" && approval.ActionTarget == "" {
+			return errors.New("upgrade legacy approval summary: safe action summary is unavailable")
+		}
+		if !validApprovalSummary(approval.ActionVerb, approval.ActionTarget) || approval.MaximumUses == 0 || approval.MaximumUses > 32 {
+			return errors.New("upgrade legacy approval summary: invalid safe action summary")
+		}
+	}
+	return nil
+}
+
+func validApprovalSummary(verb, target string) bool {
+	return (verb == "execute" || verb == "restart" || verb == "write" || verb == "delete") && (target == "workspace-service" || target == "sandbox-process" || target == "artifact" || target == "network-request")
 }
 
 // upgradeLegacyGrantScopes maps the prior grant JSON shape to the current

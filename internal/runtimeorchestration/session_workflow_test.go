@@ -7,13 +7,146 @@ import (
 	"testing"
 	"time"
 
+	"github.com/0x63616c/agent-runtime/internal/clock"
+	"github.com/0x63616c/agent-runtime/internal/runtimecontent"
 	"github.com/0x63616c/agent-runtime/internal/runtimeorchestration"
 	"github.com/0x63616c/agent-runtime/internal/runtimestate"
+	agentruntime "github.com/0x63616c/agent-runtime/sdk/go"
 	"go.temporal.io/sdk/activity"
 	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/testsuite"
 	"go.temporal.io/sdk/workflow"
 )
+
+func TestSessionWorkflowDoesNotStartAWaitingApprovalTurn(t *testing.T) {
+	ctx := context.Background()
+	now := time.Date(2026, 8, 11, 21, 0, 0, 0, time.UTC)
+	content, err := runtimecontent.New("workflow-pending-approval", &publisherObjects{values: map[string][]byte{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tenant, _ := runtimecontent.ParseTenantID("tenant-a")
+	principal, _ := runtimecontent.ParsePrincipalID("alice")
+	compiler, err := runtimestate.NewCompiler(content)
+	if err != nil {
+		t.Fatal(err)
+	}
+	timeSource, err := clock.NewFake(now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	planner, err := runtimestate.NewRuntimeStatePlanner(timeSource, &publisherIDs{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := runtimestate.NewMemoryRuntimeStateStore(planner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ownerScope := runtimestate.MutationScope{Tenant: tenant, Principal: principal, Authority: runtimestate.AuthoritySessionOwner}
+	workerScope := runtimestate.MutationScope{Tenant: tenant, Principal: principal, Authority: runtimestate.AuthorityRuntimeWorker}
+	revisionBody, err := content.StageAgentSpecificationBody(ctx, tenant, runtimecontent.AgentSpecificationBody{Name: "waiting", ModelProfile: "balanced", Instructions: "wait for approval"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	registration, err := compiler.CompileRegisterAgentRevision(runtimestate.RegisterAgentRevisionCommand{Scope: runtimestate.MutationScope{Tenant: tenant, Authority: runtimestate.AuthorityTenantAdministrator}, IdempotencyKey: "waiting-register", Specification: revisionBody})
+	if err != nil {
+		t.Fatal(err)
+	}
+	registered, err := store.Apply(ctx, registration)
+	if err != nil {
+		t.Fatal(err)
+	}
+	create, err := compiler.CompileCreateSession(runtimestate.CreateSessionCommand{Scope: ownerScope, IdempotencyKey: "waiting-session", RevisionID: registered.Result().Revision.RevisionID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	session, err := store.Apply(ctx, create)
+	if err != nil {
+		t.Fatal(err)
+	}
+	input, err := content.StageInputEnvelope(ctx, tenant, []agentruntime.ContentPart{{Kind: agentruntime.ContentText, Text: "hold this tool call"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	admit, err := compiler.CompileAdmitInput(runtimestate.AdmitInputCommand{Scope: ownerScope, IdempotencyKey: "waiting-input", SessionID: session.Result().Session.SessionID, Input: input})
+	if err != nil {
+		t.Fatal(err)
+	}
+	accepted, err := store.Apply(ctx, admit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	digest := "sha256:" + strings.Repeat("a", 64)
+	descriptor, err := content.StageToolActionDescriptor(ctx, tenant, []byte("private pending descriptor"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	intent, err := compiler.CompileRecordToolIntent(runtimestate.RecordToolIntentCommand{Scope: workerScope, IdempotencyKey: "waiting-intent", SessionID: session.Result().Session.SessionID, TurnID: accepted.Result().Turn.TurnID, ToolCallID: "tcall_1234567890ABCDEF", ToolName: "write", ActionDigest: digest, PolicyRevisionDigest: digest, Descriptor: descriptor})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Apply(ctx, intent); err != nil {
+		t.Fatal(err)
+	}
+	pending, err := compiler.CompileRequestApproval(runtimestate.RequestApprovalCommand{Scope: workerScope, IdempotencyKey: "waiting-approval", SessionID: session.Result().Session.SessionID, TurnID: accepted.Result().Turn.TurnID, ToolCallID: "tcall_1234567890ABCDEF", ApprovalID: "appr_1234567890ABCDEF", ActionDigest: digest, PolicyRevisionDigest: digest, CapabilityDigest: digest, ActionVerb: "write", ActionTarget: "workspace-service", MaximumUses: 1, ExpiresAt: now.Add(time.Hour)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Apply(ctx, pending); err != nil {
+		t.Fatal(err)
+	}
+	state, err := store.LoadRuntimeState(ctx, workerScope)
+	if err != nil || len(state.Turns) != 1 || state.Turns[0].State != agentruntime.TurnWaitingForApproval || len(state.Approvals) != 1 || state.Approvals[0].State != "pending" {
+		t.Fatalf("durable pending approval state = %#v, %v", state, err)
+	}
+	var inputRoute runtimestate.OutboxRecord
+	for _, record := range state.Outbox {
+		if record.EventKind == agentruntime.EventInputAccepted && record.SessionID == session.Result().Session.SessionID && record.TurnID == accepted.Result().Turn.TurnID {
+			inputRoute = record
+			break
+		}
+	}
+	if inputRoute.OutboxID == "" {
+		t.Fatalf("input admission did not retain a workflow route: %#v", state.Outbox)
+	}
+	claim, err := compiler.CompileClaimOutbox(runtimestate.ClaimOutboxCommand{Scope: runtimestate.MutationScope{Tenant: tenant, Authority: runtimestate.AuthorityOutboxPublisher}, IdempotencyKey: "waiting-input-claim", OutboxID: inputRoute.OutboxID, ExpectedVersion: inputRoute.Version, Claimer: "workflow-pending-test", ClaimUntil: now.Add(time.Minute)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	claimed, err := store.Apply(ctx, claim)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dispatcher, err := runtimeorchestration.NewDurableStateDispatcherWithInvocationScheduler(store, compiler, planner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	activities, err := runtimeorchestration.NewActivities(dispatcher)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var suite testsuite.WorkflowTestSuite
+	environment := suite.NewTestWorkflowEnvironment()
+	environment.RegisterActivityWithOptions(activities.DispatchStateCommand, activity.RegisterOptions{Name: runtimeorchestration.DispatchStateCommandActivity})
+	command := runtimeorchestration.Command{Tenant: string(tenant), OutboxID: string(claimed.Result().Outbox.OutboxID), SessionID: string(session.Result().Session.SessionID), Kind: runtimeorchestration.CommandInputAccepted, Sequence: claimed.Result().Outbox.EventSequence}
+	environment.RegisterDelayedCallback(func() {
+		environment.SignalWorkflow(runtimeorchestration.SessionCommandSignal, command)
+	}, 0)
+	environment.ExecuteWorkflow(runtimeorchestration.SessionWorkflow, runtimeorchestration.WorkflowInput{SessionID: string(session.Result().Session.SessionID), ContinueAfter: 1})
+	if err := environment.GetWorkflowError(); err == nil {
+		t.Fatal("workflow error = nil, want Continue-As-New after the pending input route")
+	} else {
+		var execution *temporal.WorkflowExecutionError
+		if !errors.As(err, &execution) || !workflow.IsContinueAsNewError(errors.Unwrap(execution)) {
+			t.Fatalf("workflow error = %v, want Continue-As-New after the pending input route", err)
+		}
+	}
+	state, err = store.LoadRuntimeState(ctx, workerScope)
+	if err != nil || len(state.Invocations) != 0 || state.Turns[0].State != agentruntime.TurnWaitingForApproval {
+		t.Fatalf("workflow dispatched a pending approval turn: state=%#v err=%v", state, err)
+	}
+}
 
 func TestSessionWorkflowDispatchesOrderedStateCommandsAndContinuesAsNew(t *testing.T) {
 	var suite testsuite.WorkflowTestSuite

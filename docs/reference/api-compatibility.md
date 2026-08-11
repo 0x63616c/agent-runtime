@@ -60,3 +60,18 @@ handle. Existing SDK callers retain the string-backed `EventKind` type and may
 ignore unrecognized event kinds; strict event consumers must accept documented
 additive enum values. No existing route, request field, response field, ID
 grammar, or enum member is removed or redefined.
+
+The M7 `requester`, `policy_revision`, `action`, and `scope` Approval
+projection is required in the OpenAPI response schema. The runtime admits an
+Approval only with that closed safe summary and bounded scope; it does not add
+a request parameter or expose descriptors, capabilities, credentials, grants,
+or backend handles.
+
+Snapshots written by the earlier internal `RequestApproval` path can lack the
+original action summary. They are deliberately rejected as durable-integrity
+failures on store and public API reads rather than being projected with an
+invented action. An operator must reconcile each affected snapshot from its
+authoritative source (or safely retire the pending action) before the tenant
+can resume reads; this is not an automatic migration and has no rollback
+shortcut. This is an unreleased compatibility decision, not evidence of a
+published version boundary.

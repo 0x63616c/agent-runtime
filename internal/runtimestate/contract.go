@@ -642,6 +642,7 @@ type RequestApprovalCommand struct {
 	SessionID                                                                    agentruntime.SessionID
 	TurnID                                                                       agentruntime.TurnID
 	ToolCallID, ApprovalID, ActionDigest, PolicyRevisionDigest, CapabilityDigest string
+	ActionVerb, ActionTarget                                                     string
 	MaximumUses                                                                  uint32
 	ExpiresAt                                                                    time.Time
 }

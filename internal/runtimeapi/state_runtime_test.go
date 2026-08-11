@@ -362,7 +362,7 @@ func TestStateRuntimeInspectsAndDecidesOwnerApprovalIdempotently(t *testing.T) {
 	if _, err := store.Apply(ctx, intent); err != nil {
 		t.Fatal(err)
 	}
-	request, err := compiler.CompileRequestApproval(runtimestate.RequestApprovalCommand{Scope: runtimestate.MutationScope{Tenant: tenant, Principal: principal, Authority: runtimestate.AuthorityRuntimeWorker}, IdempotencyKey: "approval-request", SessionID: session.ID, TurnID: accepted.Turn.ID, ToolCallID: "tcall_1234567890ABCDEF", ApprovalID: "appr_1234567890ABCDEF", ActionDigest: digest, PolicyRevisionDigest: digest, CapabilityDigest: digest, MaximumUses: 1, ExpiresAt: time.Date(2026, 8, 10, 13, 0, 0, 0, time.UTC)})
+	request, err := compiler.CompileRequestApproval(runtimestate.RequestApprovalCommand{Scope: runtimestate.MutationScope{Tenant: tenant, Principal: principal, Authority: runtimestate.AuthorityRuntimeWorker}, IdempotencyKey: "approval-request", SessionID: session.ID, TurnID: accepted.Turn.ID, ToolCallID: "tcall_1234567890ABCDEF", ApprovalID: "appr_1234567890ABCDEF", ActionDigest: digest, PolicyRevisionDigest: digest, CapabilityDigest: digest, ActionVerb: "write", ActionTarget: "workspace-service", MaximumUses: 1, ExpiresAt: time.Date(2026, 8, 10, 13, 0, 0, 0, time.UTC)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -371,7 +371,7 @@ func TestStateRuntimeInspectsAndDecidesOwnerApprovalIdempotently(t *testing.T) {
 	}
 	approvalID, _ := agentruntime.ParseApprovalID("appr_1234567890ABCDEF")
 	pending, err := runtime.InspectApproval(ctx, alice, approvalID)
-	if err != nil || pending.State != agentruntime.ApprovalPending || pending.SessionID != session.ID || pending.TurnID != accepted.Turn.ID || pending.Requester != "alice" || pending.PolicyRevision != digest {
+	if err != nil || pending.State != agentruntime.ApprovalPending || pending.SessionID != session.ID || pending.TurnID != accepted.Turn.ID || pending.Requester != "alice" || pending.PolicyRevision != digest || pending.Action == nil || *pending.Action != (agentruntime.ApprovalAction{Verb: "write", Target: "workspace-service"}) || pending.Scope == nil || pending.Scope.MaximumUses != 1 {
 		t.Fatalf("inspect pending Approval = %#v, %v", pending, err)
 	}
 	if _, err := runtime.InspectApproval(ctx, bob, approvalID); !hasFailure(err, agentruntime.FailureNotFound) {
@@ -418,7 +418,7 @@ func TestStateRuntimePersistsApprovalExpiryBeforeRefusingLateDecision(t *testing
 		t.Fatal(err)
 	}
 	expiresAt := fakeClock.Now().Add(time.Minute)
-	request, err := compiler.CompileRequestApproval(runtimestate.RequestApprovalCommand{Scope: runtimestate.MutationScope{Tenant: tenant, Principal: principal, Authority: runtimestate.AuthorityRuntimeWorker}, IdempotencyKey: "expired-approval-request", SessionID: session.ID, TurnID: accepted.Turn.ID, ToolCallID: "tcall_1234567890ABCDEF", ApprovalID: "appr_1234567890ABCDEF", ActionDigest: digest, PolicyRevisionDigest: digest, CapabilityDigest: digest, MaximumUses: 1, ExpiresAt: expiresAt})
+	request, err := compiler.CompileRequestApproval(runtimestate.RequestApprovalCommand{Scope: runtimestate.MutationScope{Tenant: tenant, Principal: principal, Authority: runtimestate.AuthorityRuntimeWorker}, IdempotencyKey: "expired-approval-request", SessionID: session.ID, TurnID: accepted.Turn.ID, ToolCallID: "tcall_1234567890ABCDEF", ApprovalID: "appr_1234567890ABCDEF", ActionDigest: digest, PolicyRevisionDigest: digest, CapabilityDigest: digest, ActionVerb: "write", ActionTarget: "workspace-service", MaximumUses: 1, ExpiresAt: expiresAt})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -546,7 +546,7 @@ func TestStateRuntimeHTTPAndSDKAuthorizationMatrixKeepsAdminAndOwnerScopesNonEnu
 	if _, err := store.Apply(ctx, intent); err != nil {
 		t.Fatalf("persist matrix Tool intent: %v", err)
 	}
-	approvalMutation, err := compiler.CompileRequestApproval(runtimestate.RequestApprovalCommand{Scope: workerScope, IdempotencyKey: "matrix-approval-request", SessionID: session.ID, TurnID: accepted.Turn.ID, ToolCallID: "tcall_1234567890ABCDEF", ApprovalID: "appr_1234567890ABCDEF", ActionDigest: digest, PolicyRevisionDigest: digest, CapabilityDigest: digest, MaximumUses: 1, ExpiresAt: time.Date(2026, 8, 10, 13, 0, 0, 0, time.UTC)})
+	approvalMutation, err := compiler.CompileRequestApproval(runtimestate.RequestApprovalCommand{Scope: workerScope, IdempotencyKey: "matrix-approval-request", SessionID: session.ID, TurnID: accepted.Turn.ID, ToolCallID: "tcall_1234567890ABCDEF", ApprovalID: "appr_1234567890ABCDEF", ActionDigest: digest, PolicyRevisionDigest: digest, CapabilityDigest: digest, ActionVerb: "write", ActionTarget: "workspace-service", MaximumUses: 1, ExpiresAt: time.Date(2026, 8, 10, 13, 0, 0, 0, time.UTC)})
 	if err != nil {
 		t.Fatalf("compile matrix Approval: %v", err)
 	}
@@ -765,7 +765,7 @@ func TestStateRuntimeHTTPAndSDKExposeExpiredApprovalAndItsDurableReceipt(t *test
 	if _, err := store.Apply(ctx, intent); err != nil {
 		t.Fatal(err)
 	}
-	request, err := compiler.CompileRequestApproval(runtimestate.RequestApprovalCommand{Scope: runtimestate.MutationScope{Tenant: tenant, Principal: principal, Authority: runtimestate.AuthorityRuntimeWorker}, IdempotencyKey: "http-expiry-request", SessionID: session.ID, TurnID: accepted.Turn.ID, ToolCallID: "tcall_1234567890ABCDEF", ApprovalID: "appr_1234567890ABCDEF", ActionDigest: digest, PolicyRevisionDigest: digest, CapabilityDigest: digest, MaximumUses: 1, ExpiresAt: fakeClock.Now().Add(time.Minute)})
+	request, err := compiler.CompileRequestApproval(runtimestate.RequestApprovalCommand{Scope: runtimestate.MutationScope{Tenant: tenant, Principal: principal, Authority: runtimestate.AuthorityRuntimeWorker}, IdempotencyKey: "http-expiry-request", SessionID: session.ID, TurnID: accepted.Turn.ID, ToolCallID: "tcall_1234567890ABCDEF", ApprovalID: "appr_1234567890ABCDEF", ActionDigest: digest, PolicyRevisionDigest: digest, CapabilityDigest: digest, ActionVerb: "write", ActionTarget: "workspace-service", MaximumUses: 1, ExpiresAt: fakeClock.Now().Add(time.Minute)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -860,7 +860,7 @@ func TestStateRuntimeHTTPAndSDKAuthorizationMatrixUsesFakeApprovalClock(t *testi
 		if _, e = store.Apply(ctx, intent); e != nil {
 			t.Fatal(e)
 		}
-		request, e := compiler.CompileRequestApproval(runtimestate.RequestApprovalCommand{Scope: workerScope, IdempotencyKey: "matrix-approval-" + label, SessionID: session.ID, TurnID: accepted.Turn.ID, ToolCallID: toolCallID, ApprovalID: approvalID, ActionDigest: digest, PolicyRevisionDigest: digest, CapabilityDigest: digest, MaximumUses: 1, ExpiresAt: expiresAt})
+		request, e := compiler.CompileRequestApproval(runtimestate.RequestApprovalCommand{Scope: workerScope, IdempotencyKey: "matrix-approval-" + label, SessionID: session.ID, TurnID: accepted.Turn.ID, ToolCallID: toolCallID, ApprovalID: approvalID, ActionDigest: digest, PolicyRevisionDigest: digest, CapabilityDigest: digest, ActionVerb: "write", ActionTarget: "workspace-service", MaximumUses: 1, ExpiresAt: expiresAt})
 		if e != nil {
 			t.Fatal(e)
 		}
@@ -1103,7 +1103,7 @@ func TestStateRuntimeHTTPAndSDKInspectOwnerScopedToolLifecycle(t *testing.T) {
 	if _, err := store.Apply(ctx, intent); err != nil {
 		t.Fatal(err)
 	}
-	approvalRequest, err := compiler.CompileRequestApproval(runtimestate.RequestApprovalCommand{Scope: workerScope, IdempotencyKey: "tool-inspection-approval", SessionID: session.ID, TurnID: accepted.Turn.ID, ToolCallID: "tcall_1234567890ABCDEF", ApprovalID: "appr_1234567890ABCDEF", ActionDigest: digest, PolicyRevisionDigest: digest, CapabilityDigest: digest, MaximumUses: 1, ExpiresAt: time.Date(2026, 8, 10, 13, 0, 0, 0, time.UTC)})
+	approvalRequest, err := compiler.CompileRequestApproval(runtimestate.RequestApprovalCommand{Scope: workerScope, IdempotencyKey: "tool-inspection-approval", SessionID: session.ID, TurnID: accepted.Turn.ID, ToolCallID: "tcall_1234567890ABCDEF", ApprovalID: "appr_1234567890ABCDEF", ActionDigest: digest, PolicyRevisionDigest: digest, CapabilityDigest: digest, ActionVerb: "write", ActionTarget: "workspace-service", MaximumUses: 1, ExpiresAt: time.Date(2026, 8, 10, 13, 0, 0, 0, time.UTC)})
 	if err != nil {
 		t.Fatal(err)
 	}

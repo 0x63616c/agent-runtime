@@ -350,13 +350,13 @@ type Approval struct {
 	ToolCallID string `json:"tool_call_id"`
 	// Requester is the principal that owns the requested effect. It is visible
 	// only through the already owner-scoped approval projection.
-	Requester string `json:"requester,omitempty"`
+	Requester string `json:"requester"`
 	// PolicyRevision is the immutable policy digest evaluated at admission;
 	// clients cannot alter it as part of a decision.
-	PolicyRevision string          `json:"policy_revision,omitempty"`
+	PolicyRevision string          `json:"policy_revision"`
 	State          ApprovalState   `json:"state"`
-	Action         *ApprovalAction `json:"action,omitempty"`
-	Scope          *ApprovalScope  `json:"scope,omitempty"`
+	Action         *ApprovalAction `json:"action"`
+	Scope          *ApprovalScope  `json:"scope"`
 	ExpiresAt      time.Time       `json:"expires_at"`
 	DecidedAt      *time.Time      `json:"decided_at,omitempty"`
 }

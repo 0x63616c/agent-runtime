@@ -772,12 +772,7 @@ func publicArtifact(record runtimestate.ArtifactRecord) agentruntime.ArtifactRef
 func publicApproval(record runtimestate.ApprovalRecord) agentruntime.Approval {
 	id, _ := agentruntime.ParseApprovalID(record.ApprovalID)
 	state := agentruntime.ApprovalState(record.State)
-	result := agentruntime.Approval{ID: id, SessionID: record.SessionID, TurnID: record.TurnID, ToolCallID: record.ToolCallID, Requester: string(record.Principal), PolicyRevision: record.PolicyRevisionDigest, State: state, ExpiresAt: record.ExpiresAt, DecidedAt: record.DecidedAt}
-	if record.ActionVerb != "" && record.ActionTarget != "" {
-		result.Action = &agentruntime.ApprovalAction{Verb: record.ActionVerb, Target: record.ActionTarget}
-		result.Scope = &agentruntime.ApprovalScope{MaximumUses: record.MaximumUses}
-	}
-	return result
+	return agentruntime.Approval{ID: id, SessionID: record.SessionID, TurnID: record.TurnID, ToolCallID: record.ToolCallID, Requester: string(record.Principal), PolicyRevision: record.PolicyRevisionDigest, State: state, Action: &agentruntime.ApprovalAction{Verb: record.ActionVerb, Target: record.ActionTarget}, Scope: &agentruntime.ApprovalScope{MaximumUses: record.MaximumUses}, ExpiresAt: record.ExpiresAt, DecidedAt: record.DecidedAt}
 }
 
 func publicEvents(records []runtimestate.ProductEventRecord) []agentruntime.Event {

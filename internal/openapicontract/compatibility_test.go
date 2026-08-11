@@ -53,13 +53,45 @@ func TestV1CompatibilityBaselineRetainsEveryPreexistingPublicRoute(t *testing.T)
 	}
 }
 
-func TestApprovalContractCarriesItsToolLinkAndWaitingTurnPhase(t *testing.T) {
+func TestApprovalContractGoldenSchemaCarriesTheSafeRequestProjection(t *testing.T) {
 	contract := readJSON(t, filepath.Join("..", "..", "api", "openapi", "openapi.yaml"))
 	schemas := object(t, object(t, contract, "components"), "schemas")
 
 	approval := object(t, schemas, "Approval")
-	if !contains(array(t, approval, "required"), "tool_call_id") {
-		t.Fatal("Approval contract must retain required tool_call_id linkage")
+	if additional, ok := approval["additionalProperties"].(bool); !ok || additional {
+		t.Fatal("Approval contract must reject undocumented fields")
+	}
+	for _, field := range []string{"id", "session_id", "turn_id", "tool_call_id", "requester", "policy_revision", "state", "action", "scope", "expires_at"} {
+		if !contains(array(t, approval, "required"), field) {
+			t.Fatalf("Approval contract must retain required %q", field)
+		}
+	}
+	properties := object(t, approval, "properties")
+	for _, field := range []string{"id", "session_id", "turn_id", "tool_call_id", "requester", "policy_revision", "action", "scope", "expires_at", "decided_at"} {
+		if _, exists := properties[field]; !exists {
+			t.Fatalf("Approval contract must expose safe %q", field)
+		}
+	}
+	for _, state := range []any{"pending", "approved", "denied", "expired", "cancelled"} {
+		if !contains(array(t, properties["state"].(map[string]any), "enum"), state) {
+			t.Fatalf("Approval contract must retain state %q", state)
+		}
+	}
+	action := object(t, schemas, "ApprovalAction")
+	if additional, ok := action["additionalProperties"].(bool); !ok || additional || !contains(array(t, action, "required"), "verb") || !contains(array(t, action, "required"), "target") {
+		t.Fatalf("Approval action must be a closed required safe summary: %#v", action)
+	}
+	actionProperties := object(t, action, "properties")
+	if !contains(array(t, actionProperties["verb"].(map[string]any), "enum"), "write") || !contains(array(t, actionProperties["target"].(map[string]any), "enum"), "workspace-service") {
+		t.Fatalf("Approval action must retain bounded vocabulary: %#v", actionProperties)
+	}
+	scope := object(t, schemas, "ApprovalScope")
+	if additional, ok := scope["additionalProperties"].(bool); !ok || additional || !contains(array(t, scope, "required"), "maximum_uses") {
+		t.Fatalf("Approval scope must be a closed required bounded projection: %#v", scope)
+	}
+	maximumUses := object(t, scope, "properties")["maximum_uses"].(map[string]any)
+	if minimum, ok := maximumUses["minimum"].(float64); !ok || minimum != 1 || maximumUses["maximum"] != float64(32) {
+		t.Fatalf("Approval scope maximum_uses bounds = %#v, want 1..32", maximumUses)
 	}
 	turn := object(t, schemas, "Turn")
 	states := array(t, object(t, turn, "properties")["state"].(map[string]any), "enum")
