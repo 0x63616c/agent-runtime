@@ -30,9 +30,11 @@ import (
 	"github.com/minio/minio-go/v7/pkg/credentials"
 )
 
-// TestDurableToolLifecyclePersistsDescriptorApprovalAndFinalization proves the
-// state/object-store half of TMP-010 on the disposable PostgreSQL/MinIO stack.
-func TestDurableToolLifecyclePersistsDescriptorApprovalAndFinalization(t *testing.T) {
+// TestDurableBrokeredToolLifecyclePersistsApprovalAndFinalization proves the
+// broker-to-artifact lifecycle against disposable PostgreSQL and MinIO. The
+// only Tool-admission transition is Broker.Admit; the worker can execute only
+// after the owner decision creates a bounded grant.
+func TestDurableBrokeredToolLifecyclePersistsApprovalAndFinalization(t *testing.T) {
 	ctx := context.Background()
 	dsn, endpoint, access, secret, bucket := requiredToolEnvironment(t, "AR_RUNTIME_API_POSTGRES_DSN"), requiredToolEnvironment(t, "AR_RUNTIME_API_MINIO_ENDPOINT"), requiredToolEnvironment(t, "AR_RUNTIME_API_MINIO_ACCESS_KEY"), requiredToolEnvironment(t, "AR_RUNTIME_API_MINIO_SECRET_KEY"), requiredToolEnvironment(t, "AR_RUNTIME_API_MINIO_BUCKET")
 	minioClient, err := minio.New(endpoint, &minio.Options{Creds: credentials.NewStaticV4(access, secret, ""), Secure: false})
@@ -73,24 +75,30 @@ func TestDurableToolLifecyclePersistsDescriptorApprovalAndFinalization(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
-	tenant, _ := runtimecontent.ParseTenantID("durable-tool")
+	tenant, _ := runtimecontent.ParseTenantID(fmt.Sprintf("durable-tool-%x", time.Now().UnixNano()))
 	principal, _ := runtimecontent.ParsePrincipalID("alice")
 	adminScope := runtimestate.MutationScope{Tenant: tenant, Authority: runtimestate.AuthorityTenantAdministrator}
 	ownerScope := runtimestate.MutationScope{Tenant: tenant, Principal: principal, Authority: runtimestate.AuthoritySessionOwner}
 	workerScope := runtimestate.MutationScope{Tenant: tenant, Principal: principal, Authority: runtimestate.AuthorityRuntimeWorker}
 	apply := func(m runtimestate.CompiledMutation) runtimestate.TransitionPlan {
-		state, e := store.LoadRuntimeState(ctx, m.ReceiptBinding().Scope)
-		if e != nil {
-			t.Fatal(e)
+		for attempt := 0; attempt < 64; attempt++ {
+			state, e := store.LoadRuntimeState(ctx, m.ReceiptBinding().Scope)
+			if e != nil {
+				t.Fatal(e)
+			}
+			plan, e := planner.Plan(ctx, state, m)
+			if e != nil {
+				t.Fatal(e)
+			}
+			if e = store.PersistTransitionPlan(ctx, plan); e == nil {
+				return plan
+			} else if !errors.Is(e, runtimestate.ErrConflict) {
+				t.Fatal(e)
+			}
+			runtime.Gosched()
 		}
-		plan, e := planner.Plan(ctx, state, m)
-		if e != nil {
-			t.Fatal(e)
-		}
-		if e = store.PersistTransitionPlan(ctx, plan); e != nil {
-			t.Fatal(e)
-		}
-		return plan
+		t.Fatal("persist durable tool transition: repeated state conflict")
+		return runtimestate.TransitionPlan{}
 	}
 	body, err := content.StageAgentSpecificationBody(ctx, tenant, runtimecontent.AgentSpecificationBody{Name: "durable-tool", ModelProfile: "balanced", Instructions: "safe"})
 	if err != nil {
@@ -101,6 +109,11 @@ func TestDurableToolLifecyclePersistsDescriptorApprovalAndFinalization(t *testin
 		t.Fatal(err)
 	}
 	registered := apply(mutation)
+	mutation, err = compiler.CompileRegisterPolicyRevision(runtimestate.RegisterPolicyRevisionCommand{Scope: adminScope, IdempotencyKey: "durable-tool-policy", Name: "durable-tool-policy", Rules: []agentruntime.PolicyRule{{ToolName: "sandbox", Decision: agentruntime.PolicyRequiresApproval}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	apply(mutation)
 	mutation, err = compiler.CompileCreateSession(runtimestate.CreateSessionCommand{Scope: ownerScope, IdempotencyKey: "durable-tool-session", RevisionID: registered.Result().Revision.RevisionID})
 	if err != nil {
 		t.Fatal(err)
@@ -125,21 +138,22 @@ func TestDurableToolLifecyclePersistsDescriptorApprovalAndFinalization(t *testin
 	}
 	digest := "sha256:" + strings.Repeat("a", 64)
 	session, turn := created.Result().Session.SessionID, accepted.Result().Turn.TurnID
-	mutation, err = compiler.CompileRecordToolIntent(runtimestate.RecordToolIntentCommand{Scope: workerScope, IdempotencyKey: "durable-tool-intent", SessionID: session, TurnID: turn, ToolCallID: "tcall_1234567890ABCDEF", ToolName: "sandbox", ActionDigest: digest, PolicyRevisionDigest: digest, Descriptor: descriptor})
+	broker, err := runtimetool.NewBroker(runtimetool.BrokerConfig{Store: store, Compiler: compiler, Planner: planner, Clock: source})
 	if err != nil {
 		t.Fatal(err)
 	}
-	apply(mutation)
-	mutation, err = compiler.CompileRequestApproval(runtimestate.RequestApprovalCommand{Scope: workerScope, IdempotencyKey: "durable-tool-approval", SessionID: session, TurnID: turn, ToolCallID: "tcall_1234567890ABCDEF", ApprovalID: "appr_1234567890ABCDEF", ActionDigest: digest, PolicyRevisionDigest: digest, CapabilityDigest: digest, MaximumUses: 1, ExpiresAt: now.Add(time.Hour)})
+	admission, err := broker.Admit(ctx, runtimetool.AdmissionRequest{Tenant: tenant, Principal: principal, SessionID: session, TurnID: turn, ToolCallID: "tcall_1234567890ABCDEF", ApprovalID: "appr_1234567890ABCDEF", PolicyName: "durable-tool-policy", PolicyRevision: 1, ToolName: "sandbox", ActionDigest: digest, CapabilityDigest: digest, Action: agentruntime.ApprovalAction{Verb: "write", Target: "workspace-service"}, MaximumUses: 1, ExpiresAt: now.Add(time.Hour), Descriptor: descriptor, IdempotencyKey: "durable-tool-admission"})
+	if err != nil || admission.ToolCallID != "tcall_1234567890ABCDEF" || admission.ApprovalID != "appr_1234567890ABCDEF" {
+		t.Fatalf("durable broker admission = %#v, %v", admission, err)
+	}
+	publicRuntime, err := runtimeapi.NewStateRuntime(runtimeapi.StateRuntimeConfig{Content: content, Compiler: compiler, Planner: planner, Store: store, ModelProfiles: []string{"balanced"}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	apply(mutation)
-	mutation, err = compiler.CompileDecideApproval(runtimestate.DecideApprovalCommand{Scope: ownerScope, IdempotencyKey: "durable-tool-approve", ApprovalID: "appr_1234567890ABCDEF", Decision: "approved"})
-	if err != nil {
-		t.Fatal(err)
+	decision, err := publicRuntime.DecideApproval(ctx, runtimeapi.Identity{Tenant: string(tenant), Principal: string(principal)}, agentruntime.DecideApprovalRequest{ApprovalID: admission.ApprovalID, Decision: agentruntime.ApprovalApproved, IdempotencyKey: "durable-tool-approve"})
+	if err != nil || decision.State != agentruntime.ApprovalApproved {
+		t.Fatalf("durable public approval = %#v, %v", decision, err)
 	}
-	apply(mutation)
 	adapter := newDurableToolAdapter()
 	worker, err := runtimetool.NewWorker(runtimetool.Config{Store: store, Tenants: store, Compiler: compiler, Planner: planner, Clock: source, Content: content, Adapter: adapter, Claimer: "durable-tool-worker"})
 	if err != nil {
@@ -160,6 +174,26 @@ func TestDurableToolLifecyclePersistsDescriptorApprovalAndFinalization(t *testin
 	if len(state.ToolExecutions) != 1 || state.ToolExecutions[0].State != runtimestate.ToolExecutionSucceeded || len(state.Grants) != 1 || state.Grants[0].Uses != 1 || adapter.executes != 1 || adapter.reconciles != 0 {
 		t.Fatalf("durable execution = %#v", state.ToolExecutions)
 	}
+	// The durable records contain only bounded metadata; authorization and
+	// execution lifecycles are append-only audit facts, never raw tool output.
+	for _, kind := range []string{
+		"decide_approval.authorized",
+		"consume_capability_grant.committed",
+		"begin_tool_execution.committed",
+		"record_tool_execution_outcome.terminal",
+		"capability_grant.exhausted",
+	} {
+		if !durableHasAuditKind(state.Audit, kind) {
+			t.Fatalf("durable audit lacks %q: %#v", kind, state.Audit)
+		}
+	}
+	if len(state.Artifacts) != 1 || state.Artifacts[0].Reference.SizeBytes > 8<<20 {
+		t.Fatalf("durable tool output artifact = %#v", state.Artifacts)
+	}
+	download, err := publicRuntime.ReadArtifact(ctx, runtimeapi.Identity{Tenant: string(tenant), Principal: string(principal)}, state.Artifacts[0].ArtifactID)
+	if err != nil || strings.Contains(string(download.Body), "integration-output-secret") || !strings.Contains(string(download.Body), "[REDACTED]") {
+		t.Fatalf("durable redacted output = %#v, %v", download, err)
+	}
 	// A grant can be revoked only before its execution intent. Once a real
 	// external operation has a durable terminal observation, the owner receives
 	// a stable conflict instead of a fictional undo claim.
@@ -178,6 +212,39 @@ func TestDurableToolLifecyclePersistsDescriptorApprovalAndFinalization(t *testin
 	}
 	if !found {
 		t.Fatalf("durable event replay lacks sandbox finalization: %#v", state.Events)
+	}
+	// A second brokered approval proves that a grant is checked by the durable
+	// worker immediately before dispatch: advancing past its exact expiry
+	// produces no external adapter call and no execution intent.
+	expiringInput, err := content.StageInputEnvelope(ctx, tenant, []agentruntime.ContentPart{{Kind: agentruntime.ContentText, Text: "expired action must not run"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	expiringMutation, err := compiler.CompileAdmitInput(runtimestate.AdmitInputCommand{Scope: ownerScope, IdempotencyKey: "durable-tool-expiring-input", SessionID: session, Input: expiringInput})
+	if err != nil {
+		t.Fatal(err)
+	}
+	expiringTurn := apply(expiringMutation).Result().Turn.TurnID
+	expiringDescriptor, err := content.StageToolActionDescriptor(ctx, tenant, descriptorBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	expiring, err := broker.Admit(ctx, runtimetool.AdmissionRequest{Tenant: tenant, Principal: principal, SessionID: session, TurnID: expiringTurn, ToolCallID: "tcall_1234567890ABCDEG", ApprovalID: "appr_1234567890ABCDEG", PolicyName: "durable-tool-policy", PolicyRevision: 1, ToolName: "sandbox", ActionDigest: digest, CapabilityDigest: digest, Action: agentruntime.ApprovalAction{Verb: "write", Target: "workspace-service"}, MaximumUses: 1, ExpiresAt: source.Now().Add(time.Second), Descriptor: expiringDescriptor, IdempotencyKey: "durable-tool-expiring-admission"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := publicRuntime.DecideApproval(ctx, runtimeapi.Identity{Tenant: string(tenant), Principal: string(principal)}, agentruntime.DecideApprovalRequest{ApprovalID: expiring.ApprovalID, Decision: agentruntime.ApprovalApproved, IdempotencyKey: "durable-tool-expiring-approve"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := source.Advance(time.Second + time.Nanosecond); err != nil {
+		t.Fatal(err)
+	}
+	if err := worker.ScanOnce(ctx); err != nil {
+		t.Fatal(err)
+	}
+	state, err = store.LoadRuntimeState(ctx, workerScope)
+	if err != nil || len(state.ToolExecutions) != 1 || adapter.executes != 1 || adapter.reconciles != 0 || !durableHasAuditKind(state.Audit, "capability_grant.expired") {
+		t.Fatalf("expired durable grant = executions=%#v calls=%d/%d audit=%#v err=%v", state.ToolExecutions, adapter.executes, adapter.reconciles, state.Audit, err)
 	}
 	pool.Close()
 	pool, err = pgxpool.New(ctx, dsn)
@@ -222,6 +289,15 @@ func requiredToolEnvironment(t *testing.T, name string) string {
 	return ""
 }
 
+func durableHasAuditKind(facts []runtimestate.AuditFactRecord, want string) bool {
+	for _, fact := range facts {
+		if fact.Kind == want {
+			return true
+		}
+	}
+	return false
+}
+
 type durableToolIDs struct{ next uint64 }
 
 func (ids *durableToolIDs) NextIdentifier(kind runtimestate.IdentifierKind) (string, error) {
@@ -243,7 +319,7 @@ func (adapter *durableToolAdapter) ExternalEffectContract() runtimetool.External
 
 func (adapter *durableToolAdapter) Execute(_ context.Context, request runtimetool.Request) (runtimetool.Response, error) {
 	adapter.executes++
-	return runtimetool.Response{Output: []byte(`{"result":"workspace action completed","operation_id":"` + string(request.OperationID) + `"}`), MediaType: "application/json"}, nil
+	return runtimetool.Response{Output: []byte(`{"result":"workspace action completed","token=integration-output-secret","operation_id":"` + string(request.OperationID) + `"}`), MediaType: "application/json"}, nil
 }
 
 func (adapter *durableToolAdapter) Reconcile(_ context.Context, request runtimetool.Request) (runtimetool.Response, error) {
