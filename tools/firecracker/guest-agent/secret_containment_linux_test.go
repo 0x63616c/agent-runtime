@@ -6,6 +6,8 @@ import (
 	"context"
 	"errors"
 	"testing"
+
+	"github.com/0x63616c/agent-runtime/internal/firecracker"
 )
 
 func TestGuestCgroupTreeReapVerifierRequiresExactMembershipAndAnEmptyTree(t *testing.T) {
@@ -50,6 +52,31 @@ func TestGuestCgroupTreeReapVerifierRefusesMembershipSubstitutionAndBadPaths(t *
 	}
 	if err := verifier.VerifyTreeReaped(context.Background(), 42, -1); err == nil {
 		t.Fatal("VerifyTreeReaped() accepted missing pidfd identity")
+	}
+}
+
+func TestGuestSecretCgroupManifestWiringRefusesUnprotectedOrSubstitutedConfiguration(t *testing.T) {
+	manifest := firecracker.SecretContainmentManifest{
+		Version:                   "firecracker.jailer-secret-containment/v1",
+		VMID:                      "sandbox-001",
+		GuestCgroupPath:           "/agent-runtime/secrets/sandbox-001",
+		SecretAreaPath:            "/run/agent-runtime/secrets/sandbox-001",
+		SecretAreaFilesystem:      "tmpfs",
+		SecretAreaMountOptions:    []string{"mode=0700", "nodev", "noexec", "nosuid"},
+		ProcMountPath:             "/proc",
+		ProcFilesystem:            "proc",
+		ProcMountOptions:          []string{"hidepid=2", "nodev", "noexec", "nosuid", "subset=pid"},
+		MountNamespaceRequired:    true,
+		SnapshotExclusionRequired: true,
+		CgroupV2LifecycleRequired: true,
+	}
+	directory, err := guestSecretCgroupDirectoryFromManifest(manifest, "sandbox-001")
+	if err != nil || directory != "/sys/fs/cgroup/agent-runtime/secrets/sandbox-001" {
+		t.Fatalf("guestSecretCgroupDirectoryFromManifest() = %q, %v", directory, err)
+	}
+	manifest.SnapshotExclusionRequired = false
+	if _, err := guestSecretCgroupDirectoryFromManifest(manifest, "sandbox-001"); err == nil {
+		t.Fatal("guestSecretCgroupDirectoryFromManifest accepted an unguarded snapshot area")
 	}
 }
 

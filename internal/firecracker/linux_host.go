@@ -138,28 +138,47 @@ type LinuxJailerHost struct {
 	HTTP           FirecrackerHTTPPort
 	Guest          GuestControlChannel
 
-	mu             sync.Mutex
-	preflight      bool
-	preparing      bool
-	prepared       bool
-	launching      bool
-	launched       bool
-	cleaning       bool
-	cleaned        bool
-	process        JailerProcess
-	configured     bool
-	configuredPlan Plan
-	plan           Plan
-	fixtures       FixtureSet
-	authority      JailerExecutionAuthority
-	request        LaunchRequest
-	stage          JailedResourceStage
-	serial         JailerSerialObserver
-	launchDone     chan struct{}
-	prepareDone    chan struct{}
-	cleanupDone    chan struct{}
-	cleanupProof   CleanupProof
-	cleanupErr     error
+	mu                   sync.Mutex
+	preflight            bool
+	preparing            bool
+	prepared             bool
+	launching            bool
+	launched             bool
+	cleaning             bool
+	cleaned              bool
+	process              JailerProcess
+	configured           bool
+	configuredPlan       Plan
+	secretContainment    SecretContainmentManifest
+	hasSecretContainment bool
+	plan                 Plan
+	fixtures             FixtureSet
+	authority            JailerExecutionAuthority
+	request              LaunchRequest
+	stage                JailedResourceStage
+	serial               JailerSerialObserver
+	launchDone           chan struct{}
+	prepareDone          chan struct{}
+	cleanupDone          chan struct{}
+	cleanupProof         CleanupProof
+	cleanupErr           error
+}
+
+// SecretContainmentManifest returns the fixed unavailable-profile launch
+// configuration when the host was explicitly composed with one. It is only a
+// configuration/refusal record: callers must not interpret it as proof that a
+// guest mounted the area or `/proc`, created the cgroup, excluded snapshots,
+// or enforced ptrace isolation.
+func (host *LinuxJailerHost) SecretContainmentManifest() (SecretContainmentManifest, bool) {
+	if host == nil {
+		return SecretContainmentManifest{}, false
+	}
+	host.mu.Lock()
+	defer host.mu.Unlock()
+	if !host.hasSecretContainment {
+		return SecretContainmentManifest{}, false
+	}
+	return cloneSecretContainmentManifest(host.secretContainment), true
 }
 
 // ExecuteDispatch is the only Firecracker handoff for an already authenticated
@@ -230,9 +249,9 @@ func (host *LinuxJailerHost) DispatchAuthenticatedSecret(ctx context.Context, en
 		return fmt.Errorf("%w: authenticated fenced secret command is required", ErrCapabilityUnavailable)
 	}
 	host.mu.Lock()
-	launched, cleaning, plan, guest := host.launched, host.cleaning || host.cleaned, cloneLinuxJailerPlan(host.plan), host.Guest
+	launched, cleaning, plan, guest, containment, hasContainment, boundAuthority := host.launched, host.cleaning || host.cleaned, cloneLinuxJailerPlan(host.plan), host.Guest, cloneSecretContainmentManifest(host.secretContainment), host.hasSecretContainment, cloneJailerExecutionAuthority(host.authority)
 	host.mu.Unlock()
-	if !launched || cleaning || !validCompiledPlan(plan) || envelope.SandboxID != plan.VMID() || sandbox.Digest(envelope.CapabilityDigest) != plan.Capabilities().Digest || firecrackerProfilesUnavailable(plan.Capabilities()) {
+	if !launched || cleaning || !validCompiledPlan(plan) || envelope.SandboxID != plan.VMID() || sandbox.Digest(envelope.CapabilityDigest) != plan.Capabilities().Digest || !hasContainment || !validSecretContainmentManifest(containment, plan, boundAuthority) || firecrackerProfilesUnavailable(plan.Capabilities()) {
 		return fmt.Errorf("%w: certified secret profile is unavailable", ErrCapabilityUnavailable)
 	}
 	channel, ok := guest.(AuthenticatedGuestSecretChannel)

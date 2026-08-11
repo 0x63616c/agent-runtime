@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/0x63616c/agent-runtime/internal/firecracker"
 	"github.com/0x63616c/agent-runtime/internal/sandboxauthority"
 )
 
@@ -65,6 +66,43 @@ func newGuestCgroupTreeReapVerifier(cgroupDirectory string) (*guestCgroupTreeRea
 		return nil, err
 	}
 	return verifier, nil
+}
+
+// newGuestCgroupTreeReapVerifierFromManifest is the narrow guest-side wiring
+// point for the host-composed unavailable secret-containment manifest. The
+// manifest must retain every fixed cgroup, tmpfs, proc and snapshot-exclusion
+// declaration before the verifier opens its cgroup subtree. It does not make
+// those declarations true; the protected Jailer/rootfs profile must prove
+// them before secret capability promotion.
+func newGuestCgroupTreeReapVerifierFromManifest(manifest firecracker.SecretContainmentManifest, vmID string) (*guestCgroupTreeReapVerifier, error) {
+	directory, err := guestSecretCgroupDirectoryFromManifest(manifest, vmID)
+	if err != nil {
+		return nil, err
+	}
+	return newGuestCgroupTreeReapVerifier(directory)
+}
+
+func guestSecretCgroupDirectoryFromManifest(manifest firecracker.SecretContainmentManifest, vmID string) (string, error) {
+	if vmID == "" || manifest.Version != "firecracker.jailer-secret-containment/v1" || manifest.VMID != vmID || manifest.GuestCgroupPath != "/agent-runtime/secrets/"+vmID || manifest.SecretAreaPath != "/run/agent-runtime/secrets/"+vmID || manifest.SecretAreaFilesystem != "tmpfs" || !sameGuestContainmentStrings(manifest.SecretAreaMountOptions, []string{"mode=0700", "nodev", "noexec", "nosuid"}) || manifest.ProcMountPath != "/proc" || manifest.ProcFilesystem != "proc" || !sameGuestContainmentStrings(manifest.ProcMountOptions, []string{"hidepid=2", "nodev", "noexec", "nosuid", "subset=pid"}) || !manifest.MountNamespaceRequired || !manifest.SnapshotExclusionRequired || !manifest.CgroupV2LifecycleRequired {
+		return "", fmt.Errorf("wire guest secret cgroup verifier: unavailable containment manifest is required")
+	}
+	directory := guestCgroupV2Root + manifest.GuestCgroupPath
+	if !validGuestSecretCgroupDirectory(directory) {
+		return "", fmt.Errorf("wire guest secret cgroup verifier: exact cgroup v2 subtree is required")
+	}
+	return directory, nil
+}
+
+func sameGuestContainmentStrings(left, right []string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for index := range left {
+		if left[index] != right[index] {
+			return false
+		}
+	}
+	return true
 }
 
 func newGuestCgroupTreeReapVerifierWithRoot(expectedPath string, root guestCgroupRoot, processCgroup func(int) ([]byte, error)) (*guestCgroupTreeReapVerifier, error) {

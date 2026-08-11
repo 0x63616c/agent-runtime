@@ -11,11 +11,12 @@ const fixedFirecrackerAPISocket = "/run/firecracker.socket"
 // LinuxJailerHostConfig is the complete reviewed composition input for one Linux Jailer host.
 // Constructing it neither starts a Jailer nor verifies Linux/KVM execution.
 type LinuxJailerHostConfig struct {
-	Plan           Plan
-	PreflightState KVMPreflight
-	RootFSCopyPath string
-	Authority      JailerExecutionAuthority
-	UnixDialer     unixSocketDialer
+	Plan              Plan
+	PreflightState    KVMPreflight
+	RootFSCopyPath    string
+	Authority         JailerExecutionAuthority
+	SecretContainment *SecretContainmentManifest
+	UnixDialer        unixSocketDialer
 }
 
 // NewLinuxJailerHost composes the reviewed resource stager, Jailer starter,
@@ -25,6 +26,9 @@ type LinuxJailerHostConfig struct {
 func NewLinuxJailerHost(config LinuxJailerHostConfig) (*LinuxJailerHost, error) {
 	if !validCompiledPlan(config.Plan) || !validJailerExecutionAuthority(config.Authority, config.Plan) || !safeAbsolutePath(config.RootFSCopyPath) {
 		return nil, fmt.Errorf("%w: compiled plan, exact Jailer authority, and private rootfs copy are required", ErrSmokeUnavailable)
+	}
+	if config.SecretContainment != nil && !validSecretContainmentManifest(*config.SecretContainment, config.Plan, config.Authority) {
+		return nil, fmt.Errorf("%w: exact unavailable secret-containment launch profile is required", ErrSmokeUnavailable)
 	}
 	if err := config.PreflightState.Validate(); err != nil {
 		return nil, err
@@ -37,7 +41,7 @@ func NewLinuxJailerHost(config LinuxJailerHostConfig) (*LinuxJailerHost, error) 
 	if err != nil {
 		return nil, err
 	}
-	return &LinuxJailerHost{
+	host := &LinuxJailerHost{
 		PreflightState: config.PreflightState,
 		RootFSCopyPath: config.RootFSCopyPath,
 		Resources:      LinuxJailerResourceStager{},
@@ -47,7 +51,12 @@ func NewLinuxJailerHost(config LinuxJailerHostConfig) (*LinuxJailerHost, error) 
 		Guest:          guest,
 		configured:     true,
 		configuredPlan: cloneLinuxJailerPlan(config.Plan),
-	}, nil
+	}
+	if config.SecretContainment != nil {
+		host.secretContainment = cloneSecretContainmentManifest(*config.SecretContainment)
+		host.hasSecretContainment = true
+	}
+	return host, nil
 }
 
 // hostJailedPath maps one exact chroot-visible absolute path to its host-visible path.
