@@ -164,7 +164,8 @@ func TestServeGuestControlReturnsBoundedUnavailableResultForAnAuthenticatedDispa
 	if err != nil {
 		t.Fatalf("serveGuestControl() error = %v", err)
 	}
-	if got, want := connection.String(), "OK sandbox-001 fixture-v1\nRESULT UNAVAILABLE envelope-001\n"; got != want {
+	marker := []byte("guest-control-unavailable")
+	if got, want := connection.String(), "OK sandbox-001 fixture-v1\nOUTPUT envelope-001 control 0 "+sandboxhostprotocol.Digest(marker)+" "+base64.RawURLEncoding.EncodeToString(marker)+"\nRESULT UNAVAILABLE envelope-001\n"; got != want {
 		t.Fatalf("guest control response = %q, want %q", got, want)
 	}
 }

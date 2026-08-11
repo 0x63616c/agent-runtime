@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/0x63616c/agent-runtime/internal/firecracker"
+	"github.com/0x63616c/agent-runtime/internal/sandboxhostprotocol"
 )
 
 const protocolVersion = "agent-runtime-firecracker-guest/v1"
@@ -160,6 +161,11 @@ func serveGuestOperation(vmID string, connection guestControlConnection, operati
 		// This fixture proves framing, boot identity, bounded input, and the
 		// unavailable result path. It contains no command runner, credentials,
 		// mounted data, or network authority to accidentally widen a profile.
+		markerBytes := []byte("guest-control-unavailable")
+		marker := base64.RawURLEncoding.EncodeToString(markerBytes)
+		if _, err := fmt.Fprintf(connection, "OUTPUT %s control 0 %s %s\n", envelope.EnvelopeID, sandboxhostprotocol.Digest(markerBytes), marker); err != nil {
+			return fmt.Errorf("write guest dispatch output: %w", err)
+		}
 		if _, err := fmt.Fprintf(connection, "RESULT UNAVAILABLE %s\n", envelope.EnvelopeID); err != nil {
 			return fmt.Errorf("write guest dispatch result: %w", err)
 		}
