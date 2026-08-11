@@ -546,9 +546,6 @@ func TestDurableBrokeredToolLifecyclePersistsApprovalAndFinalization(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := publicRuntime.DecideApproval(ctx, runtimeapi.Identity{Tenant: string(tenant), Principal: string(principal)}, agentruntime.DecideApprovalRequest{ApprovalID: cancelled.ApprovalID, Decision: agentruntime.ApprovalApproved, IdempotencyKey: "durable-tool-cancelled-approve"}); err != nil {
-		t.Fatal(err)
-	}
 	cancelledTurnState, err := publicRuntime.CancelTurn(ctx, runtimeapi.Identity{Tenant: string(tenant), Principal: string(principal)}, agentruntime.CancelTurnRequest{SessionID: cancelledSession, TurnID: cancelledTurn, IdempotencyKey: "durable-tool-cancel-before-intent"})
 	if err != nil || cancelledTurnState.State != agentruntime.TurnCancelled {
 		t.Fatalf("cancel approved durable turn = %#v, %v", cancelledTurnState, err)
@@ -560,8 +557,40 @@ func TestDurableBrokeredToolLifecyclePersistsApprovalAndFinalization(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(state.ToolExecutions) != 3 || adapter.executes != 1 || adapter.reconciles != 1 || !durableGrantRevokedWithoutUse(state.Grants, cancelled.ToolCallID) || !durableHasAuditKind(state.Audit, "capability_grant.revoked") || !durableHasAuditKind(state.Audit, "cancel_turn.terminal") {
+	if len(state.ToolExecutions) != 3 || adapter.executes != 1 || adapter.reconciles != 1 || durableHasGrant(state.Grants, cancelled.ToolCallID) || !durableHasAuditToolCall(state.Audit, cancelled.ToolCallID, "approval.cancelled") || !durableHasAuditKind(state.Audit, "cancel_turn.terminal") {
 		t.Fatalf("cancelled durable turn dispatched or lost terminal audit: executions=%#v calls=%d/%d grants=%#v audit=%#v", state.ToolExecutions, adapter.executes, adapter.reconciles, state.Grants, state.Audit)
+	}
+	// A conscious owner denial is a terminal approval resolution, distinct from
+	// admission-policy refusal below. It remains safe to inspect publicly and
+	// never grants authority or reaches the worker.
+	deniedApprovalSessionMutation, err := compiler.CompileCreateSession(runtimestate.CreateSessionCommand{Scope: ownerScope, IdempotencyKey: "durable-tool-approval-denied-session", RevisionID: registered.Result().Revision.RevisionID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	deniedApprovalSession := apply(deniedApprovalSessionMutation).Result().Session.SessionID
+	deniedApprovalInput, err := content.StageInputEnvelope(ctx, tenant, []agentruntime.ContentPart{{Kind: agentruntime.ContentText, Text: "denied approval must not run"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	deniedApprovalMutation, err := compiler.CompileAdmitInput(runtimestate.AdmitInputCommand{Scope: ownerScope, IdempotencyKey: "durable-tool-approval-denied-input", SessionID: deniedApprovalSession, Input: deniedApprovalInput})
+	if err != nil {
+		t.Fatal(err)
+	}
+	deniedApprovalTurn := apply(deniedApprovalMutation).Result().Turn.TurnID
+	deniedApprovalDescriptor, err := content.StageToolActionDescriptor(ctx, tenant, descriptorBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deniedApproval, err := broker.Admit(ctx, runtimetool.AdmissionRequest{Tenant: tenant, Principal: principal, SessionID: deniedApprovalSession, TurnID: deniedApprovalTurn, ToolCallID: "tcall_1234567890ABCDEO", ApprovalID: "appr_1234567890ABCDEO", PolicyName: "durable-tool-policy", PolicyRevision: 1, ToolName: "sandbox", ActionDigest: digest, CapabilityDigest: digest, Action: agentruntime.ApprovalAction{Verb: "write", Target: "workspace-service"}, MaximumUses: 1, ExpiresAt: source.Now().Add(time.Hour), Descriptor: deniedApprovalDescriptor, IdempotencyKey: "durable-tool-approval-denied-admission"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := publicRuntime.DecideApproval(ctx, runtimeapi.Identity{Tenant: string(tenant), Principal: string(principal)}, agentruntime.DecideApprovalRequest{ApprovalID: deniedApproval.ApprovalID, Decision: agentruntime.ApprovalDenied, IdempotencyKey: "durable-tool-approval-denied"}); err != nil {
+		t.Fatal(err)
+	}
+	deniedApprovalPage, err := publicRuntime.InspectToolCalls(ctx, runtimeapi.Identity{Tenant: string(tenant), Principal: string(principal)}, deniedApprovalSession, deniedApprovalTurn)
+	if err != nil || len(deniedApprovalPage.Calls) != 1 || deniedApprovalPage.Calls[0].Approval == nil || deniedApprovalPage.Calls[0].Approval.State != agentruntime.ApprovalDenied || deniedApprovalPage.Calls[0].Grant != nil || deniedApprovalPage.Calls[0].Execution != nil {
+		t.Fatalf("public denied approval state = %#v, %v", deniedApprovalPage, err)
 	}
 	// A policy refusal must be just as durable and correlated as a pending or
 	// approved request, while retaining no descriptor and exposing no policy
@@ -765,6 +794,26 @@ func TestDurableBrokeredToolLifecyclePersistsApprovalAndFinalization(t *testing.
 	if err != nil || marshalErr != nil || !durableHasPublicFinalization(uncertainEvents.Events, uncertainTurn) || bytes.Contains(uncertainPublic, []byte("audit-probe-secret")) {
 		t.Fatalf("public uncertain durable tool terminal state = tools=%#v events=%#v err=%v marshal=%v", uncertainPage, uncertainEvents, err, marshalErr)
 	}
+	// The public projection distinguishes every approval terminal path without
+	// carrying action descriptors or capability values. Each state was written
+	// through PostgreSQL before this SDK inspection, including expiry across the
+	// reopened runtime and cancellation before any execution intent.
+	for _, expected := range []struct {
+		session agentruntime.SessionID
+		turn    agentruntime.TurnID
+		kind    agentruntime.EventKind
+	}{
+		{session: session, turn: turn, kind: agentruntime.EventApprovalResolved},
+		{session: deniedApprovalSession, turn: deniedApprovalTurn, kind: agentruntime.EventApprovalResolved},
+		{session: lateSession, turn: lateTurn, kind: agentruntime.EventApprovalExpired},
+		{session: cancelledSession, turn: cancelledTurn, kind: agentruntime.EventApprovalCancelled},
+	} {
+		events, err := restarted.Events(ctx, runtimeapi.Identity{Tenant: string(tenant), Principal: string(principal)}, expected.session, "", 128)
+		encoded, marshalErr := json.Marshal(events)
+		if err != nil || marshalErr != nil || !durableHasApprovalLifecycleEvent(events.Events, expected.turn, expected.kind) || bytes.Contains(encoded, []byte("audit-probe-secret")) || bytes.Contains(encoded, descriptorBytes) {
+			t.Fatalf("public approval lifecycle events = %#v err=%v marshal=%v", events, err, marshalErr)
+		}
+	}
 	state, err = store.LoadRuntimeState(ctx, workerScope)
 	if err != nil {
 		t.Fatal(err)
@@ -784,11 +833,19 @@ func TestDurableBrokeredToolLifecyclePersistsApprovalAndFinalization(t *testing.
 		{kind: "record_tool_execution_outcome", toolCallID: recovery.ToolCallID},
 		{kind: "capability_grant.expired", toolCallID: expiring.ToolCallID},
 		{kind: "capability_grant.revoked", toolCallID: revoked.ToolCallID},
-		{kind: "capability_grant.revoked", toolCallID: cancelled.ToolCallID},
+		{kind: "approval.cancelled", toolCallID: cancelled.ToolCallID},
+		{kind: "approval.denied", toolCallID: deniedApproval.ToolCallID},
 		{kind: "approval.expired", toolCallID: late.ToolCallID},
 	} {
 		_ = durableToolAuditFact(t, auditPage.Facts, outboxPage.Records, expected.kind, expected.toolCallID, registered.Result().Revision.RevisionID, digest)
 	}
+	durableToolLifecycleRoutesAreOrderedAndCorrelated(t, state.Events, auditPage.Facts, outboxPage.Records, []durableToolLifecycleExpectation{
+		{eventKind: agentruntime.EventApprovalResolved, auditKind: "approval.approved", toolCallID: admission.ToolCallID, turnID: turn},
+		{eventKind: agentruntime.EventSandboxOperationFinalized, auditKind: "record_tool_execution_outcome", toolCallID: admission.ToolCallID, turnID: turn},
+		{eventKind: agentruntime.EventApprovalCancelled, auditKind: "approval.cancelled", toolCallID: cancelled.ToolCallID, turnID: cancelledTurn},
+		{eventKind: agentruntime.EventApprovalResolved, auditKind: "approval.denied", toolCallID: deniedApproval.ToolCallID, turnID: deniedApprovalTurn},
+		{eventKind: agentruntime.EventApprovalExpired, auditKind: "approval.expired", toolCallID: late.ToolCallID, turnID: lateTurn},
+	})
 	knownDenial := durableToolAuditFact(t, auditPage.Facts, outboxPage.Records, "tool.admission_denied", "tcall_1234567890ABCDEK", registered.Result().Revision.RevisionID, digest)
 	if knownDenial.PolicyRevisionDigest != state.Policies[0].Digest {
 		t.Fatalf("known-policy denial audit digest = %q, want %q", knownDenial.PolicyRevisionDigest, state.Policies[0].Digest)
@@ -880,9 +937,60 @@ func durableToolAuditFact(t *testing.T, facts []runtimestate.AuditFactRecord, re
 	return runtimestate.AuditFactRecord{}
 }
 
+type durableToolLifecycleExpectation struct {
+	eventKind  agentruntime.EventKind
+	auditKind  string
+	toolCallID string
+	turnID     agentruntime.TurnID
+}
+
+func durableToolLifecycleRoutesAreOrderedAndCorrelated(t *testing.T, events []runtimestate.ProductEventRecord, facts []runtimestate.AuditFactRecord, records []runtimestate.OutboxRecord, expected []durableToolLifecycleExpectation) {
+	t.Helper()
+	previousEvent, previousFact, previousRoute := -1, -1, -1
+	for _, want := range expected {
+		eventIndex, factIndex, routeIndex := -1, -1, -1
+		var event runtimestate.ProductEventRecord
+		var fact runtimestate.AuditFactRecord
+		for index, candidate := range events {
+			if candidate.Kind == want.eventKind && candidate.TurnID == want.turnID {
+				eventIndex, event = index, candidate
+				break
+			}
+		}
+		for index, candidate := range facts {
+			if candidate.Kind == want.auditKind && candidate.ToolCallID == want.toolCallID {
+				factIndex, fact = index, candidate
+				break
+			}
+		}
+		for index, candidate := range records {
+			if candidate.EventID == event.EventID && candidate.EventKind == event.Kind && candidate.TurnID == want.turnID {
+				routeIndex = index
+				if candidate.AuditFactID != fact.AuditFactID || candidate.OperationID != fact.OperationID {
+					t.Fatalf("terminal %q event route lacks exact audit correlation: route=%#v fact=%#v", want.auditKind, candidate, fact)
+				}
+				break
+			}
+		}
+		if eventIndex <= previousEvent || factIndex <= previousFact || routeIndex <= previousRoute {
+			t.Fatalf("terminal product-event/audit/outbox order %q = event:%d fact:%d route:%d after event:%d fact:%d route:%d", want.auditKind, eventIndex, factIndex, routeIndex, previousEvent, previousFact, previousRoute)
+		}
+		previousEvent, previousFact, previousRoute = eventIndex, factIndex, routeIndex
+	}
+}
+
 func durableHasPublicFinalization(events []agentruntime.Event, turnID agentruntime.TurnID) bool {
 	for _, event := range events {
 		if event.Kind == agentruntime.EventSandboxOperationFinalized && event.TurnID == turnID {
+			return true
+		}
+	}
+	return false
+}
+
+func durableHasApprovalLifecycleEvent(events []agentruntime.Event, turnID agentruntime.TurnID, kind agentruntime.EventKind) bool {
+	for _, event := range events {
+		if event.TurnID == turnID && event.Kind == kind {
 			return true
 		}
 	}
@@ -968,6 +1076,15 @@ func durableGrantRevokedWithoutUse(grants []runtimestate.CapabilityGrantRecord, 
 	for _, grant := range grants {
 		if grant.ToolCallID == toolCallID {
 			return grant.RevokedAt != nil && grant.Uses == 0
+		}
+	}
+	return false
+}
+
+func durableHasGrant(grants []runtimestate.CapabilityGrantRecord, toolCallID string) bool {
+	for _, grant := range grants {
+		if grant.ToolCallID == toolCallID {
+			return true
 		}
 	}
 	return false

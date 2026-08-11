@@ -204,7 +204,7 @@ func (publisher *Publisher) route(ctx context.Context, record runtimestate.Outbo
 	switch record.EventKind {
 	case agentruntime.EventSessionCreated:
 		return publisher.publisher.StartSession(ctx, start)
-	case agentruntime.EventInputAccepted, agentruntime.EventTurnCancelled, agentruntime.EventTurnSucceeded, agentruntime.EventTurnFailed, agentruntime.EventApprovalResolved, agentruntime.EventSandboxOperationFinalized, agentruntime.EventSessionClosing, agentruntime.EventSessionCompleted, agentruntime.EventSessionCancelled, agentruntime.EventSessionFailed:
+	case agentruntime.EventInputAccepted, agentruntime.EventTurnCancelled, agentruntime.EventTurnSucceeded, agentruntime.EventTurnFailed, agentruntime.EventApprovalResolved, agentruntime.EventApprovalExpired, agentruntime.EventApprovalCancelled, agentruntime.EventSandboxOperationFinalized, agentruntime.EventSessionClosing, agentruntime.EventSessionCompleted, agentruntime.EventSessionCancelled, agentruntime.EventSessionFailed:
 		return publisher.publisher.SignalSession(ctx, start, Command{Tenant: string(record.Tenant), OutboxID: string(record.OutboxID), SessionID: string(record.SessionID), Kind: commandKind(record.EventKind), Sequence: record.EventSequence})
 	default:
 		return nil
@@ -234,6 +234,10 @@ func commandKind(event agentruntime.EventKind) CommandKind {
 		return CommandTurnFailed
 	case agentruntime.EventApprovalResolved:
 		return CommandApprovalResolved
+	case agentruntime.EventApprovalExpired:
+		return CommandApprovalExpired
+	case agentruntime.EventApprovalCancelled:
+		return CommandApprovalCancelled
 	case agentruntime.EventSandboxOperationFinalized:
 		return CommandSandboxOperationFinalized
 	case agentruntime.EventSessionClosing:

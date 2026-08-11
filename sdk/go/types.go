@@ -595,9 +595,15 @@ const (
 	// EventProducerGap reports that a producer outcome could not be recovered
 	// and the following terminal event is the durable finalization boundary.
 	EventProducerGap EventKind = "producer.gap"
-	// EventApprovalResolved reports a terminal approved, denied, or expired
-	// approval without exposing an action or capability value.
+	// EventApprovalResolved reports a terminal approved or denied approval
+	// without exposing an action or capability value.
 	EventApprovalResolved EventKind = "approval.resolved"
+	// EventApprovalExpired reports a terminal approval expiry without exposing
+	// an action or capability value.
+	EventApprovalExpired EventKind = "approval.expired"
+	// EventApprovalCancelled reports that a pending approval was withdrawn
+	// without exposing an action or capability value.
+	EventApprovalCancelled EventKind = "approval.cancelled"
 	// EventSandboxOperationFinalized reports that a sandbox-backed operation
 	// reached a durable terminal outcome. Backend handles remain private.
 	EventSandboxOperationFinalized EventKind = "sandbox_operation.finalized"

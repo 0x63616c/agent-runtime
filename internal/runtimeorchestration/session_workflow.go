@@ -52,6 +52,10 @@ const (
 	CommandTurnFailed CommandKind = "turn_failed"
 	// CommandApprovalResolved represents an already persisted terminal approval route.
 	CommandApprovalResolved CommandKind = "approval_resolved"
+	// CommandApprovalExpired represents an already persisted approval-expiry route.
+	CommandApprovalExpired CommandKind = "approval_expired"
+	// CommandApprovalCancelled represents an already persisted approval-cancellation route.
+	CommandApprovalCancelled CommandKind = "approval_cancelled"
 	// CommandSandboxOperationFinalized represents an already persisted sandbox finalization route.
 	CommandSandboxOperationFinalized CommandKind = "sandbox_operation_finalized"
 	// CommandSessionClosing reports that durable state stopped accepting Inputs
@@ -329,6 +333,8 @@ func matchesCommand(event agentruntime.EventKind, command CommandKind) bool {
 		event == agentruntime.EventTurnSucceeded && command == CommandTurnSucceeded ||
 		event == agentruntime.EventTurnFailed && command == CommandTurnFailed ||
 		event == agentruntime.EventApprovalResolved && command == CommandApprovalResolved ||
+		event == agentruntime.EventApprovalExpired && command == CommandApprovalExpired ||
+		event == agentruntime.EventApprovalCancelled && command == CommandApprovalCancelled ||
 		event == agentruntime.EventSandboxOperationFinalized && command == CommandSandboxOperationFinalized ||
 		event == agentruntime.EventSessionClosing && command == CommandSessionClosing ||
 		event == agentruntime.EventSessionCompleted && command == CommandSessionCompleted ||
@@ -337,5 +343,5 @@ func matchesCommand(event agentruntime.EventKind, command CommandKind) bool {
 }
 
 func knownCommandKind(kind CommandKind) bool {
-	return kind == CommandInputAccepted || kind == CommandTurnCancelled || kind == CommandTurnSucceeded || kind == CommandTurnFailed || kind == CommandApprovalResolved || kind == CommandSandboxOperationFinalized || kind == CommandSessionClosing || kind == CommandSessionCompleted || kind == CommandSessionCancelled || kind == CommandSessionFailed
+	return kind == CommandInputAccepted || kind == CommandTurnCancelled || kind == CommandTurnSucceeded || kind == CommandTurnFailed || kind == CommandApprovalResolved || kind == CommandApprovalExpired || kind == CommandApprovalCancelled || kind == CommandSandboxOperationFinalized || kind == CommandSessionClosing || kind == CommandSessionCompleted || kind == CommandSessionCancelled || kind == CommandSessionFailed
 }
