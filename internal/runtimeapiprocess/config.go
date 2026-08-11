@@ -87,8 +87,8 @@ func Parse(input io.Reader) (Config, error) {
 		return Config{}, errors.New("validate runtime API configuration: version must be 1")
 	}
 	host, port, err := net.SplitHostPort(decoded.ListenAddress)
-	if err != nil || port == "" || (host != "127.0.0.1" && host != "::1") {
-		return Config{}, errors.New("validate runtime API configuration: listen_address must be an explicit loopback bind address")
+	if err != nil || port == "" || (host != "127.0.0.1" && host != "::1" && host != "0.0.0.0" && host != "::") {
+		return Config{}, errors.New("validate runtime API configuration: listen_address must be an explicit loopback or all-interface bind address")
 	}
 	storage := storage{mode: decoded.Storage.Mode, databaseDSNEnvironment: decoded.Storage.DatabaseDSNEnvironment, content: decoded.Storage.Content}
 	switch storage.mode {

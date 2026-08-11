@@ -440,7 +440,7 @@ func (runtime *StateRuntime) InspectToolCalls(ctx context.Context, identity Iden
 		}
 		for _, execution := range state.ToolExecutions {
 			if execution.ToolCallID == intent.ToolCallID && execution.SessionID == sessionID && execution.TurnID == turnID {
-				value := publicToolExecution(execution)
+				value := publicToolExecution(state, execution)
 				call.Execution = &value
 				call.State = value.State
 			}
@@ -723,17 +723,26 @@ func publicModelUsage(usage *runtimestate.ModelUsage) *agentruntime.ModelUsage {
 	return &result
 }
 
-func publicToolExecution(record runtimestate.ToolExecutionRecord) agentruntime.ToolExecution {
-	state := agentruntime.ToolCallExecuting
+func publicToolExecution(snapshot runtimestate.RuntimeState, record runtimestate.ToolExecutionRecord) agentruntime.ToolExecution {
+	executionState := agentruntime.ToolCallExecuting
 	switch record.State {
 	case runtimestate.ToolExecutionSucceeded:
-		state = agentruntime.ToolCallSucceeded
+		executionState = agentruntime.ToolCallSucceeded
 	case runtimestate.ToolExecutionFailed:
-		state = agentruntime.ToolCallFailed
+		executionState = agentruntime.ToolCallFailed
 	case runtimestate.ToolExecutionUncertain:
-		state = agentruntime.ToolCallUncertain
+		executionState = agentruntime.ToolCallUncertain
 	}
-	result := agentruntime.ToolExecution{State: state, Failure: record.Failure.Clone(), CreatedAt: record.CreatedAt}
+	result := agentruntime.ToolExecution{State: executionState, Failure: record.Failure.Clone(), CreatedAt: record.CreatedAt}
+	if record.State == runtimestate.ToolExecutionSucceeded && record.Result != nil {
+		for _, artifact := range snapshot.Artifacts {
+			if artifact.Tenant == record.Tenant && artifact.Principal == record.Principal && artifact.SessionID == record.SessionID && artifact.TurnID == record.TurnID && artifact.Reference == *record.Result {
+				value := publicArtifact(artifact)
+				result.Result = &value
+				break
+			}
+		}
+	}
 	if record.State != runtimestate.ToolExecutionIntent {
 		value := record.UpdatedAt
 		result.CompletedAt = &value

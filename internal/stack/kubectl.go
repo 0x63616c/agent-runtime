@@ -394,8 +394,8 @@ func (adapter KubectlAdapter) migrationRecorded(ctx context.Context, target Oper
 	if workload == nil || version < 2 {
 		return false, errors.New("observe declared database migration: workload and version two or later are required")
 	}
-	query := fmt.Sprintf("SELECT CASE WHEN to_regclass('runtime.schema_migrations') IS NULL THEN 'pending' WHEN EXISTS (SELECT 1 FROM runtime.schema_migrations WHERE migration_version = %d) THEN 'recorded' ELSE 'pending' END", version)
-	arguments := []string{"exec", workload.Kind + "/" + workload.Name, "--namespace", namespace, "--", "psql", "-At", "-v", "ON_ERROR_STOP=1", "-U", user, "-d", database, "-c", query}
+	existsQuery := "SELECT to_regclass('runtime.schema_migrations') IS NOT NULL"
+	arguments := []string{"exec", workload.Kind + "/" + workload.Name, "--namespace", namespace, "--", "psql", "-At", "-v", "ON_ERROR_STOP=1", "-U", user, "-d", database, "-c", existsQuery}
 	result, err := adapter.run(ctx, target, arguments, nil)
 	if err != nil {
 		return false, err
@@ -404,12 +404,32 @@ func (adapter KubectlAdapter) migrationRecorded(ctx context.Context, target Oper
 		return false, kubectlExitError("observe database migration", result.ExitCode)
 	}
 	switch strings.TrimSpace(string(result.Output)) {
-	case "recorded":
-		return true, nil
-	case "pending":
+	case "f":
 		return false, nil
+	case "t":
+		// PostgreSQL resolves relation names while planning a query. Querying the
+		// migration table in the same statement as a to_regclass guard therefore
+		// still fails before migration v2 creates that table. Only address the
+		// relation after this independent existence probe succeeds.
+		query := fmt.Sprintf("SELECT EXISTS (SELECT 1 FROM runtime.schema_migrations WHERE migration_version = %d)", version)
+		arguments[len(arguments)-1] = query
+		result, err = adapter.run(ctx, target, arguments, nil)
+		if err != nil {
+			return false, err
+		}
+		if result.ExitCode != 0 {
+			return false, kubectlExitError("observe database migration", result.ExitCode)
+		}
+		switch strings.TrimSpace(string(result.Output)) {
+		case "t":
+			return true, nil
+		case "f":
+			return false, nil
+		default:
+			return false, errors.New("observe declared database migration: journal returned an invalid state")
+		}
 	default:
-		return false, errors.New("observe declared database migration: journal returned an invalid state")
+		return false, errors.New("observe declared database migration: relation probe returned an invalid state")
 	}
 }
 
