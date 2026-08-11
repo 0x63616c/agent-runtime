@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -44,6 +45,10 @@ func TestDurablePostgresMinIOAPIProcessSurvivesRestart(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create durable Agent: %v", err)
 	}
+	policy, err := admin.CreatePolicy(context.Background(), agentruntime.CreatePolicyRequest{IdempotencyKey: "durable-policy", Name: "workspace-write", Rules: []agentruntime.PolicyRule{{ToolName: "write", Decision: agentruntime.PolicyRequiresApproval}}})
+	if err != nil {
+		t.Fatalf("create durable Policy: %v", err)
+	}
 	session, err := alice.CreateSession(context.Background(), agentruntime.CreateSessionRequest{IdempotencyKey: "durable-session", AgentRevision: agent.RevisionID})
 	if err != nil {
 		t.Fatalf("create durable Session: %v", err)
@@ -56,7 +61,11 @@ func TestDurablePostgresMinIOAPIProcessSurvivesRestart(t *testing.T) {
 
 	baseURL, stop = startDurableRuntimeProcess(t, config, secrets)
 	defer stop()
+	admin = durableProcessClient(t, baseURL, secrets["ADMIN_TOKEN"], ids)
 	alice = durableProcessClient(t, baseURL, secrets["ALICE_TOKEN"], ids)
+	if restored, err := admin.GetPolicy(context.Background(), policy.Name, policy.Revision); err != nil || !reflect.DeepEqual(restored, policy) {
+		t.Fatalf("read restarted Policy = %#v, %v; want %#v", restored, err, policy)
+	}
 	if view, err := alice.InspectSession(context.Background(), session.ID); err != nil || view.Session.ID != session.ID || view.Session.AgentID != session.AgentID || view.Session.AgentRevision != session.AgentRevision || view.Session.State != agentruntime.SessionOpen {
 		t.Fatalf("inspect restarted Session = %#v, %v; want retained open Session %#v", view.Session, err, session)
 	}
