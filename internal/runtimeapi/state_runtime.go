@@ -205,6 +205,35 @@ func (runtime *StateRuntime) OpenArtifact(ctx context.Context, identity Identity
 	return stream, nil
 }
 
+// ListSessionArtifacts returns the bounded immutable Artifact index for one
+// owner-authorized Session. It never exposes a storage locator or Artifact
+// bytes, and a caller must still pass exact authorization when reading one.
+func (runtime *StateRuntime) ListSessionArtifacts(ctx context.Context, identity Identity, sessionID agentruntime.SessionID) (agentruntime.ArtifactPage, error) {
+	scope, err := ownerScope(identity)
+	if err != nil {
+		return agentruntime.ArtifactPage{}, err
+	}
+	if _, err := runtime.store.GetSessionView(ctx, runtimestate.SessionViewQuery{Scope: scope, SessionID: sessionID, RecentEventLimit: 1, QueuedTurnLimit: 1}); err != nil {
+		return agentruntime.ArtifactPage{}, runtimeFailure("list Session Artifacts", err)
+	}
+	state, err := runtime.store.LoadRuntimeState(ctx, scope)
+	if err != nil {
+		return agentruntime.ArtifactPage{}, runtimeFailure("list Session Artifacts", err)
+	}
+	page := agentruntime.ArtifactPage{Artifacts: []agentruntime.ArtifactReference{}}
+	for _, artifact := range state.Artifacts {
+		if artifact.Tenant != scope.Tenant || artifact.Principal != scope.Principal || artifact.SessionID != sessionID {
+			continue
+		}
+		if len(page.Artifacts) == agentruntime.MaxArtifactsPerSession {
+			page.Truncated = true
+			break
+		}
+		page.Artifacts = append(page.Artifacts, publicArtifact(artifact))
+	}
+	return page, nil
+}
+
 // InspectApproval returns the caller-owned projection of one approval without
 // exposing the tool action, policy digest, or capability metadata.
 func (runtime *StateRuntime) InspectApproval(ctx context.Context, identity Identity, approvalID agentruntime.ApprovalID) (agentruntime.Approval, error) {
@@ -440,7 +469,7 @@ func (runtime *StateRuntime) InspectToolCalls(ctx context.Context, identity Iden
 		}
 		for _, execution := range state.ToolExecutions {
 			if execution.ToolCallID == intent.ToolCallID && execution.SessionID == sessionID && execution.TurnID == turnID {
-				value := publicToolExecution(execution)
+				value := publicToolExecution(state, execution)
 				call.Execution = &value
 				call.State = value.State
 			}
@@ -723,17 +752,26 @@ func publicModelUsage(usage *runtimestate.ModelUsage) *agentruntime.ModelUsage {
 	return &result
 }
 
-func publicToolExecution(record runtimestate.ToolExecutionRecord) agentruntime.ToolExecution {
-	state := agentruntime.ToolCallExecuting
+func publicToolExecution(snapshot runtimestate.RuntimeState, record runtimestate.ToolExecutionRecord) agentruntime.ToolExecution {
+	executionState := agentruntime.ToolCallExecuting
 	switch record.State {
 	case runtimestate.ToolExecutionSucceeded:
-		state = agentruntime.ToolCallSucceeded
+		executionState = agentruntime.ToolCallSucceeded
 	case runtimestate.ToolExecutionFailed:
-		state = agentruntime.ToolCallFailed
+		executionState = agentruntime.ToolCallFailed
 	case runtimestate.ToolExecutionUncertain:
-		state = agentruntime.ToolCallUncertain
+		executionState = agentruntime.ToolCallUncertain
 	}
-	result := agentruntime.ToolExecution{State: state, Failure: record.Failure.Clone(), CreatedAt: record.CreatedAt}
+	result := agentruntime.ToolExecution{State: executionState, Failure: record.Failure.Clone(), CreatedAt: record.CreatedAt}
+	if record.State == runtimestate.ToolExecutionSucceeded && record.Result != nil {
+		for _, artifact := range snapshot.Artifacts {
+			if artifact.Tenant == record.Tenant && artifact.Principal == record.Principal && artifact.SessionID == record.SessionID && artifact.TurnID == record.TurnID && artifact.Reference == *record.Result {
+				value := publicArtifact(artifact)
+				result.Result = &value
+				break
+			}
+		}
+	}
 	if record.State != runtimestate.ToolExecutionIntent {
 		value := record.UpdatedAt
 		result.CompletedAt = &value

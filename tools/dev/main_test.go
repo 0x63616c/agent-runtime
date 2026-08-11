@@ -111,7 +111,7 @@ func TestTwoLocalStackInstancesKeepTopologyStateAndSecretsIsolated(t *testing.T)
 		if _, err := materializeSecrets(instance.name, root, instance.reader); err != nil {
 			t.Fatalf("materialize %s secrets: %v", instance.name, err)
 		}
-		state, err := encodeState(instance.name, root, instance.port)
+		state, err := encodeState(instance.name, root, instance.port, "/explicit/kubeconfig", "local-development")
 		if err != nil {
 			t.Fatalf("encode %s state: %v", instance.name, err)
 		}
@@ -152,6 +152,35 @@ func TestTwoLocalStackInstancesKeepTopologyStateAndSecretsIsolated(t *testing.T)
 	}
 }
 
+func TestRetireBootstrapCapabilityRemovesOnlyTheVerifiedLocalCapability(t *testing.T) {
+	root := t.TempDir()
+	state := localState{Stack: "cleanup-proof", Namespace: "ar-cleanup-proof"}
+	path := bootstrapCapabilityPath(root, state.Stack)
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatalf("create capability directory: %v", err)
+	}
+	authority := stack.BootstrapAuthority{Stack: state.Stack, Profile: stack.ProfileLocal, Namespace: state.Namespace, NamespaceUID: "uid-cleanup", RenderDigest: "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", Nonce: "private-cleanup-nonce"}
+	if err := stack.WriteBootstrapAuthority(path, authority); err != nil {
+		t.Fatalf("write capability: %v", err)
+	}
+	if err := retireBootstrapCapability(root, state); err != nil {
+		t.Fatalf("retire capability: %v", err)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("capability remains after retirement: %v", err)
+	}
+	if err := stack.WriteBootstrapAuthority(path, authority); err != nil {
+		t.Fatalf("rewrite capability: %v", err)
+	}
+	state.Namespace = "ar-foreign"
+	if err := retireBootstrapCapability(root, state); err == nil {
+		t.Fatal("retire foreign capability unexpectedly succeeded")
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("foreign capability was removed: %v", err)
+	}
+}
+
 func TestLocalStackProjectsTheReviewedEightRoleTopology(t *testing.T) {
 	document, err := renderStack("role-proof", "local")
 	if err != nil {
@@ -168,8 +197,8 @@ func TestLocalStackProjectsTheReviewedEightRoleTopology(t *testing.T) {
 	expectedRoleCredentials := map[stack.ResourceID][]string{
 		"api":             nil,
 		"orchestration":   {"STATE_DATABASE_DSN", "TEMPORAL_AUTH_TOKEN", "ORCHESTRATION_PAYLOAD_BLOB_ACCESS_KEY", "ORCHESTRATION_PAYLOAD_BLOB_SECRET_KEY"},
-		"model":           {"CONVERSATION_ACCESS_TOKEN", "MODEL_API_KEY"},
-		"tool":            {"SANDBOX_CONTROL_TOKEN", "TOOL_BROKER_TOKEN"},
+		"model":           {"CONVERSATION_ACCESS_TOKEN", "MODEL_API_KEY", "LOCAL_DEMO_STATE_DSN", "LOCAL_DEMO_CONTENT_ACCESS_KEY", "LOCAL_DEMO_CONTENT_SECRET_KEY"},
+		"tool":            {"SANDBOX_CONTROL_TOKEN", "TOOL_BROKER_TOKEN", "LOCAL_DEMO_STATE_DSN", "LOCAL_DEMO_CONTENT_ACCESS_KEY", "LOCAL_DEMO_CONTENT_SECRET_KEY"},
 		"blob-role":       {"BLOB_STORAGE_CREDENTIAL"},
 		"codec":           {"CODEC_BLOB_CREDENTIAL"},
 		"sandbox-control": {"SANDBOX_HOST_CA", "SANDBOX_STATE_DSN"},
@@ -183,8 +212,8 @@ func TestLocalStackProjectsTheReviewedEightRoleTopology(t *testing.T) {
 	expectedEgress := map[stack.ResourceID][]stack.ResourceID{
 		"api":             {"state", "telemetry"},
 		"orchestration":   {"blob", "state", "telemetry", "temporal"},
-		"model":           {"api", "egress-proxy", "telemetry"},
-		"tool":            {"api", "sandbox-control", "telemetry"},
+		"model":           {"api", "blob", "egress-proxy", "state", "telemetry"},
+		"tool":            {"api", "blob", "sandbox-control", "state", "telemetry"},
 		"blob-role":       {"blob", "telemetry"},
 		"codec":           {"blob", "telemetry"},
 		"sandbox-control": {"state", "telemetry"},
@@ -296,16 +325,18 @@ func TestMaterializeSecretsKeepsValuesPrivateAndStablePerStack(t *testing.T) {
 		"ar-safe-stack-state-db-secret":                   {"POSTGRES_PASSWORD", "STATE_DATABASE_DSN"},
 		"ar-safe-stack-temporal-auth-secret":              {"TEMPORAL_AUTH_TOKEN"},
 		"ar-safe-stack-conversation-secret":               {"CONVERSATION_ACCESS_TOKEN"},
-		"ar-safe-stack-model-secret":                      {"MODEL_API_KEY"},
-		"ar-safe-stack-tool-broker-secret":                {"TOOL_BROKER_TOKEN"},
+		"ar-safe-stack-model-secret":                      {"MODEL_API_KEY", "LOCAL_DEMO_STATE_DSN", "LOCAL_DEMO_CONTENT_ACCESS_KEY", "LOCAL_DEMO_CONTENT_SECRET_KEY"},
+		"ar-safe-stack-tool-broker-secret":                {"TOOL_BROKER_TOKEN", "LOCAL_DEMO_STATE_DSN", "LOCAL_DEMO_CONTENT_ACCESS_KEY", "LOCAL_DEMO_CONTENT_SECRET_KEY"},
 		"ar-safe-stack-sandbox-control-secret":            {"SANDBOX_CONTROL_TOKEN"},
 		"ar-safe-stack-blob-storage-secret":               {"BLOB_STORAGE_CREDENTIAL", "MINIO_ROOT_PASSWORD", "MINIO_ROOT_USER"},
 		"ar-safe-stack-orchestration-payload-blob-secret": {"ORCHESTRATION_PAYLOAD_BLOB_ACCESS_KEY", "ORCHESTRATION_PAYLOAD_BLOB_SECRET_KEY"},
+		"ar-safe-stack-runtime-api-secret":                {"AR_RUNTIME_MINIO_ACCESS_KEY", "AR_RUNTIME_MINIO_SECRET_KEY", "RUNTIME_API_ADMIN_TOKEN", "RUNTIME_API_DEVELOPER_TOKEN"},
 		"ar-safe-stack-codec-blob-secret":                 {"CODEC_BLOB_CREDENTIAL"},
 		"ar-safe-stack-sandbox-host-ca-secret":            {"SANDBOX_HOST_CA"},
 		"ar-safe-stack-sandbox-state-secret":              {"SANDBOX_STATE_DSN"},
 		"ar-safe-stack-sandbox-host-identity-secret":      {"SANDBOX_HOST_IDENTITY"},
 		"ar-safe-stack-temporal-db-secret":                {"POSTGRES_PASSWORD"},
+		"ar-safe-stack-runtime-api-secret":                {"AR_RUNTIME_MINIO_ACCESS_KEY", "AR_RUNTIME_MINIO_SECRET_KEY", "RUNTIME_API_ADMIN_TOKEN", "RUNTIME_API_DEVELOPER_TOKEN"},
 	}
 	if len(secrets.Items) != len(expectedSecretKeys) {
 		t.Fatalf("generated Secret count = %d, want %d", len(secrets.Items), len(expectedSecretKeys))
@@ -358,9 +389,55 @@ func TestRenderRejectsUnsafeStackIdentity(t *testing.T) {
 	}
 }
 
+func TestLocalLifecycleRequiresAnExplicitKubeconfigAndBoundedActor(t *testing.T) {
+	if _, _, _, _, err := parseUpArguments([]string{"--stack", "safe-stack", "--root", ".", "--actor", "local-development"}); err == nil {
+		t.Fatal("expected local Stack lifecycle to reject an inferred kubeconfig")
+	}
+	if _, _, _, _, err := parseUpArguments([]string{"--stack", "safe-stack", "--root", ".", "--kubeconfig", "/explicit/kubeconfig", "--actor", "operator; rm"}); err == nil {
+		t.Fatal("expected local Stack lifecycle to reject an unsafe actor")
+	}
+	stackName, root, kubeconfig, actor, err := parseUpArguments([]string{"--stack", "safe-stack", "--root", ".", "--kubeconfig", "/explicit/kubeconfig", "--actor", "local-development"})
+	if err != nil || stackName != "safe-stack" || !filepath.IsAbs(root) || kubeconfig != "/explicit/kubeconfig" || actor != "local-development" {
+		t.Fatalf("parse explicit local Stack lifecycle = %q, %q, %q, %q, %v", stackName, root, kubeconfig, actor, err)
+	}
+}
+
+func TestLocalLifecyclePinsKubeconfigAndActorInPrivateState(t *testing.T) {
+	root := t.TempDir()
+	encoded, err := encodeState("safe-stack", root, 18432, "/explicit/kubeconfig", "local-development")
+	if err != nil {
+		t.Fatalf("encode local lifecycle state: %v", err)
+	}
+	if err := writePrivate(statePath(root, "safe-stack"), encoded); err != nil {
+		t.Fatalf("write local lifecycle state: %v", err)
+	}
+	state, err := loadState(root, "safe-stack")
+	if err != nil || state.Kubeconfig != "/explicit/kubeconfig" || state.OperatorActor != "local-development" {
+		t.Fatalf("load local lifecycle state = %#v, %v", state, err)
+	}
+	for _, path := range []string{bootstrapCapabilityPath(root, "safe-stack"), operatorAuditPath(root, "safe-stack")} {
+		if !strings.HasPrefix(path, filepath.Join(root, ".runtime", "dev")+string(filepath.Separator)) {
+			t.Fatalf("local lifecycle path escapes private state root: %s", path)
+		}
+	}
+}
+
+func TestCommandEnvironmentReplacesAmbientKubeconfig(t *testing.T) {
+	t.Setenv("KUBECONFIG", "/ambient/kubeconfig")
+	environment := commandEnvironment("/explicit/kubeconfig")
+	for _, entry := range environment {
+		if entry == "KUBECONFIG=/ambient/kubeconfig" {
+			t.Fatal("local lifecycle retained an ambient kubeconfig")
+		}
+	}
+	if environment[len(environment)-1] != "KUBECONFIG=/explicit/kubeconfig" {
+		t.Fatalf("local lifecycle kubeconfig = %q, want explicit path", environment[len(environment)-1])
+	}
+}
+
 func TestStateBindsOneStackToItsWorktreeAndAllocatedDashboardPort(t *testing.T) {
 	root := t.TempDir()
-	encoded, err := encodeState("safe-stack", root, 18432)
+	encoded, err := encodeState("safe-stack", root, 18432, "/explicit/kubeconfig", "local-development")
 	if err != nil {
 		t.Fatalf("encode state: %v", err)
 	}

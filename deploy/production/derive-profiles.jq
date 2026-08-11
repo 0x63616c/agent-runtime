@@ -26,6 +26,42 @@ def role_config_namespace($namespace):
       else . end))
   else . end;
 
+def runtime_api_config_namespace($namespace):
+  if .kubernetes then
+    .kubernetes.environment |= ((. // []) | map(
+      if .name == "RUNTIME_API_CONFIG" then
+        .value |= (fromjson |
+          .storage.content.endpoint = ("blob." + $namespace + ".svc:9000") |
+          .storage.content.bucket = $namespace |
+          tojson)
+      else . end))
+  else . end;
+
+# This explicit local-only operator fixture is the sole deterministic provider
+# used by the disposable Tilt demonstration. It is not derived into CI or
+# production and has no production credential or provider claim.
+def local_demo_fixture($namespace; $profile):
+  if $profile != "local" then .
+  elif .id == "model" or .id == "tool" then
+    .kubernetes.environment |= map(
+      if .name == "RUNTIME_ROLE_CONFIG" then
+        .value |= (fromjson |
+          .local_demo_worker = {enabled:true,mode:"local-demo-v1",state_dsn_environment:"LOCAL_DEMO_STATE_DSN",content_endpoint:("blob." + $namespace + ".svc:9000"),content_access_key_environment:"LOCAL_DEMO_CONTENT_ACCESS_KEY",content_secret_key_environment:"LOCAL_DEMO_CONTENT_SECRET_KEY",content_bucket:$namespace} |
+          tojson)
+      else . end) |
+    .kubernetes.secret_environment += (if .id == "model" then
+      [{name:"LOCAL_DEMO_STATE_DSN",secret:"model-secret",key:"LOCAL_DEMO_STATE_DSN"},{name:"LOCAL_DEMO_CONTENT_ACCESS_KEY",secret:"model-secret",key:"LOCAL_DEMO_CONTENT_ACCESS_KEY"},{name:"LOCAL_DEMO_CONTENT_SECRET_KEY",secret:"model-secret",key:"LOCAL_DEMO_CONTENT_SECRET_KEY"}]
+    else
+      [{name:"LOCAL_DEMO_STATE_DSN",secret:"tool-broker-secret",key:"LOCAL_DEMO_STATE_DSN"},{name:"LOCAL_DEMO_CONTENT_ACCESS_KEY",secret:"tool-broker-secret",key:"LOCAL_DEMO_CONTENT_ACCESS_KEY"},{name:"LOCAL_DEMO_CONTENT_SECRET_KEY",secret:"tool-broker-secret",key:"LOCAL_DEMO_CONTENT_SECRET_KEY"}]
+    end)
+  elif .id == "model-secret" or .id == "tool-broker-secret" then
+    .secret_reference.keys += ["LOCAL_DEMO_STATE_DSN","LOCAL_DEMO_CONTENT_ACCESS_KEY","LOCAL_DEMO_CONTENT_SECRET_KEY"]
+  elif .id == "model-egress" then
+    .kubernetes.network.allowed_egress += ["blob","state"] | .kubernetes.network.allowed_egress |= unique
+  elif .id == "tool-egress" then
+    .kubernetes.network.allowed_egress += ["blob","state"] | .kubernetes.network.allowed_egress |= unique
+  else . end;
+
 def dns_capability:
   if .kind == "kubernetes" and .kubernetes.kind == "NetworkPolicy" and ((.kubernetes.network.allowed_egress | length) > 0) then
     .kubernetes.network.allow_dns = true
@@ -36,6 +72,8 @@ def dns_capability:
 def profile_resource($namespace; $profile):
   lifecycle($profile) |
   role_config_namespace($namespace) |
+  runtime_api_config_namespace($namespace) |
+	local_demo_fixture($namespace; $profile) |
   dns_capability |
   if .kind == "secret_reference" then
     .secret_reference.provider = (if $profile == "production" then "external-secrets" else "local-generated" end) |
@@ -118,7 +156,7 @@ def extras($namespace; $profile):
     (common("blob-reconciler";"kubernetes";"blob-operator";$profile;{kubernetes:{
       api_version:"apps/v1",kind:"Deployment",name:"blob-reconciler",replicas:1,
       image:"minio/mc@sha256:aead63c77f9db9107f1696fb08ecb0faeda23729cde94b0f663edf4fe09728e3",service_account:"blob-account",
-      command:["/bin/sh"],arguments:["-c","trap : TERM INT; sleep infinity & wait"],environment:[],
+      command:["/bin/sh"],arguments:["-ec","mc alias set runtime http://blob:9000 \"$MINIO_ROOT_USER\" \"$MINIO_ROOT_PASSWORD\" >/dev/null; mc mb --ignore-existing runtime/\"$BLOB_BUCKET\" >/dev/null; mc mb --ignore-existing runtime/\"$BLOB_TEMPORAL_BUCKET\" >/dev/null; exec sleep infinity"],environment:[{name:"BLOB_BUCKET",value:$namespace},{name:"BLOB_TEMPORAL_BUCKET",value:($namespace + "-temporal-payload")}],
       secret_environment:[{name:"MINIO_ROOT_USER",secret:"blob-storage-secret",key:"MINIO_ROOT_USER"},{name:"MINIO_ROOT_PASSWORD",secret:"blob-storage-secret",key:"MINIO_ROOT_PASSWORD"}],
       ports:[],compute:{request_milli_cpu:25,limit_milli_cpu:100,request_memory_bytes:67108864,limit_memory_bytes:268435456},storage:[]
     }}) | .dependencies=["blob-account","blob-storage-secret","blob-service"]),

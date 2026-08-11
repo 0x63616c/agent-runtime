@@ -33,11 +33,12 @@ func TestBrokerAtomicallyAdmitsPolicyRequiredApprovalAndReplays(t *testing.T) {
 	if approval.State != "pending" || approval.ActionVerb != "write" || approval.ActionTarget != "workspace-service" || approval.MaximumUses != 1 || approval.ToolCallID != request.ToolCallID {
 		t.Fatalf("pending approval = %#v", approval)
 	}
+	auditCount, outboxCount := len(state.Audit), len(state.Outbox)
 	if _, err := fixture.broker.Admit(ctx, request); err != nil {
 		t.Fatalf("replay same tool admission = %v", err)
 	}
 	replayed, err := fixture.store.LoadRuntimeState(ctx, fixture.workerScope)
-	if err != nil || len(replayed.ToolIntents) != 1 || len(replayed.Approvals) != 1 {
+	if err != nil || len(replayed.ToolIntents) != 1 || len(replayed.Approvals) != 1 || len(replayed.Audit) != auditCount || len(replayed.Outbox) != outboxCount {
 		t.Fatalf("replayed admission state = %#v, %v", replayed, err)
 	}
 }
@@ -57,9 +58,27 @@ func TestBrokerFailsClosedWithoutExactPolicyApprovalRule(t *testing.T) {
 	}
 }
 
+func TestBrokerRetriesAConcurrentStateConflictBeforeAdmitting(t *testing.T) {
+	ctx, fixture := context.Background(), newBrokerFixture(t)
+	store := &conflictOnceStore{RuntimeStateStore: fixture.store}
+	broker, err := NewBroker(BrokerConfig{Store: store, Compiler: fixture.compiler, Planner: fixture.planner, Clock: fixture.clock})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := broker.Admit(ctx, fixture.request(t, "workspace-write", 1)); err != nil {
+		t.Fatalf("admit after one concurrent state conflict: %v", err)
+	}
+	if !store.failed {
+		t.Fatal("admission did not exercise the injected concurrent conflict")
+	}
+}
+
 type brokerFixture struct {
 	broker      *Broker
 	store       *runtimestate.MemoryRuntimeStateStore
+	compiler    *runtimestate.Compiler
+	planner     *runtimestate.RuntimeStatePlanner
+	clock       clock.Clock
 	content     *runtimecontent.Store
 	tenant      runtimecontent.TenantID
 	principal   runtimecontent.PrincipalID
@@ -132,7 +151,20 @@ func newBrokerFixture(t *testing.T) brokerFixture {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return brokerFixture{broker: broker, store: store, content: content, tenant: tenant, principal: principal, session: session.Result().Session.SessionID, turn: turn.Result().Turn.TurnID, workerScope: worker, now: now}
+	return brokerFixture{broker: broker, store: store, compiler: compiler, planner: planner, clock: clockSource, content: content, tenant: tenant, principal: principal, session: session.Result().Session.SessionID, turn: turn.Result().Turn.TurnID, workerScope: worker, now: now}
+}
+
+type conflictOnceStore struct {
+	runtimestate.RuntimeStateStore
+	failed bool
+}
+
+func (store *conflictOnceStore) PersistTransitionPlan(ctx context.Context, plan runtimestate.TransitionPlan) error {
+	if !store.failed {
+		store.failed = true
+		return runtimestate.ErrConflict
+	}
+	return store.RuntimeStateStore.PersistTransitionPlan(ctx, plan)
 }
 
 func (fixture brokerFixture) request(t *testing.T, policy string, revision uint64) AdmissionRequest {

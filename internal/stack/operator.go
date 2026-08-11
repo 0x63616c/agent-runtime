@@ -325,6 +325,37 @@ func (operator KubernetesOperator) Diff(ctx context.Context, request OperatorReq
 	return difference, nil
 }
 
+// ReconcileProviders verifies every declared non-Kubernetes provider without
+// diffing Kubernetes fields that a separate declared controller owns. It is an
+// explicit operator action for topologies such as local Tilt where the
+// controller replaces only development image references after rendering.
+func (operator KubernetesOperator) ReconcileProviders(ctx context.Context, request OperatorRequest, rendered Rendered) (ReconcileResult, error) {
+	_, document, err := operator.prepare(ctx, request, rendered)
+	if err != nil {
+		return ReconcileResult{}, err
+	}
+	if err := validateBootstrapAuthority(request.BootstrapAuthority, document); err != nil {
+		return ReconcileResult{}, operator.recordFailure(ctx, request, document, OperatorActionReconcile, err)
+	}
+	if operator.providers == nil {
+		return ReconcileResult{}, operator.recordFailure(ctx, request, document, OperatorActionReconcile, errors.New("reconcile declared providers: provider adapter is required"))
+	}
+	if migrationErr := operator.upgradeMigrations(ctx, request.Target, rendered, document, request.BootstrapAuthority); migrationErr != nil {
+		return ReconcileResult{}, operator.recordFailure(ctx, request, document, OperatorActionReconcile, migrationErr)
+	}
+	providerIDs, providerErr := operator.providers.ReconcileDeclared(ctx, request.Target, rendered, request.BootstrapAuthority)
+	if providerErr != nil {
+		return ReconcileResult{}, operator.recordFailure(ctx, request, document, OperatorActionReconcile, providerErr)
+	}
+	if providerErr := validateDeclaredProviderIDs(document.Resources, providerIDs); providerErr != nil {
+		return ReconcileResult{}, operator.recordFailure(ctx, request, document, OperatorActionReconcile, providerErr)
+	}
+	if err := operator.record(ctx, request, document, OperatorActionReconcile, "reconciled", providerIDs); err != nil {
+		return ReconcileResult{}, err
+	}
+	return ReconcileResult{}, nil
+}
+
 // Reconcile observes declared provider drift, then applies only the selected reviewed manifest set.
 func (operator KubernetesOperator) Reconcile(ctx context.Context, request OperatorRequest, rendered Rendered) (ReconcileResult, error) {
 	manifests, document, err := operator.prepare(ctx, request, rendered)
