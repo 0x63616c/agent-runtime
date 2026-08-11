@@ -14,6 +14,14 @@ contract declares principal-scoped idempotent Operations, immutable Effective
 Specs, typed process results, bounded output replay, finite limits, and safe
 image-admission metadata.
 
+The M4 local developer adapter is explicitly constructed through
+`NewLocalUnsafeClient` with the literal `local-unsafe` acknowledgement. It does
+not execute commands or read ambient process state. It only accepts a
+caller-provided convenience environment after removing credential, proxy, and
+SSH-agent variables, advertises all security authority profiles as unavailable,
+and refuses secrets, mounts, volumes, and isolation requirements. It is never
+Firecracker, production, or hostile-tenant security evidence.
+
 This is not yet a public HTTP/OpenAPI service, durable database implementation,
 or sandbox host backend. `NewClient` validates explicit client configuration
 but reports unavailable until a control transport is composed. The deterministic
