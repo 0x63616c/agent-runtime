@@ -25,13 +25,13 @@ completion-check: verify
 
 # Requires the protected self-hosted Linux/x86_64/KVM runner contract and always
 # retains a redacted blocked report rather than treating a local machine as proof.
-firecracker-smoke report="evidence/firecracker-smoke.json":
-    go run ./cmd/firecracker-smoke -report "{{report}}"
+firecracker-smoke report="evidence/firecracker-smoke.json" vm_id="" uid="0" gid="0" cgroup_parent="" stack_resource="" external_owner="" fixture_lock="tools/firecracker/fixtures.lock":
+    go run ./cmd/firecracker-smoke -report "{{ report }}" -fixture-lock "{{ fixture_lock }}" -vm-id "{{ vm_id }}" -uid "{{ uid }}" -gid "{{ gid }}" -cgroup-parent "{{ cgroup_parent }}" -stack-resource "{{ stack_resource }}" -external-owner "{{ external_owner }}"
 
-# Compatibility alias for the current protected-runner preflight. It does not
-# execute a microVM or constitute the planned runtime integration suite.
-firecracker-integration report="evidence/firecracker-integration.json":
-    just firecracker-smoke "{{report}}"
+# Compatibility alias for the protected boot harness. It is not the enrolled
+# public runtime-command integration suite.
+firecracker-integration report="evidence/firecracker-integration.json" vm_id="" uid="0" gid="0" cgroup_parent="" stack_resource="" external_owner="" fixture_lock="tools/firecracker/fixtures.lock":
+    just firecracker-smoke "{{ report }}" "{{ vm_id }}" "{{ uid }}" "{{ gid }}" "{{ cgroup_parent }}" "{{ stack_resource }}" "{{ external_owner }}" "{{ fixture_lock }}"
 
 # Installs the locked Astro Starlight toolchain and starts the local site.
 docs:
