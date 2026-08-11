@@ -5,6 +5,26 @@
 **Evidence level:** official-source research and read-only local CLI inspection;
 not a live authentication or model canary
 
+## M6 start re-verification (2026-08-11)
+
+The official App Server page was re-read at M6 start. It still describes App
+Server as a deep Codex-agent integration (authentication, conversation
+history, approvals, and streamed agent events), not a provider-neutral raw
+model protocol. More importantly, it still states that the App Server command
+and WebSocket transport are experimental and unsupported for production
+workloads. The official authentication and feature-maturity pages were also
+re-read. No stable, production-supported subscription-backed `Model` surface
+with a verified no-Codex-tools boundary was found.
+
+Accordingly, M6 now has a deterministic, fail-closed support-assessment seam
+at `internal/providers/codexsubscription`. It accepts only bounded, non-secret
+review metadata and refuses composition until all of the following are
+independently evidenced: official production support, a model-only tool
+boundary, isolated credential identity, and protected-canary authority. It
+does not parse, copy, refresh, or transmit credentials and it cannot fall back
+to an API key. This advances the visible-blocked behavior required by
+`MOD-001`; it is not a Codex adapter or `MOD-005` canary evidence.
+
 ## Decision
 
 **The required production Codex-subscription `Model` adapter is currently
