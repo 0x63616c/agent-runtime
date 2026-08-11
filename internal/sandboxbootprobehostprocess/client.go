@@ -6,6 +6,7 @@ import (
 	"crypto/ed25519"
 	"encoding/json"
 	"github.com/0x63616c/agent-runtime/internal/firecracker"
+	"github.com/0x63616c/agent-runtime/internal/firecrackerbootprobecomposition"
 	"github.com/0x63616c/agent-runtime/internal/firecrackerbootprobeprotocol"
 	"github.com/0x63616c/agent-runtime/internal/firecrackerbootprobev2"
 	"github.com/cockroachdb/errors"
@@ -17,6 +18,27 @@ import (
 const protocolVersion = "sandbox.host-control/v2/firecracker-boot-probe"
 const preparePath = "/sandbox.host-control/v2/firecracker-boot-probe/prepare"
 const stageReadyPath = "/sandbox.host-control/v2/firecracker-boot-probe/stage-ready"
+
+// StageReadySubmitter binds the concrete mutually-authenticated control client
+// to the M4 composition root. It contains no M4 identity: that identity is
+// compiled by the staged host immediately before submission.
+type StageReadySubmitter struct {
+	Client   *http.Client
+	Origin   string
+	Now      func() time.Time
+	Resolver firecrackerbootprobeprotocol.HostTrustResolver
+}
+
+// Submit signs and verifies the private M4 stage-ready handoff through this
+// exact control transport.
+func (submitter StageReadySubmitter) Submit(ctx context.Context, snapshot firecrackerbootprobev2.Snapshot, identity firecracker.TrustedM4Identity, guestNonce string, observationPrivateKey ed25519.PrivateKey) (firecrackerbootprobeprotocol.VerifiedCommand, error) {
+	if submitter.Now == nil {
+		return firecrackerbootprobeprotocol.VerifiedCommand{}, errors.New("submit M4 stage-ready: UTC clock is required")
+	}
+	return SubmitStageReady(ctx, submitter.Client, submitter.Origin, snapshot, identity, guestNonce, observationPrivateKey, submitter.Now().UTC(), submitter.Resolver)
+}
+
+var _ firecrackerbootprobecomposition.Submitter = StageReadySubmitter{}
 
 type prepareRequest struct {
 	ProtocolVersion       string `json:"protocol_version"`
