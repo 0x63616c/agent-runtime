@@ -2,12 +2,14 @@ package localdemoworker
 
 import (
 	"context"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/0x63616c/agent-runtime/internal/runtimemodel"
 	"github.com/0x63616c/agent-runtime/internal/runtimestate"
+	"github.com/0x63616c/agent-runtime/internal/runtimetool"
 	agentruntime "github.com/0x63616c/agent-runtime/sdk/go"
 	"github.com/cockroachdb/errors"
 )
@@ -61,6 +63,17 @@ func TestModelFixtureUsesTheCanonicalApprovalSummaryForItsResearchTool(t *testin
 	}
 	if _, err := agentruntime.ParseApprovalID(response.Tool.ApprovalID); err != nil {
 		t.Fatalf("fixture approval ID = %q, want public identifier: %v", response.Tool.ApprovalID, err)
+	}
+}
+
+func TestToolFixtureRetainsDownloadableResearchArtifactAndCitation(t *testing.T) {
+	t.Parallel()
+	response := fixtureToolResponse(runtimetool.Request{OperationID: "tool-execution-outbox_1234567890ABCDEF"})
+	if len(response.Output) <= 512*1024 {
+		t.Fatalf("fixture output length = %d, want downloadable artifact over 512KiB", len(response.Output))
+	}
+	if !strings.Contains(string(response.Output[:256]), "Citation: https://example.invalid/local-demo/tool-execution-outbox_1234567890ABCDEF") {
+		t.Fatalf("fixture output prefix = %q, want retained public citation", response.Output[:256])
 	}
 }
 

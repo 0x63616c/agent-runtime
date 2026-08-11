@@ -1,0 +1,89 @@
+---
+title: Research Dossier
+description: Run the public-contract research application and recover retained artifacts.
+---
+
+# Research Dossier
+
+Research Dossier is a loopback web and terminal application over the public
+Agent Runtime Go SDK. It does not import Temporal, PostgreSQL, MinIO, a model
+provider, a Tool adapter, or a sandbox package. Its only runtime operations are
+to create a Session, submit bounded Input, inspect state, resume Product events
+from a Cursor, list Session Artifact metadata, and read an exact authorized
+Artifact.
+
+The operator owns private model and Tool workers. A model may request only a
+Tool declared by the immutable Agent revision. The Tool broker evaluates the
+tenant Policy and creates a durable Approval where the Policy requires one;
+the application can observe that progress but never receives capability or
+credential material. A Tool result becomes a retained Artifact only after the
+private worker records it through the runtime state/content authority.
+
+## Run the terminal
+
+Start the configured public runtime API and its declared private worker roles,
+then provide the ordinary caller bearer only to the loopback application:
+
+```bash
+export AGENT_RUNTIME_DEVELOPER_TOKEN='replace-with-at-least-16-bytes'
+go run ./examples/research-dossier/cmd/research-dossier \
+  --mode=terminal \
+  --runtime-url=http://127.0.0.1:8080
+```
+
+The terminal accepts these commands:
+
+```text
+start <agent-revision> <research brief>
+research <session> <next research step>
+resume <session> [cursor]
+artifacts <session>
+download <artifact>
+```
+
+`resume` first inspects current durable Session state, then requests Product
+events after the supplied Cursor. A replay Gap remains explicit: inspect the
+current Session and continue with its returned Cursor rather than treating a
+missing event range as success. `artifacts` reveals immutable metadata only;
+`download` makes a separate authorized read and prints the retained bytes.
+
+## Run the loopback web UI
+
+```bash
+go run ./examples/research-dossier/cmd/research-dossier \
+  --mode=web \
+  --runtime-url=http://127.0.0.1:8080 \
+  --listen=127.0.0.1:8092
+```
+
+The process refuses a non-loopback listener. Its local server owns the public
+SDK credential and serves forms for starting/advancing a dossier, resuming
+progress, listing Artifacts, and downloading a selected Artifact. The browser
+does not receive the bearer credential, object-store URL, or a Tool capability.
+Mutating forms carry an ephemeral CSRF token and require the loopback page's
+same HTTP Origin. If a form returns `forbidden`, reload the page rather than
+posting from another origin or replaying an older form. Each terminal and web
+operation has a bounded request context; retry through the durable `resume`
+flow if the runtime is temporarily unavailable.
+
+## Citation and Artifact retention
+
+A final Markdown Artifact can contain ordinary absolute `https://` or `http://`
+citations. Research Dossier derives a de-duplicated safe citation index from
+those retained bytes; malformed URLs, non-web schemes, userinfo URLs, and
+storage locators are not promoted to citations. The source Artifact and final
+dossier remain in the Session's caller-authorized Artifact index after a public
+API process restart. Retention, erasure, and object GC remain runtime operator
+policies; a download is not an indefinite retention guarantee.
+
+The M8 integration suite uses a dedicated disposable `research-dossier-e2e`
+tenant with PostgreSQL, MinIO, and a real Temporal development server. It
+proves a public dossier Session is represented by a Temporal workflow, three
+distinct ordered research Tool calls each produce a separately retained cited
+Artifact (including a final result larger than 512 KiB) only after durable
+owner Approval, and cursor/artifact recovery works after an API restart midway
+through the run. The disposable tenant is created by the gate and removed with
+its disposable dependencies; it is not a shared local demo identity. Run the
+proof with `deploy/runtimeapi/run-durable-integration.sh`. This is local
+integration evidence, not a claim of an internet research provider or
+production subscription support.

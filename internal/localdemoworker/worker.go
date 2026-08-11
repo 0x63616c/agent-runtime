@@ -3,6 +3,7 @@
 package localdemoworker
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
@@ -203,5 +204,12 @@ func (toolFixture) ExternalEffectContract() runtimetool.ExternalEffectContract {
 	return runtimetool.ExternalEffectContract{IdempotencyKey: "operation_id", Reconciles: true}
 }
 func fixtureToolResponse(request runtimetool.Request) runtimetool.Response {
-	return runtimetool.Response{Output: []byte("Local demo research fixture completed. Citation: https://example.invalid/local-demo/" + string(request.OperationID)), MediaType: "text/plain; charset=utf-8"}
+	// Keep the final material large enough to exercise the public streaming
+	// download path rather than merely returning an in-memory-looking fixture.
+	// The deterministic repeated text is deliberately harmless and preserves a
+	// human-readable citation at the start of the retained artifact.
+	prefix := []byte("Local demo research fixture completed. Citation: https://example.invalid/local-demo/" + string(request.OperationID) + "\n")
+	output := append([]byte(nil), prefix...)
+	output = append(output, bytes.Repeat([]byte("local-demo-research-evidence\n"), (513*1024-len(output))/len("local-demo-research-evidence\n")+1)...)
+	return runtimetool.Response{Output: output, MediaType: "text/plain; charset=utf-8"}
 }

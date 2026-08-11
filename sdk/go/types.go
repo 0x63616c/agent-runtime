@@ -22,6 +22,9 @@ const MaxToolCallsPerTurn = 64
 // MaxApprovalsPerPage bounds one owner-scoped approval inbox response.
 const MaxApprovalsPerPage = 64
 
+// MaxArtifactsPerSession bounds one owner-scoped Session Artifact index response.
+const MaxArtifactsPerSession = 256
+
 // ToolCallState is the safe public lifecycle of one model Tool intent.
 type ToolCallState string
 
@@ -277,6 +280,26 @@ type ArtifactReference struct {
 	MediaType string     `json:"media_type"`
 	SizeBytes int64      `json:"size_bytes"`
 	SHA256    string     `json:"sha256"`
+}
+
+// ArtifactPage is one bounded owner-scoped Artifact index for a Session.
+// It exposes immutable metadata only; Artifact bytes require ReadArtifact or
+// OpenArtifact and are authorized again for the exact caller.
+type ArtifactPage struct {
+	Artifacts []ArtifactReference `json:"artifacts"`
+	Truncated bool                `json:"truncated"`
+}
+
+// Clone returns an independent ArtifactPage snapshot.
+func (page ArtifactPage) Clone() ArtifactPage {
+	if page.Artifacts == nil {
+		// ArtifactPage is a JSON collection contract: an empty page is [] rather
+		// than null, including when a runtime has no retained artifacts yet.
+		page.Artifacts = []ArtifactReference{}
+	} else {
+		page.Artifacts = append([]ArtifactReference(nil), page.Artifacts...)
+	}
+	return page
 }
 
 // ArtifactDownload is one authorized immutable artifact read.  It contains
