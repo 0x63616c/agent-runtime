@@ -1157,7 +1157,25 @@
     },
     {
       "id": "TMP-004",
-      "status": "not_started"
+      "status": "completed",
+      "evidence": [
+        {
+          "revision": "3d1e1c4ab5483d5ca3956ef03f19bfe4724782e3",
+          "utc_time": "2026-08-11T23:33:06Z",
+          "proof_level": "integration",
+          "command_id": "m5-temporal-real-server-replay",
+          "artifact_ref": "m5-temporal-core-3d1e1c4",
+          "result": "passed"
+        },
+        {
+          "revision": "3d1e1c4ab5483d5ca3956ef03f19bfe4724782e3",
+          "utc_time": "2026-08-11T23:33:06Z",
+          "proof_level": "workflow",
+          "command_id": "m5-temporal-workflow-race",
+          "artifact_ref": "m5-temporal-core-3d1e1c4",
+          "result": "passed"
+        }
+      ]
     },
     {
       "id": "TMP-005",
@@ -1249,11 +1267,39 @@
     },
     {
       "id": "TMP-009",
-      "status": "not_started"
+      "status": "completed",
+      "evidence": [
+        {
+          "revision": "3d1e1c4ab5483d5ca3956ef03f19bfe4724782e3",
+          "utc_time": "2026-08-11T23:33:06Z",
+          "proof_level": "workflow",
+          "command_id": "m5-temporal-workflow-race",
+          "artifact_ref": "m5-temporal-core-3d1e1c4",
+          "result": "passed"
+        }
+      ]
     },
     {
       "id": "TMP-010",
-      "status": "not_started"
+      "status": "completed",
+      "evidence": [
+        {
+          "revision": "3d1e1c4ab5483d5ca3956ef03f19bfe4724782e3",
+          "utc_time": "2026-08-11T23:33:06Z",
+          "proof_level": "integration",
+          "command_id": "m5-durable-composition",
+          "artifact_ref": "m5-temporal-core-3d1e1c4",
+          "result": "passed"
+        },
+        {
+          "revision": "3d1e1c4ab5483d5ca3956ef03f19bfe4724782e3",
+          "utc_time": "2026-08-11T23:33:06Z",
+          "proof_level": "workflow",
+          "command_id": "m5-temporal-workflow-race",
+          "artifact_ref": "m5-temporal-core-3d1e1c4",
+          "result": "passed"
+        }
+      ]
     },
     {
       "id": "TOL-001",

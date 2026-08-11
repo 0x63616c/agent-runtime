@@ -1,0 +1,40 @@
+{
+  "version": 1,
+  "milestone": "M5 durable agent runtime",
+  "implementation_revision": "3d1e1c4ab5483d5ca3956ef03f19bfe4724782e3",
+  "utc_time": "2026-08-11T23:33:06Z",
+  "requirements": ["TMP-004", "TMP-009", "TMP-010"],
+  "commands": [
+    {
+      "id": "m5-temporal-workflow-race",
+      "command": "go test -race ./internal/runtimeorchestration -count=1",
+      "result": "passed"
+    },
+    {
+      "id": "m5-temporal-real-server-replay",
+      "command": "go test -race -tags=integration ./internal/runtimeorchestration -run TestSessionWorkflow(RunsThroughTheOwnedFactoryAgainstTemporal|ReplaysCheckedInHistoricLifecycle) -count=1",
+      "result": "passed"
+    },
+    {
+      "id": "m5-durable-composition",
+      "command": "deploy/runtimeapi/run-durable-integration.sh",
+      "result": "passed"
+    }
+  ],
+  "coverage": {
+    "TMP-004": "Continue-As-New, a retained v1 history corpus, and a real Temporal development-server replay all pass.",
+    "TMP-009": "The workflow matrix distinguishes cancellation, deterministic refusal, transient state observation, uncertain effects, and incompatible policy without retrying an unknown effect.",
+    "TMP-010": "The durable harness covers PostgreSQL-to-Temporal acknowledgement-loss recovery, process-kill recovery, approval/sandbox finalization vocabulary, cancellation, and replay-safe terminal routes."
+  },
+  "documentation": [
+    "docs/planning/m5-temporal-worker-composition.md",
+    "docs/architecture/system.md",
+    "docs/reference/runtime-go-contract.md"
+  ],
+  "limitations": [
+    "The Temporal development server and disposable PostgreSQL/MinIO services are integration evidence, not a protected production deployment.",
+    "This evidence does not execute a live model provider or an external sandbox command.",
+    "This evidence does not prove Firecracker or Linux KVM isolation.",
+    "Protected runtime-operations role-grant, retention, audit-sink, WAL, and PITR evidence remains required for DAT-009 through DAT-013."
+  ]
+}
