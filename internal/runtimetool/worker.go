@@ -89,6 +89,9 @@ func (w *Worker) ScanOnce(ctx context.Context) error {
 		return e
 	}
 	for _, t := range ts {
+		if e := w.retireExpiredGrants(ctx, t); e != nil {
+			return e
+		}
 		// Approval only makes a bounded grant available. The worker owns the
 		// separate consume-then-intent transition, so a public decision can never
 		// dispatch an adapter directly or race a revoked/expired grant.
@@ -114,6 +117,29 @@ func (w *Worker) ScanOnce(ctx context.Context) error {
 			if e = w.ack(ctx, claimed); e != nil {
 				return e
 			}
+		}
+	}
+	return nil
+}
+
+func (w *Worker) retireExpiredGrants(ctx context.Context, tenant runtimecontent.TenantID) error {
+	state, err := w.store.LoadRuntimeState(ctx, runtimestate.MutationScope{Tenant: tenant, Authority: runtimestate.AuthorityRuntimeWorker})
+	if err != nil {
+		return err
+	}
+	for _, grant := range state.Grants {
+		if grant.RevokedAt != nil || w.clock.Now().Before(grant.ExpiresAt) {
+			continue
+		}
+		for _, intent := range state.ToolIntents {
+			if intent.ToolCallID != grant.ToolCallID || intent.Principal != grant.Principal {
+				continue
+			}
+			expire, compileErr := w.compiler.CompileExpireCapabilityGrant(runtimestate.ExpireCapabilityGrantCommand{Scope: runtimestate.MutationScope{Tenant: tenant, Principal: grant.Principal, Authority: runtimestate.AuthorityRuntimeWorker}, IdempotencyKey: "tool-expire-" + grant.GrantID, GrantID: grant.GrantID, ToolCallID: grant.ToolCallID, SessionID: intent.SessionID, TurnID: intent.TurnID})
+			if compileErr != nil {
+				return compileErr
+			}
+			return w.persist(ctx, expire)
 		}
 	}
 	return nil

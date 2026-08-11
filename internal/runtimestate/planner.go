@@ -311,6 +311,8 @@ func (planner *RuntimeStatePlanner) Plan(ctx context.Context, prior RuntimeState
 		result, effects, err = planner.consumeCapabilityGrant(&state, mutation.mutation.receipt, command, now)
 	case RevokeCapabilityGrantCommand:
 		result, effects, err = planner.revokeCapabilityGrant(&state, mutation.mutation.receipt, command, now)
+	case ExpireCapabilityGrantCommand:
+		result, effects, err = planner.expireCapabilityGrant(&state, mutation.mutation.receipt, command, now)
 	case BeginToolExecutionCommand:
 		result, effects, err = planner.beginToolExecution(&state, mutation.mutation.receipt, command, now)
 	case RecordToolExecutionOutcomeCommand:
@@ -758,6 +760,27 @@ func (planner *RuntimeStatePlanner) revokeCapabilityGrant(state *RuntimeState, b
 	return PlanResult{}, EffectSet{}, ErrNotFoundOrDenied
 }
 
+func (planner *RuntimeStatePlanner) expireCapabilityGrant(state *RuntimeState, binding ReceiptBinding, c ExpireCapabilityGrantCommand, now time.Time) (PlanResult, EffectSet, error) {
+	if findTurn(state, binding.Scope, c.SessionID, c.TurnID) < 0 {
+		return PlanResult{}, EffectSet{}, ErrNotFoundOrDenied
+	}
+	for index := range state.Grants {
+		grant := state.Grants[index]
+		if grant.GrantID != c.GrantID || grant.Tenant != binding.Scope.Tenant || grant.Principal != binding.Scope.Principal {
+			continue
+		}
+		if grant.ToolCallID != c.ToolCallID || grant.RevokedAt != nil || now.Before(grant.ExpiresAt) {
+			return PlanResult{}, EffectSet{}, ErrConflict
+		}
+		value := now
+		grant.RevokedAt = &value
+		state.Grants[index] = grant
+		effects, err := planner.auditOnly(state, binding, "capability_grant.expired", c.SessionID, c.TurnID, now)
+		return PlanResult{}, effects, err
+	}
+	return PlanResult{}, EffectSet{}, ErrNotFoundOrDenied
+}
+
 func (planner *RuntimeStatePlanner) beginToolExecution(state *RuntimeState, binding ReceiptBinding, c BeginToolExecutionCommand, now time.Time) (PlanResult, EffectSet, error) {
 	turnIndex := findTurn(state, binding.Scope, c.SessionID, c.TurnID)
 	// Keep the second half of consume->intent fenced by the same durable Turn
@@ -1164,7 +1187,7 @@ func auditLifecycleKinds(command CommandKind) []string {
 	prefix := string(command)
 	kinds := []string{prefix + ".attempted", prefix + ".authorized", prefix + ".committed"}
 	switch command {
-	case CommandRecordToolOutcome, CommandRecordOutcome, CommandSettleTurn, CommandCancelTurn, CommandCloseSession, CommandRevokeCapabilityGrant:
+	case CommandRecordToolOutcome, CommandRecordOutcome, CommandSettleTurn, CommandCancelTurn, CommandCloseSession, CommandRevokeCapabilityGrant, CommandExpireCapabilityGrant:
 		return append(kinds, prefix+".terminal")
 	case CommandClaimOutbox, CommandAcknowledgeOutbox:
 		return append(kinds, prefix+".reconciled")
