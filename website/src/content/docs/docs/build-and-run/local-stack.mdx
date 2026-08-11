@@ -17,6 +17,15 @@ binary build, configuration validation, secret-reference injection, readiness,
 and lifecycle—not the complete public Agent Runtime API, Temporal payload codec
 behavior, or any example app.
 
+For the explicitly local profile only, the model and tool roles can run the
+checked-in `local-demo-v1` fixture. It has separately named local-only
+credentials, emits a deterministic research Tool call, and still requires a
+policy created through the public admin API plus an owner Approval before the
+tool role can produce its bounded citation artifact. It is topology evidence,
+not a model-provider integration, Codex subscription path, or production
+provider claim. CI and production profiles do not mount or configure this
+fixture.
+
 Main CI invokes the same two-Stack isolation harness against a checksum-pinned,
 disposable k3d/K3s cluster using the typed `ci` profile. Its twelve-minute
 readiness bound includes a clean node's immutable dependency-image pulls and

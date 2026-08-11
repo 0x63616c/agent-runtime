@@ -245,6 +245,102 @@ func TestPublisherDerivesTemporalRoutesOnlyFromClaimedDurableOutbox(t *testing.T
 	}
 }
 
+func TestDurableInputDispatchBeginsOneInvocationAcrossRepeatedRoutes(t *testing.T) {
+	ctx := context.Background()
+	now := time.Date(2026, 8, 11, 13, 0, 0, 0, time.UTC)
+	content, err := runtimecontent.New("runtime-content", &publisherObjects{values: map[string][]byte{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tenant, _ := runtimecontent.ParseTenantID("tenant-a")
+	principal, _ := runtimecontent.ParsePrincipalID("principal-a")
+	compiler, err := runtimestate.NewCompiler(content)
+	if err != nil {
+		t.Fatal(err)
+	}
+	timeSource, err := clock.NewFake(now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	planner, err := runtimestate.NewRuntimeStatePlanner(timeSource, &publisherIDs{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := runtimestate.NewMemoryRuntimeStateStore(planner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err := content.StageAgentSpecificationBody(ctx, tenant, runtimecontent.AgentSpecificationBody{Name: "scheduler", ModelProfile: "balanced", Instructions: "safe"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	registration, err := compiler.CompileRegisterAgentRevision(runtimestate.RegisterAgentRevisionCommand{Scope: runtimestate.MutationScope{Tenant: tenant, Authority: runtimestate.AuthorityTenantAdministrator}, IdempotencyKey: "register", Specification: body})
+	if err != nil {
+		t.Fatal(err)
+	}
+	registered, err := store.Apply(ctx, registration)
+	if err != nil {
+		t.Fatal(err)
+	}
+	created, err := compiler.CompileCreateSession(runtimestate.CreateSessionCommand{Scope: runtimestate.MutationScope{Tenant: tenant, Principal: principal, Authority: runtimestate.AuthoritySessionOwner}, IdempotencyKey: "create-session", RevisionID: registered.Result().Revision.RevisionID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	session, err := store.Apply(ctx, created)
+	if err != nil {
+		t.Fatal(err)
+	}
+	input, err := content.StageInputEnvelope(ctx, tenant, []agentruntime.ContentPart{{Kind: agentruntime.ContentText, Text: "schedule exactly once"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	accepted, err := compiler.CompileAdmitInput(runtimestate.AdmitInputCommand{Scope: runtimestate.MutationScope{Tenant: tenant, Principal: principal, Authority: runtimestate.AuthoritySessionOwner}, IdempotencyKey: "input", SessionID: session.Result().Session.SessionID, Input: input})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Apply(ctx, accepted); err != nil {
+		t.Fatal(err)
+	}
+	temporal := &recordingPublisher{}
+	publisher, err := runtimeorchestration.NewPublisher(runtimeorchestration.PublisherConfig{Store: store, Tenants: store, Compiler: compiler, Planner: planner, Clock: timeSource, Publisher: temporal, Claimer: "orchestration-codec"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := publisher.ScanOnce(ctx); err != nil {
+		t.Fatalf("publish public input route: %v", err)
+	}
+	var inputRoute runtimeorchestration.Command
+	for _, command := range temporal.commands {
+		if command.Kind == runtimeorchestration.CommandInputAccepted {
+			inputRoute = command
+			break
+		}
+	}
+	if inputRoute.OutboxID == "" {
+		t.Fatalf("published commands = %#v, want input route", temporal.commands)
+	}
+	dispatcher, err := runtimeorchestration.NewDurableStateDispatcherWithInvocationScheduler(store, compiler, planner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for attempt := 0; attempt < 2; attempt++ {
+		if err := dispatcher.Dispatch(ctx, inputRoute); err != nil {
+			t.Fatalf("dispatch durable input route attempt %d: %v", attempt+1, err)
+		}
+	}
+	state, err := store.LoadRuntimeState(ctx, runtimestate.MutationScope{Tenant: tenant, Principal: principal, Authority: runtimestate.AuthorityRuntimeWorker})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(state.Invocations) != 1 {
+		t.Fatalf("invocations = %#v, want exactly one durable begin attempt", state.Invocations)
+	}
+	invocation := state.Invocations[0]
+	if invocation.SessionID != session.Result().Session.SessionID || invocation.TurnID == "" || invocation.OperationID != runtimestate.OperationID("orchestration-invocation-"+inputRoute.OutboxID) {
+		t.Fatalf("invocation = %#v, want deterministic input-owned operation", invocation)
+	}
+}
+
 func TestPublisherReclaimsAnUnacknowledgedRouteAfterProcessLoss(t *testing.T) {
 	ctx := context.Background()
 	now := time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC)

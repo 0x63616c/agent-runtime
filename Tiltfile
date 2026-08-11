@@ -47,7 +47,7 @@ secret_manifests = local('go run ./tools/dev secrets --stack=' + stack + ' --pro
 k8s_yaml([stack_manifests, secret_manifests])
 
 for workload in ['api', 'runtime-api', 'orchestration', 'model', 'tool', 'blob-role', 'codec', 'sandbox-control', 'sandbox-host', 'egress-proxy']:
-    docker_build('agent-runtime-dev/' + stack + '/' + workload, '.', dockerfile='deploy/production/Dockerfile', only=['cmd/runtime', 'cmd/agent-runtime-api', 'cmd/egress-proxy', 'internal', 'sdk', 'temporalpayload', 'deploy/production/Dockerfile', 'go.mod', 'go.sum'])
+    docker_build('agent-runtime-dev/' + stack + '/' + workload, '.', dockerfile='deploy/production/Dockerfile', only=['cmd/runtime', 'cmd/agent-runtime-api', 'cmd/egress-proxy', 'internal', 'sandbox', 'sdk', 'temporalpayload', 'deploy/production/Dockerfile', 'go.mod', 'go.sum'])
 
 # The declared profile owns every dependency and policy. Tilt only orders the
 # reviewed resources and substitutes its stack-scoped development images.
@@ -58,7 +58,7 @@ k8s_resource('temporal', resource_deps=['temporal-state'], pod_readiness='wait')
 # Reconciliation is a separately audited operator action and runs only after
 # the owned Temporal Deployment reports Ready; runtime processes never create
 # their own namespace as a startup side effect.
-local_resource('stack-reconcile', cmd='go run ./tools/dev reconcile --stack=' + stack + ' --root=.', resource_deps=['temporal'])
+local_resource('stack-reconcile', cmd='go run ./tools/dev reconcile --stack=' + stack + ' --root=.', resource_deps=['temporal', 'migration-runner'])
 k8s_resource('blob', pod_readiness='wait')
 k8s_resource('telemetry', pod_readiness='wait')
 k8s_resource('egress-proxy', pod_readiness='wait')

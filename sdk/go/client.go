@@ -224,8 +224,9 @@ func (client *Client) GetPolicy(ctx context.Context, name string, revision uint6
 	return doJSON[Policy](client, ctx, openAPIMethodGetPolicy, path, "", nil)
 }
 
-// ReadArtifact downloads bounded immutable content only after the server has
-// authorized the exact tenant/principal/artifact tuple.
+// ReadArtifact downloads a Content-Length-bounded immutable response only
+// after the server has authorized the exact tenant/principal/artifact tuple.
+// Call OpenArtifact for a trailer-verified streaming response.
 func (client *Client) ReadArtifact(ctx context.Context, artifactID ArtifactID) (ArtifactDownload, error) {
 	if _, err := ParseArtifactID(artifactID.String()); err != nil {
 		return ArtifactDownload{}, errors.New("read Artifact: invalid artifact ID")

@@ -14,6 +14,10 @@ COPY cmd/agent-runtime-api ./cmd/agent-runtime-api
 # The composition binaries have transitive internal-package seams. Copy the
 # reviewed internal module tree rather than maintaining a brittle hand list.
 COPY internal ./internal
+# `internal/runtimetool` carries the reviewed sandbox operation contract. Keep
+# the module-root package in the build context too; `-mod=readonly` must never
+# fall back to resolving this first-party dependency externally.
+COPY sandbox ./sandbox
 COPY sdk ./sdk
 COPY temporalpayload ./temporalpayload
 RUN go mod verify

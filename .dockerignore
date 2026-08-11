@@ -12,6 +12,8 @@
 !cmd/agent-runtime-api/**
 !internal/
 !internal/**
+!sandbox/
+!sandbox/**
 !sdk/
 !sdk/**
 !temporalpayload/
