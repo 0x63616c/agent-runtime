@@ -29,6 +29,7 @@ type Entry struct {
 	ExecutionCount              uint64   `json:"execution_count"`
 	LeaseEpoch                  uint64   `json:"lease_epoch"`
 	FencingToken                uint64   `json:"fencing_token"`
+	HostGeneration              uint64   `json:"host_generation,omitempty"`
 	StartedWire                 []byte   `json:"started_wire"`
 	StartedDigest               string   `json:"started_digest"`
 	StartedAcknowledged         bool     `json:"started_acknowledged"`
@@ -39,6 +40,7 @@ type Entry struct {
 	TransferReceiptWire         []byte   `json:"transfer_receipt_wire,omitempty"`
 	TransferReceiptDigest       string   `json:"transfer_receipt_digest,omitempty"`
 	TransferReceiptAcknowledged bool     `json:"transfer_receipt_acknowledged,omitempty"`
+	TransferReceiptKind         string   `json:"transfer_receipt_kind,omitempty"`
 }
 
 // Output is one signed output observation staged before its control send.
@@ -64,6 +66,7 @@ type PendingOutput struct {
 // receipt awaiting its exact control acknowledgement.
 type PendingTransferReceipt struct {
 	ReceiptKey string
+	Kind       string
 	Wire       []byte
 }
 
@@ -276,13 +279,40 @@ func (journal *Journal) Entry(envelope sandboxhostprotocol.Envelope) (Entry, boo
 	return entry, true
 }
 
+// EntryByReceiptKey returns one cloned durable record for restart recovery.
+func (journal *Journal) EntryByReceiptKey(key string) (Entry, bool) {
+	if journal == nil || key == "" {
+		return Entry{}, false
+	}
+	journal.mu.Lock()
+	defer journal.mu.Unlock()
+	entry, exists := journal.entries[key]
+	if !exists {
+		return Entry{}, false
+	}
+	entry.StartedWire = append([]byte(nil), entry.StartedWire...)
+	entry.ResultWire = append([]byte(nil), entry.ResultWire...)
+	entry.TransferReceiptWire = append([]byte(nil), entry.TransferReceiptWire...)
+	return entry, true
+}
+
 // StageTransferReceipt fsyncs one exact private data-plane receipt after a
 // started intent and before its first control delivery. The receipt is opaque
 // to this generic journal, bounded, canonical at its owner, and cannot carry
 // raw artifact or snapshot bytes.
 func (journal *Journal) StageTransferReceipt(envelope sandboxhostprotocol.Envelope, wire []byte) error {
+	return journal.StageTypedTransferReceipt(envelope, "transfer", wire)
+}
+
+// StageTypedTransferReceipt persists one exact private receipt with the only
+// public-control kind allowed to wrap it. The generic journal never parses the
+// receipt payload, so application metadata remains owned by its authority.
+func (journal *Journal) StageTypedTransferReceipt(envelope sandboxhostprotocol.Envelope, kind string, wire []byte) error {
 	if journal == nil || len(wire) == 0 || len(wire) > 1<<20 {
 		return errors.New("stage sandbox host transfer receipt: bounded receipt is required")
+	}
+	if kind != "transfer" && kind != "snapshot-restore" && kind != "mount" {
+		return errors.New("stage sandbox host transfer receipt: invalid receipt kind")
 	}
 	key := receiptKey(envelope)
 	journal.mu.Lock()
@@ -293,16 +323,17 @@ func (journal *Journal) StageTransferReceipt(envelope sandboxhostprotocol.Envelo
 	}
 	digest := sandboxhostprotocol.Digest(wire)
 	if entry.TransferReceiptDigest != "" {
-		if entry.TransferReceiptDigest != digest || !bytes.Equal(entry.TransferReceiptWire, wire) {
+		if (entry.TransferReceiptKind != kind && !(entry.TransferReceiptKind == "" && kind == "transfer")) || entry.TransferReceiptDigest != digest || !bytes.Equal(entry.TransferReceiptWire, wire) {
 			return errors.New("stage sandbox host transfer receipt: altered receipt refused")
 		}
 		return nil
 	}
 	entry.TransferReceiptWire = append([]byte(nil), wire...)
 	entry.TransferReceiptDigest = digest
+	entry.TransferReceiptKind = kind
 	journal.entries[key] = entry
 	if err := journal.persistLocked(); err != nil {
-		entry.TransferReceiptWire, entry.TransferReceiptDigest = nil, ""
+		entry.TransferReceiptWire, entry.TransferReceiptDigest, entry.TransferReceiptKind = nil, "", ""
 		journal.entries[key] = entry
 		return err
 	}
@@ -320,7 +351,11 @@ func (journal *Journal) PendingTransferReceipts() []PendingTransferReceipt {
 	var pending []PendingTransferReceipt
 	for key, entry := range journal.entries {
 		if entry.TransferReceiptDigest != "" && !entry.TransferReceiptAcknowledged {
-			pending = append(pending, PendingTransferReceipt{ReceiptKey: key, Wire: append([]byte(nil), entry.TransferReceiptWire...)})
+			kind := entry.TransferReceiptKind
+			if kind == "" {
+				kind = "transfer"
+			}
+			pending = append(pending, PendingTransferReceipt{ReceiptKey: key, Kind: kind, Wire: append([]byte(nil), entry.TransferReceiptWire...)})
 		}
 	}
 	sort.Slice(pending, func(i, j int) bool { return pending[i].ReceiptKey < pending[j].ReceiptKey })
@@ -573,7 +608,7 @@ func (journal *Journal) Accept(envelope sandboxhostprotocol.Envelope, envelopeDi
 	if len(journal.entries) >= journal.maximum {
 		return Entry{}, false, errors.New("accept sandbox host receipt: finite journal limit reached")
 	}
-	entry := Entry{ReceiptKey: key, EnvelopeDigest: envelopeDigest, ReceiptDigest: sandboxhostprotocol.Digest([]byte(key)), ExecutionCount: 1, LeaseEpoch: envelope.LeaseEpoch, FencingToken: envelope.FencingToken}
+	entry := Entry{ReceiptKey: key, EnvelopeDigest: envelopeDigest, ReceiptDigest: sandboxhostprotocol.Digest([]byte(key)), ExecutionCount: 1, LeaseEpoch: envelope.LeaseEpoch, FencingToken: envelope.FencingToken, HostGeneration: envelope.HostGeneration}
 	journal.entries[key] = entry
 	if err := journal.persistLocked(); err != nil {
 		delete(journal.entries, key)
@@ -654,9 +689,9 @@ func validOutputState(entry Entry) bool {
 
 func validTransferReceiptState(entry Entry) bool {
 	if entry.TransferReceiptDigest == "" {
-		return len(entry.TransferReceiptWire) == 0 && !entry.TransferReceiptAcknowledged
+		return len(entry.TransferReceiptWire) == 0 && !entry.TransferReceiptAcknowledged && entry.TransferReceiptKind == ""
 	}
-	return len(entry.TransferReceiptWire) > 0 && len(entry.TransferReceiptWire) <= 1<<20 && sandboxhostprotocol.Digest(entry.TransferReceiptWire) == entry.TransferReceiptDigest
+	return (entry.TransferReceiptKind == "" || entry.TransferReceiptKind == "transfer" || entry.TransferReceiptKind == "snapshot-restore" || entry.TransferReceiptKind == "mount") && len(entry.TransferReceiptWire) > 0 && len(entry.TransferReceiptWire) <= 1<<20 && sandboxhostprotocol.Digest(entry.TransferReceiptWire) == entry.TransferReceiptDigest
 }
 
 func validExecutionState(entry Entry) bool {

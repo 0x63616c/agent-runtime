@@ -3,6 +3,7 @@ package sandboxhostprocess
 import (
 	"context"
 	"crypto/ed25519"
+	"strconv"
 	"time"
 
 	"github.com/0x63616c/agent-runtime/internal/sandboxhostjournal"
@@ -50,6 +51,25 @@ type AuthenticatedOutputReportingHostExecutor interface {
 	ExecuteAuthenticatedWithOutput(context.Context, sandboxhostprotocol.Envelope, []byte, OutputEmitter) error
 }
 
+// DataPlaneReceiptEmitter sends a canonical private receipt only after its
+// owner has fsynced it. The host process signs and obtains public-control ack.
+type DataPlaneReceiptEmitter = func(context.Context, string, []byte) error
+
+// DataPlaneReceiptReportingHostExecutor is the typed private effect seam for
+// reference-only transfer, restore, and mount terminal observations.
+type DataPlaneReceiptReportingHostExecutor interface {
+	HostExecutor
+	ExecuteWithDataPlaneReceipt(context.Context, sandboxhostprotocol.Envelope, DataPlaneReceiptEmitter) error
+}
+
+// AuthenticatedDataPlaneReceiptReportingHostExecutor preserves the exact
+// control-signed wire across a data-plane authority boundary.
+type AuthenticatedDataPlaneReceiptReportingHostExecutor interface {
+	AuthenticatedHostExecutor
+	DataPlaneReceiptReportingHostExecutor
+	ExecuteAuthenticatedWithDataPlaneReceipt(context.Context, sandboxhostprotocol.Envelope, []byte, DataPlaneReceiptEmitter) error
+}
+
 type authenticatedEnvelopeExecutor struct {
 	HostExecutor
 	wire []byte
@@ -68,6 +88,16 @@ func (executor authenticatedEnvelopeExecutor) ExecuteWithOutput(ctx context.Cont
 	}
 	if reporting, ok := executor.HostExecutor.(OutputReportingHostExecutor); ok {
 		return reporting.ExecuteWithOutput(ctx, envelope, emit)
+	}
+	return executor.Execute(ctx, envelope)
+}
+
+func (executor authenticatedEnvelopeExecutor) ExecuteWithDataPlaneReceipt(ctx context.Context, envelope sandboxhostprotocol.Envelope, emit DataPlaneReceiptEmitter) error {
+	if authenticated, ok := executor.HostExecutor.(AuthenticatedDataPlaneReceiptReportingHostExecutor); ok {
+		return authenticated.ExecuteAuthenticatedWithDataPlaneReceipt(ctx, envelope, append([]byte(nil), executor.wire...), emit)
+	}
+	if reporting, ok := executor.HostExecutor.(DataPlaneReceiptReportingHostExecutor); ok {
+		return reporting.ExecuteWithDataPlaneReceipt(ctx, envelope, emit)
 	}
 	return executor.Execute(ctx, envelope)
 }
@@ -127,17 +157,17 @@ func executeEnvelope(ctx context.Context, envelope sandboxhostprotocol.Envelope,
 }
 
 func executeEnvelopeWithOutput(ctx context.Context, envelope sandboxhostprotocol.Envelope, now time.Time, journal *sandboxhostjournal.Journal, privateKey ed25519.PrivateKey, executor HostExecutor, send resultSender, sendOutput resultSender, deadline executionDeadline) error {
-	return executeEnvelopeWithOutputAfterTerminalSend(ctx, envelope, now, journal, privateKey, executor, send, sendOutput, deadline, nil)
+	return executeEnvelopeWithOutputAfterTerminalSend(ctx, envelope, now, journal, privateKey, executor, send, sendOutput, nil, deadline, nil)
 }
 
 // executeEnvelopeWithAfterTerminalSend retains a narrow test-only lost-ack
 // seam. Production passes nil; a hook runs only after the terminal result has
 // reached control and before the journal acknowledgement is fsynced.
 func executeEnvelopeWithAfterTerminalSend(ctx context.Context, envelope sandboxhostprotocol.Envelope, now time.Time, journal *sandboxhostjournal.Journal, privateKey ed25519.PrivateKey, executor HostExecutor, send resultSender, deadline executionDeadline, afterTerminalSend func() error) error {
-	return executeEnvelopeWithOutputAfterTerminalSend(ctx, envelope, now, journal, privateKey, executor, send, nil, deadline, afterTerminalSend)
+	return executeEnvelopeWithOutputAfterTerminalSend(ctx, envelope, now, journal, privateKey, executor, send, nil, nil, deadline, afterTerminalSend)
 }
 
-func executeEnvelopeWithOutputAfterTerminalSend(ctx context.Context, envelope sandboxhostprotocol.Envelope, now time.Time, journal *sandboxhostjournal.Journal, privateKey ed25519.PrivateKey, executor HostExecutor, send resultSender, sendOutput resultSender, deadline executionDeadline, afterTerminalSend func() error) error {
+func executeEnvelopeWithOutputAfterTerminalSend(ctx context.Context, envelope sandboxhostprotocol.Envelope, now time.Time, journal *sandboxhostjournal.Journal, privateKey ed25519.PrivateKey, executor HostExecutor, send resultSender, sendOutput, sendDataReceipt resultSender, deadline executionDeadline, afterTerminalSend func() error) error {
 	if ctx == nil || journal == nil || len(privateKey) != ed25519.PrivateKeySize || executor == nil || send == nil || deadline == nil || now.IsZero() || !now.Before(envelope.ExpiresAt) {
 		return errExecutionLeaseExpired
 	}
@@ -166,7 +196,22 @@ func executeEnvelopeWithOutputAfterTerminalSend(ctx context.Context, envelope sa
 	}
 	executionContext, cancel := deadline(ctx, envelope.ExpiresAt)
 	defer cancel()
-	if outputExecutor, ok := executor.(OutputReportingHostExecutor); ok && sendOutput != nil {
+	if dataPlaneExecutor, ok := executor.(DataPlaneReceiptReportingHostExecutor); ok && sendDataReceipt != nil {
+		err = dataPlaneExecutor.ExecuteWithDataPlaneReceipt(executionContext, envelope, func(receiptCtx context.Context, kind string, receipt []byte) error {
+			wire, signErr := signDataPlaneReceipt(envelope, kind, receipt, privateKey)
+			if signErr != nil {
+				return signErr
+			}
+			if sendErr := sendDataReceipt(receiptCtx, wire); sendErr != nil {
+				return sendErr
+			}
+			entry, found := journal.Entry(envelope)
+			if !found {
+				return errors.New("acknowledge sandbox host data-plane receipt: durable receipt is absent")
+			}
+			return journal.AcknowledgeTransferReceipt(entry.ReceiptKey, sandboxhostprotocol.Digest(receipt))
+		})
+	} else if outputExecutor, ok := executor.(OutputReportingHostExecutor); ok && sendOutput != nil {
 		err = outputExecutor.ExecuteWithOutput(executionContext, envelope, func(outputCtx context.Context, output ExecutionOutput) error {
 			wire, signErr := signExecutionOutput(envelope, output, now, privateKey)
 			if signErr != nil {
@@ -192,6 +237,14 @@ func executeEnvelopeWithOutputAfterTerminalSend(ctx context.Context, envelope sa
 		state = "uncertain"
 	}
 	return stageAndSendTerminal(ctx, envelope, now, journal, privateKey, state, send, afterTerminalSend)
+}
+
+func signDataPlaneReceipt(envelope sandboxhostprotocol.Envelope, kind string, receipt []byte, privateKey ed25519.PrivateKey) ([]byte, error) {
+	if (kind != "transfer" && kind != "snapshot-restore" && kind != "mount") || len(receipt) == 0 || len(receipt) > 768<<10 {
+		return nil, errors.New("sign sandbox host data-plane receipt: invalid bounded receipt")
+	}
+	identity := envelope.AssignmentID + "\x00" + strconv.FormatUint(envelope.LeaseEpoch, 10) + "\x00" + strconv.FormatUint(envelope.FencingToken, 10) + "\x00" + kind + "\x00" + string(receipt)
+	return sandboxhostprotocol.SignDataPlaneReceipt(sandboxhostprotocol.DataPlaneReceipt{ProtocolVersion: sandboxhostprotocol.Version, ReceiptID: "receipt_" + sandboxhostprotocol.Digest([]byte(identity))[7:39], HostID: envelope.HostID, HostGeneration: envelope.HostGeneration, AssignmentID: envelope.AssignmentID, LeaseEpoch: envelope.LeaseEpoch, FencingToken: envelope.FencingToken, OperationID: envelope.OperationID, Kind: kind, ReceiptDigest: sandboxhostprotocol.Digest(receipt)}, privateKey)
 }
 
 func signExecutionOutput(envelope sandboxhostprotocol.Envelope, output ExecutionOutput, observedAt time.Time, privateKey ed25519.PrivateKey) ([]byte, error) {

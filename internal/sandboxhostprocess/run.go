@@ -11,6 +11,8 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"strconv"
+	"strings"
 
 	"github.com/0x63616c/agent-runtime/internal/clock"
 	"github.com/0x63616c/agent-runtime/internal/sandboxhostjournal"
@@ -19,10 +21,11 @@ import (
 )
 
 const (
-	pullPath     = "/sandbox.host-control/v1/pull"
-	receiptPath  = "/sandbox.host-control/v1/receipt"
-	resultPath   = "/sandbox.host-control/v1/result"
-	maxBodyBytes = 1 << 20
+	pullPath        = "/sandbox.host-control/v1/pull"
+	receiptPath     = "/sandbox.host-control/v1/receipt"
+	resultPath      = "/sandbox.host-control/v1/result"
+	dataReceiptPath = "/sandbox.host-control/v1/data-receipt"
+	maxBodyBytes    = 1 << 20
 )
 
 var (
@@ -95,6 +98,22 @@ func RunOnceWithExecutor(ctx context.Context, config Config, lookup SecretLookup
 			return err
 		}
 	}
+	for _, pending := range journal.PendingTransferReceipts() {
+		entry, found := journal.EntryByReceiptKey(pending.ReceiptKey)
+		if !found {
+			return errors.New("replay sandbox host data-plane receipt: durable receipt is absent")
+		}
+		wire, err := signPendingDataPlaneReceipt(entry, pending.Kind, pending.Wire, ed25519.PrivateKey(hostPrivate))
+		if err != nil {
+			return err
+		}
+		if err := sendDataReceipt(ctx, client, config.controlURL, wire); err != nil {
+			return err
+		}
+		if err := journal.AcknowledgeTransferReceipt(pending.ReceiptKey, sandboxhostprotocol.Digest(pending.Wire)); err != nil {
+			return err
+		}
+	}
 	if err := recoverIncompleteExecutions(ctx, source.Now().UTC(), journal, ed25519.PrivateKey(hostPrivate), func(sendCtx context.Context, wire []byte) error {
 		return sendResult(sendCtx, client, config.controlURL, wire)
 	}); err != nil {
@@ -146,6 +165,8 @@ func RunOnceWithExecutor(ctx context.Context, config Config, lookup SecretLookup
 		return sendResult(sendCtx, client, config.controlURL, wire)
 	}, func(sendCtx context.Context, wire []byte) error {
 		return sendOutput(sendCtx, client, config.controlURL, wire)
+	}, func(sendCtx context.Context, wire []byte) error {
+		return sendDataReceipt(sendCtx, client, config.controlURL, wire)
 	}, context.WithDeadline, func() error {
 		if config.testFaultAfterResultSend {
 			return ErrInjectedResultAcknowledgementFault
@@ -177,6 +198,26 @@ func sendOutput(ctx context.Context, client *http.Client, controlURL string, wir
 		return err
 	}
 	return requireControlStatus(response.status, "output control endpoint is unavailable", "output was not accepted")
+}
+
+func sendDataReceipt(ctx context.Context, client *http.Client, controlURL string, wire []byte) error {
+	response, err := do(ctx, client, controlURL+dataReceiptPath, wire)
+	if err != nil {
+		return err
+	}
+	return requireControlStatus(response.status, "data receipt control endpoint is unavailable", "data receipt was not accepted")
+}
+
+func signPendingDataPlaneReceipt(entry sandboxhostjournal.Entry, kind string, receipt []byte, privateKey ed25519.PrivateKey) ([]byte, error) {
+	parts := strings.Split(entry.ReceiptKey, "\x00")
+	if len(parts) != 4 || parts[0] == "" || parts[1] == "" || parts[2] == "" || entry.HostGeneration == 0 || entry.LeaseEpoch == 0 || entry.FencingToken == 0 {
+		return nil, errors.New("replay sandbox host data-plane receipt: exact durable binding is absent")
+	}
+	if kind != "transfer" && kind != "snapshot-restore" && kind != "mount" || len(receipt) == 0 || len(receipt) > 768<<10 {
+		return nil, errors.New("replay sandbox host data-plane receipt: invalid bounded receipt")
+	}
+	identity := parts[1] + "\x00" + strconv.FormatUint(entry.LeaseEpoch, 10) + "\x00" + strconv.FormatUint(entry.FencingToken, 10) + "\x00" + kind + "\x00" + string(receipt)
+	return sandboxhostprotocol.SignDataPlaneReceipt(sandboxhostprotocol.DataPlaneReceipt{ProtocolVersion: sandboxhostprotocol.Version, ReceiptID: "receipt_" + sandboxhostprotocol.Digest([]byte(identity))[7:39], HostID: parts[0], HostGeneration: entry.HostGeneration, AssignmentID: parts[1], LeaseEpoch: entry.LeaseEpoch, FencingToken: entry.FencingToken, OperationID: parts[2], Kind: kind, ReceiptDigest: sandboxhostprotocol.Digest(receipt)}, privateKey)
 }
 
 type response struct {

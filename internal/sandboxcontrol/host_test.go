@@ -96,6 +96,61 @@ func TestMemoryHostControlLostAckRestartFenceAndQuarantine(t *testing.T) {
 	}
 }
 
+func TestMemoryHostControlFencesDataPlaneReceiptAndRequiresItForTransferSuccess(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 8, 11, 12, 0, 0, 0, time.UTC)
+	ledger := NewMemoryLedger()
+	publicKey, _, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	host := HostEnrollment{HostID: "host_data_receipt", Tenant: "tenant_01", Pool: "pool_01", Generation: 1, ProtocolVersion: sandboxhostprotocol.Version, CertificateDigest: digest("1"), SigningPublicKey: publicKey, CapabilityDigest: digest("2"), Status: HostActive, ExpiresAt: now.Add(time.Hour)}
+	if err := ledger.ProvisionHost(context.Background(), host, AttestationInput{Profile: AttestationProfileLocalMetadata}, nil); err != nil {
+		t.Fatal(err)
+	}
+	operation := Operation{Principal: "tenant_01:subject_01", Tenant: host.Tenant, ID: "op_data_receipt", Kind: "agent-runtime.guest-transfer/v1", TargetKind: "sandbox", TargetID: "sbx_data_receipt", InputDigest: digest("3"), CanonicalDigest: digest("4"), EffectiveSpecDigest: digest("5"), CapabilityDigest: host.CapabilityDigest, DispatchBody: `{"version":"sandbox.control/v1"}`, AcceptedAt: now, RetentionExpiresAt: now.Add(time.Hour), CleanupRequired: true}
+	if _, _, err := ledger.Accept(context.Background(), operation); err != nil {
+		t.Fatal(err)
+	}
+	identity := HostIdentity{HostID: host.HostID, Generation: host.Generation, CertificateDigest: host.CertificateDigest}
+	dispatch, err := ledger.PullHostAssignment(context.Background(), identity, now, now.Add(time.Minute), DeliverySeed{AssignmentID: "assignment_data_receipt", EnvelopeID: "envelope_data_receipt", DeliveryID: "delivery_data_receipt", Nonce: "nonce_data_receipt"}, testEnvelopeSigner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ledger.AcknowledgeHostAssignment(context.Background(), identity, dispatch.Operation.Assignment.AssignmentID, dispatch.Operation.Assignment.FencingToken, digest("6"), now.Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	reference := []byte(`{"artifact_id":"artifact_01","version":"agent-runtime.transfer-receipt/v1"}`)
+	receipt := sandboxhostprotocol.DataPlaneReceipt{ProtocolVersion: sandboxhostprotocol.Version, ReceiptID: "receipt_data_01", HostID: host.HostID, HostGeneration: host.Generation, AssignmentID: dispatch.Operation.Assignment.AssignmentID, LeaseEpoch: dispatch.Operation.Assignment.LeaseEpoch, FencingToken: dispatch.Operation.Assignment.FencingToken, OperationID: operation.ID, Kind: "transfer", ReceiptDigest: sandboxhostprotocol.Digest(reference)}
+	if _, err := ledger.RecordAuthenticatedDataPlaneReceipt(context.Background(), identity, receipt, now.Add(time.Second)); !errors.Is(err, ErrStaleFence) {
+		t.Fatalf("receipt before started error = %v", err)
+	}
+	started := sandboxhostprotocol.Result{ProtocolVersion: sandboxhostprotocol.Version, ResultID: "started_data_receipt", HostID: host.HostID, HostGeneration: host.Generation, AssignmentID: receipt.AssignmentID, LeaseEpoch: receipt.LeaseEpoch, FencingToken: receipt.FencingToken, Principal: operation.Principal, OperationID: operation.ID, EffectiveSpecDigest: operation.EffectiveSpecDigest, CapabilityDigest: operation.CapabilityDigest, State: "started", ObservedAt: now.Add(2 * time.Second)}
+	if got, err := ledger.RecordAuthenticatedHostResult(context.Background(), identity, started, started.ObservedAt); err != nil || got.State != StateStarted {
+		t.Fatalf("RecordAuthenticatedHostResult(started) = %#v, %v", got, err)
+	}
+	succeeded := started
+	succeeded.ResultID, succeeded.State, succeeded.ObservedAt = "succeeded_data_receipt", "succeeded", now.Add(3*time.Second)
+	if _, err := ledger.RecordAuthenticatedHostResult(context.Background(), identity, succeeded, succeeded.ObservedAt); !errors.Is(err, ErrHostProtocolViolation) {
+		t.Fatalf("success without receipt error = %v", err)
+	}
+	if duplicate, err := ledger.RecordAuthenticatedDataPlaneReceipt(context.Background(), identity, receipt, now.Add(3*time.Second)); err != nil || duplicate {
+		t.Fatalf("RecordAuthenticatedDataPlaneReceipt(first) = %t, %v", duplicate, err)
+	}
+	if duplicate, err := ledger.RecordAuthenticatedDataPlaneReceipt(context.Background(), identity, receipt, now.Add(3*time.Second)); err != nil || !duplicate {
+		t.Fatalf("RecordAuthenticatedDataPlaneReceipt(replay) = %t, %v", duplicate, err)
+	}
+	altered := receipt
+	altered.ReceiptID = "receipt_data_02"
+	if _, err := ledger.RecordAuthenticatedDataPlaneReceipt(context.Background(), identity, altered, now.Add(3*time.Second)); !errors.Is(err, ErrHostProtocolViolation) {
+		t.Fatalf("altered receipt error = %v", err)
+	}
+	if got, err := ledger.RecordAuthenticatedHostResult(context.Background(), identity, succeeded, succeeded.ObservedAt); err != nil || got.State != StateSucceeded {
+		t.Fatalf("RecordAuthenticatedHostResult(succeeded) = %#v, %v", got, err)
+	}
+}
+
 func TestAttestationVerifierRecordsFailureAndRefusesFailedHost(t *testing.T) {
 	t.Parallel()
 
