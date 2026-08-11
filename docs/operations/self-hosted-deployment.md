@@ -157,6 +157,45 @@ Before a production rollout, the platform operator must define and test:
   it: a platform/security operator must provision the transport identity,
   sink retention, outage alert, access control, and a live delivery/recovery
   record before declaring an operational audit sink.
+
+## Protected operations drill
+
+`runtime-operations-drill` is the one deliberately fail-closed path for
+retaining operational evidence that crosses the database/audit/PITR boundary.
+It runs only through the manually dispatched `runtime-operations-drill`
+workflow in the protected `runtime-operations` GitHub Environment. The runner
+must provide the exact `protected-runtime-operations-v1` contract and all
+operator-owned environment capabilities; a local invocation, missing secret,
+missing authorization, unavailable endpoint, or incomplete observation exits
+non-zero and creates no report.
+
+The protected environment supplies two database DSNs: a source authority and
+a separately named, isolated PITR restore target; it also supplies the
+designated retention/PITR tenant, distinct current authorization identifiers,
+the authorized RFC3339 recovery point, and the expected restored snapshot
+generation. The drill verifies the source's `runtime_state_app` and
+`runtime_state_operator` memberships, assumes each narrow role, verifies an
+actual authorized retention record has a later next-collection schedule, and
+checks the four native snapshot partitions. It refuses unless source WAL
+archiving is active and the source is primary; it then reads only the bound
+tenant's expected generation from the isolated restore target.
+
+The configured audit sink must expose the operator-approved drill protocol:
+an HTTPS `POST` to its configured sink endpoint with
+`X-Agent-Runtime-Drill-Mode: outage` returns a 5xx response, the same redacted
+request with `recovery` returns 2xx, and the separate HTTPS retention endpoint
+returns exactly
+`{"schema_version":"agent-runtime.audit-sink-retention/v1","retention_seconds":positive}`.
+Those requests prove only an operator-enabled outage/recovery/retention drill;
+they do not turn ordinary delivery into fail-closed behavior.
+
+Only after every check passes does the command write a new, mode-`0600`, strict
+`agent-runtime.operations-evidence/v1` JSON artifact. The artifact is then
+parsed again before GitHub uploads it for 90 days. It records bounded statuses,
+partition count, retention outcome, recovery point, restored generation, and
+revision—but never a DSN, endpoint, tenant ID, credential, or authorization
+identifier. A retained successful artifact is evidence of that exact protected
+run, not a perpetual production guarantee.
 - Blob bucket/prefix lifecycle, retention, backup/restore, encryption and
   credential rotation.
 - Codec ingress hosts and CORS origins. Routing hosts are Stack Ingress rules;

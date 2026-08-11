@@ -52,3 +52,12 @@ can enumerate the physical partitions. It does not prove that a production
 database login has been granted those roles, that an operator scheduler runs
 the due retention jobs, or that a production retention execution succeeded;
 those remain deployment evidence, not an inferred capability.
+
+The protected operational drill is the promoted evidence path for these
+controls. It requires an explicit protected-run contract, current authorized
+retention record, distinct isolated PITR target, active source WAL archive,
+and configured audit-sink outage/recovery/retention protocol. It emits no
+artifact if any one capability is absent. See the
+[self-hosted deployment contract](../operations/self-hosted-deployment.md#protected-operations-drill)
+for the exact redacted report boundary; the checked-in drill source and CI
+workflow are automation, not a completed production drill.

@@ -32,6 +32,11 @@ firecracker-smoke report="evidence/firecracker-smoke.json":
 firecracker-integration report="evidence/firecracker-integration.json":
     just firecracker-smoke "{{report}}"
 
+# Runs only on an approved protected runner with live operator capabilities.
+# Missing authority fails closed and does not create a report.
+runtime-operations-drill report="evidence/runtime-operations-report.json":
+    go run ./cmd/runtime-operations-drill -report "{{report}}"
+
 # Installs the locked Astro Starlight toolchain and starts the local site.
 docs:
     npm --prefix website ci

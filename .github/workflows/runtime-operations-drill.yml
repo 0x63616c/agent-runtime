@@ -1,0 +1,52 @@
+name: runtime-operations-drill
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  drill:
+    name: protected-runtime-operations-drill
+    runs-on: [self-hosted, linux, x64]
+    environment: runtime-operations
+    timeout-minutes: 20
+    steps:
+      - name: Check out immutable revision
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install pinned Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Install pinned just
+        uses: extractions/setup-just@53165ef7e734c5c07cb06b3c8e7b647c5aa16db3 # v4
+        with:
+          just-version: 1.58.0
+      - name: Run authorized database, audit-sink, and PITR drill
+        env:
+          RUNTIME_OPERATIONS_RUNNER_CONTRACT: protected-runtime-operations-v1
+          AR_RUNTIME_OPERATIONS_DATABASE_DSN: ${{ secrets.RUNTIME_OPERATIONS_DATABASE_DSN }}
+          AR_RUNTIME_OPERATIONS_PITR_RESTORE_DSN: ${{ secrets.RUNTIME_OPERATIONS_PITR_RESTORE_DSN }}
+          AR_RUNTIME_OPERATIONS_AUDIT_SINK_URL: ${{ secrets.RUNTIME_OPERATIONS_AUDIT_SINK_URL }}
+          AR_RUNTIME_OPERATIONS_AUDIT_RETENTION_URL: ${{ secrets.RUNTIME_OPERATIONS_AUDIT_RETENTION_URL }}
+          AR_RUNTIME_OPERATIONS_RETENTION_TENANT: ${{ vars.RUNTIME_OPERATIONS_RETENTION_TENANT }}
+          AR_RUNTIME_OPERATIONS_RETENTION_AUTHORIZATION_ID: ${{ secrets.RUNTIME_OPERATIONS_RETENTION_AUTHORIZATION_ID }}
+          AR_RUNTIME_OPERATIONS_PITR_TENANT: ${{ vars.RUNTIME_OPERATIONS_PITR_TENANT }}
+          AR_RUNTIME_OPERATIONS_PITR_AUTHORIZATION_ID: ${{ secrets.RUNTIME_OPERATIONS_PITR_AUTHORIZATION_ID }}
+          AR_RUNTIME_OPERATIONS_PITR_RECOVERY_POINT: ${{ vars.RUNTIME_OPERATIONS_PITR_RECOVERY_POINT }}
+          AR_RUNTIME_OPERATIONS_PITR_EXPECTED_GENERATION: ${{ vars.RUNTIME_OPERATIONS_PITR_EXPECTED_GENERATION }}
+        run: just runtime-operations-drill evidence/runtime-operations-report.json
+      - name: Validate retained report schema
+        run: go run ./cmd/runtime-operations-drill -validate evidence/runtime-operations-report.json
+      - name: Retain redacted protected-run report
+        if: success() && hashFiles('evidence/runtime-operations-report.json') != ''
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: runtime-operations-${{ github.sha }}
+          path: evidence/runtime-operations-report.json
+          if-no-files-found: error
+          retention-days: 90
