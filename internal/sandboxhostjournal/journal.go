@@ -23,19 +23,22 @@ var (
 
 // Entry is one immutable accepted receipt key and reference execution marker.
 type Entry struct {
-	ReceiptKey          string   `json:"receipt_key"`
-	EnvelopeDigest      string   `json:"envelope_digest"`
-	ReceiptDigest       string   `json:"receipt_digest"`
-	ExecutionCount      uint64   `json:"execution_count"`
-	LeaseEpoch          uint64   `json:"lease_epoch"`
-	FencingToken        uint64   `json:"fencing_token"`
-	StartedWire         []byte   `json:"started_wire"`
-	StartedDigest       string   `json:"started_digest"`
-	StartedAcknowledged bool     `json:"started_acknowledged"`
-	ResultWire          []byte   `json:"result_wire"`
-	ResultDigest        string   `json:"result_digest"`
-	ResultAcknowledged  bool     `json:"result_acknowledged"`
-	Outputs             []Output `json:"outputs,omitempty"`
+	ReceiptKey                  string   `json:"receipt_key"`
+	EnvelopeDigest              string   `json:"envelope_digest"`
+	ReceiptDigest               string   `json:"receipt_digest"`
+	ExecutionCount              uint64   `json:"execution_count"`
+	LeaseEpoch                  uint64   `json:"lease_epoch"`
+	FencingToken                uint64   `json:"fencing_token"`
+	StartedWire                 []byte   `json:"started_wire"`
+	StartedDigest               string   `json:"started_digest"`
+	StartedAcknowledged         bool     `json:"started_acknowledged"`
+	ResultWire                  []byte   `json:"result_wire"`
+	ResultDigest                string   `json:"result_digest"`
+	ResultAcknowledged          bool     `json:"result_acknowledged"`
+	Outputs                     []Output `json:"outputs,omitempty"`
+	TransferReceiptWire         []byte   `json:"transfer_receipt_wire,omitempty"`
+	TransferReceiptDigest       string   `json:"transfer_receipt_digest,omitempty"`
+	TransferReceiptAcknowledged bool     `json:"transfer_receipt_acknowledged,omitempty"`
 }
 
 // Output is one signed output observation staged before its control send.
@@ -53,6 +56,13 @@ type PendingResult struct {
 
 // PendingOutput is one exact signed output awaiting control acknowledgement.
 type PendingOutput struct {
+	ReceiptKey string
+	Wire       []byte
+}
+
+// PendingTransferReceipt is one canonical private reference-only data-plane
+// receipt awaiting its exact control acknowledgement.
+type PendingTransferReceipt struct {
 	ReceiptKey string
 	Wire       []byte
 }
@@ -115,7 +125,7 @@ func Open(path string, maximum int) (*Journal, error) {
 	}
 	prior := ""
 	for _, entry := range decoded.Entries {
-		if entry.ReceiptKey == "" || entry.ReceiptKey <= prior || entry.EnvelopeDigest == "" || entry.ReceiptDigest == "" || entry.ExecutionCount != 1 || entry.LeaseEpoch == 0 || entry.FencingToken == 0 || !validExecutionState(entry) || !validResultState(entry) || !validOutputState(entry) {
+		if entry.ReceiptKey == "" || entry.ReceiptKey <= prior || entry.EnvelopeDigest == "" || entry.ReceiptDigest == "" || entry.ExecutionCount != 1 || entry.LeaseEpoch == 0 || entry.FencingToken == 0 || !validExecutionState(entry) || !validResultState(entry) || !validOutputState(entry) || !validTransferReceiptState(entry) {
 			return nil, errors.New("open sandbox host journal: invalid receipt entry")
 		}
 		journal.entries[entry.ReceiptKey] = entry
@@ -262,7 +272,83 @@ func (journal *Journal) Entry(envelope sandboxhostprotocol.Envelope) (Entry, boo
 	}
 	entry.StartedWire = append([]byte(nil), entry.StartedWire...)
 	entry.ResultWire = append([]byte(nil), entry.ResultWire...)
+	entry.TransferReceiptWire = append([]byte(nil), entry.TransferReceiptWire...)
 	return entry, true
+}
+
+// StageTransferReceipt fsyncs one exact private data-plane receipt after a
+// started intent and before its first control delivery. The receipt is opaque
+// to this generic journal, bounded, canonical at its owner, and cannot carry
+// raw artifact or snapshot bytes.
+func (journal *Journal) StageTransferReceipt(envelope sandboxhostprotocol.Envelope, wire []byte) error {
+	if journal == nil || len(wire) == 0 || len(wire) > 1<<20 {
+		return errors.New("stage sandbox host transfer receipt: bounded receipt is required")
+	}
+	key := receiptKey(envelope)
+	journal.mu.Lock()
+	defer journal.mu.Unlock()
+	entry, exists := journal.entries[key]
+	if !exists || entry.StartedDigest == "" || entry.ResultDigest != "" {
+		return errors.New("stage sandbox host transfer receipt: durable started receipt without terminal result is required")
+	}
+	digest := sandboxhostprotocol.Digest(wire)
+	if entry.TransferReceiptDigest != "" {
+		if entry.TransferReceiptDigest != digest || !bytes.Equal(entry.TransferReceiptWire, wire) {
+			return errors.New("stage sandbox host transfer receipt: altered receipt refused")
+		}
+		return nil
+	}
+	entry.TransferReceiptWire = append([]byte(nil), wire...)
+	entry.TransferReceiptDigest = digest
+	journal.entries[key] = entry
+	if err := journal.persistLocked(); err != nil {
+		entry.TransferReceiptWire, entry.TransferReceiptDigest = nil, ""
+		journal.entries[key] = entry
+		return err
+	}
+	return nil
+}
+
+// PendingTransferReceipts returns stable receipt-key order for exact private
+// data-plane receipts that must be replayed after a lost control ack.
+func (journal *Journal) PendingTransferReceipts() []PendingTransferReceipt {
+	if journal == nil {
+		return nil
+	}
+	journal.mu.Lock()
+	defer journal.mu.Unlock()
+	var pending []PendingTransferReceipt
+	for key, entry := range journal.entries {
+		if entry.TransferReceiptDigest != "" && !entry.TransferReceiptAcknowledged {
+			pending = append(pending, PendingTransferReceipt{ReceiptKey: key, Wire: append([]byte(nil), entry.TransferReceiptWire...)})
+		}
+	}
+	sort.Slice(pending, func(i, j int) bool { return pending[i].ReceiptKey < pending[j].ReceiptKey })
+	return pending
+}
+
+// AcknowledgeTransferReceipt durably records only the exact staged receipt.
+func (journal *Journal) AcknowledgeTransferReceipt(receiptKey, digest string) error {
+	if journal == nil || receiptKey == "" || digest == "" {
+		return errors.New("acknowledge sandbox host transfer receipt: receipt and digest are required")
+	}
+	journal.mu.Lock()
+	defer journal.mu.Unlock()
+	entry, exists := journal.entries[receiptKey]
+	if !exists || entry.TransferReceiptDigest != digest {
+		return errors.New("acknowledge sandbox host transfer receipt: altered or absent receipt refused")
+	}
+	if entry.TransferReceiptAcknowledged {
+		return nil
+	}
+	entry.TransferReceiptAcknowledged = true
+	journal.entries[receiptKey] = entry
+	if err := journal.persistLocked(); err != nil {
+		entry.TransferReceiptAcknowledged = false
+		journal.entries[receiptKey] = entry
+		return err
+	}
+	return nil
 }
 
 // StageResult fsyncs the exact signed result before its first transport
@@ -295,6 +381,9 @@ func (journal *Journal) stageResult(key string, wire []byte) error {
 		if !output.Acknowledged {
 			return errors.New("stage sandbox host result: every durable output must be acknowledged first")
 		}
+	}
+	if entry.TransferReceiptDigest != "" && !entry.TransferReceiptAcknowledged {
+		return errors.New("stage sandbox host result: durable transfer receipt must be acknowledged first")
 	}
 	digest := sandboxhostprotocol.Digest(wire)
 	if entry.ResultDigest != "" {
@@ -561,6 +650,13 @@ func validOutputState(entry Entry) bool {
 		}
 	}
 	return true
+}
+
+func validTransferReceiptState(entry Entry) bool {
+	if entry.TransferReceiptDigest == "" {
+		return len(entry.TransferReceiptWire) == 0 && !entry.TransferReceiptAcknowledged
+	}
+	return len(entry.TransferReceiptWire) > 0 && len(entry.TransferReceiptWire) <= 1<<20 && sandboxhostprotocol.Digest(entry.TransferReceiptWire) == entry.TransferReceiptDigest
 }
 
 func validExecutionState(entry Entry) bool {

@@ -7,6 +7,8 @@ import (
 	"io"
 	"path"
 	"strings"
+
+	"github.com/0x63616c/agent-runtime/sandbox"
 )
 
 const maximumArchiveEntries = 1024
@@ -116,6 +118,26 @@ func BindGuestWorkspace(sandboxID, hostDirectory string, maximumBytes uint64) (*
 	return &GuestWorkspaceBinding{sandboxID: sandboxID, workspace: workspace}, nil
 }
 func (binding *GuestWorkspaceBinding) GuestRoot() string { return workspaceGuestRoot }
+
+// CopyIn is the sole descriptor-rooted copy-in door exposed by a guest
+// workspace binding. It refuses a cross-sandbox request before the backing
+// workspace is consulted and never returns its host path.
+func (binding *GuestWorkspaceBinding) CopyIn(ctx context.Context, source ArtifactSource, request sandbox.CopyInRequest) error {
+	if binding == nil || binding.workspace == nil || request.SandboxID == "" || string(request.SandboxID) != binding.sandboxID {
+		return fmt.Errorf("copy bound guest workspace in: %w", ErrPathDenied)
+	}
+	return binding.workspace.CopyIn(ctx, source, request)
+}
+
+// CopyOut is the sole descriptor-rooted copy-out door exposed by a guest
+// workspace binding. It returns only an immutable artifact reference.
+func (binding *GuestWorkspaceBinding) CopyOut(ctx context.Context, sink ArtifactSink, request sandbox.CopyOutRequest) (sandbox.ArtifactRef, error) {
+	if binding == nil || binding.workspace == nil || request.SandboxID == "" || string(request.SandboxID) != binding.sandboxID {
+		return sandbox.ArtifactRef{}, fmt.Errorf("copy bound guest workspace out: %w", ErrPathDenied)
+	}
+	return binding.workspace.CopyOut(ctx, sink, request)
+}
+
 func (binding *GuestWorkspaceBinding) Close() error {
 	if binding == nil {
 		return nil
