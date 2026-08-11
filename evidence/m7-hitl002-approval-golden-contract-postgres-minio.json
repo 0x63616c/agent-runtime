@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "observed_at_utc": "2026-08-11T21:58:33Z",
+  "proof_level": "integration",
+  "revision": "c991c188e08e13f94bf96214674a7abf2f8db718",
+  "scope": "HITL-002 public Approval request contract and durable linkage. The golden OpenAPI test and disposable PostgreSQL/MinIO public-process check cover only safe Approval projection fields and their session/turn/tool correlation. Private Broker seeding is test setup only. This is not a sandbox, Firecracker, Linux/KVM, or browser claim.",
+  "commands": [
+    "go test ./internal/openapicontract -run '^TestApprovalContractGoldenSchemaCarriesTheSafeRequestProjection$' -count=1",
+    "./deploy/runtimeapi/run-durable-integration.sh",
+    "just check"
+  ],
+  "result": "passed",
+  "observations": {
+    "golden_contract": "The closed Approval schema requires the stable approval/session/turn/tool links plus requester, policy revision, safe action, bounded maximum uses, state, and expiry; the action vocabulary and scope bounds are asserted directly.",
+    "durable_linkage": "The disposable API-process check reads the same caller-owned pending Approval before and after restart through public HTTP/SDK clients and verifies its session, Turn, Tool call, requester, policy, safe action, bounded scope, expiry, and undecided state.",
+    "legacy_safety": "Historic snapshots missing an original safe action summary fail closed on durable store and public SDK reads; the runtime never invents a public action from opaque digests."
+  },
+  "redaction": "No DSNs, object-store credentials, tokens, raw tenant/session/turn/approval IDs, descriptors, capability values, credentials, grants, backend handles, or provider credentials are retained."
+}

@@ -580,15 +580,45 @@
     },
     {
       "id": "HITL-001",
-      "status": "not_started"
+      "status": "completed",
+      "evidence": [
+        {
+          "revision": "c991c188e08e13f94bf96214674a7abf2f8db718",
+          "utc_time": "2026-08-11T21:58:33Z",
+          "proof_level": "integration",
+          "command_id": "m7-hitl001-pending-workflow-postgres-minio",
+          "artifact_ref": "m7-hitl001-pending-workflow-postgres-minio",
+          "result": "passed"
+        }
+      ]
     },
     {
       "id": "HITL-002",
-      "status": "not_started"
+      "status": "completed",
+      "evidence": [
+        {
+          "revision": "c991c188e08e13f94bf96214674a7abf2f8db718",
+          "utc_time": "2026-08-11T21:58:33Z",
+          "proof_level": "integration",
+          "command_id": "m7-hitl002-approval-golden-contract-postgres-minio",
+          "artifact_ref": "m7-hitl002-approval-golden-contract-postgres-minio",
+          "result": "passed"
+        }
+      ]
     },
     {
       "id": "HITL-003",
-      "status": "not_started"
+      "status": "completed",
+      "evidence": [
+        {
+          "revision": "c991c188e08e13f94bf96214674a7abf2f8db718",
+          "utc_time": "2026-08-11T21:58:33Z",
+          "proof_level": "unit",
+          "command_id": "m7-hitl003-public-authorization-fake-clock",
+          "artifact_ref": "m7-hitl003-public-authorization-fake-clock",
+          "result": "passed"
+        }
+      ]
     },
     {
       "id": "HITL-004",
