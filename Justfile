@@ -28,7 +28,8 @@ completion-check: verify
 firecracker-smoke report="evidence/firecracker-smoke.json":
     go run ./cmd/firecracker-smoke -report "{{report}}"
 
-# The protected workflow invokes this alias from its self-hosted KVM runner.
+# Compatibility alias for the current protected-runner preflight. It does not
+# execute a microVM or constitute the planned runtime integration suite.
 firecracker-integration report="evidence/firecracker-integration.json":
     just firecracker-smoke "{{report}}"
 
