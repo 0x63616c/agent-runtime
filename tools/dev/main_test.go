@@ -111,7 +111,7 @@ func TestTwoLocalStackInstancesKeepTopologyStateAndSecretsIsolated(t *testing.T)
 		if _, err := materializeSecrets(instance.name, root, instance.reader); err != nil {
 			t.Fatalf("materialize %s secrets: %v", instance.name, err)
 		}
-		state, err := encodeState(instance.name, root, instance.port)
+		state, err := encodeState(instance.name, root, instance.port, "/explicit/kubeconfig", "local-development")
 		if err != nil {
 			t.Fatalf("encode %s state: %v", instance.name, err)
 		}
@@ -149,6 +149,35 @@ func TestTwoLocalStackInstancesKeepTopologyStateAndSecretsIsolated(t *testing.T)
 		if bytes.Equal(leftData, rightData) {
 			t.Fatalf("two Stack instances unexpectedly share identical %s state", suffix)
 		}
+	}
+}
+
+func TestRetireBootstrapCapabilityRemovesOnlyTheVerifiedLocalCapability(t *testing.T) {
+	root := t.TempDir()
+	state := localState{Stack: "cleanup-proof", Namespace: "ar-cleanup-proof"}
+	path := bootstrapCapabilityPath(root, state.Stack)
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatalf("create capability directory: %v", err)
+	}
+	authority := stack.BootstrapAuthority{Stack: state.Stack, Profile: stack.ProfileLocal, Namespace: state.Namespace, NamespaceUID: "uid-cleanup", RenderDigest: "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", Nonce: "private-cleanup-nonce"}
+	if err := stack.WriteBootstrapAuthority(path, authority); err != nil {
+		t.Fatalf("write capability: %v", err)
+	}
+	if err := retireBootstrapCapability(root, state); err != nil {
+		t.Fatalf("retire capability: %v", err)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("capability remains after retirement: %v", err)
+	}
+	if err := stack.WriteBootstrapAuthority(path, authority); err != nil {
+		t.Fatalf("rewrite capability: %v", err)
+	}
+	state.Namespace = "ar-foreign"
+	if err := retireBootstrapCapability(root, state); err == nil {
+		t.Fatal("retire foreign capability unexpectedly succeeded")
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("foreign capability was removed: %v", err)
 	}
 }
 
@@ -357,9 +386,55 @@ func TestRenderRejectsUnsafeStackIdentity(t *testing.T) {
 	}
 }
 
+func TestLocalLifecycleRequiresAnExplicitKubeconfigAndBoundedActor(t *testing.T) {
+	if _, _, _, _, err := parseUpArguments([]string{"--stack", "safe-stack", "--root", ".", "--actor", "local-development"}); err == nil {
+		t.Fatal("expected local Stack lifecycle to reject an inferred kubeconfig")
+	}
+	if _, _, _, _, err := parseUpArguments([]string{"--stack", "safe-stack", "--root", ".", "--kubeconfig", "/explicit/kubeconfig", "--actor", "operator; rm"}); err == nil {
+		t.Fatal("expected local Stack lifecycle to reject an unsafe actor")
+	}
+	stackName, root, kubeconfig, actor, err := parseUpArguments([]string{"--stack", "safe-stack", "--root", ".", "--kubeconfig", "/explicit/kubeconfig", "--actor", "local-development"})
+	if err != nil || stackName != "safe-stack" || !filepath.IsAbs(root) || kubeconfig != "/explicit/kubeconfig" || actor != "local-development" {
+		t.Fatalf("parse explicit local Stack lifecycle = %q, %q, %q, %q, %v", stackName, root, kubeconfig, actor, err)
+	}
+}
+
+func TestLocalLifecyclePinsKubeconfigAndActorInPrivateState(t *testing.T) {
+	root := t.TempDir()
+	encoded, err := encodeState("safe-stack", root, 18432, "/explicit/kubeconfig", "local-development")
+	if err != nil {
+		t.Fatalf("encode local lifecycle state: %v", err)
+	}
+	if err := writePrivate(statePath(root, "safe-stack"), encoded); err != nil {
+		t.Fatalf("write local lifecycle state: %v", err)
+	}
+	state, err := loadState(root, "safe-stack")
+	if err != nil || state.Kubeconfig != "/explicit/kubeconfig" || state.OperatorActor != "local-development" {
+		t.Fatalf("load local lifecycle state = %#v, %v", state, err)
+	}
+	for _, path := range []string{bootstrapCapabilityPath(root, "safe-stack"), operatorAuditPath(root, "safe-stack")} {
+		if !strings.HasPrefix(path, filepath.Join(root, ".runtime", "dev")+string(filepath.Separator)) {
+			t.Fatalf("local lifecycle path escapes private state root: %s", path)
+		}
+	}
+}
+
+func TestCommandEnvironmentReplacesAmbientKubeconfig(t *testing.T) {
+	t.Setenv("KUBECONFIG", "/ambient/kubeconfig")
+	environment := commandEnvironment("/explicit/kubeconfig")
+	for _, entry := range environment {
+		if entry == "KUBECONFIG=/ambient/kubeconfig" {
+			t.Fatal("local lifecycle retained an ambient kubeconfig")
+		}
+	}
+	if environment[len(environment)-1] != "KUBECONFIG=/explicit/kubeconfig" {
+		t.Fatalf("local lifecycle kubeconfig = %q, want explicit path", environment[len(environment)-1])
+	}
+}
+
 func TestStateBindsOneStackToItsWorktreeAndAllocatedDashboardPort(t *testing.T) {
 	root := t.TempDir()
-	encoded, err := encodeState("safe-stack", root, 18432)
+	encoded, err := encodeState("safe-stack", root, 18432, "/explicit/kubeconfig", "local-development")
 	if err != nil {
 		t.Fatalf("encode state: %v", err)
 	}

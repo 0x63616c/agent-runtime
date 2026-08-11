@@ -131,6 +131,9 @@ func RunWithWait(ctx context.Context, config ProcessConfig, wait Wait) error {
 			if ctx.Err() != nil {
 				return nil
 			}
+			if errors.Is(err, context.DeadlineExceeded) {
+				continue
+			}
 			return errors.Wrap(err, "run runtime orchestration worker: wait to publish outbox")
 		}
 		if err := publisher.ScanOnce(ctx); err != nil {

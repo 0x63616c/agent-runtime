@@ -46,7 +46,7 @@ stack_manifests = local('go run ./cmd/stackctl manifests --stack-file ' + stack_
 secret_manifests = local('go run ./tools/dev secrets --stack=' + stack + ' --profile=' + profile + ' --root=.', quiet=True)
 k8s_yaml([stack_manifests, secret_manifests])
 
-for workload in ['api', 'orchestration', 'model', 'tool', 'blob-role', 'codec', 'sandbox-control', 'sandbox-host', 'egress-proxy']:
+for workload in ['api', 'runtime-api', 'orchestration', 'model', 'tool', 'blob-role', 'codec', 'sandbox-control', 'sandbox-host', 'egress-proxy']:
     # Keep Tilt's incremental context aligned with every Dockerfile COPY.
     # Omitting a Go package here makes the CI-only context compile differently
     # from the sealed production context and fails only after deployment starts.
@@ -57,6 +57,11 @@ for workload in ['api', 'orchestration', 'model', 'tool', 'blob-role', 'codec', 
 k8s_resource('state', pod_readiness='wait')
 k8s_resource('temporal-state', pod_readiness='wait')
 k8s_resource('temporal', resource_deps=['temporal-state'], pod_readiness='wait')
+# The local Stack's private bootstrap capability is created before Tilt starts.
+# Reconciliation is a separately audited operator action and runs only after
+# the owned Temporal Deployment reports Ready; runtime processes never create
+# their own namespace as a startup side effect.
+local_resource('stack-reconcile', cmd='go run ./tools/dev reconcile --stack=' + stack + ' --root=.', resource_deps=['temporal'])
 k8s_resource('blob', pod_readiness='wait')
 k8s_resource('telemetry', pod_readiness='wait')
 k8s_resource('egress-proxy', pod_readiness='wait')

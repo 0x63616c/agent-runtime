@@ -57,11 +57,11 @@ docs-check:
 
 # Starts one isolated declarative OrbStack environment. STACK is optional; an
 # omitted value derives a deterministic identity from this worktree.
-dev stack="":
-    go run ./tools/dev up --stack "{{stack}}" --root .
+dev stack="" kubeconfig="" actor="local-development":
+    go run ./tools/dev up --stack "{{stack}}" --root . --kubeconfig "{{kubeconfig}}" --actor "{{actor}}"
 
-dev-preflight stack="":
-    go run ./tools/dev preflight --stack "{{stack}}" --root .
+dev-preflight stack="" kubeconfig="":
+    go run ./tools/dev preflight --stack "{{stack}}" --root . --kubeconfig "{{kubeconfig}}"
 
 dev-status stack="":
     go run ./tools/dev status --stack "{{stack}}" --root .

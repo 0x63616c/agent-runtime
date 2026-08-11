@@ -88,6 +88,12 @@ var _ = Describe("render and check", func() {
 		request, _, _, _, _, err := parseOperatorArguments("apply", append(base, "--bootstrap-capability-file", "/bootstrap-capability.json"))
 		Expect(err).NotTo(HaveOccurred())
 		Expect(request.CapabilityFile).To(Equal("/bootstrap-capability.json"))
+
+		request, _, _, _, _, err = parseOperatorArguments("reconcile", append(base, "--bootstrap-capability-file", "/bootstrap-capability.json", "--providers-only"))
+		Expect(err).NotTo(HaveOccurred())
+		Expect(request.ProvidersOnly).To(BeTrue())
+		_, _, _, _, _, err = parseOperatorArguments("apply", append(base, "--bootstrap-capability-file", "/bootstrap-capability.json", "--providers-only"))
+		Expect(err).To(MatchError(ContainSubstring("--providers-only is valid only for reconcile")))
 	})
 
 	It("retains the bootstrap capability until namespace deletion succeeds on retry", func() {
@@ -175,6 +181,10 @@ func (*retryingTeardownOperator) Diff(context.Context, stack.OperatorRequest, st
 }
 
 func (*retryingTeardownOperator) Reconcile(context.Context, stack.OperatorRequest, stack.Rendered) (stack.ReconcileResult, error) {
+	return stack.ReconcileResult{}, nil
+}
+
+func (*retryingTeardownOperator) ReconcileProviders(context.Context, stack.OperatorRequest, stack.Rendered) (stack.ReconcileResult, error) {
 	return stack.ReconcileResult{}, nil
 }
 
