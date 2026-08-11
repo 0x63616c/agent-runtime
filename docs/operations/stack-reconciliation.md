@@ -59,6 +59,16 @@ identity-bound authority. Successful teardown then removes the unchanged file.
    reconcile applies only
    Kubernetes manifests when the bounded live diff is non-empty, and always
    reconciles or verifies every declared provider resource.
+
+   A controller that owns only a documented dynamic Kubernetes field (the local
+   Tilt image references are the implemented case) may instead run
+`stackctl reconcile --providers-only`. It re-verifies the same private
+bootstrap authority, runs declared migrations, and reconciles every declared
+non-Kubernetes provider, but does not inspect or change controller-owned
+Kubernetes fields. The caller must first wait for the declared dependency
+required by that provider;
+   the local Tilt resource waits for the owned Temporal Deployment before this
+   action creates or verifies its declared Temporal namespace.
 6. Re-observe and retain the JSONL audit outcome.
 7. On failure, run audited `stackctl rollback` with an explicit previous Stack
    document. It digest-verifies and executes only rollback artifacts newer than

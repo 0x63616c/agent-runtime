@@ -26,7 +26,10 @@ import (
 
 const quotaPolicy = `{"defaults":{"milli_cpu":500,"memory_bytes":536870912,"root_disk_bytes":4294967296,"tmpfs_bytes":268435456,"pids":128,"process_count":64,"open_files":1024,"inodes":100000,"files":50000,"lifetime_seconds":3600,"produced_output_bytes":67108864,"retained_output_bytes":16777216,"transfer_bytes":1073741824,"network_connections":64,"volume_bytes":10737418240,"snapshot_bytes":10737418240},"maximums":{"milli_cpu":4000,"memory_bytes":4294967296,"root_disk_bytes":34359738368,"tmpfs_bytes":2147483648,"pids":1024,"process_count":512,"open_files":8192,"inodes":1000000,"files":500000,"lifetime_seconds":86400,"produced_output_bytes":1073741824,"retained_output_bytes":268435456,"transfer_bytes":10737418240,"network_connections":1024,"volume_bytes":107374182400,"snapshot_bytes":107374182400}}`
 
-var stackPattern = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9-]{0,38}[a-z0-9])?$`)
+var (
+	stackPattern         = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9-]{0,38}[a-z0-9])?$`)
+	operatorActorPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9@._-]{0,127}$`)
+)
 
 func main() {
 	if err := run(context.Background(), os.Args[1:], os.Stdout); err != nil {
@@ -37,7 +40,7 @@ func main() {
 
 func run(ctx context.Context, arguments []string, output io.Writer) error {
 	if len(arguments) == 0 {
-		return fmt.Errorf("run local development command: render, secrets, preflight, up, status, api, reset, or down is required")
+		return fmt.Errorf("run local development command: render, secrets, preflight, up, reconcile, status, api, reset, or down is required")
 	}
 	switch arguments[0] {
 	case "render":
@@ -68,17 +71,23 @@ func run(ctx context.Context, arguments []string, output io.Writer) error {
 		_, err = output.Write(manifest)
 		return err
 	case "preflight":
-		_, root, err := parseStackAndRoot("preflight", arguments[1:])
+		_, root, kubeconfig, err := parsePreflightArguments(arguments[1:])
 		if err != nil {
 			return err
 		}
-		return preflight(ctx, root, output)
+		return preflight(ctx, root, kubeconfig, output)
 	case "up":
-		stack, root, err := parseStackAndRoot("up", arguments[1:])
+		stack, root, kubeconfig, actor, err := parseUpArguments(arguments[1:])
 		if err != nil {
 			return err
 		}
-		return up(ctx, stack, root, output)
+		return up(ctx, stack, root, kubeconfig, actor, output)
+	case "reconcile":
+		stack, root, err := parseStackAndRoot("reconcile", arguments[1:])
+		if err != nil {
+			return err
+		}
+		return reconcile(ctx, stack, root, output)
 	case "status":
 		stack, root, err := parseStackAndRoot("status", arguments[1:])
 		if err != nil {
@@ -176,6 +185,66 @@ func parseStackAndRoot(command string, arguments []string) (string, string, erro
 		return "", "", err
 	}
 	return *stack, absRoot, nil
+}
+
+func parseUpArguments(arguments []string) (string, string, string, string, error) {
+	flags := flag.NewFlagSet("up", flag.ContinueOnError)
+	flags.SetOutput(io.Discard)
+	stackName := flags.String("stack", "", "sole validated Stack identity")
+	root := flags.String("root", ".", "repository root")
+	kubeconfig := flags.String("kubeconfig", "", "absolute kubeconfig used only with the explicit orbstack context")
+	actor := flags.String("actor", "", "bounded audited local operator identity")
+	if err := flags.Parse(arguments); err != nil || flags.NArg() != 0 {
+		return "", "", "", "", fmt.Errorf("parse local development up arguments: --stack, absolute --kubeconfig, and --actor are required")
+	}
+	absRoot, err := filepath.Abs(*root)
+	if err != nil {
+		return "", "", "", "", fmt.Errorf("resolve local development root: %w", err)
+	}
+	if *stackName == "" {
+		*stackName, err = derivedStack(absRoot)
+		if err != nil {
+			return "", "", "", "", err
+		}
+	}
+	if err := validateStack(*stackName); err != nil {
+		return "", "", "", "", err
+	}
+	if !filepath.IsAbs(*kubeconfig) {
+		return "", "", "", "", fmt.Errorf("parse local development up arguments: absolute --kubeconfig is required")
+	}
+	if !operatorActorPattern.MatchString(*actor) {
+		return "", "", "", "", fmt.Errorf("parse local development up arguments: --actor must be a bounded operator identity")
+	}
+	return *stackName, absRoot, *kubeconfig, *actor, nil
+}
+
+func parsePreflightArguments(arguments []string) (string, string, string, error) {
+	flags := flag.NewFlagSet("preflight", flag.ContinueOnError)
+	flags.SetOutput(io.Discard)
+	stackName := flags.String("stack", "", "sole validated Stack identity")
+	root := flags.String("root", ".", "repository root")
+	kubeconfig := flags.String("kubeconfig", "", "absolute kubeconfig used only with the explicit orbstack context")
+	if err := flags.Parse(arguments); err != nil || flags.NArg() != 0 {
+		return "", "", "", fmt.Errorf("parse local development preflight arguments: --stack and absolute --kubeconfig are required")
+	}
+	absRoot, err := filepath.Abs(*root)
+	if err != nil {
+		return "", "", "", fmt.Errorf("resolve local development root: %w", err)
+	}
+	if *stackName == "" {
+		*stackName, err = derivedStack(absRoot)
+		if err != nil {
+			return "", "", "", err
+		}
+	}
+	if err := validateStack(*stackName); err != nil {
+		return "", "", "", err
+	}
+	if !filepath.IsAbs(*kubeconfig) {
+		return "", "", "", fmt.Errorf("parse local development preflight arguments: absolute --kubeconfig is required")
+	}
+	return *stackName, absRoot, *kubeconfig, nil
 }
 
 func validateStack(stack string) error {
@@ -328,6 +397,8 @@ type localState struct {
 	Namespace           string `json:"namespace"`
 	DashboardPort       int    `json:"dashboard_port"`
 	WorktreeFingerprint string `json:"worktree_fingerprint"`
+	Kubeconfig          string `json:"kubeconfig"`
+	OperatorActor       string `json:"operator_actor"`
 }
 
 func materializeSecrets(stack, root string, reader io.Reader) ([]byte, error) {
@@ -360,14 +431,17 @@ func materializeSecretsForProfile(stackName, profile, root string, reader io.Rea
 		stateReference, stateFound := secretReferenceByID(references, "state-db-secret")
 		sandboxReference, sandboxFound := secretReferenceByID(references, "sandbox-state-secret")
 		blobReference, blobFound := secretReferenceByID(references, "blob-storage-secret")
+		orchestrationReference, orchestrationFound := secretReferenceByID(references, "orchestration-payload-blob-secret")
 		runtimeAPIReference, runtimeAPIFound := secretReferenceByID(references, "runtime-api-secret")
-		if !stateFound || !sandboxFound || !blobFound || !runtimeAPIFound {
+		if !stateFound || !sandboxFound || !blobFound || !orchestrationFound || !runtimeAPIFound {
 			return nil, fmt.Errorf("materialize local development secrets: reviewed Stack is missing required state credential references")
 		}
 		statePassword := state.Values[stateReference.name]["POSTGRES_PASSWORD"]
 		stateDSN := "postgres://postgres:" + statePassword + "@state:5432/agent_runtime?sslmode=disable"
 		state.Values[stateReference.name]["STATE_DATABASE_DSN"] = stateDSN
 		state.Values[sandboxReference.name]["SANDBOX_STATE_DSN"] = stateDSN
+		state.Values[orchestrationReference.name]["ORCHESTRATION_PAYLOAD_BLOB_ACCESS_KEY"] = state.Values[blobReference.name]["MINIO_ROOT_USER"]
+		state.Values[orchestrationReference.name]["ORCHESTRATION_PAYLOAD_BLOB_SECRET_KEY"] = state.Values[blobReference.name]["MINIO_ROOT_PASSWORD"]
 		state.Values[runtimeAPIReference.name]["AR_RUNTIME_MINIO_ACCESS_KEY"] = state.Values[blobReference.name]["MINIO_ROOT_USER"]
 		state.Values[runtimeAPIReference.name]["AR_RUNTIME_MINIO_SECRET_KEY"] = state.Values[blobReference.name]["MINIO_ROOT_PASSWORD"]
 		encoded, marshalErr := json.Marshal(state)
@@ -378,15 +452,61 @@ func materializeSecretsForProfile(stackName, profile, root string, reader io.Rea
 			return nil, err
 		}
 	}
+	stateReference, stateFound := secretReferenceByID(references, "state-db-secret")
+	sandboxReference, sandboxFound := secretReferenceByID(references, "sandbox-state-secret")
+	blobReference, blobFound := secretReferenceByID(references, "blob-storage-secret")
+	orchestrationReference, orchestrationFound := secretReferenceByID(references, "orchestration-payload-blob-secret")
+	runtimeAPIReference, runtimeAPIFound := secretReferenceByID(references, "runtime-api-secret")
+	if !stateFound || !sandboxFound || !blobFound || !orchestrationFound || !runtimeAPIFound {
+		return nil, fmt.Errorf("materialize local development secrets: reviewed Stack is missing required credential references")
+	}
+	statePassword := state.Values[stateReference.name]["POSTGRES_PASSWORD"]
+	state.Values[stateReference.name]["STATE_DATABASE_DSN"] = "postgres://postgres:" + statePassword + "@state:5432/agent_runtime?sslmode=disable"
+	state.Values[sandboxReference.name]["SANDBOX_STATE_DSN"] = state.Values[stateReference.name]["STATE_DATABASE_DSN"]
+	state.Values[orchestrationReference.name]["ORCHESTRATION_PAYLOAD_BLOB_ACCESS_KEY"] = state.Values[blobReference.name]["MINIO_ROOT_USER"]
+	state.Values[orchestrationReference.name]["ORCHESTRATION_PAYLOAD_BLOB_SECRET_KEY"] = state.Values[blobReference.name]["MINIO_ROOT_PASSWORD"]
+	state.Values[runtimeAPIReference.name]["AR_RUNTIME_MINIO_ACCESS_KEY"] = state.Values[blobReference.name]["MINIO_ROOT_USER"]
+	state.Values[runtimeAPIReference.name]["AR_RUNTIME_MINIO_SECRET_KEY"] = state.Values[blobReference.name]["MINIO_ROOT_PASSWORD"]
+	metadata, err := localSecretControllerMetadata(stackName, profile, root)
+	if err != nil {
+		return nil, err
+	}
 	items := make([]map[string]any, 0, len(references))
 	for _, reference := range references {
-		items = append(items, map[string]any{"apiVersion": "v1", "kind": "Secret", "metadata": map[string]any{"name": reference.name, "labels": map[string]string{"app.kubernetes.io/part-of": "agent-runtime", "agent-runtime.dev/stack": stackName, "agent-runtime.dev/profile": profile, "agent-runtime.dev/resource": string(reference.id)}}, "type": "Opaque", "stringData": state.Values[reference.name]})
+		items = append(items, map[string]any{"apiVersion": "v1", "kind": "Secret", "metadata": map[string]any{"name": reference.name, "labels": metadata.labels, "annotations": metadata.annotations}, "type": "Opaque", "stringData": state.Values[reference.name]})
 	}
 	encoded, err := json.Marshal(map[string]any{"apiVersion": "v1", "kind": "List", "items": items})
 	if err != nil {
 		return nil, fmt.Errorf("encode local development Secret manifests: %w", err)
 	}
 	return encoded, nil
+}
+
+type localSecretMetadata struct {
+	labels      map[string]string
+	annotations map[string]string
+}
+
+func localSecretControllerMetadata(stackName, profile, root string) (localSecretMetadata, error) {
+	labels := map[string]string{"app.kubernetes.io/part-of": "agent-runtime", "agent-runtime.dev/stack": stackName, "agent-runtime.dev/profile": profile}
+	if profile != "local" {
+		return localSecretMetadata{labels: labels}, nil
+	}
+	capabilityPath := bootstrapCapabilityPath(root, stackName)
+	if _, err := os.Stat(capabilityPath); os.IsNotExist(err) {
+		return localSecretMetadata{labels: labels}, nil
+	} else if err != nil {
+		return localSecretMetadata{}, fmt.Errorf("read local Stack bootstrap capability for generated Secrets: %w", err)
+	}
+	authority, err := stack.ReadBootstrapAuthority(capabilityPath)
+	if err != nil {
+		return localSecretMetadata{}, fmt.Errorf("read local Stack bootstrap capability for generated Secrets: %w", err)
+	}
+	if authority.Stack != stackName || authority.Profile != stack.ProfileLocal || authority.Namespace != profileNamespace(stackName, profile) || authority.NamespaceUID == "" || authority.RenderDigest == "" {
+		return localSecretMetadata{}, fmt.Errorf("read local Stack bootstrap capability for generated Secrets: capability does not match the rendered local Stack")
+	}
+	labels["agent-runtime.dev/external-controller"] = "local-generated"
+	return localSecretMetadata{labels: labels, annotations: map[string]string{"agent-runtime.dev/bootstrap-uid": string(authority.NamespaceUID), "agent-runtime.dev/render-digest": authority.RenderDigest}}, nil
 }
 
 func secretStatePath(root, stackName, profile string) string {
@@ -498,13 +618,13 @@ func writePrivate(path string, data []byte) error {
 	return nil
 }
 
-func preflight(ctx context.Context, root string, output io.Writer) error {
+func preflight(ctx context.Context, root, kubeconfig string, output io.Writer) error {
 	for _, program := range []string{"tilt", "kubectl", "docker"} {
 		if _, err := exec.LookPath(program); err != nil {
 			return fmt.Errorf("check local development prerequisite %s: install it; no automatic installation was attempted", program)
 		}
 	}
-	command := exec.CommandContext(ctx, "kubectl", "--context", "orbstack", "get", "--raw=/readyz")
+	command := exec.CommandContext(ctx, "kubectl", "--kubeconfig", kubeconfig, "--context", "orbstack", "get", "--raw=/readyz")
 	command.Dir = root
 	if output != nil {
 		command.Stdout = output
@@ -516,8 +636,8 @@ func preflight(ctx context.Context, root string, output io.Writer) error {
 	return nil
 }
 
-func up(ctx context.Context, stack, root string, output io.Writer) error {
-	if err := preflight(ctx, root, output); err != nil {
+func up(ctx context.Context, stack, root, kubeconfig, actor string, output io.Writer) error {
+	if err := preflight(ctx, root, kubeconfig, output); err != nil {
 		return err
 	}
 	stackPath := filepath.Join(root, ".runtime", "dev", stack+".stack.json")
@@ -532,18 +652,96 @@ func up(ctx context.Context, stack, root string, output io.Writer) error {
 	if err != nil {
 		return err
 	}
-	state, err := encodeState(stack, root, port)
+	state, err := encodeState(stack, root, port, kubeconfig, actor)
 	if err != nil {
 		return err
 	}
 	if err := writePrivate(statePath(root, stack), state); err != nil {
 		return err
 	}
+	if err := bootstrap(ctx, stack, root, kubeconfig, actor, output); err != nil {
+		return err
+	}
 	command := exec.CommandContext(ctx, "tilt", "up", "--context", "orbstack", "--namespace", profileNamespace(stack, "local"), "--port", fmt.Sprint(port), "--", "--stack="+stack)
+	command.Env = commandEnvironment(kubeconfig)
 	command.Dir = root
 	command.Stdout, command.Stderr = output, output
 	if err := command.Run(); err != nil {
 		return fmt.Errorf("start isolated local Tilt Stack %s: %w", stack, err)
+	}
+	return nil
+}
+
+func reconcile(ctx context.Context, stack, root string, output io.Writer) error {
+	state, err := loadState(root, stack)
+	if err != nil {
+		return err
+	}
+	if err := verifyNamespace(ctx, state); err != nil {
+		return err
+	}
+	for _, deployment := range []string{"migration-runner", "temporal"} {
+		ready := exec.CommandContext(ctx, "kubectl", "--kubeconfig", state.Kubeconfig, "--context", "orbstack", "--namespace", state.Namespace, "rollout", "status", "deployment/"+deployment, "--timeout=120s")
+		ready.Dir, ready.Stdout, ready.Stderr = root, output, output
+		if err := ready.Run(); err != nil {
+			return fmt.Errorf("wait for verified local Stack %s readiness: %w", deployment, err)
+		}
+	}
+	if err := runStackctl(ctx, root, output, "reconcile", state); err != nil {
+		return fmt.Errorf("reconcile verified local Stack providers: %w", err)
+	}
+	return nil
+}
+
+func bootstrap(ctx context.Context, stack, root, kubeconfig, actor string, output io.Writer) error {
+	capability := bootstrapCapabilityPath(root, stack)
+	if _, err := os.Stat(capability); err == nil {
+		state, stateErr := loadState(root, stack)
+		if stateErr != nil {
+			return fmt.Errorf("reuse local Stack bootstrap capability: %w", stateErr)
+		}
+		if state.Kubeconfig != kubeconfig || state.OperatorActor != actor {
+			return fmt.Errorf("reuse local Stack bootstrap capability: refuse a different kubeconfig or operator actor")
+		}
+		if verifyErr := verifyNamespace(ctx, state); verifyErr != nil {
+			return fmt.Errorf("reuse local Stack bootstrap capability: %w", verifyErr)
+		}
+		return nil
+	} else if !os.IsNotExist(err) {
+		return fmt.Errorf("read local Stack bootstrap capability: %w", err)
+	}
+	state, err := loadState(root, stack)
+	if err != nil {
+		return err
+	}
+	if state.Kubeconfig != kubeconfig || state.OperatorActor != actor {
+		return fmt.Errorf("bootstrap local Stack: state does not match explicit kubeconfig and operator actor")
+	}
+	if err := runStackctl(ctx, root, output, "bootstrap", state); err != nil {
+		return fmt.Errorf("bootstrap isolated local Stack %s: %w", stack, err)
+	}
+	return nil
+}
+
+func runStackctl(ctx context.Context, root string, output io.Writer, action string, state localState) error {
+	arguments := []string{"run", "./cmd/stackctl", action,
+		"--stack-file", filepath.Join(root, ".runtime", "dev", state.Stack+".stack.json"),
+		"--stack", state.Stack,
+		"--profile", "local",
+		"--kubeconfig", state.Kubeconfig,
+		"--context", "orbstack",
+		"--actor", state.OperatorActor,
+		"--audit-file", operatorAuditPath(root, state.Stack),
+		"--migration-root", filepath.Join(root, "deploy", "production"),
+		"--bootstrap-capability-file", bootstrapCapabilityPath(root, state.Stack),
+	}
+	if action == "reconcile" {
+		arguments = append(arguments, "--providers-only")
+	}
+	command := exec.CommandContext(ctx, "go", arguments...)
+	command.Dir, command.Stdout, command.Stderr = root, output, output
+	if err := command.Run(); err != nil {
+		return fmt.Errorf("run audited Stack operator %s: %w", action, err)
 	}
 	return nil
 }
@@ -565,7 +763,7 @@ func reset(ctx context.Context, stack, root string, output io.Writer) error {
 	if err := verifyNamespace(ctx, state); err != nil {
 		return err
 	}
-	arguments := []string{"--context", "orbstack", "--namespace", state.Namespace, "rollout", "restart"}
+	arguments := []string{"--kubeconfig", state.Kubeconfig, "--context", "orbstack", "--namespace", state.Namespace, "rollout", "restart"}
 	for _, role := range []string{"api", "runtime-api", "orchestration", "model", "tool", "blob-role", "codec", "sandbox-control", "sandbox-host"} {
 		arguments = append(arguments, "deployment/"+role)
 	}
@@ -585,7 +783,7 @@ func api(ctx context.Context, stack, root string, output io.Writer) error {
 	if err := verifyNamespace(ctx, state); err != nil {
 		return err
 	}
-	command := exec.CommandContext(ctx, "kubectl", "--context", "orbstack", "--namespace", state.Namespace, "port-forward", "service/runtime-api", ":8088")
+	command := exec.CommandContext(ctx, "kubectl", "--kubeconfig", state.Kubeconfig, "--context", "orbstack", "--namespace", state.Namespace, "port-forward", "service/runtime-api", ":8088")
 	command.Dir, command.Stdout, command.Stderr = root, output, output
 	if err := command.Run(); err != nil {
 		return fmt.Errorf("forward only verified local Stack API: %w", err)
@@ -599,12 +797,22 @@ func down(ctx context.Context, stack, root string, output io.Writer) error {
 		return err
 	}
 	if err := verifyNamespace(ctx, state); err != nil {
+		if goneErr := verifyNamespaceGone(ctx, state); goneErr == nil {
+			return retireBootstrapCapability(root, state)
+		}
 		return err
 	}
 	command := exec.CommandContext(ctx, "tilt", "down", "--context", "orbstack", "--namespace", state.Namespace, "--delete-namespaces", "--", "--stack="+stack)
+	command.Env = commandEnvironment(state.Kubeconfig)
 	command.Dir, command.Stdout, command.Stderr = root, output, output
 	if err := command.Run(); err != nil {
 		return fmt.Errorf("tear down only verified local Stack %s: %w", stack, err)
+	}
+	if err := verifyNamespaceGone(ctx, state); err != nil {
+		return err
+	}
+	if err := retireBootstrapCapability(root, state); err != nil {
+		return err
 	}
 	return nil
 }
@@ -613,13 +821,24 @@ func statePath(root, stack string) string {
 	return filepath.Join(root, ".runtime", "dev", stack+".state.json")
 }
 
-func encodeState(stack, root string, port int) ([]byte, error) {
+func bootstrapCapabilityPath(root, stack string) string {
+	return filepath.Join(root, ".runtime", "dev", stack+".bootstrap-capability.json")
+}
+
+func operatorAuditPath(root, stack string) string {
+	return filepath.Join(root, ".runtime", "dev", stack+".operator-audit.jsonl")
+}
+
+func encodeState(stack, root string, port int, kubeconfig, actor string) ([]byte, error) {
+	if !filepath.IsAbs(kubeconfig) || !operatorActorPattern.MatchString(actor) {
+		return nil, fmt.Errorf("encode local development state: explicit absolute kubeconfig and bounded operator actor are required")
+	}
 	canonical, err := filepath.EvalSymlinks(root)
 	if err != nil {
 		return nil, fmt.Errorf("canonicalize local development worktree: %w", err)
 	}
 	sum := sha256.Sum256([]byte(canonical))
-	return json.Marshal(localState{Stack: stack, Namespace: profileNamespace(stack, "local"), DashboardPort: port, WorktreeFingerprint: fmt.Sprintf("sha256:%x", sum)})
+	return json.Marshal(localState{Stack: stack, Namespace: profileNamespace(stack, "local"), DashboardPort: port, WorktreeFingerprint: fmt.Sprintf("sha256:%x", sum), Kubeconfig: kubeconfig, OperatorActor: actor})
 }
 
 func loadState(root, stack string) (localState, error) {
@@ -628,7 +847,7 @@ func loadState(root, stack string) (localState, error) {
 		return localState{}, fmt.Errorf("read local development Stack state: run dev up for this Stack first: %w", err)
 	}
 	var state localState
-	if err := json.Unmarshal(data, &state); err != nil || state.Stack != stack || state.Namespace != profileNamespace(stack, "local") || state.DashboardPort < 1 || state.WorktreeFingerprint == "" {
+	if err := json.Unmarshal(data, &state); err != nil || state.Stack != stack || state.Namespace != profileNamespace(stack, "local") || state.DashboardPort < 1 || state.WorktreeFingerprint == "" || !filepath.IsAbs(state.Kubeconfig) || !operatorActorPattern.MatchString(state.OperatorActor) {
 		return localState{}, fmt.Errorf("read local development Stack state: refuse malformed or foreign Stack state")
 	}
 	return state, nil
@@ -643,8 +862,18 @@ func allocatePort() (int, error) {
 	return listener.Addr().(*net.TCPAddr).Port, nil
 }
 
+func commandEnvironment(kubeconfig string) []string {
+	environment := make([]string, 0, len(os.Environ())+1)
+	for _, entry := range os.Environ() {
+		if !strings.HasPrefix(entry, "KUBECONFIG=") {
+			environment = append(environment, entry)
+		}
+	}
+	return append(environment, "KUBECONFIG="+kubeconfig)
+}
+
 func verifyNamespace(ctx context.Context, state localState) error {
-	command := exec.CommandContext(ctx, "kubectl", "--context", "orbstack", "get", "namespace", state.Namespace, "-o", "json")
+	command := exec.CommandContext(ctx, "kubectl", "--kubeconfig", state.Kubeconfig, "--context", "orbstack", "get", "namespace", state.Namespace, "-o", "json")
 	output, err := command.Output()
 	if err != nil {
 		return fmt.Errorf("verify local Stack namespace containment: %w", err)
@@ -657,6 +886,40 @@ func verifyNamespace(ctx context.Context, state localState) error {
 	}
 	if err := json.Unmarshal(output, &observed); err != nil || observed.Metadata.UID == "" || observed.Metadata.Labels["app.kubernetes.io/part-of"] != "agent-runtime" || observed.Metadata.Labels["agent-runtime.dev/stack"] != state.Stack || observed.Metadata.Labels["agent-runtime.dev/profile"] != "local" {
 		return fmt.Errorf("verify local Stack namespace containment: namespace labels or UID do not prove ownership")
+	}
+	return nil
+}
+
+// verifyNamespaceGone proves Tilt deleted the same exact local namespace before
+// its private bootstrap capability can be retired.
+func verifyNamespaceGone(ctx context.Context, state localState) error {
+	command := exec.CommandContext(ctx, "kubectl", "--kubeconfig", state.Kubeconfig, "--context", "orbstack", "get", "namespace", state.Namespace, "--ignore-not-found=true", "-o", "name")
+	output, err := command.Output()
+	if err != nil {
+		return fmt.Errorf("verify local Stack namespace deletion: %w", err)
+	}
+	if strings.TrimSpace(string(output)) != "" {
+		return fmt.Errorf("verify local Stack namespace deletion: verified local namespace %s remains", state.Namespace)
+	}
+	return nil
+}
+
+// retireBootstrapCapability prevents a later up from treating a deleted Stack
+// as a live owned namespace. It runs only after namespace absence was proven.
+func retireBootstrapCapability(root string, state localState) error {
+	path := bootstrapCapabilityPath(root, state.Stack)
+	authority, err := stack.ReadBootstrapAuthority(path)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("retire local Stack bootstrap capability: %w", err)
+	}
+	if authority.Stack != state.Stack || authority.Profile != stack.ProfileLocal || authority.Namespace != state.Namespace {
+		return fmt.Errorf("retire local Stack bootstrap capability: refuse foreign capability")
+	}
+	if err := stack.RemoveBootstrapAuthority(path, authority); err != nil {
+		return fmt.Errorf("retire local Stack bootstrap capability: %w", err)
 	}
 	return nil
 }

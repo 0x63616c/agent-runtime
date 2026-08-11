@@ -180,6 +180,10 @@ func normalizedProfile(resources []stack.Resource, namespace string) []byte {
 			}
 			for environmentIndex := range resource.Kubernetes.Environment {
 				environment := &resource.Kubernetes.Environment[environmentIndex]
+				if environment.Name == "BLOB_BUCKET" || environment.Name == "BLOB_TEMPORAL_BUCKET" {
+					environment.Value = "<namespace>"
+					continue
+				}
 				if environment.Name == "RUNTIME_API_CONFIG" {
 					environment.Value = "<profile-runtime-api-config>"
 					continue

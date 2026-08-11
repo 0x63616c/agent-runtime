@@ -19,6 +19,7 @@ func (audit *recordedAudit) Append(_ context.Context, record stack.OperatorAudit
 type fakeKubernetesOperator struct {
 	changes   []stack.Change
 	applies   int
+	diffs     int
 	observes  int
 	teardowns int
 	upgrades  int
@@ -57,6 +58,7 @@ func (operator *fakeKubernetesOperator) Observe(_ context.Context, _ stack.Opera
 }
 
 func (operator *fakeKubernetesOperator) Diff(_ context.Context, _ stack.OperatorTarget, _ stack.KubernetesManifests) (stack.KubernetesDifference, error) {
+	operator.diffs++
 	return stack.KubernetesDifference{Changes: operator.changes}, nil
 }
 
@@ -280,10 +282,38 @@ var _ = Describe("Audited Kubernetes operator", func() {
 		result, err := operator.Reconcile(context.Background(), operatorRequest(rendered), rendered)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(result.Applied).To(BeFalse())
+		Expect(adapter.diffs).To(Equal(1))
 		Expect(provider.reconciles).To(Equal(1))
 		Expect(audit.records).To(HaveLen(1))
 		Expect(audit.records[0].Result).To(Equal("reconciled"))
 		Expect(audit.records[0].Resources).To(Equal([]stack.ResourceID{"notifier-secret"}))
+	})
+
+	It("reconciles declared providers without reading Kubernetes fields owned by Tilt", func() {
+		database := `{"database":"agent_runtime","schema":"runtime","connection_reference":"database-secret","migration_target":"postgres","migrations":[{"version":1,"upgrade_digest":"sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","rollback_digest":"sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc","upgrade_artifact":"migrations/v1.up.sql","rollback_artifact":"migrations/v1.down.sql"}]}`
+		spec, err := stack.Parse(strings.NewReader(databaseStack(database)))
+		Expect(err).NotTo(HaveOccurred())
+		rendered, err := stack.Render(spec, stack.ProfileLocal)
+		Expect(err).NotTo(HaveOccurred())
+		adapter := &fakeKubernetesOperator{changes: []stack.Change{{Resource: "api", Kind: stack.ChangeModified}}}
+		provider := &fakeDeclaredProvider{reconciled: []stack.ResourceID{"database", "database-secret"}}
+		audit := &recordedAudit{}
+		operator, err := stack.NewKubernetesOperatorWithProviders(adapter, provider, audit)
+		Expect(err).NotTo(HaveOccurred())
+
+		request := operatorRequest(rendered)
+		request.Target.MigrationRoot = "/reviewed-migrations"
+		result, err := operator.ReconcileProviders(context.Background(), request, rendered)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(result.Applied).To(BeFalse())
+		Expect(adapter.applies).To(BeZero())
+		Expect(adapter.diffs).To(BeZero())
+		Expect(adapter.upgrades).To(Equal(1))
+		Expect(provider.reconciles).To(Equal(1))
+		Expect(audit.records).To(HaveLen(1))
+		Expect(audit.records[0].Action).To(Equal(stack.OperatorActionReconcile))
+		Expect(audit.records[0].Result).To(Equal("reconciled"))
+		Expect(audit.records[0].Resources).To(Equal([]stack.ResourceID{"database", "database-secret"}))
 	})
 
 	It("does not mutate when observed state already matches the rendered manifests", func() {

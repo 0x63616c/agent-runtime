@@ -11,14 +11,11 @@ RUN go mod download
 COPY cmd/runtime ./cmd/runtime
 COPY cmd/egress-proxy ./cmd/egress-proxy
 COPY cmd/agent-runtime-api ./cmd/agent-runtime-api
-COPY internal/roles ./internal/roles
-COPY internal/egressproxy ./internal/egressproxy
-COPY internal/runtimeapi ./internal/runtimeapi
-COPY internal/runtimeapiprocess ./internal/runtimeapiprocess
-COPY internal/runtimecontent ./internal/runtimecontent
-COPY internal/runtimestate ./internal/runtimestate
-COPY internal/runtimepostgres ./internal/runtimepostgres
-COPY internal/identity ./internal/identity
+# The composition binaries have transitive internal-package seams. Copy the
+# reviewed internal module tree rather than maintaining a brittle hand list.
+COPY internal ./internal
+COPY sdk ./sdk
+COPY temporalpayload ./temporalpayload
 RUN go mod verify
 RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -mod=readonly -trimpath -ldflags='-s -w' -o /out/runtime ./cmd/runtime
 RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -mod=readonly -trimpath -ldflags='-s -w' -o /out/egress-proxy ./cmd/egress-proxy
