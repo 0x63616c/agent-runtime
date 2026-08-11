@@ -22,12 +22,24 @@ type HostProcessExecutor struct {
 	Mount    *MountExecutionAuthority
 }
 
+// UnavailableHostProcessExecutor binds the public host-control runtime to the
+// Firecracker authority adapter before an operator has supplied a reviewed
+// Linux Jailer composition.  It is deliberately useful only as a fail-closed
+// control/recovery owner: the empty host cannot launch, dispatch, or promote a
+// capability profile.
+func UnavailableHostProcessExecutor() HostProcessExecutor {
+	return HostProcessExecutor{Host: &LinuxJailerHost{}}
+}
+
 // ExecuteAuthenticatedTransfer is the private control-to-host data-plane door.
 // It accepts only the original authenticated envelope, returns no bytes, and
 // remains profile-gated until protected guest evidence exists.
 func (executor HostProcessExecutor) ExecuteAuthenticatedTransfer(ctx context.Context, envelope sandboxhostprotocol.Envelope, authenticatedEnvelope []byte, emit TransferReceiptEmitter) (TransferReceipt, error) {
 	if executor.Host == nil || executor.Transfer == nil || emit == nil {
 		return TransferReceipt{}, fmt.Errorf("execute authenticated Firecracker transfer: %w", ErrCapabilityUnavailable)
+	}
+	if err := sandboxhostprotocol.ValidateAuthenticatedEnvelopeWire(authenticatedEnvelope, envelope); err != nil {
+		return TransferReceipt{}, fmt.Errorf("execute authenticated Firecracker transfer: exact canonical envelope is required: %w", ErrCapabilityUnavailable)
 	}
 	return executor.Host.DispatchAuthenticatedTransfer(ctx, envelope, authenticatedEnvelope, executor.Transfer, emit)
 }
@@ -36,7 +48,10 @@ func (executor HostProcessExecutor) ExecuteAuthenticatedTransfer(ctx context.Con
 // restore door. The store/sink remain fixed at construction and profile-gated.
 func (executor HostProcessExecutor) ExecuteAuthenticatedSnapshotRestore(ctx context.Context, envelope sandboxhostprotocol.Envelope, authenticatedEnvelope []byte, emit TransferReceiptEmitter) (TransferReceipt, error) {
 	if executor.Host == nil || executor.Restore == nil || emit == nil {
-		return TransferReceipt{}, fmt.Errorf("execute authenticated Firecracker snapshot restore: %w", ErrCapabilityUnavailable)
+		return TransferReceipt{}, fmt.Errorf("execute authenticated Firecracker snapshot restore: exact canonical envelope is required: %w", ErrCapabilityUnavailable)
+	}
+	if err := sandboxhostprotocol.ValidateAuthenticatedEnvelopeWire(authenticatedEnvelope, envelope); err != nil {
+		return TransferReceipt{}, fmt.Errorf("execute authenticated Firecracker snapshot restore: exact canonical envelope is required: %w", ErrCapabilityUnavailable)
 	}
 	return executor.Host.DispatchAuthenticatedSnapshotRestore(ctx, envelope, authenticatedEnvelope, executor.Restore, emit)
 }
@@ -46,7 +61,10 @@ func (executor HostProcessExecutor) ExecuteAuthenticatedSnapshotRestore(ctx cont
 // profile has protected Linux/KVM evidence.
 func (executor HostProcessExecutor) ExecuteAuthenticatedMount(ctx context.Context, envelope sandboxhostprotocol.Envelope, authenticatedEnvelope []byte, emit MountReceiptEmitter) (MountReceipt, error) {
 	if executor.Host == nil || executor.Mount == nil || emit == nil {
-		return MountReceipt{}, fmt.Errorf("execute authenticated Firecracker mount: %w", ErrCapabilityUnavailable)
+		return MountReceipt{}, fmt.Errorf("execute authenticated Firecracker mount: exact canonical envelope is required: %w", ErrCapabilityUnavailable)
+	}
+	if err := sandboxhostprotocol.ValidateAuthenticatedEnvelopeWire(authenticatedEnvelope, envelope); err != nil {
+		return MountReceipt{}, fmt.Errorf("execute authenticated Firecracker mount: exact canonical envelope is required: %w", ErrCapabilityUnavailable)
 	}
 	return executor.Host.DispatchAuthenticatedMount(ctx, envelope, authenticatedEnvelope, executor.Mount, emit)
 }
@@ -95,7 +113,10 @@ func (executor HostProcessExecutor) Execute(ctx context.Context, envelope sandbo
 // that sandboxhostprocess already trust-verified before guest dispatch.
 func (executor HostProcessExecutor) ExecuteAuthenticated(ctx context.Context, envelope sandboxhostprotocol.Envelope, authenticatedEnvelope []byte) error {
 	if executor.Host == nil {
-		return fmt.Errorf("execute authenticated Firecracker host envelope: %w", ErrCapabilityUnavailable)
+		return fmt.Errorf("execute authenticated Firecracker host envelope: exact canonical envelope is required: %w", ErrCapabilityUnavailable)
+	}
+	if err := sandboxhostprotocol.ValidateAuthenticatedEnvelopeWire(authenticatedEnvelope, envelope); err != nil {
+		return fmt.Errorf("execute authenticated Firecracker host envelope: exact canonical envelope is required: %w", ErrCapabilityUnavailable)
 	}
 	err := executor.Host.ExecuteAuthenticatedDispatch(ctx, envelope, authenticatedEnvelope)
 	if ctx == nil || ctx.Err() == nil || errors.Is(err, ErrCapabilityUnavailable) {
@@ -119,7 +140,10 @@ func (executor HostProcessExecutor) ExecuteWithOutput(ctx context.Context, envel
 // each stdout/stderr chunk before allowing the durable terminal path to run.
 func (executor HostProcessExecutor) ExecuteAuthenticatedWithOutput(ctx context.Context, envelope sandboxhostprotocol.Envelope, authenticatedEnvelope []byte, emit sandboxhostprotocol.GuestOutputEmitter) error {
 	if executor.Host == nil || emit == nil {
-		return fmt.Errorf("execute authenticated Firecracker guest output: %w", ErrCapabilityUnavailable)
+		return fmt.Errorf("execute authenticated Firecracker guest output: exact canonical envelope is required: %w", ErrCapabilityUnavailable)
+	}
+	if err := sandboxhostprotocol.ValidateAuthenticatedEnvelopeWire(authenticatedEnvelope, envelope); err != nil {
+		return fmt.Errorf("execute authenticated Firecracker guest output: exact canonical envelope is required: %w", ErrCapabilityUnavailable)
 	}
 	if envelope.OperationKind == GuestSecretCommandOperationKind {
 		if executor.Secrets == nil {
@@ -179,7 +203,10 @@ func (executor HostProcessExecutor) ExecuteWithDataPlaneReceipt(ctx context.Cont
 // wire while selecting one fixed transfer, restore, or sharing authority.
 func (executor HostProcessExecutor) ExecuteAuthenticatedWithDataPlaneReceipt(ctx context.Context, envelope sandboxhostprotocol.Envelope, authenticatedEnvelope []byte, emit func(context.Context, string, []byte) error) error {
 	if executor.Host == nil || emit == nil || len(authenticatedEnvelope) == 0 {
-		return fmt.Errorf("execute Firecracker data-plane receipt: %w", ErrCapabilityUnavailable)
+		return fmt.Errorf("execute Firecracker data-plane receipt: exact canonical envelope is required: %w", ErrCapabilityUnavailable)
+	}
+	if err := sandboxhostprotocol.ValidateAuthenticatedEnvelopeWire(authenticatedEnvelope, envelope); err != nil {
+		return fmt.Errorf("execute Firecracker data-plane receipt: exact canonical envelope is required: %w", ErrCapabilityUnavailable)
 	}
 	switch envelope.OperationKind {
 	case GuestTransferOperationKind:
@@ -202,5 +229,33 @@ func (executor HostProcessExecutor) ExecuteAuthenticatedWithDataPlaneReceipt(ctx
 		return err
 	default:
 		return fmt.Errorf("execute Firecracker data-plane receipt: %w", ErrCapabilityUnavailable)
+	}
+}
+
+// ReapAuthenticated converges only the exact already-verified control command
+// after a cancellation or a failed guest exchange.  It is intentionally
+// conservative: an unavailable profile may refuse cleanup, but it can never
+// receive an altered envelope, a different lease, or a different fence.
+func (executor HostProcessExecutor) ReapAuthenticated(ctx context.Context, envelope sandboxhostprotocol.Envelope, authenticatedEnvelope []byte) error {
+	if executor.Host == nil || sandboxhostprotocol.ValidateAuthenticatedEnvelopeWire(authenticatedEnvelope, envelope) != nil {
+		return fmt.Errorf("reap authenticated Firecracker command: exact canonical envelope is required: %w", ErrCapabilityUnavailable)
+	}
+	switch envelope.OperationKind {
+	case GuestSecretCommandOperationKind:
+		if executor.Secrets == nil {
+			return fmt.Errorf("reap authenticated Firecracker secret command: %w", ErrCapabilityUnavailable)
+		}
+		return executor.Secrets.AbandonAfterLostContact(ctx, envelope.ProcessID)
+	case GuestTransferOperationKind:
+		if executor.Transfer == nil {
+			return fmt.Errorf("reap authenticated Firecracker transfer: %w", ErrCapabilityUnavailable)
+		}
+		return executor.Transfer.Reap(envelope)
+	case GuestSnapshotRestoreOperationKind:
+		return executor.ReapAuthenticatedSnapshotRestore(ctx, envelope)
+	case GuestMountOperationKind:
+		return executor.ReapAuthenticatedMount(ctx, envelope)
+	default:
+		return executor.Host.CancelDispatch(ctx, envelope)
 	}
 }

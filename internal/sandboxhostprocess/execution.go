@@ -28,6 +28,20 @@ type AuthenticatedHostExecutor interface {
 	ExecuteAuthenticated(context.Context, sandboxhostprotocol.Envelope, []byte) error
 }
 
+// HostReaper converges an exact started command after its guest exchange has
+// failed or its lease context has been cancelled.  It never turns recovery
+// into another execution attempt.
+type HostReaper interface {
+	Reap(context.Context, sandboxhostprotocol.Envelope) error
+}
+
+// AuthenticatedHostReaper carries the same verified canonical control wire
+// into cleanup that crossed the effect boundary.  A reaper must reject a
+// substituted wire rather than reconstructing authority from journal state.
+type AuthenticatedHostReaper interface {
+	ReapAuthenticated(context.Context, sandboxhostprotocol.Envelope, []byte) error
+}
+
 // ExecutionOutput is one bounded guest chunk before it is signed and durably
 // acknowledged through the private host-control output owner.
 type ExecutionOutput = sandboxhostprotocol.GuestOutput
@@ -80,6 +94,16 @@ func (executor authenticatedEnvelopeExecutor) Execute(ctx context.Context, envel
 		return authenticated.ExecuteAuthenticated(ctx, envelope, append([]byte(nil), executor.wire...))
 	}
 	return executor.HostExecutor.Execute(ctx, envelope)
+}
+
+func (executor authenticatedEnvelopeExecutor) Reap(ctx context.Context, envelope sandboxhostprotocol.Envelope) error {
+	if authenticated, ok := executor.HostExecutor.(AuthenticatedHostReaper); ok {
+		return authenticated.ReapAuthenticated(ctx, envelope, append([]byte(nil), executor.wire...))
+	}
+	if reaper, ok := executor.HostExecutor.(HostReaper); ok {
+		return reaper.Reap(ctx, envelope)
+	}
+	return nil
 }
 
 func (executor authenticatedEnvelopeExecutor) ExecuteWithOutput(ctx context.Context, envelope sandboxhostprotocol.Envelope, emit OutputEmitter) error {
@@ -235,6 +259,14 @@ func executeEnvelopeWithOutputAfterTerminalSend(ctx context.Context, envelope sa
 	state := "succeeded"
 	if err != nil || executionContext.Err() != nil || !now.Before(envelope.ExpiresAt) {
 		state = "uncertain"
+		// A terminal result is intentionally still emitted even if cleanup cannot
+		// be confirmed: it records the effect ambiguity for fenced control-side
+		// recovery.  The reaper receives no opportunity to replay the command.
+		if reaper, ok := executor.(HostReaper); ok {
+			reapContext, reapCancel := context.WithTimeout(context.Background(), time.Second)
+			_ = reaper.Reap(reapContext, envelope)
+			reapCancel()
+		}
 	}
 	return stageAndSendTerminal(ctx, envelope, now, journal, privateKey, state, send, afterTerminalSend)
 }
