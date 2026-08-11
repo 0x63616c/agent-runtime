@@ -242,22 +242,23 @@ func (record ToolExecutionRecord) Clone() ToolExecutionRecord {
 
 // ApprovalRecord is durable bounded approval metadata governed by a Session/Turn.
 type ApprovalRecord struct {
-	Tenant               runtimecontent.TenantID
-	Principal            runtimecontent.PrincipalID
-	ApprovalID           string
-	SessionID            agentruntime.SessionID `json:",omitempty"`
-	TurnID               agentruntime.TurnID    `json:",omitempty"`
-	ToolCallID           string
-	ActionDigest         string
-	PolicyRevisionDigest string
-	State                string
-	CapabilityDigest     string
-	MaximumUses          uint32
-	ExpiresAt            time.Time
-	Decision             string
-	DecidedAt            *time.Time
-	CreatedAt            time.Time
-	RetainUntil          time.Time
+	Tenant                   runtimecontent.TenantID
+	Principal                runtimecontent.PrincipalID
+	ApprovalID               string
+	SessionID                agentruntime.SessionID `json:",omitempty"`
+	TurnID                   agentruntime.TurnID    `json:",omitempty"`
+	ToolCallID               string
+	ActionDigest             string
+	PolicyRevisionDigest     string
+	State                    string
+	CapabilityDigest         string
+	ActionVerb, ActionTarget string
+	MaximumUses              uint32
+	ExpiresAt                time.Time
+	Decision                 string
+	DecidedAt                *time.Time
+	CreatedAt                time.Time
+	RetainUntil              time.Time
 }
 
 func (record ApprovalRecord) Clone() ApprovalRecord {
@@ -595,6 +596,27 @@ type RecordToolIntentCommand struct {
 }
 
 func (command RecordToolIntentCommand) Owned() RecordToolIntentCommand { return command }
+
+// AdmitToolApprovalCommand is the one atomic worker-owned admission path for
+// a policy-required Tool intent. It never grants execution authority; only a
+// later owner decision can create a bounded grant.
+type AdmitToolApprovalCommand struct {
+	Scope                                                                                  MutationScope
+	IdempotencyKey                                                                         string
+	SessionID                                                                              agentruntime.SessionID
+	TurnID                                                                                 agentruntime.TurnID
+	ToolCallID, ToolName, ApprovalID, ActionDigest, PolicyRevisionDigest, CapabilityDigest string
+	ActionVerb, ActionTarget                                                               string
+	Descriptor                                                                             runtimecontent.ContentHandoff
+	MaximumUses                                                                            uint32
+	ExpiresAt                                                                              time.Time
+}
+
+// Owned returns a value-owned immutable admission command.
+func (command AdmitToolApprovalCommand) Owned() AdmitToolApprovalCommand {
+	command.ExpiresAt = normalizeTime(command.ExpiresAt)
+	return command
+}
 
 // RequestApprovalCommand creates bounded pending approval metadata for a recorded intent.
 type RequestApprovalCommand struct {

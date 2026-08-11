@@ -27,6 +27,7 @@ This index is derived only from the declared public `sdk/go` source files. It li
 | `method` | `AgentSpecification.Clone` | Clone returns an independent Agent specification snapshot. |
 | `type` | `Approval` | Approval is a caller-safe immutable projection of a pending or terminal human decision. |
 | `method` | `Approval.Clone` | Clone returns an independent Approval snapshot. |
+| `type` | `ApprovalAction` | ApprovalAction is the fixed, human-readable description of an elevated operation. It deliberately contains no raw model arguments or credentials. |
 | `const` | `ApprovalApproved` | ApprovalApproved records an owner decision that created a bounded internal grant. |
 | `const` | `ApprovalDenied` | ApprovalDenied records an owner decision that forbids the requested effect. |
 | `const` | `ApprovalExpired` | ApprovalExpired records that the decision window elapsed before a decision. |
@@ -37,6 +38,7 @@ This index is derived only from the declared public `sdk/go` source files. It li
 | `method` | `ApprovalID.String` | String returns the canonical Approval ID. |
 | `method` | `ApprovalID.UnmarshalJSON` | UnmarshalJSON decodes and validates an Approval ID. |
 | `const` | `ApprovalPending` | ApprovalPending awaits an owner decision before any tool execution may be authorized. |
+| `type` | `ApprovalScope` | ApprovalScope is the public bounded-use projection of a proposed capability. Capability bytes and digests never cross this boundary. |
 | `type` | `ApprovalState` | ApprovalState is the public lifecycle state of one human decision request. |
 | `type` | `ArtifactDownload` | ArtifactDownload is one authorized immutable artifact read. It contains metadata chosen by runtime state and bounded bytes, never a storage URL. |
 | `method` | `ArtifactDownload.Clone` | Clone returns an independent authorized artifact read. |
