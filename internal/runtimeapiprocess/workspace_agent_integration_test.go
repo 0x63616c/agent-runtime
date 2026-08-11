@@ -5,6 +5,7 @@ package runtimeapiprocess_test
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -149,17 +150,24 @@ func TestDurableWorkspaceAgentBinariesUseOnlyThePublicAPI(t *testing.T) {
 		t.Fatalf("web workspace page omitted safe state: %q", body)
 	}
 	postWorkspaceForm(t, webURL+"/approvals/"+approveID.String()+"/approve", "web-approve")
+	// A browser replay of the exact public idempotency key stays a successful
+	// redirect and cannot create a second approval effect.
+	postWorkspaceForm(t, webURL+"/approvals/"+approveID.String()+"/approve", "web-approve")
 	if approval, e := alice.InspectApproval(ctx, approveID); e != nil || approval.State != agentruntime.ApprovalApproved {
 		t.Fatalf("web approve = %#v, %v", approval, e)
 	}
 
 	// The actual terminal binary is a second, non-owner client: it cannot list
-	// Alice's inbox, while Alice can deny and cancel through public API calls.
+	// Alice's inbox. Alice's terminal then denies a separate request through the
+	// same public HTTP/SDK contract.
 	terminal := runWorkspaceTerminal(t, baseURL, secrets["BOB_TOKEN"], "list\nquit\n")
 	if strings.Contains(terminal, approveID.String()) || !strings.Contains(terminal, "Workspace sandbox execution is unavailable") {
 		t.Fatalf("cross-principal terminal leaked owner approval: %q", terminal)
 	}
-	postWorkspaceForm(t, webURL+"/approvals/"+denyID.String()+"/deny", "web-deny")
+	terminal = runWorkspaceTerminal(t, baseURL, secrets["ALICE_TOKEN"], "deny "+denyID.String()+" terminal-deny\nquit\n")
+	if !strings.Contains(terminal, string(agentruntime.ApprovalDenied)) {
+		t.Fatalf("owner terminal did not render denied Approval: %q", terminal)
+	}
 	postWorkspaceForm(t, webURL+"/approvals/"+cancelID.String()+"/cancel", "web-cancel")
 	if approval, e := alice.InspectApproval(ctx, denyID); e != nil || approval.State != agentruntime.ApprovalDenied {
 		t.Fatalf("web deny = %#v, %v", approval, e)
@@ -173,8 +181,12 @@ func TestDurableWorkspaceAgentBinariesUseOnlyThePublicAPI(t *testing.T) {
 	// in the future; the public API role owns wall-clock expiry enforcement.
 	expiresAt := time.Now().UTC().Add(50 * time.Millisecond)
 	expireID := seed("EXPIREDD", expiresAt)
-	for time.Now().UTC().Before(expiresAt) {
-		runtime.Gosched()
+	expiryWait, stopExpiryWait := context.WithDeadline(ctx, expiresAt.Add(100*time.Millisecond))
+	<-expiryWait.Done()
+	waitErr := expiryWait.Err()
+	stopExpiryWait()
+	if !errors.Is(waitErr, context.DeadlineExceeded) {
+		t.Fatalf("await Workspace Approval expiry deadline: %v", waitErr)
 	}
 	postWorkspaceFormFailure(t, webURL+"/approvals/"+expireID.String()+"/approve", "web-expired")
 	if approval, e := alice.InspectApproval(ctx, expireID); e != nil || approval.State != agentruntime.ApprovalExpired {
