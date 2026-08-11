@@ -192,6 +192,37 @@ func TestWorkerConsumesApprovedGrantAndResumesAfterConsumeBeforeIntent(t *testin
 	}
 }
 
+func TestWorkerRefusesOversizedToolOutputBeforeDurablePersistence(t *testing.T) {
+	ctx := context.Background()
+	now := time.Date(2026, 8, 11, 12, 0, 0, 0, time.UTC)
+	content, err := runtimecontent.New("runtime-content", &toolObjects{values: map[string][]byte{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tenant, _ := runtimecontent.ParseTenantID("tenant-a")
+	principal, _ := runtimecontent.ParsePrincipalID("principal-a")
+	compiler, _ := runtimestate.NewCompiler(content)
+	source, _ := clock.NewFake(now)
+	planner, _ := runtimestate.NewRuntimeStatePlanner(source, &toolIDs{})
+	store, _ := runtimestate.NewMemoryRuntimeStateStore(planner)
+	_, _, _, _ = createToolExecution(t, ctx, content, compiler, store, tenant, principal, now)
+	adapter := &recordingAdapter{response: runtimetool.Response{Output: bytes.Repeat([]byte("x"), 8<<20+1)}}
+	worker, err := runtimetool.NewWorker(runtimetool.Config{Store: store, Tenants: store, Compiler: compiler, Planner: planner, Clock: source, Content: content, Adapter: adapter, Claimer: "tool-worker"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := worker.ScanOnce(ctx); err != nil {
+		t.Fatalf("finalize oversized output: %v", err)
+	}
+	state, err := store.LoadRuntimeState(ctx, runtimestate.MutationScope{Tenant: tenant, Principal: principal, Authority: runtimestate.AuthorityRuntimeWorker})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(state.ToolExecutions) != 1 || state.ToolExecutions[0].State != runtimestate.ToolExecutionFailed || state.ToolExecutions[0].Failure == nil || state.ToolExecutions[0].Failure.Message != "tool output exceeds the safe retention limit" || len(state.Artifacts) != 0 {
+		t.Fatalf("oversized output state = executions=%#v artifacts=%#v", state.ToolExecutions, state.Artifacts)
+	}
+}
+
 func TestWorkerNeverDispatchesExpiredOrCancelledApprovedGrants(t *testing.T) {
 	for _, test := range []struct {
 		name    string
