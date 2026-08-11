@@ -16,7 +16,7 @@ import (
 type HostProcessExecutor struct {
 	Host     *LinuxJailerHost
 	Secrets  *SecretExecutionAuthority
-	Egress   *ProxyExecutionAuthority
+	Egress   *ProxyAuthorityIssuer
 	Transfer *TransferExecutionAuthority
 	Restore  *SnapshotRestoreExecutionAuthority
 	Mount    *MountExecutionAuthority
@@ -133,7 +133,12 @@ func (executor HostProcessExecutor) ExecuteAuthenticatedWithOutput(ctx context.C
 		}
 		result, err := executor.Host.DispatchAuthenticatedProxy(ctx, envelope, authenticatedEnvelope, executor.Egress)
 		if err != nil {
-			return err
+			if ctx == nil || ctx.Err() == nil || errors.Is(err, ErrCapabilityUnavailable) {
+				return err
+			}
+			cancelCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			return errors.Join(err, executor.Host.CancelDispatch(cancelCtx, envelope))
 		}
 		for _, output := range result.Outputs {
 			if output.Stream != "stdout" && output.Stream != "stderr" {
