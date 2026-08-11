@@ -62,6 +62,13 @@ func TestWebHandlerUsesSameDurableControllerAndLabelsSubscriptionState(t *testin
 	if message.Code != http.StatusSeeOther || client.sent.Parts[0].Text != "queued web message" {
 		t.Fatalf("message response = %d sent=%#v", message.Code, client.sent)
 	}
+	cancel := httptest.NewRecorder()
+	cancelRequest := httptest.NewRequest(http.MethodPost, "/sessions/sess_1234567890ABCDEF/cancel", strings.NewReader("turn=turn_1234567890ABCDEF"))
+	cancelRequest.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	handler.ServeHTTP(cancel, cancelRequest)
+	if cancel.Code != http.StatusSeeOther || client.cancel.TurnID != "turn_1234567890ABCDEF" {
+		t.Fatalf("cancel response = %d cancelled=%#v", cancel.Code, client.cancel)
+	}
 	page := httptest.NewRecorder()
 	handler.ServeHTTP(page, httptest.NewRequest(http.MethodGet, "/?session=sess_1234567890ABCDEF", nil))
 	if !strings.Contains(page.Body.String(), "subscription canary blocked") || strings.Contains(page.Body.String(), "token") {
