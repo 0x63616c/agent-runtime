@@ -135,7 +135,12 @@ func TestCoreFreezesCommandArgumentsAndEnvironment(t *testing.T) {
 }
 
 func TestCoreTreatsEveryCreateAuthorityFieldAsOperationIdentity(t *testing.T) {
-	client := newCoreClient("principal-a", time.Date(2026, 8, 6, 12, 0, 0, 0, time.UTC))
+	policy := testLimitPolicy()
+	policy.capabilities.Secrets = CapabilityDescriptor{State: CapabilityEnforced}
+	client, err := newCoreClientWithPolicy("principal-a", time.Date(2026, 8, 6, 12, 0, 0, 0, time.UTC), policy)
+	if err != nil {
+		t.Fatalf("newCoreClientWithPolicy(): %v", err)
+	}
 	request := validCreateRequest("op_03")
 	request.CreateSandbox.Spec.SecretBindings = []SecretBinding{{Name: "build-token", Purpose: "build"}}
 	if _, err := client.Submit(context.Background(), request); err != nil {
@@ -144,7 +149,7 @@ func TestCoreTreatsEveryCreateAuthorityFieldAsOperationIdentity(t *testing.T) {
 	changed := request
 	changed.CreateSandbox = &CreateSandboxRequest{Spec: copySpec(request.CreateSandbox.Spec)}
 	changed.CreateSandbox.Spec.SecretBindings[0].Purpose = "deploy"
-	_, err := client.Submit(context.Background(), changed)
+	_, err = client.Submit(context.Background(), changed)
 	failure, ok := AsFailure(err)
 	if !ok || failure.Code != FailureOperationConflict {
 		t.Fatalf("changed Submit() failure = %#v, %v; want operation conflict", failure, err)

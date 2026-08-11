@@ -29,6 +29,7 @@
         "docs/adr/0013-temporary-documentation-audit-exception.md",
         "docs/adr/0014-astro-starlight-documentation-platform.md",
         "docs/operations/evidence-and-status.md",
+        "docs/operations/firecracker-m4-readiness.md",
         "docs/operations/sandbox-control-ledger.md",
         "docs/operations/sandbox-host-routing.md",
         "docs/operations/self-hosted-deployment.md",
