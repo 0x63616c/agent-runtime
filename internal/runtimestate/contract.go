@@ -675,6 +675,17 @@ type RevokeCapabilityGrantCommand struct {
 // Owned returns a value-owned revocation command.
 func (command RevokeCapabilityGrantCommand) Owned() RevokeCapabilityGrantCommand { return command }
 
+// ExpireCapabilityGrantCommand retires a grant after its immutable expiry.
+type ExpireCapabilityGrantCommand struct {
+	Scope                               MutationScope
+	IdempotencyKey, GrantID, ToolCallID string
+	SessionID                           agentruntime.SessionID
+	TurnID                              agentruntime.TurnID
+}
+
+// Owned returns a value-owned expiry command.
+func (command ExpireCapabilityGrantCommand) Owned() ExpireCapabilityGrantCommand { return command }
+
 // BeginToolExecutionCommand records one granted external tool operation before
 // an adapter receives its runtime-owned idempotency key.
 type BeginToolExecutionCommand struct {

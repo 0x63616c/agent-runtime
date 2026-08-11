@@ -29,6 +29,7 @@ const (
 	CommandRequestApproval        CommandKind = "request_approval"
 	CommandDecideApproval         CommandKind = "decide_approval"
 	CommandRevokeCapabilityGrant  CommandKind = "revoke_capability_grant"
+	CommandExpireCapabilityGrant  CommandKind = "expire_capability_grant"
 	CommandConsumeCapabilityGrant CommandKind = "consume_capability_grant"
 	CommandBeginToolExecution     CommandKind = "begin_tool_execution"
 	CommandRecordToolOutcome      CommandKind = "record_tool_execution_outcome"
@@ -234,6 +235,16 @@ func (compiler *Compiler) CompileRevokeCapabilityGrant(command RevokeCapabilityG
 		return CompiledMutation{}, errors.New("compile revoke capability grant: invalid command")
 	}
 	return compiler.compile(CommandRevokeCapabilityGrant, command.Scope, command.IdempotencyKey, command, command)
+}
+
+// CompileExpireCapabilityGrant records a worker-observed expiry. It is sealed
+// to the worker and can only retire an already bounded grant.
+func (compiler *Compiler) CompileExpireCapabilityGrant(command ExpireCapabilityGrantCommand) (CompiledMutation, error) {
+	command = command.Owned()
+	if err := validateScope(command.Scope, AuthorityRuntimeWorker, true); err != nil || validSession(command.SessionID) != nil || validTurn(command.TurnID) != nil || !validOpaque(command.ToolCallID, 128) || !validOpaque(command.GrantID, 128) {
+		return CompiledMutation{}, errors.New("compile expire capability grant: invalid command")
+	}
+	return compiler.compile(CommandExpireCapabilityGrant, command.Scope, command.IdempotencyKey, command, command)
 }
 
 // CompileBeginToolExecution validates one capability-bound external operation intent.
