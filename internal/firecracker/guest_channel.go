@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"fmt"
 	"net"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -13,7 +14,28 @@ import (
 	"github.com/0x63616c/agent-runtime/internal/sandboxhostprotocol"
 )
 
-const maximumGuestControlResponseBytes = 1024
+const (
+	maximumGuestControlResponseBytes = 48 << 10
+	maximumGuestOutputBytes          = 32 << 10
+	maximumGuestOutputChunks         = 4
+)
+
+// GuestOutput is one bounded, ordered private guest-output chunk. Its caller
+// must route it to a durable output owner before any future profile can claim
+// command-output delivery.
+type GuestOutput struct {
+	Stream   string
+	Sequence uint64
+	Digest   string
+	Data     []byte
+}
+
+// GuestDispatchResult records the only terminal result accepted from a guest
+// dispatch exchange and the bounded output that preceded it.
+type GuestDispatchResult struct {
+	State   string
+	Outputs []GuestOutput
+}
 
 // GuestIdentityBinder binds the boot identities that the guest must echo on
 // every private vsock connection. A host obtains those values only from the
@@ -144,29 +166,39 @@ func (channel *UnixGuestControlChannel) ExecuteDispatch(ctx context.Context, env
 // ExecuteAuthenticatedDispatch transports the exact control-signed canonical
 // envelope retained by sandboxhostprocess after control trust verification.
 func (channel *UnixGuestControlChannel) ExecuteAuthenticatedDispatch(ctx context.Context, envelope sandboxhostprotocol.Envelope, authenticatedEnvelope []byte) error {
-	frame, err := EncodeAuthenticatedGuestDispatch(envelope, authenticatedEnvelope)
+	result, err := channel.DispatchAuthenticated(ctx, envelope, authenticatedEnvelope)
 	if err != nil {
 		return err
+	}
+	if result.State != "UNAVAILABLE" {
+		return fmt.Errorf("authenticated guest dispatch state: %w", ErrCapabilityUnavailable)
+	}
+	return fmt.Errorf("authenticated guest dispatch: %w", ErrCapabilityUnavailable)
+}
+
+// DispatchAuthenticated carries a signed control envelope and returns bounded
+// ordered output before the guest's terminal result. It does not itself make
+// that output durable or authorize a Firecracker profile.
+func (channel *UnixGuestControlChannel) DispatchAuthenticated(ctx context.Context, envelope sandboxhostprotocol.Envelope, authenticatedEnvelope []byte) (GuestDispatchResult, error) {
+	frame, err := EncodeAuthenticatedGuestDispatch(envelope, authenticatedEnvelope)
+	if err != nil {
+		return GuestDispatchResult{}, err
 	}
 	channel.mu.Lock()
 	vmID := channel.vmID
 	channel.mu.Unlock()
 	if envelope.SandboxID != vmID {
-		return fmt.Errorf("dispatch guest control: %w", ErrCapabilityUnavailable)
+		return GuestDispatchResult{}, fmt.Errorf("dispatch guest control: %w", ErrCapabilityUnavailable)
 	}
 	connection, reader, err := channel.open(ctx)
 	if err != nil {
-		return err
+		return GuestDispatchResult{}, err
 	}
 	defer channel.release(connection)
 	if _, err := fmt.Fprintf(connection, "DISPATCH %s\n", base64.RawURLEncoding.EncodeToString(frame)); err != nil {
-		return fmt.Errorf("write authenticated guest dispatch: %w", err)
+		return GuestDispatchResult{}, fmt.Errorf("write authenticated guest dispatch: %w", err)
 	}
-	line, err := readGuestControlResponse(reader)
-	if err != nil || line != "RESULT UNAVAILABLE "+envelope.EnvelopeID {
-		return fmt.Errorf("read authenticated guest dispatch result: %w", ErrCapabilityUnavailable)
-	}
-	return fmt.Errorf("authenticated guest dispatch: %w", ErrCapabilityUnavailable)
+	return readGuestDispatchResult(reader, envelope.EnvelopeID)
 }
 
 // CancelDispatch asks the exact bound guest to cancel one fenced operation.
@@ -284,6 +316,35 @@ func readGuestControlResponse(reader *bufio.Reader) (string, error) {
 		return "", fmt.Errorf("invalid bounded guest control response")
 	}
 	return strings.TrimSuffix(line, "\n"), nil
+}
+
+func readGuestDispatchResult(reader *bufio.Reader, envelopeID string) (GuestDispatchResult, error) {
+	result := GuestDispatchResult{}
+	for {
+		line, err := readGuestControlResponse(reader)
+		if err != nil {
+			return GuestDispatchResult{}, fmt.Errorf("read guest result: %w", ErrCapabilityUnavailable)
+		}
+		fields := strings.Split(line, " ")
+		if len(fields) == 6 && fields[0] == "OUTPUT" && fields[1] == envelopeID && validGuestOutputStream(fields[2]) && len(result.Outputs) < maximumGuestOutputChunks {
+			sequence, sequenceErr := strconv.ParseUint(fields[3], 10, 64)
+			chunk, decodeErr := base64.RawURLEncoding.DecodeString(fields[5])
+			if sequenceErr != nil || sequence != uint64(len(result.Outputs)) || decodeErr != nil || len(chunk) == 0 || len(chunk) > maximumGuestOutputBytes || fields[4] != sandboxhostprotocol.Digest(chunk) {
+				return GuestDispatchResult{}, fmt.Errorf("read guest output: %w", ErrCapabilityUnavailable)
+			}
+			result.Outputs = append(result.Outputs, GuestOutput{Stream: fields[2], Sequence: sequence, Digest: fields[4], Data: append([]byte(nil), chunk...)})
+			continue
+		}
+		if len(fields) == 3 && fields[0] == "RESULT" && fields[1] == "UNAVAILABLE" && fields[2] == envelopeID {
+			result.State = fields[1]
+			return result, nil
+		}
+		return GuestDispatchResult{}, fmt.Errorf("read guest terminal result: %w", ErrCapabilityUnavailable)
+	}
+}
+
+func validGuestOutputStream(stream string) bool {
+	return stream == "control" || stream == "stdout" || stream == "stderr"
 }
 
 func joinGuestControlError(left, right error) error {

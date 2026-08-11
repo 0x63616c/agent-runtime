@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"net"
 	"strings"
@@ -50,6 +51,10 @@ func TestUnixGuestControlChannelExchangesOnlyTheBoundIdentityAndUnavailableDispa
 			t.Errorf("DecodeGuestDispatch() = %#v, %v", envelope, err)
 			return
 		}
+		if _, _, err := DecodeAuthenticatedGuestDispatch(frame); err == nil {
+			marker := []byte("guest-control-unavailable")
+			_, _ = connection.Write([]byte("OUTPUT envelope-001 control 0 " + sandboxhostprotocol.Digest(marker) + " " + base64.RawURLEncoding.EncodeToString(marker) + "\n"))
+		}
 		_, _ = connection.Write([]byte("RESULT UNAVAILABLE envelope-001\n"))
 	}
 	channel, err := NewUnixGuestControlChannel(dialer)
@@ -70,11 +75,19 @@ func TestUnixGuestControlChannelExchangesOnlyTheBoundIdentityAndUnavailableDispa
 	if err := channel.ExecuteDispatch(context.Background(), envelope); !errors.Is(err, ErrCapabilityUnavailable) {
 		t.Fatalf("ExecuteDispatch() error = %v, want unavailable guest result", err)
 	}
+	authenticatedEnvelope, err := json.Marshal(envelope)
+	if err != nil {
+		t.Fatalf("marshal authenticated envelope: %v", err)
+	}
+	result, err := channel.DispatchAuthenticated(context.Background(), envelope, authenticatedEnvelope)
+	if err != nil || result.State != "UNAVAILABLE" || len(result.Outputs) != 1 || result.Outputs[0].Stream != "control" || string(result.Outputs[0].Data) != "guest-control-unavailable" {
+		t.Fatalf("DispatchAuthenticated() = (%#v, %v), want bounded unavailable marker", result, err)
+	}
 	if err := channel.CancelDispatch(context.Background(), envelope); err != nil {
 		t.Fatalf("CancelDispatch() error = %v", err)
 	}
 	dialer.wait()
-	if got, want := dialer.targets(), []string{"unix:/srv/jailer/sandbox-001/root/run/firecracker.vsock", "unix:/srv/jailer/sandbox-001/root/run/firecracker.vsock", "unix:/srv/jailer/sandbox-001/root/run/firecracker.vsock"}; strings.Join(got, "|") != strings.Join(want, "|") {
+	if got, want := dialer.targets(), []string{"unix:/srv/jailer/sandbox-001/root/run/firecracker.vsock", "unix:/srv/jailer/sandbox-001/root/run/firecracker.vsock", "unix:/srv/jailer/sandbox-001/root/run/firecracker.vsock", "unix:/srv/jailer/sandbox-001/root/run/firecracker.vsock"}; strings.Join(got, "|") != strings.Join(want, "|") {
 		t.Fatalf("dial targets = %v, want %v", got, want)
 	}
 }
@@ -146,6 +159,31 @@ func TestUnixGuestControlChannelReaperCloseInterruptsAnActivePrivateExchange(t *
 	}
 	<-peerClosed
 	dialer.wait()
+}
+
+func TestGuestDispatchResultRefusesTamperedOrOutOfOrderOutputBeforeTerminalState(t *testing.T) {
+	chunk := []byte("bounded-output")
+	encoded := base64.RawURLEncoding.EncodeToString(chunk)
+	valid := "OUTPUT envelope-001 stdout 0 " + sandboxhostprotocol.Digest(chunk) + " " + encoded + "\nRESULT UNAVAILABLE envelope-001\n"
+	for name, wire := range map[string]string{
+		"wrong digest":    "OUTPUT envelope-001 stdout 0 sha256:bad " + encoded + "\nRESULT UNAVAILABLE envelope-001\n",
+		"wrong sequence":  "OUTPUT envelope-001 stdout 1 " + sandboxhostprotocol.Digest(chunk) + " " + encoded + "\nRESULT UNAVAILABLE envelope-001\n",
+		"wrong envelope":  "OUTPUT another-envelope stdout 0 " + sandboxhostprotocol.Digest(chunk) + " " + encoded + "\nRESULT UNAVAILABLE envelope-001\n",
+		"valid transport": valid,
+	} {
+		t.Run(name, func(t *testing.T) {
+			result, err := readGuestDispatchResult(bufio.NewReader(strings.NewReader(wire)), "envelope-001")
+			if name == "valid transport" {
+				if err != nil || len(result.Outputs) != 1 || string(result.Outputs[0].Data) != string(chunk) {
+					t.Fatalf("readGuestDispatchResult() = (%#v, %v), want bounded output", result, err)
+				}
+				return
+			}
+			if !errors.Is(err, ErrCapabilityUnavailable) {
+				t.Fatalf("readGuestDispatchResult() error = %v, want output refusal", err)
+			}
+		})
+	}
 }
 
 type guestChannelDialer struct {
