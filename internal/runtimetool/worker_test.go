@@ -132,6 +132,130 @@ func TestWorkerFinalizesAuthorizedToolActionsAndReconcilesLostClaims(t *testing.
 	}
 }
 
+func TestWorkerConsumesApprovedGrantAndResumesAfterConsumeBeforeIntent(t *testing.T) {
+	for _, test := range []struct {
+		name             string
+		consumeBeforeRun bool
+	}{
+		{name: "approved grant is consumed then executed"},
+		{name: "restart after consume creates the missing execution intent", consumeBeforeRun: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			ctx := context.Background()
+			now := time.Date(2026, 8, 11, 12, 0, 0, 0, time.UTC)
+			objects := &toolObjects{values: map[string][]byte{}}
+			content, err := runtimecontent.New("runtime-content", objects)
+			if err != nil {
+				t.Fatal(err)
+			}
+			tenant, _ := runtimecontent.ParseTenantID("tenant-a")
+			principal, _ := runtimecontent.ParsePrincipalID("principal-a")
+			compiler, _ := runtimestate.NewCompiler(content)
+			source, _ := clock.NewFake(now)
+			planner, _ := runtimestate.NewRuntimeStatePlanner(source, &toolIDs{})
+			store, _ := runtimestate.NewMemoryRuntimeStateStore(planner)
+			approved := createApprovedToolGrant(t, ctx, content, compiler, store, tenant, principal, now)
+			if test.consumeBeforeRun {
+				consume, err := compiler.CompileConsumeCapabilityGrant(runtimestate.ConsumeCapabilityGrantCommand{Scope: approved.workerScope, IdempotencyKey: "crash-consume", SessionID: approved.sessionID, TurnID: approved.turnID, ToolCallID: approved.toolCallID, GrantID: approved.grantID, PolicyRevisionDigest: approved.digest})
+				if err != nil {
+					t.Fatal(err)
+				}
+				if _, err = store.Apply(ctx, consume); err != nil {
+					t.Fatal(err)
+				}
+			}
+			adapter := &recordingAdapter{response: runtimetool.Response{Output: []byte("one bounded result")}}
+			worker, err := runtimetool.NewWorker(runtimetool.Config{Store: store, Tenants: store, Compiler: compiler, Planner: planner, Clock: source, Content: content, Adapter: adapter, Claimer: "tool-worker"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := worker.ScanOnce(ctx); err != nil {
+				t.Fatalf("first scan: %v", err)
+			}
+			if err := worker.ScanOnce(ctx); err != nil {
+				t.Fatalf("replay scan: %v", err)
+			}
+			if adapter.executes != 1 || adapter.reconciles != 0 {
+				t.Fatalf("adapter calls = execute=%d reconcile=%d, want exactly one execution", adapter.executes, adapter.reconciles)
+			}
+			state, err := store.LoadRuntimeState(ctx, approved.workerScope)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(state.Grants) != 1 || state.Grants[0].Uses != 1 {
+				t.Fatalf("grant use count = %#v, want exactly one durable consumption", state.Grants)
+			}
+			if len(state.ToolExecutions) != 1 || state.ToolExecutions[0].OperationID != runtimestate.OperationID("op-tool-"+approved.grantID) || state.ToolExecutions[0].State != runtimestate.ToolExecutionSucceeded {
+				t.Fatalf("tool executions = %#v, want one succeeded deterministic execution", state.ToolExecutions)
+			}
+		})
+	}
+}
+
+func TestWorkerNeverDispatchesExpiredOrCancelledApprovedGrants(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		prepare func(t *testing.T, compiler *runtimestate.Compiler, store *runtimestate.MemoryRuntimeStateStore, clock *clock.Fake, approved approvedToolGrant)
+	}{
+		{
+			name: "expired approval is not consumed",
+			prepare: func(t *testing.T, _ *runtimestate.Compiler, _ *runtimestate.MemoryRuntimeStateStore, source *clock.Fake, approved approvedToolGrant) {
+				t.Helper()
+				if err := source.Advance(time.Hour + time.Minute); err != nil {
+					t.Fatal(err)
+				}
+			},
+		},
+		{
+			name: "cancelled turn invalidates approval before dispatch",
+			prepare: func(t *testing.T, compiler *runtimestate.Compiler, store *runtimestate.MemoryRuntimeStateStore, _ *clock.Fake, approved approvedToolGrant) {
+				t.Helper()
+				ownerScope := approved.workerScope
+				ownerScope.Authority = runtimestate.AuthoritySessionOwner
+				cancel, err := compiler.CompileCancelTurn(runtimestate.CancelTurnCommand{Scope: ownerScope, IdempotencyKey: "cancel-before-tool-dispatch", SessionID: approved.sessionID, TurnID: approved.turnID})
+				if err != nil {
+					t.Fatal(err)
+				}
+				if _, err = store.Apply(context.Background(), cancel); err != nil {
+					t.Fatal(err)
+				}
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			ctx := context.Background()
+			now := time.Date(2026, 8, 11, 12, 0, 0, 0, time.UTC)
+			content, err := runtimecontent.New("runtime-content", &toolObjects{values: map[string][]byte{}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			tenant, _ := runtimecontent.ParseTenantID("tenant-a")
+			principal, _ := runtimecontent.ParsePrincipalID("principal-a")
+			compiler, _ := runtimestate.NewCompiler(content)
+			source, _ := clock.NewFake(now)
+			planner, _ := runtimestate.NewRuntimeStatePlanner(source, &toolIDs{})
+			store, _ := runtimestate.NewMemoryRuntimeStateStore(planner)
+			approved := createApprovedToolGrant(t, ctx, content, compiler, store, tenant, principal, now)
+			test.prepare(t, compiler, store, source, approved)
+			adapter := &recordingAdapter{response: runtimetool.Response{Output: []byte("must not execute")}}
+			worker, err := runtimetool.NewWorker(runtimetool.Config{Store: store, Tenants: store, Compiler: compiler, Planner: planner, Clock: source, Content: content, Adapter: adapter, Claimer: "tool-worker"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := worker.ScanOnce(ctx); err != nil {
+				t.Fatalf("scan invalid grant: %v", err)
+			}
+			state, err := store.LoadRuntimeState(ctx, approved.workerScope)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if adapter.executes != 0 || adapter.reconciles != 0 || len(state.ToolExecutions) != 0 || state.Grants[0].Uses != 0 {
+				t.Fatalf("invalid grant dispatched = calls=%d/%d executions=%#v grants=%#v", adapter.executes, adapter.reconciles, state.ToolExecutions, state.Grants)
+			}
+		})
+	}
+}
+
 func TestStateAuthorizationRejectsCrossScopeToolDescriptorReads(t *testing.T) {
 	ctx := context.Background()
 	now := time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC)
@@ -252,6 +376,43 @@ func TestSandboxAdapterUsesOnlyVerifiedDescriptorAndReconcilesWithoutResubmit(t 
 
 func createToolExecution(t *testing.T, ctx context.Context, content *runtimecontent.Store, compiler *runtimestate.Compiler, store *runtimestate.MemoryRuntimeStateStore, tenant runtimecontent.TenantID, principal runtimecontent.PrincipalID, now time.Time) (agentruntime.SessionID, agentruntime.TurnID, runtimestate.ToolExecutionRecord, []byte) {
 	t.Helper()
+	approved := createApprovedToolGrant(t, ctx, content, compiler, store, tenant, principal, now)
+	consume, err := compiler.CompileConsumeCapabilityGrant(runtimestate.ConsumeCapabilityGrantCommand{Scope: approved.workerScope, IdempotencyKey: "consume", SessionID: approved.sessionID, TurnID: approved.turnID, ToolCallID: approved.toolCallID, GrantID: approved.grantID, PolicyRevisionDigest: approved.digest})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Apply(ctx, consume); err != nil {
+		t.Fatal(err)
+	}
+	begin, err := compiler.CompileBeginToolExecution(runtimestate.BeginToolExecutionCommand{Scope: approved.workerScope, IdempotencyKey: "begin", SessionID: approved.sessionID, TurnID: approved.turnID, ToolCallID: approved.toolCallID, GrantID: approved.grantID, OperationID: "op_tool_000000000001"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan, err := store.Apply(ctx, begin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, execution := range plan.State().ToolExecutions {
+		if execution.OperationID == "op_tool_000000000001" {
+			return approved.sessionID, approved.turnID, execution, approved.descriptor
+		}
+	}
+	t.Fatal("begin tool execution did not retain an execution record")
+	return "", "", runtimestate.ToolExecutionRecord{}, nil
+}
+
+type approvedToolGrant struct {
+	sessionID   agentruntime.SessionID
+	turnID      agentruntime.TurnID
+	toolCallID  string
+	grantID     string
+	digest      string
+	descriptor  []byte
+	workerScope runtimestate.MutationScope
+}
+
+func createApprovedToolGrant(t *testing.T, ctx context.Context, content *runtimecontent.Store, compiler *runtimestate.Compiler, store *runtimestate.MemoryRuntimeStateStore, tenant runtimecontent.TenantID, principal runtimecontent.PrincipalID, now time.Time) approvedToolGrant {
+	t.Helper()
 	body, err := content.StageAgentSpecificationBody(ctx, tenant, runtimecontent.AgentSpecificationBody{Name: "tool-worker", ModelProfile: "balanced", Instructions: "safe"})
 	if err != nil {
 		t.Fatal(err)
@@ -316,29 +477,7 @@ func createToolExecution(t *testing.T, ctx context.Context, content *runtimecont
 	if err != nil || len(state.Grants) != 1 {
 		t.Fatalf("approved capability grant = %#v, %v", state.Grants, err)
 	}
-	grantID := state.Grants[0].GrantID
-	consume, err := compiler.CompileConsumeCapabilityGrant(runtimestate.ConsumeCapabilityGrantCommand{Scope: workerScope, IdempotencyKey: "consume", SessionID: sessionPlan.Result().Session.SessionID, TurnID: accepted.Result().Turn.TurnID, ToolCallID: "tcall_1234567890ABCDEF", GrantID: grantID, PolicyRevisionDigest: digest})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := store.Apply(ctx, consume); err != nil {
-		t.Fatal(err)
-	}
-	begin, err := compiler.CompileBeginToolExecution(runtimestate.BeginToolExecutionCommand{Scope: workerScope, IdempotencyKey: "begin", SessionID: sessionPlan.Result().Session.SessionID, TurnID: accepted.Result().Turn.TurnID, ToolCallID: "tcall_1234567890ABCDEF", GrantID: grantID, OperationID: "op_tool_000000000001"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	plan, err := store.Apply(ctx, begin)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, execution := range plan.State().ToolExecutions {
-		if execution.OperationID == "op_tool_000000000001" {
-			return sessionPlan.Result().Session.SessionID, accepted.Result().Turn.TurnID, execution, descriptor
-		}
-	}
-	t.Fatal("begin tool execution did not retain an execution record")
-	return "", "", runtimestate.ToolExecutionRecord{}, nil
+	return approvedToolGrant{sessionID: sessionPlan.Result().Session.SessionID, turnID: accepted.Result().Turn.TurnID, toolCallID: "tcall_1234567890ABCDEF", grantID: state.Grants[0].GrantID, digest: digest, descriptor: descriptor, workerScope: workerScope}
 }
 
 func toolOutbox(t *testing.T, ctx context.Context, store *runtimestate.MemoryRuntimeStateStore, tenant runtimecontent.TenantID) runtimestate.OutboxRecord {

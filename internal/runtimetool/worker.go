@@ -13,6 +13,8 @@ import (
 	agentruntime "github.com/0x63616c/agent-runtime/sdk/go"
 )
 
+const maximumRetainedToolOutputBytes = 8 << 20
+
 type Request struct {
 	Tenant      runtimecontent.TenantID
 	SessionID   agentruntime.SessionID
@@ -87,6 +89,12 @@ func (w *Worker) ScanOnce(ctx context.Context) error {
 		return e
 	}
 	for _, t := range ts {
+		// Approval only makes a bounded grant available. The worker owns the
+		// separate consume-then-intent transition, so a public decision can never
+		// dispatch an adapter directly or race a revoked/expired grant.
+		if e := w.admitApprovedGrants(ctx, t); e != nil {
+			return e
+		}
 		p, e := w.store.ReadOutbox(ctx, runtimestate.OutboxQuery{Scope: runtimestate.MutationScope{Tenant: t, Authority: runtimestate.AuthorityOutboxPublisher}, Limit: 128})
 		if e != nil {
 			return e
@@ -107,6 +115,69 @@ func (w *Worker) ScanOnce(ctx context.Context) error {
 				return e
 			}
 		}
+	}
+	return nil
+}
+
+func (w *Worker) admitApprovedGrants(ctx context.Context, tenant runtimecontent.TenantID) error {
+	state, err := w.store.LoadRuntimeState(ctx, runtimestate.MutationScope{Tenant: tenant, Authority: runtimestate.AuthorityRuntimeWorker})
+	if err != nil {
+		return err
+	}
+	for _, grant := range state.Grants {
+		if !w.clock.Now().Before(grant.ExpiresAt) {
+			continue
+		}
+		operationID := runtimestate.OperationID("op-tool-" + grant.GrantID)
+		existing := false
+		for _, execution := range state.ToolExecutions {
+			if execution.GrantID == grant.GrantID {
+				existing = true
+				break
+			}
+		}
+		if existing {
+			continue
+		}
+		var approval runtimestate.ApprovalRecord
+		for _, candidate := range state.Approvals {
+			if candidate.ToolCallID == grant.ToolCallID && candidate.State == "approved" && candidate.Principal == grant.Principal {
+				approval = candidate
+				break
+			}
+		}
+		if approval.ApprovalID == "" {
+			continue
+		}
+		turnRunning := false
+		for _, turn := range state.Turns {
+			if turn.SessionID == approval.SessionID && turn.TurnID == approval.TurnID && turn.Principal == grant.Principal && turn.State == agentruntime.TurnRunning {
+				turnRunning = true
+				break
+			}
+		}
+		if !turnRunning {
+			// Cancellation and terminal settlement are authoritative. Do not turn a
+			// stale approved grant into a worker error or a late external effect.
+			continue
+		}
+		if grant.Uses == 0 {
+			consume, err := w.compiler.CompileConsumeCapabilityGrant(runtimestate.ConsumeCapabilityGrantCommand{Scope: runtimestate.MutationScope{Tenant: tenant, Principal: grant.Principal, Authority: runtimestate.AuthorityRuntimeWorker}, IdempotencyKey: "tool-consume-" + grant.GrantID, GrantID: grant.GrantID, ToolCallID: grant.ToolCallID, PolicyRevisionDigest: grant.PolicyRevisionDigest, SessionID: approval.SessionID, TurnID: approval.TurnID})
+			if err != nil {
+				return err
+			}
+			if err = w.persist(ctx, consume); err != nil {
+				return err
+			}
+		}
+		begin, err := w.compiler.CompileBeginToolExecution(runtimestate.BeginToolExecutionCommand{Scope: runtimestate.MutationScope{Tenant: tenant, Principal: grant.Principal, Authority: runtimestate.AuthorityRuntimeWorker}, IdempotencyKey: "tool-begin-" + grant.GrantID, GrantID: grant.GrantID, ToolCallID: grant.ToolCallID, SessionID: approval.SessionID, TurnID: approval.TurnID, OperationID: operationID})
+		if err != nil {
+			return err
+		}
+		if err = w.persist(ctx, begin); err != nil {
+			return err
+		}
+		return nil
 	}
 	return nil
 }
@@ -150,6 +221,12 @@ func (w *Worker) process(ctx context.Context, r runtimestate.OutboxRecord, recov
 	var result *runtimecontent.Reference
 	if out.Uncertain {
 		state = runtimestate.ToolExecutionUncertain
+	}
+	if len(out.Output) > maximumRetainedToolOutputBytes && failure == nil && !out.Uncertain {
+		// The adapter is permitted to observe an external response, but no
+		// unbounded result may enter durable state or a public event projection.
+		failure = &agentruntime.Failure{Code: agentruntime.FailureInvalidInput, Message: "tool output exceeds the safe retention limit"}
+		state = runtimestate.ToolExecutionFailed
 	}
 	if len(out.Output) > 0 && failure == nil && !out.Uncertain {
 		mediaType := out.MediaType
