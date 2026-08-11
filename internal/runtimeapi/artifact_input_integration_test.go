@@ -274,6 +274,88 @@ func TestDurablePostgresMinIOCollectorDeletesExpiredUnreferencedArtifact(t *test
 	}
 }
 
+// TestDurablePostgresMinIOTenantErasurePreservesAnotherTenant proves the
+// DAT-010/DAT-013 operator erasure boundary through real PostgreSQL and
+// MinIO authorities. A denied request preserves its target, while an
+// authorized erasure removes only that tenant's exact state-referenced object
+// and leaves another tenant's durable state and object untouched.
+func TestDurablePostgresMinIOTenantErasurePreservesAnotherTenant(t *testing.T) {
+	ctx := context.Background()
+	dsn := requiredArtifactInputEnvironment(t, "AR_RUNTIME_API_POSTGRES_DSN")
+	endpoint := requiredArtifactInputEnvironment(t, "AR_RUNTIME_API_MINIO_ENDPOINT")
+	access := requiredArtifactInputEnvironment(t, "AR_RUNTIME_API_MINIO_ACCESS_KEY")
+	secret := requiredArtifactInputEnvironment(t, "AR_RUNTIME_API_MINIO_SECRET_KEY")
+	bucket := requiredArtifactInputEnvironment(t, "AR_RUNTIME_API_MINIO_BUCKET")
+	minioClient, err := minio.New(endpoint, &minio.Options{Creds: credentials.NewStaticV4(access, secret, ""), Secure: false})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := minioClient.MakeBucket(ctx, bucket, minio.MakeBucketOptions{}); err != nil && minio.ToErrorResponse(err).Code != "BucketAlreadyOwnedByYou" {
+		t.Fatal(err)
+	}
+	content := durableTenantErasureContent(t, minioClient, bucket)
+	pool, err := pgxpool.New(ctx, dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	store, err := runtimepostgres.NewRuntimeStateStore(pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	clockSource, err := clock.NewFake(time.Date(2026, 8, 11, 1, 0, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatal(err)
+	}
+	compiler, err := runtimestate.NewCompiler(content)
+	if err != nil {
+		t.Fatal(err)
+	}
+	planner, err := runtimestate.NewRuntimeStatePlanner(clockSource, &artifactInputIDs{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	target, targetReference := seedDurableTenantErasureRevision(t, ctx, content, compiler, planner, store, "tenant-erasure-target")
+	other, otherReference := seedDurableTenantErasureRevision(t, ctx, content, compiler, planner, store, "tenant-erasure-other")
+	assertDurableReferenceExists(t, ctx, minioClient, bucket, target, "tenant-erasure-postgres", targetReference)
+	assertDurableReferenceExists(t, ctx, minioClient, bucket, other, "tenant-erasure-postgres", otherReference)
+
+	immutable, err := runtimecontent.NewMinIOImmutableClient(minioClient)
+	if err != nil {
+		t.Fatal(err)
+	}
+	objects, err := runtimecontent.NewS3ImmutableObjects(immutable, bucket)
+	if err != nil {
+		t.Fatal(err)
+	}
+	controller, err := runtimecontent.NewTenantErasureController(content, integrationErasureAuthorizer{allowed: true}, objects)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := runtimepostgres.LifecycleRequest{Action: runtimepostgres.LifecycleEraseTenant, Tenant: target, AuthorizationID: "operator-tenant-erasure-0001"}
+	if _, err := store.EraseTenantAndContent(ctx, integrationLifecycleAuthorizer{allowed: false}, request, controller); !errors.Is(err, runtimestate.ErrNotFoundOrDenied) {
+		t.Fatalf("deny tenant erasure error = %v, want safe denial", err)
+	}
+	assertDurableReferenceExists(t, ctx, minioClient, bucket, target, "tenant-erasure-postgres", targetReference)
+
+	receipt, err := store.EraseTenantAndContent(ctx, integrationLifecycleAuthorizer{allowed: true}, request, controller)
+	if err != nil {
+		t.Fatalf("erase target tenant through PostgreSQL and MinIO: %v", err)
+	}
+	if receipt.Tenant != target || len(receipt.Content.Deleted) != 1 || receipt.Content.Deleted[0] != targetReference || receipt.Content.Failed != nil {
+		t.Fatalf("target tenant erasure receipt = %#v", receipt)
+	}
+	assertDurableReferenceMissing(t, ctx, minioClient, bucket, target, "tenant-erasure-postgres", targetReference)
+	assertDurableReferenceExists(t, ctx, minioClient, bucket, other, "tenant-erasure-postgres", otherReference)
+	otherState, err := store.LoadRuntimeState(ctx, runtimestate.MutationScope{Tenant: other, Authority: runtimestate.AuthorityTenantAdministrator})
+	if err != nil {
+		t.Fatalf("load unaffected tenant after target erasure: %v", err)
+	}
+	if len(otherState.Revisions) != 1 || otherState.Revisions[0].Specification != otherReference {
+		t.Fatalf("unaffected tenant state = %#v, want exact retained revision", otherState)
+	}
+}
+
 func durableArtifactInputContent(t *testing.T, client *minio.Client, bucket string) *runtimecontent.Store {
 	t.Helper()
 	immutable, err := runtimecontent.NewMinIOImmutableClient(client)
@@ -289,6 +371,71 @@ func durableArtifactInputContent(t *testing.T, client *minio.Client, bucket stri
 		t.Fatal(err)
 	}
 	return content
+}
+
+func durableTenantErasureContent(t *testing.T, client *minio.Client, bucket string) *runtimecontent.Store {
+	t.Helper()
+	immutable, err := runtimecontent.NewMinIOImmutableClient(client)
+	if err != nil {
+		t.Fatal(err)
+	}
+	objects, err := runtimecontent.NewS3ImmutableObjects(immutable, bucket)
+	if err != nil {
+		t.Fatal(err)
+	}
+	content, err := runtimecontent.New("tenant-erasure-postgres", objects)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return content
+}
+
+func seedDurableTenantErasureRevision(t *testing.T, ctx context.Context, content *runtimecontent.Store, compiler *runtimestate.Compiler, planner *runtimestate.RuntimeStatePlanner, store runtimestate.RuntimeStateStore, tenantName string) (runtimecontent.TenantID, runtimecontent.Reference) {
+	t.Helper()
+	tenant, err := runtimecontent.ParseTenantID(tenantName)
+	if err != nil {
+		t.Fatal(err)
+	}
+	handoff, err := content.StageAgentSpecificationBody(ctx, tenant, runtimecontent.AgentSpecificationBody{Name: "erasable-" + tenantName, ModelProfile: "balanced", Instructions: "remove only after explicit operator authorization"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mutation, err := compiler.CompileRegisterAgentRevision(runtimestate.RegisterAgentRevisionCommand{Scope: runtimestate.MutationScope{Tenant: tenant, Authority: runtimestate.AuthorityTenantAdministrator}, IdempotencyKey: "register-" + tenantName, Specification: handoff})
+	if err != nil {
+		t.Fatal(err)
+	}
+	state, err := store.LoadRuntimeState(ctx, mutation.ReceiptBinding().Scope)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan, err := planner.Plan(ctx, state, mutation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.PersistTransitionPlan(ctx, plan); err != nil {
+		t.Fatal(err)
+	}
+	return tenant, plan.Result().Revision.Specification
+}
+
+func assertDurableReferenceExists(t *testing.T, ctx context.Context, client *minio.Client, bucket string, tenant runtimecontent.TenantID, contentRoot string, reference runtimecontent.Reference) {
+	t.Helper()
+	if _, err := client.StatObject(ctx, bucket, durableReferenceObjectKey(tenant, contentRoot, reference), minio.StatObjectOptions{}); err != nil {
+		t.Fatalf("stat durable immutable object %q: %v", reference.Digest, err)
+	}
+}
+
+func assertDurableReferenceMissing(t *testing.T, ctx context.Context, client *minio.Client, bucket string, tenant runtimecontent.TenantID, contentRoot string, reference runtimecontent.Reference) {
+	t.Helper()
+	if _, err := client.StatObject(ctx, bucket, durableReferenceObjectKey(tenant, contentRoot, reference), minio.StatObjectOptions{}); err == nil {
+		t.Fatalf("erased immutable object %q remains in MinIO", reference.Digest)
+	} else if response := minio.ToErrorResponse(err); response.Code != "NoSuchKey" && response.Code != "NoSuchObject" {
+		t.Fatalf("stat erased immutable object %q = %v, want exact missing-object response", reference.Digest, err)
+	}
+}
+
+func durableReferenceObjectKey(tenant runtimecontent.TenantID, contentRoot string, reference runtimecontent.Reference) string {
+	return string(tenant) + "/" + contentRoot + "/v1/sha256/" + strings.TrimPrefix(reference.Digest, "sha256:")
 }
 
 func newDurableArtifactInputRuntime(t *testing.T, content *runtimecontent.Store, store runtimestate.RuntimeStateStore, clockSource clock.Clock, ids runtimestate.IdentifierSource) (*runtimeapi.StateRuntime, *runtimestate.Compiler, *runtimestate.RuntimeStatePlanner) {
