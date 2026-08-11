@@ -64,7 +64,11 @@ func TestDurableBrokeredToolLifecyclePersistsApprovalAndFinalization(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer pool.Close()
+	defer func() {
+		if pool != nil {
+			pool.Close()
+		}
+	}()
 	store, err := runtimepostgres.NewRuntimeStateStore(pool)
 	if err != nil {
 		t.Fatal(err)
@@ -665,6 +669,10 @@ func TestDurableBrokeredToolLifecyclePersistsApprovalAndFinalization(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
+	broker, err = runtimetool.NewBroker(runtimetool.BrokerConfig{Store: store, Compiler: compiler, Planner: planner, Clock: source})
+	if err != nil {
+		t.Fatal(err)
+	}
 	restarted, err := runtimeapi.NewStateRuntime(runtimeapi.StateRuntimeConfig{Content: content, Compiler: compiler, Planner: planner, Store: store, ModelProfiles: []string{"balanced"}})
 	if err != nil {
 		t.Fatal(err)
@@ -683,6 +691,11 @@ func TestDurableBrokeredToolLifecyclePersistsApprovalAndFinalization(t *testing.
 	if err != nil || len(page.Calls) != 1 || page.Truncated || page.Calls[0].State != agentruntime.ToolCallSucceeded || page.Calls[0].Approval == nil || page.Calls[0].Approval.State != agentruntime.ApprovalApproved || page.Calls[0].Grant == nil || page.Calls[0].Grant.Uses != 1 || page.Calls[0].Execution == nil || page.Calls[0].Execution.Failure != nil {
 		t.Fatalf("restarted durable Tool inspection = %#v, %v", page, err)
 	}
+	state, err = store.LoadRuntimeState(ctx, workerScope)
+	if err != nil {
+		t.Fatal(err)
+	}
+	artifactsBeforeUncertain := len(state.Artifacts)
 	// A worker may have submitted an external operation before losing its
 	// acknowledgement. After the lease expires and the process restarts, the
 	// replacement worker is allowed to observe only that exact operation ID.
@@ -706,7 +719,7 @@ func TestDurableBrokeredToolLifecyclePersistsApprovalAndFinalization(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	uncertainAdmission, err := broker.Admit(ctx, runtimetool.AdmissionRequest{Tenant: tenant, Principal: principal, SessionID: uncertainSession, TurnID: uncertainTurn, ToolCallID: "tcall_1234567890ABCDEM", ApprovalID: "appr_1234567890ABCDEM", PolicyName: "durable-tool-policy", PolicyRevision: 1, ToolName: "sandbox", ActionDigest: digest, CapabilityDigest: digest, Action: agentruntime.ApprovalAction{Verb: "write", Target: "workspace-service"}, MaximumUses: 1, ExpiresAt: source.Now().Add(time.Hour), Descriptor: uncertainDescriptor, IdempotencyKey: "durable-tool-uncertain-admission"})
+	uncertainAdmission, err := broker.Admit(ctx, runtimetool.AdmissionRequest{Tenant: tenant, Principal: principal, SessionID: uncertainSession, TurnID: uncertainTurn, ToolCallID: "tcall_1234567890ABCDEQ", ApprovalID: "appr_1234567890ABCDEQ", PolicyName: "durable-tool-policy", PolicyRevision: 1, ToolName: "sandbox", ActionDigest: digest, CapabilityDigest: digest, Action: agentruntime.ApprovalAction{Verb: "write", Target: "workspace-service"}, MaximumUses: 1, ExpiresAt: source.Now().Add(time.Hour), Descriptor: uncertainDescriptor, IdempotencyKey: "durable-tool-uncertain-admission"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -779,7 +792,7 @@ func TestDurableBrokeredToolLifecyclePersistsApprovalAndFinalization(t *testing.
 			break
 		}
 	}
-	if uncertainExecution.State != runtimestate.ToolExecutionUncertain || uncertainExecution.Result != nil || uncertainExecution.Failure == nil || uncertainExecution.Failure.Message != "external operation status is unknown" || uncertainAdapter.executes != 0 || uncertainAdapter.reconciles != 1 || uncertainAdapter.reconciledOperationID != uncertainOperationID || len(state.Artifacts) != 1 {
+	if uncertainExecution.State != runtimestate.ToolExecutionUncertain || uncertainExecution.Result != nil || uncertainExecution.Failure == nil || uncertainExecution.Failure.Message != "external operation status is unknown" || uncertainAdapter.executes != 0 || uncertainAdapter.reconciles != 1 || uncertainAdapter.reconciledOperationID != uncertainOperationID || len(state.Artifacts) != artifactsBeforeUncertain {
 		t.Fatalf("uncertain durable recovery resubmitted or retained a false result: execution=%#v adapter=%#v artifacts=%#v", uncertainExecution, uncertainAdapter, state.Artifacts)
 	}
 	uncertainPage, err := restarted.InspectToolCalls(ctx, runtimeapi.Identity{Tenant: string(tenant), Principal: string(principal)}, uncertainSession, uncertainTurn)
