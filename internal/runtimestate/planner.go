@@ -670,6 +670,8 @@ func (planner *RuntimeStatePlanner) decideApproval(state *RuntimeState, binding 
 			state.Grants = append(state.Grants, CapabilityGrantRecord{
 				Tenant:               a.Tenant,
 				Principal:            a.Principal,
+				SessionID:            a.SessionID,
+				TurnID:               a.TurnID,
 				GrantID:              grantID,
 				ToolCallID:           a.ToolCallID,
 				CapabilityDigest:     a.CapabilityDigest,
@@ -728,7 +730,7 @@ func (planner *RuntimeStatePlanner) consumeCapabilityGrant(state *RuntimeState, 
 		if grant.GrantID != c.GrantID || grant.Tenant != binding.Scope.Tenant || grant.Principal != binding.Scope.Principal {
 			continue
 		}
-		if grant.ToolCallID != c.ToolCallID || grant.PolicyRevisionDigest != c.PolicyRevisionDigest || grant.RevokedAt != nil || !now.Before(grant.ExpiresAt) || grant.Uses >= grant.MaximumUses {
+		if grant.SessionID != c.SessionID || grant.TurnID != c.TurnID || grant.ToolCallID != c.ToolCallID || grant.PolicyRevisionDigest != c.PolicyRevisionDigest || grant.RevokedAt != nil || !now.Before(grant.ExpiresAt) || grant.Uses >= grant.MaximumUses {
 			return PlanResult{}, EffectSet{}, ErrConflict
 		}
 		grant.Uses++
@@ -749,7 +751,7 @@ func (planner *RuntimeStatePlanner) revokeCapabilityGrant(state *RuntimeState, b
 		if grant.GrantID != c.GrantID || grant.Tenant != binding.Scope.Tenant || grant.Principal != binding.Scope.Principal {
 			continue
 		}
-		if grant.ToolCallID != c.ToolCallID || grant.Uses != 0 || grant.RevokedAt != nil || !now.Before(grant.ExpiresAt) {
+		if grant.SessionID != c.SessionID || grant.TurnID != c.TurnID || grant.ToolCallID != c.ToolCallID || grant.Uses != 0 || grant.RevokedAt != nil || !now.Before(grant.ExpiresAt) {
 			return PlanResult{}, EffectSet{}, ErrConflict
 		}
 		for _, execution := range state.ToolExecutions {
@@ -775,7 +777,7 @@ func (planner *RuntimeStatePlanner) expireCapabilityGrant(state *RuntimeState, b
 		if grant.GrantID != c.GrantID || grant.Tenant != binding.Scope.Tenant || grant.Principal != binding.Scope.Principal {
 			continue
 		}
-		if grant.ToolCallID != c.ToolCallID || grant.RevokedAt != nil || now.Before(grant.ExpiresAt) {
+		if grant.SessionID != c.SessionID || grant.TurnID != c.TurnID || grant.ToolCallID != c.ToolCallID || grant.RevokedAt != nil || now.Before(grant.ExpiresAt) {
 			return PlanResult{}, EffectSet{}, ErrConflict
 		}
 		value := now
@@ -816,7 +818,7 @@ func (planner *RuntimeStatePlanner) beginToolExecution(state *RuntimeState, bind
 		if grant.GrantID != c.GrantID || grant.Tenant != binding.Scope.Tenant || grant.Principal != binding.Scope.Principal {
 			continue
 		}
-		if grant.ToolCallID != c.ToolCallID || grant.Uses == 0 || !now.Before(grant.ExpiresAt) {
+		if grant.SessionID != c.SessionID || grant.TurnID != c.TurnID || grant.ToolCallID != c.ToolCallID || grant.Uses == 0 || !now.Before(grant.ExpiresAt) {
 			return PlanResult{}, EffectSet{}, ErrConflict
 		}
 		record := ToolExecutionRecord{Tenant: binding.Scope.Tenant, Principal: binding.Scope.Principal, SessionID: c.SessionID, TurnID: c.TurnID, ToolCallID: c.ToolCallID, GrantID: c.GrantID, OperationID: c.OperationID, State: ToolExecutionIntent, CreatedAt: now, UpdatedAt: now, RetentionUntil: planner.retain(now, DataClassAuthorization)}
@@ -1018,19 +1020,10 @@ func (planner *RuntimeStatePlanner) cancel(state *RuntimeState, binding ReceiptB
 	// A cancellation withdraws any still-unused authority for this Turn before
 	// the worker can commit an execution intent. A consumed grant has already
 	// crossed that boundary and must instead reconcile its exact operation.
-	toolCalls := map[string]struct{}{}
-	for _, intent := range state.ToolIntents {
-		if intent.SessionID == command.SessionID && intent.TurnID == command.TurnID && intent.Tenant == binding.Scope.Tenant && intent.Principal == binding.Scope.Principal {
-			toolCalls[intent.ToolCallID] = struct{}{}
-		}
-	}
 	revokedGrants := 0
 	for index := range state.Grants {
 		grant := state.Grants[index]
-		if grant.Tenant != binding.Scope.Tenant || grant.Principal != binding.Scope.Principal || grant.Uses != 0 || grant.RevokedAt != nil {
-			continue
-		}
-		if _, belongsToCancelledTurn := toolCalls[grant.ToolCallID]; !belongsToCancelledTurn {
+		if grant.Tenant != binding.Scope.Tenant || grant.Principal != binding.Scope.Principal || grant.SessionID != command.SessionID || grant.TurnID != command.TurnID || grant.Uses != 0 || grant.RevokedAt != nil {
 			continue
 		}
 		value := now
@@ -1604,7 +1597,7 @@ func validateState(state RuntimeState) error {
 		}
 	}
 	for _, record := range state.Grants {
-		if duplicate(grants, record.GrantID) || record.MaximumUses == 0 || record.Uses > record.MaximumUses || record.ExpiresAt.IsZero() || (record.RevokedAt != nil && (record.RevokedAt.IsZero() || record.RevokedAt.Location() != time.UTC)) {
+		if duplicate(grants, record.GrantID) || validSession(record.SessionID) != nil || validTurn(record.TurnID) != nil || record.MaximumUses == 0 || record.Uses > record.MaximumUses || record.ExpiresAt.IsZero() || (record.RevokedAt != nil && (record.RevokedAt.IsZero() || record.RevokedAt.Location() != time.UTC)) {
 			return ErrIntegrity
 		}
 	}

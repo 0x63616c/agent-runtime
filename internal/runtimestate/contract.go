@@ -185,6 +185,8 @@ func (record ToolIntentRecord) Clone() ToolIntentRecord { return record }
 type CapabilityGrantRecord struct {
 	Tenant               runtimecontent.TenantID
 	Principal            runtimecontent.PrincipalID
+	SessionID            agentruntime.SessionID
+	TurnID               agentruntime.TurnID
 	GrantID              string
 	ToolCallID           string
 	CapabilityDigest     string
