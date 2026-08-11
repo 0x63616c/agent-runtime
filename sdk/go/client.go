@@ -70,6 +70,14 @@ type ArtifactStreamer interface {
 	OpenArtifact(context.Context, ArtifactID) (ArtifactStream, error)
 }
 
+// SessionArtifactLister is the additive public capability for discovering a
+// caller's immutable artifacts for one exact Session.
+type SessionArtifactLister interface {
+	// ListSessionArtifacts returns bounded metadata only; bytes require a
+	// separate caller-authorized Artifact read.
+	ListSessionArtifacts(context.Context, SessionID) (ArtifactPage, error)
+}
+
 // ToolCallInspector is the additive public capability for owner-scoped Tool-call inspection.
 type ToolCallInspector interface {
 	// InspectToolCalls returns bounded safe Tool intent, approval, grant, and execution projections.
@@ -224,13 +232,24 @@ func (client *Client) GetPolicy(ctx context.Context, name string, revision uint6
 	return doJSON[Policy](client, ctx, openAPIMethodGetPolicy, path, "", nil)
 }
 
-// ReadArtifact downloads bounded immutable content only after the server has
-// authorized the exact tenant/principal/artifact tuple.
+// ReadArtifact downloads a Content-Length-bounded immutable response only
+// after the server has authorized the exact tenant/principal/artifact tuple.
+// Call OpenArtifact for a trailer-verified streaming response.
 func (client *Client) ReadArtifact(ctx context.Context, artifactID ArtifactID) (ArtifactDownload, error) {
 	if _, err := ParseArtifactID(artifactID.String()); err != nil {
 		return ArtifactDownload{}, errors.New("read Artifact: invalid artifact ID")
 	}
 	return doArtifact(client, ctx, replacePath(openAPIPathReadArtifact, "artifact_id", artifactID.String()), artifactID)
+}
+
+// ListSessionArtifacts returns one bounded owner-scoped Artifact index for a
+// Session without downloading artifact bytes or exposing content storage.
+func (client *Client) ListSessionArtifacts(ctx context.Context, sessionID SessionID) (ArtifactPage, error) {
+	if _, err := ParseSessionID(sessionID.String()); err != nil {
+		return ArtifactPage{}, errors.New("list Session Artifacts: invalid session ID")
+	}
+	path := replacePath(openAPIPathListSessionArtifacts, "session_id", sessionID.String())
+	return doJSON[ArtifactPage](client, ctx, openAPIMethodListSessionArtifacts, path, "", nil)
 }
 
 // OpenArtifact opens a bounded Artifact response. Reaching EOF verifies its

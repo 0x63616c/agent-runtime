@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "observed_at_utc": "2026-08-11T16:13:00Z",
+  "proof_level": "local_tilt_e2e",
+  "scope": "One isolated declared local Stack exercised the public Workspace fixture lifecycle. This proves local Kubernetes composition only; it is not a production provider, Linux/KVM, Firecracker, or sandbox-execution claim.",
+  "commands": [
+    "go run ./tools/dev up --stack=m7-workspace-proof-4 --root . --kubeconfig=<redacted> --actor=local-development",
+    "go run ./tools/dev reconcile --stack=m7-workspace-proof-4 --root .",
+    "go test -tags=stackproof ./tools/dev -run '^TestDeclaredLocalWorkspaceFixturePublicLifecycle$' -count=1 -v -timeout=55s",
+    "go run ./tools/dev down --stack=m7-workspace-proof-4 --root ."
+  ],
+  "result": "passed",
+  "observations": {
+    "topology": "All 16 declared deployments reached Ready before the proof.",
+    "lifecycle": "The public route reached pending approval, performed a scoped role reset, reconnected through a fresh verified API forward, replayed the same approval idempotency key, and completed exactly one tool execution.",
+    "isolation_and_cancel": "Non-owner tool and artifact reads were safely denied; a second public pending approval was cancelled and did not create a tool execution.",
+    "no_sandbox_claim": "The owner artifact explicitly states that no Workspace service or sandbox was executed.",
+    "teardown": "The isolated namespace and owned Tilt and port-forward processes were verified absent after observation."
+  },
+  "redaction": "No secret values, bearer tokens, request headers, raw input, artifact body, runtime IDs, pod logs, kubeconfig bytes, database DSNs, or internal backend identifiers are retained."
+}

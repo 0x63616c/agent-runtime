@@ -96,7 +96,9 @@ func NewActivities(dispatcher StateDispatcher) (*Activities, error) {
 // therefore cannot manufacture runtime work: the command must name a durable
 // outbox record with the matching tenant, Session, and event route.
 type DurableStateDispatcher struct {
-	store runtimestate.RuntimeStateStore
+	store    runtimestate.RuntimeStateStore
+	compiler *runtimestate.Compiler
+	planner  *runtimestate.RuntimeStatePlanner
 }
 
 // NewDurableStateDispatcher creates the state-only activity authority. It has
@@ -106,6 +108,16 @@ func NewDurableStateDispatcher(store runtimestate.RuntimeStateStore) (*DurableSt
 		return nil, errors.New("create durable state dispatcher: state store is required")
 	}
 	return &DurableStateDispatcher{store: store}, nil
+}
+
+// NewDurableStateDispatcherWithInvocationScheduler composes the private
+// public-input-to-model-intent scheduler. It retains the exact durable outbox
+// route check and has no public API or content-read authority.
+func NewDurableStateDispatcherWithInvocationScheduler(store runtimestate.RuntimeStateStore, compiler *runtimestate.Compiler, planner *runtimestate.RuntimeStatePlanner) (*DurableStateDispatcher, error) {
+	if store == nil || compiler == nil || planner == nil {
+		return nil, errors.New("create durable state dispatcher: state, compiler, and planner are required")
+	}
+	return &DurableStateDispatcher{store: store, compiler: compiler, planner: planner}, nil
 }
 
 // Dispatch confirms the publisher-selected outbox route remains durable.
@@ -130,6 +142,9 @@ func (dispatcher *DurableStateDispatcher) Dispatch(ctx context.Context, command 
 			if string(record.SessionID) != command.SessionID || !matchesCommand(record.EventKind, command.Kind) || (record.State != runtimestate.OutboxClaimed && record.State != runtimestate.OutboxPublished) {
 				return errors.New("dispatch durable runtime state command: outbox route is not dispatchable")
 			}
+			if command.Kind == CommandInputAccepted && dispatcher.compiler != nil && dispatcher.planner != nil {
+				return dispatcher.beginInvocation(ctx, record)
+			}
 			return nil
 		}
 		if page.Next == "" || page.Next == after {
@@ -138,6 +153,58 @@ func (dispatcher *DurableStateDispatcher) Dispatch(ctx context.Context, command 
 		after = page.Next
 	}
 	return errors.New("dispatch durable runtime state command: outbox route is absent")
+}
+
+func (dispatcher *DurableStateDispatcher) beginInvocation(ctx context.Context, record runtimestate.OutboxRecord) error {
+	scope := runtimestate.MutationScope{Tenant: record.Tenant, Principal: record.Principal, Authority: runtimestate.AuthorityRuntimeWorker}
+	state, err := dispatcher.store.LoadRuntimeState(ctx, scope)
+	if err != nil {
+		return err
+	}
+	var session *runtimestate.SessionRecord
+	for index := range state.Sessions {
+		candidate := &state.Sessions[index]
+		if candidate.Tenant == record.Tenant && candidate.Principal == record.Principal && candidate.SessionID == record.SessionID {
+			session = candidate
+			break
+		}
+	}
+	var turn *runtimestate.TurnRecord
+	for index := range state.Turns {
+		candidate := &state.Turns[index]
+		if candidate.Tenant == record.Tenant && candidate.Principal == record.Principal && candidate.SessionID == record.SessionID && candidate.TurnID == record.TurnID {
+			turn = candidate
+			break
+		}
+	}
+	if session == nil || turn == nil {
+		return runtimestate.ErrNotFoundOrDenied
+	}
+	if turn.State != agentruntime.TurnRunning {
+		return nil
+	}
+	for _, invocation := range state.Invocations {
+		if invocation.Tenant == record.Tenant && invocation.Principal == record.Principal && invocation.SessionID == record.SessionID && invocation.TurnID == record.TurnID {
+			return nil
+		}
+	}
+	mutation, err := dispatcher.compiler.CompileBeginInvocationAttempt(runtimestate.BeginInvocationAttemptCommand{
+		Scope:                  scope,
+		IdempotencyKey:         "orchestration-invocation-" + string(record.OutboxID),
+		SessionID:              record.SessionID,
+		TurnID:                 record.TurnID,
+		OperationID:            runtimestate.OperationID("orchestration-invocation-" + string(record.OutboxID)),
+		ExpectedSessionVersion: session.Version,
+		ExpectedTurnVersion:    turn.Version,
+	})
+	if err != nil {
+		return err
+	}
+	plan, err := dispatcher.planner.Plan(ctx, state, mutation)
+	if err != nil {
+		return err
+	}
+	return dispatcher.store.PersistTransitionPlan(ctx, plan)
 }
 
 // DispatchStateCommand delivers one already-durable command to the state-backed dispatcher.

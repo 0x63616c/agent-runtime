@@ -13,6 +13,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/0x63616c/agent-runtime/internal/localdemoworker"
 	"github.com/0x63616c/agent-runtime/internal/roles"
 	"github.com/0x63616c/agent-runtime/internal/runtimeorchestration"
 )
@@ -93,7 +94,24 @@ func run(ctx context.Context, arguments []string, lookup func(string) (string, b
 	if config.Role() == roles.RoleOrchestrationCodec {
 		return serveCodecWorker(ctx, config, plan, listener, lookup)
 	}
+	if worker := config.LocalDemoWorker(); worker != nil && worker.Enabled {
+		return serveLocalDemoWorker(ctx, config, plan, listener, lookup)
+	}
 	return roles.Serve(ctx, plan, listener)
+}
+
+func serveLocalDemoWorker(ctx context.Context, config roles.Config, plan roles.Plan, listener net.Listener, lookup func(string) (string, bool)) error {
+	roleContext, cancel := context.WithCancel(ctx)
+	defer cancel()
+	results := make(chan error, 2)
+	go func() { results <- roles.Serve(roleContext, plan, listener) }()
+	go func() { results <- localdemoworker.Run(roleContext, config, lookup) }()
+	err := <-results
+	cancel()
+	if err != nil {
+		return err
+	}
+	return <-results
 }
 
 func serveCodecWorker(ctx context.Context, config roles.Config, plan roles.Plan, listener net.Listener, lookup func(string) (string, bool)) error {

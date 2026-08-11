@@ -182,7 +182,7 @@ func (worker *Worker) process(ctx context.Context, record runtimestate.OutboxRec
 		}
 		handoff, stageErr := worker.content.StageToolActionDescriptor(ctx, record.Tenant, response.Tool.Descriptor)
 		if stageErr != nil {
-			return stageErr
+			return fmt.Errorf("stage verified tool descriptor: %w", stageErr)
 		}
 		_, admitErr := worker.broker.Admit(ctx, runtimetool.AdmissionRequest{Tenant: record.Tenant, Principal: record.Principal, SessionID: record.SessionID, TurnID: record.TurnID, ToolCallID: response.Tool.ToolCallID, ApprovalID: agentruntime.ApprovalID(response.Tool.ApprovalID), PolicyName: response.Tool.PolicyName, PolicyRevision: response.Tool.PolicyRevision, ToolName: response.Tool.ToolName, ActionDigest: response.Tool.ActionDigest, CapabilityDigest: response.Tool.CapabilityDigest, Action: response.Tool.Action, MaximumUses: response.Tool.MaximumUses, ExpiresAt: response.Tool.ExpiresAt, Descriptor: handoff, IdempotencyKey: fmt.Sprintf("model-tool-%s-%d", record.OperationID, invocation.Fence)})
 		return admitErr

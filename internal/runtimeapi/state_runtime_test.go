@@ -126,6 +126,10 @@ func TestStateRuntimeReadsOnlyStateAuthorizedArtifactBytes(t *testing.T) {
 	if err != nil || string(artifact.Body) != "approved report" || artifact.Artifact.SHA256 == "" {
 		t.Fatalf("read artifact = %#v, %v", artifact, err)
 	}
+	page, err := runtime.ListSessionArtifacts(ctx, alice, session.ID)
+	if err != nil || page.Truncated || len(page.Artifacts) != 1 || page.Artifacts[0] != artifact.Artifact {
+		t.Fatalf("list session artifacts = %#v, %v", page, err)
+	}
 	artifactInput, err := runtime.SendInput(ctx, alice, agentruntime.SendInputRequest{SessionID: session.ID, IdempotencyKey: "artifact-reference-input", Parts: []agentruntime.ContentPart{{Kind: agentruntime.ContentArtifact, Artifact: &artifact.Artifact}}})
 	if err != nil || len(artifactInput.Input.Parts) != 1 || artifactInput.Input.Parts[0].Artifact == nil || *artifactInput.Input.Parts[0].Artifact != artifact.Artifact {
 		t.Fatalf("send authorized Artifact Input = %#v, %v", artifactInput, err)
@@ -144,6 +148,63 @@ func TestStateRuntimeReadsOnlyStateAuthorizedArtifactBytes(t *testing.T) {
 	}
 	if _, err := runtime.ReadArtifact(ctx, bob, plan.Result().Artifact.ArtifactID); !hasFailure(err, agentruntime.FailureNotFound) {
 		t.Fatalf("cross-principal artifact read error = %v, want safe not-found", err)
+	}
+	if _, err := runtime.ListSessionArtifacts(ctx, bob, session.ID); !hasFailure(err, agentruntime.FailureNotFound) {
+		t.Fatalf("cross-principal artifact listing error = %v, want safe not-found", err)
+	}
+}
+
+func TestStateRuntimeArtifactIndexIsSessionScopedAndBounded(t *testing.T) {
+	runtime, content, compiler, store, _ := newMemoryStateAuthority(t)
+	ctx := context.Background()
+	admin := runtimeapi.Identity{Tenant: "tenant-a", Principal: "admin", Admin: true}
+	alice := runtimeapi.Identity{Tenant: "tenant-a", Principal: "alice"}
+	agent, err := runtime.CreateAgent(ctx, admin, agentruntime.CreateAgentRequest{IdempotencyKey: "artifact-page-agent", Name: "assistant", ModelProfile: "balanced", Instructions: "safe"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := runtime.CreateSession(ctx, alice, agentruntime.CreateSessionRequest{IdempotencyKey: "artifact-page-first", AgentRevision: agent.RevisionID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstTurn, err := runtime.SendInput(ctx, alice, agentruntime.SendInputRequest{SessionID: first.ID, IdempotencyKey: "artifact-page-first-input", Parts: []agentruntime.ContentPart{{Kind: agentruntime.ContentText, Text: "first"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := runtime.CreateSession(ctx, alice, agentruntime.CreateSessionRequest{IdempotencyKey: "artifact-page-second", AgentRevision: agent.RevisionID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondTurn, err := runtime.SendInput(ctx, alice, agentruntime.SendInputRequest{SessionID: second.ID, IdempotencyKey: "artifact-page-second-input", Parts: []agentruntime.ContentPart{{Kind: agentruntime.ContentText, Text: "second"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tenant, _ := runtimecontent.ParseTenantID("tenant-a")
+	principal, _ := runtimecontent.ParsePrincipalID("alice")
+	register := func(sessionID agentruntime.SessionID, turnID agentruntime.TurnID, ordinal int) {
+		handoff, stageErr := content.StageArtifact(ctx, tenant, "text/plain", []byte(fmt.Sprintf("artifact-%03d", ordinal)))
+		if stageErr != nil {
+			t.Fatalf("stage artifact %d: %v", ordinal, stageErr)
+		}
+		mutation, compileErr := compiler.CompileRegisterArtifact(runtimestate.RegisterArtifactCommand{Scope: runtimestate.MutationScope{Tenant: tenant, Principal: principal, Authority: runtimestate.AuthorityRuntimeWorker}, IdempotencyKey: fmt.Sprintf("artifact-page-%03d", ordinal), SessionID: sessionID, TurnID: turnID, Artifact: handoff})
+		if compileErr != nil {
+			t.Fatalf("compile artifact %d: %v", ordinal, compileErr)
+		}
+		if _, applyErr := store.Apply(ctx, mutation); applyErr != nil {
+			t.Fatalf("persist artifact %d: %v", ordinal, applyErr)
+		}
+	}
+	for ordinal := 0; ordinal <= agentruntime.MaxArtifactsPerSession; ordinal++ {
+		register(first.ID, firstTurn.Turn.ID, ordinal)
+	}
+	register(second.ID, secondTurn.Turn.ID, agentruntime.MaxArtifactsPerSession+1)
+	firstPage, err := runtime.ListSessionArtifacts(ctx, alice, first.ID)
+	if err != nil || len(firstPage.Artifacts) != agentruntime.MaxArtifactsPerSession || !firstPage.Truncated {
+		t.Fatalf("bounded first-session artifact page = %#v, %v", firstPage, err)
+	}
+	secondPage, err := runtime.ListSessionArtifacts(ctx, alice, second.ID)
+	if err != nil || len(secondPage.Artifacts) != 1 || secondPage.Truncated {
+		t.Fatalf("same-principal second-session artifact page = %#v, %v", secondPage, err)
 	}
 }
 

@@ -22,6 +22,9 @@ const MaxToolCallsPerTurn = 64
 // MaxApprovalsPerPage bounds one owner-scoped approval inbox response.
 const MaxApprovalsPerPage = 64
 
+// MaxArtifactsPerSession bounds one owner-scoped Session Artifact index response.
+const MaxArtifactsPerSession = 256
+
 // ToolCallState is the safe public lifecycle of one model Tool intent.
 type ToolCallState string
 
@@ -52,10 +55,13 @@ type CapabilityGrant struct {
 
 // ToolExecution is a caller-safe terminal or in-progress tool observation.
 type ToolExecution struct {
-	State       ToolCallState `json:"state"`
-	Failure     *Failure      `json:"failure,omitempty"`
-	CreatedAt   time.Time     `json:"created_at"`
-	CompletedAt *time.Time    `json:"completed_at,omitempty"`
+	State ToolCallState `json:"state"`
+	// Result is the immutable owner-readable artifact produced by a successful
+	// tool execution. It is absent for failed, uncertain, and in-progress work.
+	Result      *ArtifactReference `json:"result,omitempty"`
+	Failure     *Failure           `json:"failure,omitempty"`
+	CreatedAt   time.Time          `json:"created_at"`
+	CompletedAt *time.Time         `json:"completed_at,omitempty"`
 }
 
 // Clone returns an independent ToolExecution snapshot.
@@ -64,6 +70,10 @@ func (execution *ToolExecution) Clone() *ToolExecution {
 		return nil
 	}
 	clone := *execution
+	if execution.Result != nil {
+		value := *execution.Result
+		clone.Result = &value
+	}
 	clone.Failure = execution.Failure.Clone()
 	if execution.CompletedAt != nil {
 		value := *execution.CompletedAt
@@ -270,6 +280,26 @@ type ArtifactReference struct {
 	MediaType string     `json:"media_type"`
 	SizeBytes int64      `json:"size_bytes"`
 	SHA256    string     `json:"sha256"`
+}
+
+// ArtifactPage is one bounded owner-scoped Artifact index for a Session.
+// It exposes immutable metadata only; Artifact bytes require ReadArtifact or
+// OpenArtifact and are authorized again for the exact caller.
+type ArtifactPage struct {
+	Artifacts []ArtifactReference `json:"artifacts"`
+	Truncated bool                `json:"truncated"`
+}
+
+// Clone returns an independent ArtifactPage snapshot.
+func (page ArtifactPage) Clone() ArtifactPage {
+	if page.Artifacts == nil {
+		// ArtifactPage is a JSON collection contract: an empty page is [] rather
+		// than null, including when a runtime has no retained artifacts yet.
+		page.Artifacts = []ArtifactReference{}
+	} else {
+		page.Artifacts = append([]ArtifactReference(nil), page.Artifacts...)
+	}
+	return page
 }
 
 // ArtifactDownload is one authorized immutable artifact read.  It contains

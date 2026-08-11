@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "observed_at_utc": "2026-08-11T13:41:07Z",
+  "proof_level": "local_tilt_e2e",
+  "scope": "One isolated declared local Stack exercised the public research-dossier demo lifecycle. This proves local Kubernetes composition only; it is not a production provider, Codex subscription, Linux/KVM, or Firecracker claim.",
+  "commands": [
+    "go run ./tools/dev up --stack=m6-workers-proof-14 --root . --kubeconfig=<redacted> --actor=local-development",
+    "go test -tags=stackproof ./tools/dev -run TestLocalDemoWorkerPublicApprovalAndArtifactLifecycle -count=1 -v",
+    "GET /v1/artifacts/<owner-authorized-artifact-id> with developer credential and integrity-checked streaming response",
+    "go run ./tools/dev down --stack=m6-workers-proof-14 --root ."
+  ],
+  "result": "passed",
+  "observations": {
+    "topology": "All 16 declared deployments reached Ready, including runtime-api, three orchestration workers, model, and tool.",
+    "durable_lifecycle": "A public administrator policy and public input produced exactly one fenced invocation, one pending owner approval, one approved bounded grant, and one succeeded tool execution.",
+    "owner_artifact": "The owner-authenticated streaming artifact response returned HTTP 200, 114 bytes, and a Digest trailer equal to the durable result reference SHA-256.",
+    "teardown": "The owned namespace, generated secrets, local claims, port-forward, Tilt process, and local Stack process were removed after the successful observation."
+  },
+  "redaction": "No generated secret values, bearer tokens, request headers, raw user input, artifact body, full runtime IDs, raw pod logs, kubeconfig bytes, database DSNs, capability state, or internal backend identifiers are retained."
+}

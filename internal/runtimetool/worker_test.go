@@ -80,14 +80,16 @@ func TestWorkerFinalizesAuthorizedToolActionsAndReconcilesLostClaims(t *testing.
 			}
 			if test.recovering {
 				record := toolOutbox(t, ctx, store, tenant)
-				claim, err := compiler.CompileClaimOutbox(runtimestate.ClaimOutboxCommand{Scope: runtimestate.MutationScope{Tenant: tenant, Authority: runtimestate.AuthorityOutboxPublisher}, IdempotencyKey: "lost-tool-claim", OutboxID: record.OutboxID, ExpectedVersion: record.Version, Claimer: "lost-tool-worker", ClaimUntil: now.Add(time.Minute)})
+				// The bounded restart lease must recover by observing the same
+				// OperationID, never by issuing a second external execution.
+				claim, err := compiler.CompileClaimOutbox(runtimestate.ClaimOutboxCommand{Scope: runtimestate.MutationScope{Tenant: tenant, Authority: runtimestate.AuthorityOutboxPublisher}, IdempotencyKey: "lost-tool-claim", OutboxID: record.OutboxID, ExpectedVersion: record.Version, Claimer: "lost-tool-worker", ClaimUntil: now.Add(10 * time.Second)})
 				if err != nil {
 					t.Fatal(err)
 				}
 				if _, err := store.Apply(ctx, claim); err != nil {
 					t.Fatal(err)
 				}
-				if err := source.Advance(time.Minute + time.Nanosecond); err != nil {
+				if err := source.Advance(10*time.Second + time.Nanosecond); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -121,6 +123,15 @@ func TestWorkerFinalizesAuthorizedToolActionsAndReconcilesLostClaims(t *testing.
 			if len(state.ToolExecutions) != 1 || state.ToolExecutions[0].State != test.wantState {
 				t.Fatalf("tool execution state = %#v, want %s", state.ToolExecutions, test.wantState)
 			}
+			if !test.cancel {
+				wantTurn := agentruntime.TurnSucceeded
+				if test.wantState != runtimestate.ToolExecutionSucceeded {
+					wantTurn = agentruntime.TurnFailed
+				}
+				if len(state.Turns) != 1 || state.Turns[0].State != wantTurn {
+					t.Fatalf("terminal tool outcome left Turn = %#v, want %s", state.Turns, wantTurn)
+				}
+			}
 			if test.corrupt && (state.ToolExecutions[0].Failure == nil || state.ToolExecutions[0].Failure.Message != "verified tool action descriptor is invalid") {
 				t.Fatalf("corrupt descriptor outcome = %#v", state.ToolExecutions[0])
 			}
@@ -133,8 +144,15 @@ func TestWorkerFinalizesAuthorizedToolActionsAndReconcilesLostClaims(t *testing.
 			if !test.corrupt && !test.missing && !test.cancel && !hasAuditKind(state.Audit, "capability_grant.exhausted") {
 				t.Fatalf("terminal max-use grant lacks exhausted audit: %#v", state.Audit)
 			}
-			if len(state.Events) == 0 || state.Events[len(state.Events)-1].Kind != agentruntime.EventSandboxOperationFinalized {
-				t.Fatalf("tool terminal event = %#v, want durable sandbox finalization", state.Events)
+			foundFinalizationEvent := false
+			for _, event := range state.Events {
+				if event.Kind == agentruntime.EventSandboxOperationFinalized && event.OperationID == execution.OperationID {
+					foundFinalizationEvent = true
+					break
+				}
+			}
+			if !foundFinalizationEvent {
+				t.Fatalf("tool terminal events = %#v, want durable sandbox finalization", state.Events)
 			}
 			foundFinalizationRoute := false
 			for _, record := range state.Outbox {
@@ -209,6 +227,50 @@ func TestWorkerConsumesApprovedGrantAndResumesAfterConsumeBeforeIntent(t *testin
 				t.Fatalf("tool executions = %#v, want one succeeded deterministic execution", state.ToolExecutions)
 			}
 		})
+	}
+}
+
+func TestWorkerTraversesOutboxPagesBeforeExecutingApprovedTool(t *testing.T) {
+	ctx := context.Background()
+	now := time.Date(2026, 8, 11, 12, 0, 0, 0, time.UTC)
+	objects := &toolObjects{values: map[string][]byte{}}
+	content, err := runtimecontent.New("runtime-content", objects)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tenant, _ := runtimecontent.ParseTenantID("tenant-a")
+	principal, _ := runtimecontent.ParsePrincipalID("principal-a")
+	compiler, _ := runtimestate.NewCompiler(content)
+	source, _ := clock.NewFake(now)
+	planner, _ := runtimestate.NewRuntimeStatePlanner(source, &toolIDs{})
+	store, _ := runtimestate.NewMemoryRuntimeStateStore(planner)
+	adminScope := runtimestate.MutationScope{Tenant: tenant, Authority: runtimestate.AuthorityTenantAdministrator}
+	// Each registration emits auditable outbox facts that a tool worker must
+	// skip. Seed more than its bounded read page before the executable record.
+	for index := 0; index < 33; index++ {
+		policy, compileErr := compiler.CompileRegisterPolicyRevision(runtimestate.RegisterPolicyRevisionCommand{Scope: adminScope, IdempotencyKey: fmt.Sprintf("page-policy-%d", index), Name: fmt.Sprintf("page-policy-%d", index), Rules: []agentruntime.PolicyRule{{ToolName: fmt.Sprintf("page-tool-%d", index), Decision: agentruntime.PolicyDenied}}})
+		if compileErr != nil {
+			t.Fatalf("compile stale outbox policy %d: %v", index, compileErr)
+		}
+		if _, applyErr := store.Apply(ctx, policy); applyErr != nil {
+			t.Fatalf("persist stale outbox policy %d: %v", index, applyErr)
+		}
+	}
+	_, _, execution, _ := createToolExecution(t, ctx, content, compiler, store, tenant, principal, now)
+	adapter := &recordingAdapter{response: runtimetool.Response{Output: []byte("page traversal completed")}}
+	worker, err := runtimetool.NewWorker(runtimetool.Config{Store: store, Tenants: store, Compiler: compiler, Planner: planner, Clock: source, Content: content, Adapter: adapter, Claimer: "tool-worker"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := worker.ScanOnce(ctx); err != nil {
+		t.Fatalf("scan paginated tool outbox: %v", err)
+	}
+	state, err := store.LoadRuntimeState(ctx, runtimestate.MutationScope{Tenant: tenant, Principal: principal, Authority: runtimestate.AuthorityRuntimeWorker})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if adapter.executes != 1 || len(state.ToolExecutions) != 1 || state.ToolExecutions[0].OperationID != execution.OperationID || state.ToolExecutions[0].State != runtimestate.ToolExecutionSucceeded {
+		t.Fatalf("paged tool execution = calls=%d executions=%#v", adapter.executes, state.ToolExecutions)
 	}
 }
 

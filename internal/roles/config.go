@@ -71,6 +71,18 @@ type Config struct {
 	listenAddress string
 	dependencies  []dependency
 	worker        *WorkerConfig
+	localDemo     *LocalDemoWorkerConfig
+}
+
+// LocalDemoWorker returns the explicitly declared local-only fixture
+// capability. A nil result means this role remains a health/configuration
+// process and must not invent a provider or tool adapter.
+func (config Config) LocalDemoWorker() *LocalDemoWorkerConfig {
+	if config.localDemo == nil {
+		return nil
+	}
+	clone := *config.localDemo
+	return &clone
 }
 
 // Role returns the one trust boundary selected by this Config.
@@ -120,6 +132,23 @@ type WorkerConfig struct {
 	AuditSink *AuditSinkConfig `json:"audit_sink,omitempty"`
 }
 
+// LocalDemoWorkerConfig declares the intentionally deterministic local Stack
+// fixture used for end-to-end topology evidence. It is not a provider profile,
+// accepts no production credential, and is rejected outside the model/tool
+// process roles.
+type LocalDemoWorkerConfig struct {
+	Enabled bool   `json:"enabled"`
+	Mode    string `json:"mode"`
+	// Fixture identifies the one reviewed local behavior. It is deliberately
+	// not inferred from an Agent, Tenant, prompt, or Tool name.
+	Fixture                     string `json:"fixture"`
+	StateDSNEnvironment         string `json:"state_dsn_environment"`
+	ContentEndpoint             string `json:"content_endpoint"`
+	ContentAccessKeyEnvironment string `json:"content_access_key_environment"`
+	ContentSecretKeyEnvironment string `json:"content_secret_key_environment"`
+	ContentBucket               string `json:"content_bucket"`
+}
+
 // AuditSinkConfig declares one bounded HTTPS audit-delivery capability. It
 // contains no credentials; transport authorization is operator-owned.
 type AuditSinkConfig struct {
@@ -138,12 +167,13 @@ type Dependency struct {
 }
 
 type document struct {
-	Version       int           `json:"version"`
-	Role          Role          `json:"role"`
-	Namespace     string        `json:"namespace"`
-	ListenAddress string        `json:"listen_address"`
-	Dependencies  []Dependency  `json:"dependencies"`
-	Worker        *WorkerConfig `json:"worker,omitempty"`
+	Version       int                    `json:"version"`
+	Role          Role                   `json:"role"`
+	Namespace     string                 `json:"namespace"`
+	ListenAddress string                 `json:"listen_address"`
+	Dependencies  []Dependency           `json:"dependencies"`
+	Worker        *WorkerConfig          `json:"worker,omitempty"`
+	LocalDemo     *LocalDemoWorkerConfig `json:"local_demo_worker,omitempty"`
 }
 
 type dependency struct {
@@ -204,6 +234,18 @@ func KnownCredentialEnvironmentNames() []string {
 			known = append(known, requirement.secretEnvironment)
 		}
 	}
+	// These names can be admitted only by an explicit local_demo_worker
+	// declaration below. Listing them here makes a leaked demo capability fail
+	// closed in every ordinary role process.
+	for _, environment := range []string{"LOCAL_DEMO_STATE_DSN", "LOCAL_DEMO_CONTENT_ACCESS_KEY", "LOCAL_DEMO_CONTENT_SECRET_KEY"} {
+		seen[environment] = struct{}{}
+	}
+	sort.Strings(known)
+	for environment := range seen {
+		if !slices.Contains(known, environment) {
+			known = append(known, environment)
+		}
+	}
 	sort.Strings(known)
 	return known
 }
@@ -243,13 +285,28 @@ func Parse(input io.Reader) (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
-	if err := validateWorker(decoded.Role, decoded.Worker); err != nil {
+	if err := validateWorker(decoded.Role, decoded.Worker, decoded.LocalDemo); err != nil {
 		return Config{}, err
 	}
-	return Config{role: decoded.Role, namespace: decoded.Namespace, listenAddress: decoded.ListenAddress, dependencies: dependencies, worker: decoded.Worker}, nil
+	return Config{role: decoded.Role, namespace: decoded.Namespace, listenAddress: decoded.ListenAddress, dependencies: dependencies, worker: decoded.Worker, localDemo: decoded.LocalDemo}, nil
 }
 
-func validateWorker(role Role, worker *WorkerConfig) error {
+func validateWorker(role Role, worker *WorkerConfig, localDemo *LocalDemoWorkerConfig) error {
+	if localDemo != nil {
+		if role != RoleModel && role != RoleTool {
+			return errors.New("validate runtime role configuration: local demo worker is only allowed for model or tool")
+		}
+		if !localDemo.Enabled {
+			if worker != nil || localDemo.Mode != "disabled" || localDemo.Fixture != "" || localDemo.StateDSNEnvironment != "" || localDemo.ContentEndpoint != "" || localDemo.ContentAccessKeyEnvironment != "" || localDemo.ContentSecretKeyEnvironment != "" || localDemo.ContentBucket != "" {
+				return errors.New("validate runtime role configuration: disabled local demo worker capability is invalid")
+			}
+			return nil
+		}
+		if worker != nil || localDemo.Mode != "local-demo-v1" || localDemo.Fixture != "workspace-approval-v1" || localDemo.StateDSNEnvironment != "LOCAL_DEMO_STATE_DSN" || !validEndpoint(localDemo.ContentEndpoint) || localDemo.ContentAccessKeyEnvironment != "LOCAL_DEMO_CONTENT_ACCESS_KEY" || localDemo.ContentSecretKeyEnvironment != "LOCAL_DEMO_CONTENT_SECRET_KEY" || !validWorkerSegment(localDemo.ContentBucket) {
+			return errors.New("validate runtime role configuration: local demo worker capability is incomplete")
+		}
+		return nil
+	}
 	if role != RoleOrchestrationCodec {
 		if worker != nil {
 			return errors.New("validate runtime role configuration: worker is only allowed for orchestration-codec")
@@ -389,6 +446,11 @@ func Prepare(ctx context.Context, config Config, source SecretSource) (Plan, err
 			allowed[dependency.secretEnvironment] = struct{}{}
 		}
 	}
+	if config.localDemo != nil && config.localDemo.Enabled {
+		for _, environment := range []string{config.localDemo.StateDSNEnvironment, config.localDemo.ContentAccessKeyEnvironment, config.localDemo.ContentSecretKeyEnvironment} {
+			allowed[environment] = struct{}{}
+		}
+	}
 	known := make(map[string]struct{}, len(KnownCredentialEnvironmentNames()))
 	for _, environment := range KnownCredentialEnvironmentNames() {
 		known[environment] = struct{}{}
@@ -409,7 +471,7 @@ func Prepare(ctx context.Context, config Config, source SecretSource) (Plan, err
 			return Plan{}, errors.Newf("prepare runtime role: known credential %s is not entitled to role %s", environment, config.role)
 		}
 	}
-	secretEnvironments := make([]string, 0, len(config.dependencies))
+	secretEnvironments := make([]string, 0, len(config.dependencies)+3)
 	for _, dependency := range config.dependencies {
 		if dependency.secretEnvironment == "" {
 			continue
@@ -422,6 +484,18 @@ func Prepare(ctx context.Context, config Config, source SecretSource) (Plan, err
 			return Plan{}, errors.Newf("prepare runtime role: required credential %s is unavailable", dependency.secretEnvironment)
 		}
 		secretEnvironments = append(secretEnvironments, dependency.secretEnvironment)
+	}
+	if config.localDemo != nil && config.localDemo.Enabled {
+		for _, environment := range []string{config.localDemo.StateDSNEnvironment, config.localDemo.ContentAccessKeyEnvironment, config.localDemo.ContentSecretKeyEnvironment} {
+			value, found, err := source.Lookup(ctx, environment)
+			if err != nil {
+				return Plan{}, errors.Wrapf(err, "prepare runtime role: read local demo credential %s", environment)
+			}
+			if !found || value == "" {
+				return Plan{}, errors.Newf("prepare runtime role: required local demo credential %s is unavailable", environment)
+			}
+			secretEnvironments = append(secretEnvironments, environment)
+		}
 	}
 	sort.Strings(secretEnvironments)
 	return Plan{role: config.role, namespace: config.namespace, listenAddress: config.listenAddress, secretEnvironments: secretEnvironments}, nil

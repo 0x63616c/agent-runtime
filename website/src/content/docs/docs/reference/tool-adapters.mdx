@@ -1,0 +1,53 @@
+---
+title: Tool adapters
+description: The broker-only boundary for built-in, sandbox, and MCP tool execution.
+---
+
+# Tool adapters
+
+A Tool call is model intent, not execution authority. The private Tool broker
+evaluates the pinned Policy revision, records the authorization decision, and
+issues a bounded Capability grant only after any required Approval. The Tool
+worker consumes that grant and reads one immutable, tenant-bound action
+descriptor before it can call an adapter. No public HTTP endpoint, SDK client,
+or model-provider request can invoke an adapter directly.
+
+Every external-effect adapter receives the runtime Operation ID as its
+application idempotency key. Recovery must observe that exact operation and
+must not submit the original effect again. If the adapter cannot prove a
+terminal result, it reports an uncertain outcome rather than claiming exactly
+once execution.
+
+## MCP Streamable HTTP
+
+The implemented MCP adapter is private runtime infrastructure. It supports
+the standard Streamable HTTP transport with JSON and SSE JSON-RPC responses.
+It pins protocol version `2025-11-25`, negotiates the `tools` capability,
+sends `notifications/initialized`, preserves the negotiated session and
+protocol headers, and uses a bounded `tools/list` lookup before `tools/call`.
+An operator pins each server reference, endpoint, server Tool name, input-schema
+digest, and operation-ID argument. The immutable `mcp.tool/v1` descriptor holds
+only that server reference, Tool name, and bounded JSON arguments; it cannot
+carry a URL, credential, session, or capability grant.
+
+The adapter uses HTTPS by default. Loopback HTTP is an explicit test-only
+fixture setting. It refuses redirects, malformed/oversized JSON-RPC results,
+unnegotiated schemas, and non-pinned Tools. A credential source supplies the
+Authorization value only while each outbound request is constructed; no
+credential value is retained in descriptors, durable state, events, artifacts,
+or diagnostic errors. A caller timeout sends the standard
+`notifications/cancelled` request for the matching in-flight operation, then
+reports uncertainty. Connection loss is not cancellation and never causes an
+automatic resubmission.
+
+Reconciliation calls only the separately pinned status Tool with the exact
+Operation ID. That Tool must return a matching terminal operation state.
+Anything else—including a transport failure, a missing/mismatched status, or
+an in-progress state—remains uncertain.
+
+The adapter deliberately does **not** implement MCP stdio. Launching an MCP
+server subprocess needs a separate declared executable, argv-only authority,
+environment allow-list, process/resource policy, and lifecycle evidence; it
+is not inferred from a Tool descriptor. The adapter also does not prove
+Workspace Agent Firecracker execution or hostile-tenant isolation. Those are
+separate M4 Linux/KVM acceptance requirements.

@@ -142,6 +142,27 @@ func TestHTTPClientOpensArtifactWithoutBufferingAndVerifiesTheTrailer(t *testing
 	}
 }
 
+func TestHTTPClientReadArtifactRequiresMatchingContentLength(t *testing.T) {
+	t.Parallel()
+	credential, _ := agentruntime.NewStaticBearerCredential("test-token-000000")
+	body := "four"
+	digest := sha256.Sum256([]byte(body))
+	client, err := agentruntime.NewClient(agentruntime.ClientConfig{BaseURL: "https://runtime.example", HTTPClient: &http.Client{Transport: roundTripperFunc(func(request *http.Request) (*http.Response, error) {
+		header := make(http.Header)
+		header.Set("X-Request-ID", request.Header.Get("X-Request-ID"))
+		header.Set("Content-Type", "text/plain")
+		header.Set("Content-Length", "5")
+		header.Set("Digest", "sha-256="+hex.EncodeToString(digest[:]))
+		return &http.Response{StatusCode: http.StatusOK, Header: header, Body: io.NopCloser(strings.NewReader(body))}, nil
+	})}, Credentials: credential, RequestIDs: fixedRequestIDs{}})
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	if _, err := client.ReadArtifact(context.Background(), "art_0000000000000001"); err == nil || !strings.Contains(err.Error(), "invalid content length") {
+		t.Fatalf("ReadArtifact error = %v, want bounded content-length refusal", err)
+	}
+}
+
 func TestHTTPClientRejectsArtifactStreamDigestMismatchAndSupportsCancellationClose(t *testing.T) {
 	credential, _ := agentruntime.NewStaticBearerCredential("test-token-000000")
 	body := []byte("streamed artifact bytes")
