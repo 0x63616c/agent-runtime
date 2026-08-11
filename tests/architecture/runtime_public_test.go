@@ -47,6 +47,22 @@ var _ = Describe("public Agent Runtime Go contract", func() {
 		Expect(imports).To(BeEmpty())
 	})
 
+	It("keeps Durable Chat on the public SDK and HTTP boundary", func() {
+		root, err := filepath.Abs(filepath.Join("..", "..", "examples", "durable-chat"))
+		Expect(err).NotTo(HaveOccurred())
+		files, err := filepath.Glob(filepath.Join(root, "*.go"))
+		Expect(err).NotTo(HaveOccurred())
+		commandFiles, err := filepath.Glob(filepath.Join(root, "cmd", "durable-chat", "*.go"))
+		Expect(err).NotTo(HaveOccurred())
+		files = append(files, commandFiles...)
+		Expect(files).NotTo(BeEmpty())
+		for _, file := range files {
+			imports, importErr := forbiddenExampleImports(file)
+			Expect(importErr).NotTo(HaveOccurred(), file)
+			Expect(imports).To(BeEmpty(), file)
+		}
+	})
+
 	It("lets a release consumer compile the public SDK and OpenAPI-backed additive capabilities without workspace state", func() {
 		root, err := filepath.Abs(filepath.Join("..", ".."))
 		Expect(err).NotTo(HaveOccurred())

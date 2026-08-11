@@ -10,7 +10,16 @@ shows the explicit `OperationRequest` shape and finite `ResourceLimits`; it
 does not start a sandbox because no public control transport or backend is
 composed yet.
 
-Durable Chat, Workspace Agent, and Research Dossier are required public-contract
-applications, but none is implemented in M0. This page will link executable
-tutorials only when the examples consume the real public HTTP contract and Go
-SDK and pass their clean local Tilt demonstrations.
+Durable Chat now has a loopback web UI and terminal UI at
+[`examples/durable-chat`](https://github.com/0x63616c/agent-runtime/tree/main/examples/durable-chat).
+It uses only the public Go SDK/HTTP contract to create/resume Sessions, queue
+input, reconnect events by cursor, inspect state, and cancel Turns. Its web
+server owns the local SDK bearer so the browser never receives it.
+
+The example is not a Codex subscription canary. The official production
+subscription Model surface remains blocked, so no example may label its model
+path subscription-verified until the protected live canary is retained.
+
+Workspace Agent and Research Dossier are not yet implemented. The complete
+three-example local Tilt E2E suite is also not complete, so this page does not
+claim a clean local demonstration yet.
