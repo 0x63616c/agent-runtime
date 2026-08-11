@@ -62,6 +62,17 @@ func (executor HostProcessExecutor) ReapAuthenticatedMount(ctx context.Context, 
 	return executor.Mount.Reap(ctx, envelope)
 }
 
+// ReapAuthenticatedSnapshotRestore converges the fixed guest sink and exact
+// snapshot lease after cancellation, a process crash, or terminal delivery.
+// Like mount cleanup, it stays callable while profiles are unavailable: a
+// withdrawn capability must never strand an already-started protected sink.
+func (executor HostProcessExecutor) ReapAuthenticatedSnapshotRestore(ctx context.Context, envelope sandboxhostprotocol.Envelope) error {
+	if executor.Host == nil || executor.Restore == nil {
+		return fmt.Errorf("reap authenticated Firecracker snapshot restore: %w", ErrCapabilityUnavailable)
+	}
+	return executor.Restore.Reap(ctx, envelope)
+}
+
 // Execute hands an already-verified envelope to the sole Firecracker guest-dispatch gate.
 func (executor HostProcessExecutor) Execute(ctx context.Context, envelope sandboxhostprotocol.Envelope) error {
 	if executor.Host == nil {

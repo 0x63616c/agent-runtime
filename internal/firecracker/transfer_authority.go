@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/0x63616c/agent-runtime/internal/clock"
@@ -30,11 +32,14 @@ const GuestDataPlaneReceiptVersion = "agent-runtime.guest-data-plane-receipt/v1"
 // GuestTransferCommand is one canonical transfer direction bound to the same
 // process, operation, fence, and expiry as its authenticated host envelope.
 // Exactly one request is present. Neither request has a representation for
-// bytes: copy-in names an immutable source and copy-out returns a reference.
+// bytes: copy-in/archive-in names an immutable source and copy-out returns a
+// reference. Archive-in is deliberately a separate command arm so a regular
+// file cannot silently acquire directory-materialization authority.
 type GuestTransferCommand struct {
-	Version string                  `json:"version"`
-	CopyIn  *sandbox.CopyInRequest  `json:"copy_in,omitempty"`
-	CopyOut *sandbox.CopyOutRequest `json:"copy_out,omitempty"`
+	Version   string                  `json:"version"`
+	CopyIn    *sandbox.CopyInRequest  `json:"copy_in,omitempty"`
+	ArchiveIn *sandbox.CopyInRequest  `json:"archive_in,omitempty"`
+	CopyOut   *sandbox.CopyOutRequest `json:"copy_out,omitempty"`
 }
 
 // GuestSnapshotRestoreCommand binds an admitted store restore request to the
@@ -56,6 +61,7 @@ type TransferReceipt struct {
 	FencingToken   uint64               `json:"fencing_token"`
 	Kind           string               `json:"kind"`
 	Artifact       *sandbox.ArtifactRef `json:"artifact,omitempty"`
+	ArchiveDigest  string               `json:"archive_digest,omitempty"`
 	SnapshotID     string               `json:"snapshot_id,omitempty"`
 	SnapshotDigest string               `json:"snapshot_digest,omitempty"`
 	CompletedAt    time.Time            `json:"completed_at"`
@@ -83,17 +89,26 @@ type TransferExecutionAuthority struct {
 type SnapshotRestoreExecutionAuthority struct {
 	store   *sandboxresource.Store
 	sink    sandboxresource.SnapshotRestoreSink
+	reaper  SnapshotRestoreSinkReaper
 	journal *sandboxhostjournal.Journal
 	clock   clock.Clock
+}
+
+// SnapshotRestoreSinkReaper removes only the sink state belonging to one
+// exact restore request. Implementations must be idempotent: it is invoked
+// after cancellation and durable recovery, never as a broad host cleanup.
+type SnapshotRestoreSinkReaper interface {
+	ReapSnapshotRestore(context.Context, sandboxresource.SnapshotRestoreRequest) error
 }
 
 // NewSnapshotRestoreExecutionAuthority freezes one store/sink/journal/clock
 // set at the composition root; a payload cannot replace any of those ports.
 func NewSnapshotRestoreExecutionAuthority(store *sandboxresource.Store, sink sandboxresource.SnapshotRestoreSink, journal *sandboxhostjournal.Journal, sourceClock clock.Clock) (*SnapshotRestoreExecutionAuthority, error) {
-	if store == nil || sink == nil || journal == nil || sourceClock == nil {
+	reaper, ok := sink.(SnapshotRestoreSinkReaper)
+	if store == nil || sink == nil || !ok || reaper == nil || journal == nil || sourceClock == nil {
 		return nil, fmt.Errorf("create guest snapshot restore authority: %w", ErrCapabilityUnavailable)
 	}
-	return &SnapshotRestoreExecutionAuthority{store: store, sink: sink, journal: journal, clock: sourceClock}, nil
+	return &SnapshotRestoreExecutionAuthority{store: store, sink: sink, reaper: reaper, journal: journal, clock: sourceClock}, nil
 }
 
 // NewTransferExecutionAuthority freezes all host-selected data-plane ports.
@@ -123,8 +138,18 @@ func DecodeGuestTransferCommand(payload []byte) (GuestTransferCommand, error) {
 	if err := decoder.Decode(&trailing); err == nil {
 		return GuestTransferCommand{}, fmt.Errorf("decode guest transfer command: %w", ErrCapabilityUnavailable)
 	}
+	requestCount := 0
+	if command.CopyIn != nil {
+		requestCount++
+	}
+	if command.ArchiveIn != nil {
+		requestCount++
+	}
+	if command.CopyOut != nil {
+		requestCount++
+	}
 	canonical, err := json.Marshal(command)
-	if err != nil || !bytes.Equal(canonical, payload) || command.Version != GuestTransferOperationKind || (command.CopyIn == nil) == (command.CopyOut == nil) {
+	if err != nil || !bytes.Equal(canonical, payload) || command.Version != GuestTransferOperationKind || requestCount != 1 {
 		return GuestTransferCommand{}, fmt.Errorf("decode guest transfer command: %w", ErrCapabilityUnavailable)
 	}
 	return command, nil
@@ -185,6 +210,11 @@ func (authority *TransferExecutionAuthority) Execute(ctx context.Context, envelo
 			return TransferReceipt{}, err
 		}
 		receipt.Kind = "copy-in"
+	} else if command.ArchiveIn != nil {
+		if err := authority.workspace.CopyArchiveIn(ctx, authority.source, *command.ArchiveIn); err != nil {
+			return TransferReceipt{}, err
+		}
+		receipt.Kind, receipt.ArchiveDigest = "archive-in", string(command.ArchiveIn.Source.Digest)
 	} else {
 		artifact, err := authority.workspace.CopyOut(ctx, authority.sink, *command.CopyOut)
 		if err != nil {
@@ -244,7 +274,7 @@ func (authority *SnapshotRestoreExecutionAuthority) Execute(ctx context.Context,
 		return TransferReceipt{}, fmt.Errorf("execute guest snapshot restore authority: %w", ErrCapabilityUnavailable)
 	}
 	command, err := DecodeGuestSnapshotRestoreCommand(envelope.Payload)
-	if err != nil || envelope.OperationKind != GuestSnapshotRestoreOperationKind || command.FencingToken != envelope.FencingToken || command.Request.Owner != envelope.Principal || command.Request.SandboxID != envelope.SandboxID || command.Request.Holder != envelope.ProcessID || command.Request.Generation != envelope.LeaseEpoch || command.Request.EffectiveSpecDigest != envelope.EffectiveSpecDigest || command.Request.CapabilityDigest != envelope.CapabilityDigest || !authority.clock.Now().UTC().Before(envelope.ExpiresAt) {
+	if err != nil || !authority.exactCommand(command, envelope) {
 		return TransferReceipt{}, fmt.Errorf("execute guest snapshot restore authority: %w", ErrCapabilityUnavailable)
 	}
 	if entry, exists := authority.journal.Entry(envelope); exists && entry.TransferReceiptDigest != "" {
@@ -294,11 +324,42 @@ func (authority *SnapshotRestoreExecutionAuthority) AcknowledgeReceipt(envelope 
 	return authority.journal.AcknowledgeTransferReceipt(entry.ReceiptKey, entry.TransferReceiptDigest)
 }
 
+// Reap converges an exact snapshot sink after cancellation, restart, or a
+// completed terminal lifecycle. A durable but unacknowledged receipt is not
+// reaped: it must remain replayable so a lost acknowledgement cannot turn a
+// completed restore into ambiguous state.
+func (authority *SnapshotRestoreExecutionAuthority) Reap(ctx context.Context, envelope sandboxhostprotocol.Envelope) error {
+	if authority == nil || ctx == nil || authority.reaper == nil || !authority.journal.ExecutionStarted(envelope) {
+		return fmt.Errorf("reap guest snapshot restore authority: %w", ErrCapabilityUnavailable)
+	}
+	command, err := DecodeGuestSnapshotRestoreCommand(envelope.Payload)
+	if err != nil || !authority.exactCommand(command, envelope) {
+		return fmt.Errorf("reap guest snapshot restore authority: %w", ErrCapabilityUnavailable)
+	}
+	if entry, exists := authority.journal.Entry(envelope); exists && entry.TransferReceiptDigest != "" && (!entry.TransferReceiptAcknowledged || entry.ResultDigest == "" || !entry.ResultAcknowledged) {
+		return fmt.Errorf("reap guest snapshot restore authority: %w", ErrCapabilityUnavailable)
+	}
+	if err := authority.reaper.ReapSnapshotRestore(ctx, command.Request); err != nil {
+		return err
+	}
+	if _, err := authority.store.ReleaseSnapshotLease(ctx, command.Request.Owner, command.Request.ID, command.Request.Generation); err != nil && !errors.Is(err, sandboxresource.ErrConflict) {
+		return err
+	}
+	return nil
+}
+
+func (authority *SnapshotRestoreExecutionAuthority) exactCommand(command GuestSnapshotRestoreCommand, envelope sandboxhostprotocol.Envelope) bool {
+	return envelope.OperationKind == GuestSnapshotRestoreOperationKind && command.FencingToken == envelope.FencingToken && command.Request.Owner == envelope.Principal && command.Request.SandboxID == envelope.SandboxID && command.Request.Holder == envelope.ProcessID && command.Request.Generation == envelope.LeaseEpoch && command.Request.EffectiveSpecDigest == envelope.EffectiveSpecDigest && command.Request.CapabilityDigest == envelope.CapabilityDigest && authority.clock.Now().UTC().Before(envelope.ExpiresAt)
+}
+
 func exactTransferCommand(command GuestTransferCommand, envelope sandboxhostprotocol.Envelope) error {
 	if command.CopyIn != nil && command.CopyIn.SandboxID == sandbox.SandboxID(envelope.SandboxID) {
 		return nil
 	}
 	if command.CopyOut != nil && command.CopyOut.SandboxID == sandbox.SandboxID(envelope.SandboxID) {
+		return nil
+	}
+	if command.ArchiveIn != nil && command.ArchiveIn.SandboxID == sandbox.SandboxID(envelope.SandboxID) && command.ArchiveIn.Source.MediaType == sandboxtransfer.ArchiveMediaType {
 		return nil
 	}
 	return ErrCapabilityUnavailable
@@ -309,12 +370,27 @@ func exactTransferReceipt(receipt TransferReceipt, envelope sandboxhostprotocol.
 		return false
 	}
 	if receipt.Kind == "copy-in" {
-		return receipt.Artifact == nil && receipt.SnapshotID == "" && receipt.SnapshotDigest == ""
+		return receipt.Artifact == nil && receipt.ArchiveDigest == "" && receipt.SnapshotID == "" && receipt.SnapshotDigest == ""
 	}
 	if receipt.Kind == "copy-out" {
-		return receipt.Artifact != nil && receipt.Artifact.ID != "" && receipt.Artifact.MediaType != "" && receipt.Artifact.SizeBytes > 0 && len(receipt.Artifact.Digest) == 71 && receipt.SnapshotID == "" && receipt.SnapshotDigest == ""
+		return receipt.Artifact != nil && receipt.Artifact.ID != "" && receipt.Artifact.MediaType != "" && receipt.Artifact.SizeBytes > 0 && len(receipt.Artifact.Digest) == 71 && receipt.ArchiveDigest == "" && receipt.SnapshotID == "" && receipt.SnapshotDigest == ""
 	}
-	return receipt.Kind == "snapshot-restore" && receipt.Artifact == nil && receipt.SnapshotID != "" && len(receipt.SnapshotDigest) == 71
+	if receipt.Kind == "archive-in" {
+		return receipt.Artifact == nil && validReceiptDigest(receipt.ArchiveDigest) && receipt.SnapshotID == "" && receipt.SnapshotDigest == ""
+	}
+	return receipt.Kind == "snapshot-restore" && receipt.Artifact == nil && receipt.ArchiveDigest == "" && receipt.SnapshotID != "" && validReceiptDigest(receipt.SnapshotDigest)
+}
+
+func validReceiptDigest(value string) bool {
+	if len(value) != 71 || !strings.HasPrefix(value, "sha256:") {
+		return false
+	}
+	for _, character := range value[7:] {
+		if (character < '0' || character > '9') && (character < 'a' || character > 'f') {
+			return false
+		}
+	}
+	return true
 }
 
 func encodeTransferReceipt(receipt TransferReceipt) ([]byte, error) {
