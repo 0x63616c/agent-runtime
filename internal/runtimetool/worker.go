@@ -27,7 +27,21 @@ type Request struct {
 	// Descriptor is the exact verified immutable sandbox-control action. It is
 	// supplied only after the worker's state authorization succeeds.
 	Descriptor []byte
+	dispatch   *dispatchCapability
 }
+
+// dispatchCapability is created only by Worker after it has loaded the
+// durable execution intent and read the descriptor through the state-owned
+// authorization path. Keeping it private prevents a direct adapter caller
+// from turning a model descriptor into an external effect.
+type dispatchCapability struct{}
+
+func dispatchAuthorized(request Request) bool { return request.dispatch != nil }
+
+func refusedDirectDispatch() Response {
+	return Response{Failure: &agentruntime.Failure{Code: agentruntime.FailureInvalidInput, Message: "tool adapter execution requires broker dispatch"}}
+}
+
 type Response struct {
 	Output    []byte
 	MediaType string
@@ -73,6 +87,7 @@ type Worker struct {
 	descriptorReader *runtimecontent.ToolActionDescriptorReader
 	adapter          Adapter
 	claimer          string
+	dispatch         *dispatchCapability
 }
 
 func NewWorker(c Config) (*Worker, error) {
@@ -87,7 +102,7 @@ func NewWorker(c Config) (*Worker, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Worker{store: c.Store, tenants: c.Tenants, compiler: c.Compiler, planner: c.Planner, clock: c.Clock, content: c.Content, descriptorReader: reader, adapter: c.Adapter, claimer: c.Claimer}, nil
+	return &Worker{store: c.Store, tenants: c.Tenants, compiler: c.Compiler, planner: c.Planner, clock: c.Clock, content: c.Content, descriptorReader: reader, adapter: c.Adapter, claimer: c.Claimer, dispatch: &dispatchCapability{}}, nil
 }
 
 // descriptorRepository is the only bridge from content reads to the sealed
@@ -252,7 +267,7 @@ func (w *Worker) process(ctx context.Context, r runtimestate.OutboxRecord, recov
 		}
 		return w.recordDescriptorFailure(ctx, r)
 	}
-	q := Request{Tenant: r.Tenant, SessionID: r.SessionID, TurnID: r.TurnID, ToolCallID: r.ToolCallID, OperationID: r.OperationID, Descriptor: descriptor}
+	q := Request{Tenant: r.Tenant, SessionID: r.SessionID, TurnID: r.TurnID, ToolCallID: r.ToolCallID, OperationID: r.OperationID, Descriptor: descriptor, dispatch: w.dispatch}
 	var out Response
 	if recover {
 		out, e = w.adapter.Reconcile(ctx, q)

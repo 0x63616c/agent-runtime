@@ -19,11 +19,17 @@ func NewBuiltinAdapter(adapter ContractAdapter) (*BuiltinAdapter, error) {
 
 // Execute delegates only after Worker authorization.
 func (adapter *BuiltinAdapter) Execute(ctx context.Context, request Request) (Response, error) {
+	if !dispatchAuthorized(request) {
+		return refusedDirectDispatch(), nil
+	}
 	return adapter.adapter.Execute(ctx, request)
 }
 
 // Reconcile observes the exact existing operation without submission.
 func (adapter *BuiltinAdapter) Reconcile(ctx context.Context, request Request) (Response, error) {
+	if !dispatchAuthorized(request) {
+		return refusedDirectDispatch(), nil
+	}
 	return adapter.adapter.Reconcile(ctx, request)
 }
 
@@ -37,15 +43,21 @@ type MCPAdapter struct{ adapter ContractAdapter }
 
 // NewMCPAdapter constructs a broker-only MCP adapter seam.
 func NewMCPAdapter(adapter ContractAdapter) (*MCPAdapter, error) {
-	if adapter == nil {
+	if adapter == nil || adapter.ExternalEffectContract() != (ExternalEffectContract{IdempotencyKey: "operation_id", Reconciles: true}) {
 		return nil, errors.New("create MCP tool adapter: recovery contract is required")
 	}
 	return &MCPAdapter{adapter: adapter}, nil
 }
 func (adapter *MCPAdapter) Execute(ctx context.Context, request Request) (Response, error) {
+	if !dispatchAuthorized(request) {
+		return refusedDirectDispatch(), nil
+	}
 	return adapter.adapter.Execute(ctx, request)
 }
 func (adapter *MCPAdapter) Reconcile(ctx context.Context, request Request) (Response, error) {
+	if !dispatchAuthorized(request) {
+		return refusedDirectDispatch(), nil
+	}
 	return adapter.adapter.Reconcile(ctx, request)
 }
 func (adapter *MCPAdapter) ExternalEffectContract() ExternalEffectContract {
