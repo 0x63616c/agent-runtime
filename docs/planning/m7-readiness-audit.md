@@ -21,6 +21,15 @@ The public Approval projection includes only fixed action verb/target and a
 maximum-use bound; raw model arguments, capability bytes/digests, and sandbox
 descriptors remain private.
 
+The Workspace Agent example now ships a loopback web binary and a terminal
+binary. Both call only the public HTTP/Go SDK contract. The disposable
+PostgreSQL/MinIO durable runner starts the API role, seeds pending approvals
+through the private broker seam, proves owner-web approve/deny/cancel, a
+cross-principal terminal cannot list another owner's inbox, expiry refusal,
+and a restarted API role plus reconnected web client. The fixture is
+deliberately broker-seeded: it is public-client evidence, not model-to-tool
+composition or sandbox-execution evidence.
+
 ## Remaining code-owned work
 
 - connect the broker to the durable model/worker process with a canonical Tool
@@ -29,8 +38,8 @@ descriptors remain private.
   preserve queued Turn semantics while an Approval is pending;
 - compose the Tool worker role, bounded output/artifact event path, restart
   reconciliation, and public API/SDK E2E;
-- deliver the Workspace Agent browser/TUI using only the public SDK/HTTP
-  contract, including approval inspect/approve/deny/expiry/cancel flows;
+- connect the public Workspace Agent to a composed model-to-tool producer once
+  that worker role exists; the current durable client proof is broker-seeded;
 - run the complete M7 focused, integration, public-path, documentation, and
   milestone gate evidence suite.
 
