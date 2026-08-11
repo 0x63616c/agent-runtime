@@ -1,7 +1,9 @@
 package workspaceagent
 
 import (
+	"bytes"
 	"context"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -31,6 +33,30 @@ func TestInboxUsesOnlyOwnerScopedPublicApprovalAndTurnCommands(t *testing.T) {
 	}
 	if row := HTML(approval); !strings.HasPrefix(row, "<li>") || !strings.HasSuffix(row, "</li>") {
 		t.Fatalf("html row = %q", row)
+	}
+}
+
+func TestWorkspaceApprovalWebAndTerminalStayPublicAndBlocked(t *testing.T) {
+	approval := agentruntime.Approval{ID: "appr_1234567890ABCDEF", SessionID: "sess_1234567890ABCDEF", TurnID: "turn_1234567890ABCDEF", State: agentruntime.ApprovalPending, Action: &agentruntime.ApprovalAction{Verb: "write", Target: "workspace-service"}, ExpiresAt: time.Date(2026, 8, 11, 20, 0, 0, 0, time.UTC)}
+	inbox, err := NewInbox(&approvalClient{approval: approval})
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler, err := NewWebHandler(inbox)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, httptest.NewRequest("GET", "/", nil))
+	if response.Code != 200 || !strings.Contains(response.Body.String(), "Workspace sandbox execution is unavailable") || !strings.Contains(response.Body.String(), approval.ID.String()) {
+		t.Fatalf("web response = %d %q", response.Code, response.Body.String())
+	}
+	var output bytes.Buffer
+	if err := RunTerminal(context.Background(), inbox, strings.NewReader("list\nsandbox-status\nquit\n"), &output); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(output.String(), approval.ID.String()) || !strings.Contains(output.String(), "unavailable") {
+		t.Fatalf("terminal output = %q", output.String())
 	}
 }
 
