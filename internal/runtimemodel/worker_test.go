@@ -11,6 +11,7 @@ import (
 	"github.com/0x63616c/agent-runtime/internal/runtimecontent"
 	"github.com/0x63616c/agent-runtime/internal/runtimemodel"
 	"github.com/0x63616c/agent-runtime/internal/runtimestate"
+	"github.com/0x63616c/agent-runtime/internal/runtimetool"
 	agentruntime "github.com/0x63616c/agent-runtime/sdk/go"
 )
 
@@ -105,6 +106,42 @@ func TestWorkerFinalizesNewAndRecoveredModelIntentsWithoutBlindReinvoke(t *testi
 				t.Fatalf("published intent reexecuted: invoke=%d reconcile=%d", adapter.invocations, adapter.reconciliations)
 			}
 		})
+	}
+}
+
+func TestWorkerRoutesNormalizedModelToolThroughBrokerAndPausesTurn(t *testing.T) {
+	ctx := context.Background()
+	now := time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC)
+	content, _ := runtimecontent.New("runtime-content", &modelObjects{values: map[string][]byte{}})
+	tenant, _ := runtimecontent.ParseTenantID("tenant-a")
+	principal, _ := runtimecontent.ParsePrincipalID("principal-a")
+	compiler, _ := runtimestate.NewCompiler(content)
+	source, _ := clock.NewFake(now)
+	planner, _ := runtimestate.NewRuntimeStatePlanner(source, &modelIDs{})
+	store, _ := runtimestate.NewMemoryRuntimeStateStore(planner)
+	session, turn, _ := createModelIntent(t, ctx, content, compiler, store, tenant, principal)
+	policy, err := compiler.CompileRegisterPolicyRevision(runtimestate.RegisterPolicyRevisionCommand{Scope: runtimestate.MutationScope{Tenant: tenant, Authority: runtimestate.AuthorityTenantAdministrator}, IdempotencyKey: "tool-policy", Name: "workspace-write", Rules: []agentruntime.PolicyRule{{ToolName: "write", Decision: agentruntime.PolicyRequiresApproval}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = store.Apply(ctx, policy); err != nil {
+		t.Fatal(err)
+	}
+	broker, err := runtimetool.NewBroker(runtimetool.BrokerConfig{Store: store, Compiler: compiler, Planner: planner, Clock: source})
+	if err != nil {
+		t.Fatal(err)
+	}
+	adapter := &recordingAdapter{response: runtimemodel.Response{Tool: &runtimemodel.ToolRequest{ToolCallID: "tcall_1234567890ABCDEF", ApprovalID: "appr_1234567890ABCDEF", PolicyName: "workspace-write", PolicyRevision: 1, ToolName: "write", ActionDigest: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", CapabilityDigest: "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", Action: agentruntime.ApprovalAction{Verb: "write", Target: "workspace-service"}, MaximumUses: 1, ExpiresAt: now.Add(time.Hour), Descriptor: []byte("safe descriptor")}}}
+	worker, err := runtimemodel.NewWorker(runtimemodel.WorkerConfig{Store: store, Tenants: store, Compiler: compiler, Planner: planner, Clock: source, Content: content, Adapter: adapter, Broker: broker, Claimer: "model-worker"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := worker.ScanOnce(ctx); err != nil {
+		t.Fatal(err)
+	}
+	state, err := store.LoadRuntimeState(ctx, runtimestate.MutationScope{Tenant: tenant, Principal: principal, Authority: runtimestate.AuthorityRuntimeWorker})
+	if err != nil || len(state.ToolIntents) != 1 || len(state.Approvals) != 1 || state.Approvals[0].State != "pending" || len(state.Invocations) != 1 || state.Invocations[0].State != runtimestate.InvocationIntent || len(state.Turns) != 1 || state.Turns[0].SessionID != session || state.Turns[0].TurnID != turn || state.Turns[0].State != agentruntime.TurnWaitingForApproval {
+		t.Fatalf("brokered model tool state = %#v, %v", state, err)
 	}
 }
 

@@ -246,3 +246,4 @@ This index is derived only from the declared public `sdk/go` source files. It li
 | `const` | `TurnRunning` | TurnRunning is the only Turn currently allowed to progress a Session. |
 | `type` | `TurnState` | TurnState is the durable lifecycle state of one Turn. |
 | `const` | `TurnSucceeded` | TurnSucceeded completed successfully. |
+| `const` | `TurnWaitingForApproval` | TurnWaitingForApproval has durably paused one active Turn at a bounded human-approval boundary. It is non-terminal and remains cancellable. |

@@ -227,6 +227,9 @@ const (
 	TurnQueued TurnState = "queued"
 	// TurnRunning is the only Turn currently allowed to progress a Session.
 	TurnRunning TurnState = "running"
+	// TurnWaitingForApproval has durably paused one active Turn at a bounded
+	// human-approval boundary. It is non-terminal and remains cancellable.
+	TurnWaitingForApproval TurnState = "waiting_for_approval"
 	// TurnSucceeded completed successfully.
 	TurnSucceeded TurnState = "succeeded"
 	// TurnFailed completed with a safe Failure.
@@ -329,14 +332,20 @@ type ApprovalScope struct {
 
 // Approval is a caller-safe immutable projection of a pending or terminal human decision.
 type Approval struct {
-	ID        ApprovalID      `json:"id"`
-	SessionID SessionID       `json:"session_id"`
-	TurnID    TurnID          `json:"turn_id"`
-	State     ApprovalState   `json:"state"`
-	Action    *ApprovalAction `json:"action,omitempty"`
-	Scope     *ApprovalScope  `json:"scope,omitempty"`
-	ExpiresAt time.Time       `json:"expires_at"`
-	DecidedAt *time.Time      `json:"decided_at,omitempty"`
+	ID        ApprovalID `json:"id"`
+	SessionID SessionID  `json:"session_id"`
+	TurnID    TurnID     `json:"turn_id"`
+	// Requester is the principal that owns the requested effect. It is visible
+	// only through the already owner-scoped approval projection.
+	Requester string `json:"requester,omitempty"`
+	// PolicyRevision is the immutable policy digest evaluated at admission;
+	// clients cannot alter it as part of a decision.
+	PolicyRevision string          `json:"policy_revision,omitempty"`
+	State          ApprovalState   `json:"state"`
+	Action         *ApprovalAction `json:"action,omitempty"`
+	Scope          *ApprovalScope  `json:"scope,omitempty"`
+	ExpiresAt      time.Time       `json:"expires_at"`
+	DecidedAt      *time.Time      `json:"decided_at,omitempty"`
 }
 
 // ApprovalPage is one bounded owner-scoped Approval inbox projection.
