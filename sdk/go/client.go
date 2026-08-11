@@ -27,6 +27,12 @@ type RuntimeClient interface {
 	ReviseAgent(context.Context, ReviseAgentRequest) (AgentSpecification, error)
 	// GetAgentRevision reads one immutable Agent revision through the admin surface.
 	GetAgentRevision(context.Context, AgentID, AgentRevisionID) (AgentSpecification, error)
+	// CreatePolicy creates the first immutable revision of a tenant Policy.
+	CreatePolicy(context.Context, CreatePolicyRequest) (Policy, error)
+	// RevisePolicy creates the next immutable revision of a tenant Policy.
+	RevisePolicy(context.Context, RevisePolicyRequest) (Policy, error)
+	// GetPolicy reads one immutable Policy revision through the admin surface.
+	GetPolicy(context.Context, string, uint64) (Policy, error)
 	// ReadArtifact downloads one caller-authorized immutable artifact.
 	ReadArtifact(context.Context, ArtifactID) (ArtifactDownload, error)
 	// InspectApproval returns the caller-authorized state of one Approval.
@@ -172,6 +178,31 @@ func (client *Client) ReviseAgent(ctx context.Context, request ReviseAgentReques
 func (client *Client) GetAgentRevision(ctx context.Context, agentID AgentID, revisionID AgentRevisionID) (AgentSpecification, error) {
 	path := replacePath(replacePath(openAPIPathGetAgentRevision, "agent_id", agentID.String()), "revision_id", revisionID.String())
 	return doJSON[AgentSpecification](client, ctx, openAPIMethodGetAgentRevision, path, "", nil)
+}
+
+// CreatePolicy creates the first immutable revision of a tenant Policy.
+func (client *Client) CreatePolicy(ctx context.Context, request CreatePolicyRequest) (Policy, error) {
+	body := struct {
+		Name  string       `json:"name"`
+		Rules []PolicyRule `json:"rules"`
+	}{Name: request.Name, Rules: request.Rules}
+	return doJSON[Policy](client, ctx, openAPIMethodCreatePolicy, openAPIPathCreatePolicy, request.IdempotencyKey, body)
+}
+
+// RevisePolicy creates the next immutable revision of a tenant Policy.
+func (client *Client) RevisePolicy(ctx context.Context, request RevisePolicyRequest) (Policy, error) {
+	body := struct {
+		ExpectedRevision uint64       `json:"expected_revision"`
+		Rules            []PolicyRule `json:"rules"`
+	}{ExpectedRevision: request.ExpectedRevision, Rules: request.Rules}
+	path := replacePath(openAPIPathRevisePolicy, "policy_name", request.Name)
+	return doJSON[Policy](client, ctx, openAPIMethodRevisePolicy, path, request.IdempotencyKey, body)
+}
+
+// GetPolicy reads one immutable Policy revision through the admin surface.
+func (client *Client) GetPolicy(ctx context.Context, name string, revision uint64) (Policy, error) {
+	path := replacePath(replacePath(openAPIPathGetPolicy, "policy_name", name), "revision", strconv.FormatUint(revision, 10))
+	return doJSON[Policy](client, ctx, openAPIMethodGetPolicy, path, "", nil)
 }
 
 // ReadArtifact downloads bounded immutable content only after the server has

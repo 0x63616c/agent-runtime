@@ -69,6 +69,9 @@ func NewHandler(config Config) (http.Handler, error) {
 	mux.HandleFunc(openAPIMethodCreateAgent+" "+openAPIPathCreateAgent, server.createAgent)
 	mux.HandleFunc(openAPIMethodReviseAgent+" "+openAPIPathReviseAgent, server.reviseAgent)
 	mux.HandleFunc(openAPIMethodGetAgentRevision+" "+openAPIPathGetAgentRevision, server.getAgentRevision)
+	mux.HandleFunc(openAPIMethodCreatePolicy+" "+openAPIPathCreatePolicy, server.createPolicy)
+	mux.HandleFunc(openAPIMethodRevisePolicy+" "+openAPIPathRevisePolicy, server.revisePolicy)
+	mux.HandleFunc(openAPIMethodGetPolicy+" "+openAPIPathGetPolicy, server.getPolicy)
 	mux.HandleFunc(openAPIMethodReadArtifact+" "+openAPIPathReadArtifact, server.readArtifact)
 	mux.HandleFunc(openAPIMethodInspectApproval+" "+openAPIPathInspectApproval, server.inspectApproval)
 	mux.HandleFunc(openAPIMethodDecideApproval+" "+openAPIPathDecideApproval, server.decideApproval)
@@ -238,6 +241,55 @@ func (server *server) getAgentRevision(writer http.ResponseWriter, request *http
 	}
 	result, err := server.runtime.GetAgentRevision(request.Context(), contextValue.identity, agentID, revisionID)
 	server.writeResult(writer, contextValue.requestID, http.StatusOK, result, err)
+}
+
+func (server *server) createPolicy(writer http.ResponseWriter, request *http.Request) {
+	contextValue := request.Context().Value(requestContextKey{}).(requestContext)
+	if !contextValue.identity.Admin {
+		server.writeFailure(writer, contextValue.requestID, http.StatusNotFound, agentruntime.Failure{Code: agentruntime.FailureNotFound, Message: "resource not found"})
+		return
+	}
+	var body struct {
+		Name  string                    `json:"name"`
+		Rules []agentruntime.PolicyRule `json:"rules"`
+	}
+	if !server.decodeMutation(writer, request, contextValue.requestID, &body) {
+		return
+	}
+	result, err := server.runtime.CreatePolicy(request.Context(), contextValue.identity, agentruntime.CreatePolicyRequest{IdempotencyKey: request.Header.Get("Idempotency-Key"), Name: body.Name, Rules: body.Rules})
+	server.writeResult(writer, contextValue.requestID, http.StatusCreated, result, err)
+}
+
+func (server *server) revisePolicy(writer http.ResponseWriter, request *http.Request) {
+	contextValue := request.Context().Value(requestContextKey{}).(requestContext)
+	if !contextValue.identity.Admin {
+		server.writeFailure(writer, contextValue.requestID, http.StatusNotFound, agentruntime.Failure{Code: agentruntime.FailureNotFound, Message: "resource not found"})
+		return
+	}
+	var body struct {
+		ExpectedRevision uint64                    `json:"expected_revision"`
+		Rules            []agentruntime.PolicyRule `json:"rules"`
+	}
+	if !server.decodeMutation(writer, request, contextValue.requestID, &body) {
+		return
+	}
+	result, err := server.runtime.RevisePolicy(request.Context(), contextValue.identity, agentruntime.RevisePolicyRequest{IdempotencyKey: request.Header.Get("Idempotency-Key"), Name: request.PathValue("policy_name"), ExpectedRevision: body.ExpectedRevision, Rules: body.Rules})
+	server.writeResult(writer, contextValue.requestID, http.StatusCreated, result, err)
+}
+
+func (server *server) getPolicy(writer http.ResponseWriter, request *http.Request) {
+	contextValue := request.Context().Value(requestContextKey{}).(requestContext)
+	if !contextValue.identity.Admin {
+		server.writeFailure(writer, contextValue.requestID, http.StatusNotFound, agentruntime.Failure{Code: agentruntime.FailureNotFound, Message: "resource not found"})
+		return
+	}
+	revision, err := strconv.ParseUint(request.PathValue("revision"), 10, 64)
+	if err != nil || revision == 0 {
+		server.writeInvalid(writer, contextValue.requestID)
+		return
+	}
+	result, callErr := server.runtime.GetPolicy(request.Context(), contextValue.identity, request.PathValue("policy_name"), revision)
+	server.writeResult(writer, contextValue.requestID, http.StatusOK, result, callErr)
 }
 
 func (server *server) readArtifact(writer http.ResponseWriter, request *http.Request) {

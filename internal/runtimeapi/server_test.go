@@ -404,6 +404,18 @@ func (runtime *recordingRuntime) GetAgentRevision(context.Context, runtimeapi.Id
 	return agentruntime.AgentSpecification{}, nil
 }
 
+func (runtime *recordingRuntime) CreatePolicy(context.Context, runtimeapi.Identity, agentruntime.CreatePolicyRequest) (agentruntime.Policy, error) {
+	return agentruntime.Policy{}, nil
+}
+
+func (runtime *recordingRuntime) RevisePolicy(context.Context, runtimeapi.Identity, agentruntime.RevisePolicyRequest) (agentruntime.Policy, error) {
+	return agentruntime.Policy{}, nil
+}
+
+func (runtime *recordingRuntime) GetPolicy(context.Context, runtimeapi.Identity, string, uint64) (agentruntime.Policy, error) {
+	return agentruntime.Policy{}, nil
+}
+
 func (runtime *recordingRuntime) ReadArtifact(context.Context, runtimeapi.Identity, agentruntime.ArtifactID) (agentruntime.ArtifactDownload, error) {
 	return runtime.artifact.Clone(), runtime.artifactErr
 }

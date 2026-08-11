@@ -120,6 +120,21 @@ func (store *RuntimeStateStore) GetAgentRevision(ctx context.Context, query runt
 	}
 	return runtimestate.AgentRevisionRecord{}, runtimestate.ErrNotFoundOrDenied
 }
+func (store *RuntimeStateStore) GetPolicyRevision(ctx context.Context, query runtimestate.PolicyRevisionQuery) (runtimestate.PolicyRevisionRecord, error) {
+	if !hasScope(query.Scope, runtimestate.AuthorityTenantAdministrator, false) || query.Name == "" || query.Revision == 0 {
+		return runtimestate.PolicyRevisionRecord{}, runtimestate.ErrNotFoundOrDenied
+	}
+	state, err := store.LoadRuntimeState(ctx, query.Scope)
+	if err != nil {
+		return runtimestate.PolicyRevisionRecord{}, err
+	}
+	for _, record := range state.Policies {
+		if record.Tenant == query.Scope.Tenant && record.Name == query.Name && record.Revision == query.Revision {
+			return record.Clone(), nil
+		}
+	}
+	return runtimestate.PolicyRevisionRecord{}, runtimestate.ErrNotFoundOrDenied
+}
 func (store *RuntimeStateStore) GetSessionView(ctx context.Context, query runtimestate.SessionViewQuery) (runtimestate.SessionView, error) {
 	if !hasScope(query.Scope, runtimestate.AuthoritySessionOwner, true) {
 		return runtimestate.SessionView{}, runtimestate.ErrNotFoundOrDenied

@@ -114,6 +114,49 @@ func (runtime *StateRuntime) GetAgentRevision(ctx context.Context, identity Iden
 	return runtime.readAgentSpecification(ctx, scope.Tenant, agentID, revisionID)
 }
 
+// CreatePolicy creates the first immutable revision of a named tenant policy.
+func (runtime *StateRuntime) CreatePolicy(ctx context.Context, identity Identity, request agentruntime.CreatePolicyRequest) (agentruntime.Policy, error) {
+	scope, err := administratorScope(identity)
+	if err != nil {
+		return agentruntime.Policy{}, err
+	}
+	plan, err := runtime.apply(ctx, scope, func() (runtimestate.CompiledMutation, error) {
+		return runtime.compiler.CompileRegisterPolicyRevision(runtimestate.RegisterPolicyRevisionCommand{Scope: scope, IdempotencyKey: request.IdempotencyKey, Name: request.Name, Rules: request.Rules})
+	})
+	if err != nil {
+		return agentruntime.Policy{}, runtimeFailure("create Policy", err)
+	}
+	return publicPolicy(plan.Result().Policy), nil
+}
+
+// RevisePolicy creates the next immutable revision of a named tenant policy.
+func (runtime *StateRuntime) RevisePolicy(ctx context.Context, identity Identity, request agentruntime.RevisePolicyRequest) (agentruntime.Policy, error) {
+	scope, err := administratorScope(identity)
+	if err != nil {
+		return agentruntime.Policy{}, err
+	}
+	plan, err := runtime.apply(ctx, scope, func() (runtimestate.CompiledMutation, error) {
+		return runtime.compiler.CompileRegisterPolicyRevision(runtimestate.RegisterPolicyRevisionCommand{Scope: scope, IdempotencyKey: request.IdempotencyKey, Name: request.Name, ExpectedRevision: request.ExpectedRevision, Rules: request.Rules})
+	})
+	if err != nil {
+		return agentruntime.Policy{}, runtimeFailure("revise Policy", err)
+	}
+	return publicPolicy(plan.Result().Policy), nil
+}
+
+// GetPolicy reads one immutable policy revision through the administrator surface.
+func (runtime *StateRuntime) GetPolicy(ctx context.Context, identity Identity, name string, revision uint64) (agentruntime.Policy, error) {
+	scope, err := administratorScope(identity)
+	if err != nil {
+		return agentruntime.Policy{}, err
+	}
+	record, err := runtime.store.GetPolicyRevision(ctx, runtimestate.PolicyRevisionQuery{Scope: scope, Name: name, Revision: revision})
+	if err != nil {
+		return agentruntime.Policy{}, runtimeFailure("read Policy", err)
+	}
+	return publicPolicy(record), nil
+}
+
 // ReadArtifact returns one principal-authorized immutable artifact through the
 // state-authorized runtime-content reader.  Blob storage is never addressed by
 // a public ID alone.
@@ -414,6 +457,9 @@ func (repository stateInputRepository) AuthorizeInputEnvelopeRead(ctx context.Co
 }
 
 func administratorScope(identity Identity) (runtimestate.MutationScope, error) {
+	if !identity.Admin {
+		return runtimestate.MutationScope{}, invalidFailure("administrator authority is required")
+	}
 	tenant, err := runtimecontent.ParseTenantID(identity.Tenant)
 	if err != nil {
 		return runtimestate.MutationScope{}, invalidFailure("invalid authenticated identity")
@@ -453,6 +499,10 @@ func latestRevision(state runtimestate.RuntimeState, tenant runtimecontent.Tenan
 
 func publicSession(record runtimestate.SessionRecord) agentruntime.Session {
 	return agentruntime.Session{ID: record.SessionID, AgentID: record.AgentID, AgentRevision: record.RevisionID, State: record.State, CreatedAt: record.CreatedAt, UpdatedAt: record.UpdatedAt}
+}
+
+func publicPolicy(record runtimestate.PolicyRevisionRecord) agentruntime.Policy {
+	return agentruntime.Policy{Name: record.Name, Revision: record.Revision, Digest: record.Digest, Rules: append([]agentruntime.PolicyRule(nil), record.Rules...), CreatedAt: record.CreatedAt}
 }
 
 func publicTurn(record runtimestate.TurnRecord) agentruntime.Turn {

@@ -80,6 +80,25 @@ type AgentRevisionRecord struct {
 	RetainUntil   time.Time
 }
 
+// PolicyRevisionRecord is immutable tenant authorization metadata. Rules are
+// bounded public vocabulary; no raw secret, credential, or executable action
+// is retained in state.
+type PolicyRevisionRecord struct {
+	Tenant      runtimecontent.TenantID
+	Name        string
+	Revision    uint64
+	Digest      string
+	Rules       []agentruntime.PolicyRule
+	CreatedAt   time.Time
+	RetainUntil time.Time
+}
+
+// Clone returns an independent Policy revision snapshot.
+func (record PolicyRevisionRecord) Clone() PolicyRevisionRecord {
+	record.Rules = append([]agentruntime.PolicyRule(nil), record.Rules...)
+	return record
+}
+
 // Clone returns an independent Agent revision metadata snapshot.
 func (record AgentRevisionRecord) Clone() AgentRevisionRecord { return record }
 
@@ -384,6 +403,8 @@ type MutationReceipt struct {
 	InputID             agentruntime.InputID         `json:",omitempty"`
 	TurnID              agentruntime.TurnID          `json:",omitempty"`
 	ArtifactID          agentruntime.ArtifactID      `json:",omitempty"`
+	PolicyName          string
+	PolicyRevision      uint64
 	ConversationVersion uint64
 	AcceptedAt          time.Time
 	RetentionUntil      time.Time
@@ -419,6 +440,23 @@ type RegisterAgentRevisionCommand struct {
 	AgentID          agentruntime.AgentID // empty allocates a new Agent
 	ExpectedRevision uint64               // zero only when AgentID is empty
 	Specification    runtimecontent.ContentHandoff
+}
+
+// RegisterPolicyRevisionCommand creates an initial or next immutable policy
+// revision. It is tenant-administrator-only and is deliberately independent
+// from ordinary Session commands.
+type RegisterPolicyRevisionCommand struct {
+	Scope            MutationScope
+	IdempotencyKey   string
+	Name             string
+	ExpectedRevision uint64
+	Rules            []agentruntime.PolicyRule
+}
+
+// Owned returns an independent policy-revision command snapshot.
+func (command RegisterPolicyRevisionCommand) Owned() RegisterPolicyRevisionCommand {
+	command.Rules = append([]agentruntime.PolicyRule(nil), command.Rules...)
+	return command
 }
 
 // Owned returns a value-owned command. ContentHandoff is opaque and immutable to callers.
@@ -637,6 +675,13 @@ type RegisterAgentRevisionResult struct {
 	Effects  EffectSet
 }
 
+// RegisterPolicyRevisionResult returns one committed immutable policy revision.
+type RegisterPolicyRevisionResult struct {
+	Policy  PolicyRevisionRecord
+	Receipt MutationReceipt
+	Effects EffectSet
+}
+
 // CreateSessionResult returns the committed revision-pinned Session and its declared effects.
 type CreateSessionResult struct {
 	Session SessionRecord
@@ -726,6 +771,12 @@ func (result RegisterAgentRevisionResult) Clone() RegisterAgentRevisionResult {
 	return result
 }
 
+// Clone returns an independent policy-revision result.
+func (result RegisterPolicyRevisionResult) Clone() RegisterPolicyRevisionResult {
+	result.Policy, result.Receipt, result.Effects = result.Policy.Clone(), result.Receipt.Clone(), result.Effects.Clone()
+	return result
+}
+
 // Clone returns an independent CreateSession result.
 func (result CreateSessionResult) Clone() CreateSessionResult {
 	result.Session, result.Receipt, result.Effects = result.Session.Clone(), result.Receipt.Clone(), result.Effects.Clone()
@@ -809,6 +860,13 @@ type AgentRevisionQuery struct {
 	Scope      MutationScope
 	AgentID    agentruntime.AgentID
 	RevisionID agentruntime.AgentRevisionID
+}
+
+// PolicyRevisionQuery is a tenant-administrator scoped immutable policy query.
+type PolicyRevisionQuery struct {
+	Scope    MutationScope
+	Name     string
+	Revision uint64
 }
 
 // SessionViewQuery requests one bounded principal-scoped Session projection.
@@ -979,6 +1037,7 @@ type RuntimeStateStore interface {
 	LoadRuntimeState(context.Context, MutationScope) (RuntimeState, error)
 	PersistTransitionPlan(context.Context, TransitionPlan) error
 	GetAgentRevision(context.Context, AgentRevisionQuery) (AgentRevisionRecord, error)
+	GetPolicyRevision(context.Context, PolicyRevisionQuery) (PolicyRevisionRecord, error)
 	GetSessionView(context.Context, SessionViewQuery) (SessionView, error)
 	GetTurn(context.Context, TurnQuery) (TurnRecord, error)
 	GetArtifact(context.Context, ArtifactQuery) (ArtifactRecord, error)

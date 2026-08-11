@@ -14,6 +14,9 @@ This generated index is derived only from the checked-in `api/openapi/openapi.ya
 | `POST` | `/v1/admin/agents` | `createAgent` | `201` |
 | `POST` | `/v1/admin/agents/{agent_id}/revisions` | `reviseAgent` | `201` |
 | `GET` | `/v1/admin/agents/{agent_id}/revisions/{revision_id}` | `getAgentRevision` | `200` |
+| `POST` | `/v1/admin/policies` | `createPolicy` | `201` |
+| `POST` | `/v1/admin/policies/{policy_name}/revisions` | `revisePolicy` | `201` |
+| `GET` | `/v1/admin/policies/{policy_name}/revisions/{revision}` | `getPolicy` | `200` |
 | `GET` | `/v1/approvals/{approval_id}` | `inspectApproval` | `200` |
 | `POST` | `/v1/approvals/{approval_id}/decide` | `decideApproval` | `200` |
 | `GET` | `/v1/artifacts/{artifact_id}` | `readArtifact` | `200` |

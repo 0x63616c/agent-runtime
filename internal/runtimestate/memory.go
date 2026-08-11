@@ -97,6 +97,19 @@ func (store *MemoryRuntimeStateStore) GetAgentRevision(ctx context.Context, quer
 	}
 	return AgentRevisionRecord{}, ErrNotFoundOrDenied
 }
+
+func (store *MemoryRuntimeStateStore) GetPolicyRevision(ctx context.Context, query PolicyRevisionQuery) (PolicyRevisionRecord, error) {
+	if err := requireScope(ctx, query.Scope, AuthorityTenantAdministrator, false); err != nil || !validName(query.Name) || query.Revision == 0 {
+		return PolicyRevisionRecord{}, ErrNotFoundOrDenied
+	}
+	state := store.snapshot(query.Scope.Tenant)
+	for _, record := range state.Policies {
+		if record.Name == query.Name && record.Revision == query.Revision {
+			return record.Clone(), nil
+		}
+	}
+	return PolicyRevisionRecord{}, ErrNotFoundOrDenied
+}
 func (store *MemoryRuntimeStateStore) GetSessionView(ctx context.Context, query SessionViewQuery) (SessionView, error) {
 	if err := requireScope(ctx, query.Scope, AuthoritySessionOwner, true); err != nil {
 		return SessionView{}, err

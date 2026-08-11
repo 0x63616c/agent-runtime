@@ -9,17 +9,20 @@ import DocLink from '../../../../components/DocLink.astro';
 
 [`api/openapi/openapi.yaml`](https://github.com/0x63616c/agent-runtime/blob/main/api/openapi/openapi.yaml)
 is the canonical `/v1` transport contract. The generated Go SDK and server
-route constants are checked against its twelve operations.
+route constants are checked against its fifteen operations.
 
 The generated <DocLink href="/docs/reference/generated/http-operations">HTTP operation index</DocLink> lists
 the declared route, method, operation ID, and successful response statuses
 directly from that contract. It is an index, not a claim that the standalone
 development role provides production durability.
 
-The API creates and reads immutable Agent revisions, creates and inspects
+The API creates and reads immutable Agent and Policy revisions, creates and inspects
 Sessions, idempotently submits Input, observes Turns and cursor-addressed
 Product events, explicitly cancels a Turn, and drain-closes a Session. Agent
-catalog operations require a tenant administrator. Session access is scoped to
+and Policy catalog operations require a tenant administrator. A Policy revision
+contains only a bounded named-Tool disposition (`denied` or
+`requires_approval`) and a canonical digest; it is not a credential or an
+execution capability. Session access is scoped to
 the authenticated tenant and principal; absent and unauthorized objects share
 the same safe `not_found` result.
 

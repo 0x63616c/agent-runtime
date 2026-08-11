@@ -19,6 +19,7 @@ type CommandKind string
 
 const (
 	CommandRegisterAgentRevision  CommandKind = "register_agent_revision"
+	CommandRegisterPolicyRevision CommandKind = "register_policy_revision"
 	CommandCreateSession          CommandKind = "create_session"
 	CommandAdmitInput             CommandKind = "admit_input"
 	CommandRegisterArtifact       CommandKind = "register_artifact"
@@ -93,6 +94,19 @@ func (compiler *Compiler) CompileRegisterAgentRevision(command RegisterAgentRevi
 		Reference     runtimecontent.Reference
 		Name, Profile string
 	}{command.AgentID.String(), commitment.Reference, commitment.Name, commitment.ModelProfile}, compiledRegister{command: command, commitment: commitment})
+}
+
+// CompileRegisterPolicyRevision seals a bounded immutable policy revision.
+func (compiler *Compiler) CompileRegisterPolicyRevision(command RegisterPolicyRevisionCommand) (CompiledMutation, error) {
+	command = command.Owned()
+	if err := validateScope(command.Scope, AuthorityTenantAdministrator, false); err != nil || !validName(command.Name) || !validPolicyRules(command.Rules) {
+		return CompiledMutation{}, errors.New("compile register Policy revision: invalid scope or revision")
+	}
+	return compiler.compile(CommandRegisterPolicyRevision, command.Scope, command.IdempotencyKey, struct {
+		Name             string
+		ExpectedRevision uint64
+		Rules            []agentruntime.PolicyRule
+	}{command.Name, command.ExpectedRevision, command.Rules}, command)
 }
 
 // CompileCreateSession validates a principal-owned revision-pinned Session command.
@@ -380,6 +394,22 @@ func validDigest(value string) bool {
 	return len(value) == 71 && strings.HasPrefix(value, "sha256:") && strings.Trim(value[7:], "0123456789abcdef") == ""
 }
 func validName(value string) bool { return validOpaque(value, 128) }
+func validPolicyRules(rules []agentruntime.PolicyRule) bool {
+	if len(rules) == 0 || len(rules) > 64 {
+		return false
+	}
+	seen := make(map[string]struct{}, len(rules))
+	for _, rule := range rules {
+		if !validName(rule.ToolName) || (rule.Decision != agentruntime.PolicyDenied && rule.Decision != agentruntime.PolicyRequiresApproval) {
+			return false
+		}
+		if _, exists := seen[rule.ToolName]; exists {
+			return false
+		}
+		seen[rule.ToolName] = struct{}{}
+	}
+	return true
+}
 func validReference(reference runtimecontent.Reference) bool {
 	return reference.SizeBytes > 0 && reference.SizeBytes <= 2<<20+4<<10 && validOpaque(reference.Digest, 128) && validOpaque(reference.MediaType, 256)
 }

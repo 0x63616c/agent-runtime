@@ -36,6 +36,16 @@ func (runtime kernelRuntime) GetAgentRevision(ctx context.Context, identity Iden
 	return runtime.kernel.GetAgentRevision(ctx, tenantScope(identity), agentID, revisionID)
 }
 
+func (runtime kernelRuntime) CreatePolicy(context.Context, Identity, agentruntime.CreatePolicyRequest) (agentruntime.Policy, error) {
+	return agentruntime.Policy{}, &agentruntime.Error{Failure: agentruntime.Failure{Code: agentruntime.FailureNotFound, Message: "resource not found"}}
+}
+func (runtime kernelRuntime) RevisePolicy(context.Context, Identity, agentruntime.RevisePolicyRequest) (agentruntime.Policy, error) {
+	return agentruntime.Policy{}, &agentruntime.Error{Failure: agentruntime.Failure{Code: agentruntime.FailureNotFound, Message: "resource not found"}}
+}
+func (runtime kernelRuntime) GetPolicy(context.Context, Identity, string, uint64) (agentruntime.Policy, error) {
+	return agentruntime.Policy{}, &agentruntime.Error{Failure: agentruntime.Failure{Code: agentruntime.FailureNotFound, Message: "resource not found"}}
+}
+
 // ReadArtifact is intentionally unavailable in the legacy memory-only kernel.
 // Artifact reads require the state-authorized immutable-content authority.
 func (runtime kernelRuntime) ReadArtifact(context.Context, Identity, agentruntime.ArtifactID) (agentruntime.ArtifactDownload, error) {

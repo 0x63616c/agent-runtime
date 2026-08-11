@@ -2,6 +2,9 @@ package runtimestate
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
@@ -58,6 +61,7 @@ func WithRetentionPolicy(policy RetentionPolicy) PlannerOption {
 // It intentionally contains no raw Agent/Input bytes and is cloned at every boundary.
 type RuntimeState struct {
 	Revisions     []AgentRevisionRecord
+	Policies      []PolicyRevisionRecord
 	Sessions      []SessionRecord
 	Inputs        []InputRecord
 	Artifacts     []ArtifactRecord
@@ -77,6 +81,10 @@ type RuntimeState struct {
 func (state RuntimeState) Clone() RuntimeState {
 	clone := RuntimeState{}
 	clone.Revisions = append([]AgentRevisionRecord(nil), state.Revisions...)
+	clone.Policies = make([]PolicyRevisionRecord, len(state.Policies))
+	for i := range state.Policies {
+		clone.Policies[i] = state.Policies[i].Clone()
+	}
 	clone.Sessions = append([]SessionRecord(nil), state.Sessions...)
 	clone.Inputs = append([]InputRecord(nil), state.Inputs...)
 	clone.Artifacts = append([]ArtifactRecord(nil), state.Artifacts...)
@@ -109,6 +117,7 @@ func (state RuntimeState) Clone() RuntimeState {
 type PlanResult struct {
 	Kind         CommandKind
 	Revision     AgentRevisionRecord
+	Policy       PolicyRevisionRecord
 	Session      SessionRecord
 	Input        InputRecord
 	Artifact     ArtifactRecord
@@ -123,6 +132,7 @@ type PlanResult struct {
 // Clone returns an independent transition result.
 func (result PlanResult) Clone() PlanResult {
 	result.Revision = result.Revision.Clone()
+	result.Policy = result.Policy.Clone()
 	result.Session = result.Session.Clone()
 	result.Input = result.Input.Clone()
 	result.Artifact = result.Artifact.Clone()
@@ -244,6 +254,8 @@ func (planner *RuntimeStatePlanner) Plan(ctx context.Context, prior RuntimeState
 	switch command := mutation.mutation.command.(type) {
 	case compiledRegister:
 		result, effects, err = planner.register(&state, mutation.mutation.receipt, command, now)
+	case RegisterPolicyRevisionCommand:
+		result, effects, err = planner.registerPolicy(&state, mutation.mutation.receipt, command, now)
 	case CreateSessionCommand:
 		result, effects, err = planner.createSession(&state, mutation.mutation.receipt, command, now)
 	case compiledAdmit:
@@ -291,6 +303,45 @@ func (planner *RuntimeStatePlanner) Plan(ctx context.Context, prior RuntimeState
 		return TransitionPlan{}, err
 	}
 	return plan, nil
+}
+
+func (planner *RuntimeStatePlanner) registerPolicy(state *RuntimeState, binding ReceiptBinding, command RegisterPolicyRevisionCommand, now time.Time) (PlanResult, EffectSet, error) {
+	latest := uint64(0)
+	for _, record := range state.Policies {
+		if record.Tenant == binding.Scope.Tenant && record.Name == command.Name && record.Revision > latest {
+			latest = record.Revision
+		}
+	}
+	if latest != command.ExpectedRevision {
+		return PlanResult{}, EffectSet{}, ErrConflict
+	}
+	rules := append([]agentruntime.PolicyRule(nil), command.Rules...)
+	digest, err := policyDigest(command.Name, latest+1, rules)
+	if err != nil {
+		return PlanResult{}, EffectSet{}, ErrIntegrity
+	}
+	until := planner.retain(now)
+	record := PolicyRevisionRecord{Tenant: binding.Scope.Tenant, Name: command.Name, Revision: latest + 1, Digest: digest, Rules: rules, CreatedAt: now, RetainUntil: until}
+	state.Policies = append(state.Policies, record)
+	effects, err := planner.auditOnly(state, binding, "policy_revision.registered", "", "", now, until)
+	if err != nil {
+		return PlanResult{}, EffectSet{}, err
+	}
+	return PlanResult{Policy: record}, effects, nil
+}
+
+func policyDigest(name string, revision uint64, rules []agentruntime.PolicyRule) (string, error) {
+	encoded, err := json.Marshal(struct {
+		Version  string                    `json:"version"`
+		Name     string                    `json:"name"`
+		Revision uint64                    `json:"revision"`
+		Rules    []agentruntime.PolicyRule `json:"rules"`
+	}{"runtime-policy/v1", name, revision, rules})
+	if err != nil {
+		return "", err
+	}
+	sum := sha256.Sum256(encoded)
+	return "sha256:" + hex.EncodeToString(sum[:]), nil
 }
 
 func (planner *RuntimeStatePlanner) register(state *RuntimeState, binding ReceiptBinding, compiled compiledRegister, now time.Time) (PlanResult, EffectSet, error) {
@@ -866,7 +917,7 @@ func (planner *RuntimeStatePlanner) conversationOutbox(binding ReceiptBinding, c
 	return OutboxRecord{Tenant: conversation.Tenant, Principal: conversation.Principal, OutboxID: id, Aggregate: "conversation", AggregateVersion: conversation.Version, Version: 1, OperationID: OperationID(binding.IdempotencyKey), SessionID: conversation.SessionID, State: OutboxPending, CommittedAt: now, RetentionUntil: until}, nil
 }
 func (planner *RuntimeStatePlanner) receipt(binding ReceiptBinding, result PlanResult, now time.Time) MutationReceipt {
-	return MutationReceipt{Scope: binding.Scope, IdempotencyKey: binding.IdempotencyKey, OperationID: OperationID(binding.IdempotencyKey), Command: string(binding.Command), RequestDigest: binding.RequestDigest, AgentID: result.Revision.AgentID, RevisionID: result.Revision.RevisionID, SessionID: firstID(firstID(firstID(result.Session.SessionID, result.Turn.SessionID), result.Artifact.SessionID), result.Conversation.SessionID), InputID: result.Input.InputID, TurnID: firstTurnID(result.Turn.TurnID, result.Artifact.TurnID), ArtifactID: result.Artifact.ArtifactID, ConversationVersion: result.Conversation.Version, AcceptedAt: now, RetentionUntil: planner.retain(now)}
+	return MutationReceipt{Scope: binding.Scope, IdempotencyKey: binding.IdempotencyKey, OperationID: OperationID(binding.IdempotencyKey), Command: string(binding.Command), RequestDigest: binding.RequestDigest, AgentID: result.Revision.AgentID, RevisionID: result.Revision.RevisionID, PolicyName: result.Policy.Name, PolicyRevision: result.Policy.Revision, SessionID: firstID(firstID(firstID(result.Session.SessionID, result.Turn.SessionID), result.Artifact.SessionID), result.Conversation.SessionID), InputID: result.Input.InputID, TurnID: firstTurnID(result.Turn.TurnID, result.Artifact.TurnID), ArtifactID: result.Artifact.ArtifactID, ConversationVersion: result.Conversation.Version, AcceptedAt: now, RetentionUntil: planner.retain(now)}
 }
 func firstID(left, right agentruntime.SessionID) agentruntime.SessionID {
 	if left != "" {
@@ -1061,12 +1112,21 @@ func containsOutbox(state RuntimeState, record OutboxRecord) bool {
 	return false
 }
 func validateState(state RuntimeState) error {
-	revisions, sessions, inputs, artifacts, conversations, turns, operations := map[string]struct{}{}, map[string]struct{}{}, map[string]struct{}{}, map[string]struct{}{}, map[string]struct{}{}, map[string]struct{}{}, map[string]struct{}{}
+	revisions, policies, sessions, inputs, artifacts, conversations, turns, operations := map[string]struct{}{}, map[string]struct{}{}, map[string]struct{}{}, map[string]struct{}{}, map[string]struct{}{}, map[string]struct{}{}, map[string]struct{}{}, map[string]struct{}{}
 	approvals, grants := map[string]struct{}{}, map[string]struct{}{}
 	events, cursors, audit, outbox, receipts := map[string]struct{}{}, map[string]struct{}{}, map[string]struct{}{}, map[string]struct{}{}, map[string]struct{}{}
 	active, positions := map[agentruntime.SessionID]uint64{}, map[string]struct{}{}
 	for _, record := range state.Revisions {
 		if duplicate(revisions, record.RevisionID.String()) {
+			return ErrIntegrity
+		}
+	}
+	for _, record := range state.Policies {
+		if duplicate(policies, string(record.Tenant)+"/"+record.Name+fmt.Sprintf("/%d", record.Revision)) || !validName(record.Name) || !validPolicyRules(record.Rules) || !validDigest(record.Digest) || record.Revision == 0 || record.CreatedAt.IsZero() || record.CreatedAt.Location() != time.UTC {
+			return ErrIntegrity
+		}
+		digest, err := policyDigest(record.Name, record.Revision, record.Rules)
+		if err != nil || digest != record.Digest {
 			return ErrIntegrity
 		}
 	}
@@ -1153,6 +1213,11 @@ func (planner *RuntimeStatePlanner) replayPlan(state RuntimeState, kind CommandK
 	for _, revision := range state.Revisions {
 		if revision.RevisionID == receipt.RevisionID {
 			result.Revision = revision
+		}
+	}
+	for _, policy := range state.Policies {
+		if policy.Name == receipt.PolicyName && policy.Revision == receipt.PolicyRevision {
+			result.Policy = policy
 		}
 	}
 	for _, session := range state.Sessions {

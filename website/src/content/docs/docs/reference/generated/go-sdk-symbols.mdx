@@ -54,16 +54,19 @@ This index is derived only from the declared public `sdk/go` source files. It li
 | `method` | `Client.CancelTurn` | CancelTurn explicitly requests durable Turn cancellation. |
 | `method` | `Client.CloseSession` | CloseSession closes Input admission and drains accepted work. |
 | `method` | `Client.CreateAgent` | CreateAgent creates the first immutable Agent revision through the admin surface. |
+| `method` | `Client.CreatePolicy` | CreatePolicy creates the first immutable revision of a tenant Policy. |
 | `method` | `Client.CreateSession` | CreateSession creates a principal-owned Session pinned to one Agent revision. |
 | `method` | `Client.DecideApproval` | DecideApproval records one idempotent owner decision for a pending Approval. |
 | `method` | `Client.Events` | Events resumes bounded Product-event observation after an opaque Cursor. |
 | `method` | `Client.GetAgentRevision` | GetAgentRevision reads one immutable Agent revision through the admin surface. |
+| `method` | `Client.GetPolicy` | GetPolicy reads one immutable Policy revision through the admin surface. |
 | `method` | `Client.IdempotencyStatus` | IdempotencyStatus reads the caller-scoped durable status of one mutation key. |
 | `method` | `Client.InspectApproval` | InspectApproval returns the caller-authorized state of one Approval. |
 | `method` | `Client.InspectSession` | InspectSession returns caller-safe Session state without backend identifiers. |
 | `method` | `Client.InspectTurn` | InspectTurn returns one caller-safe Turn snapshot. |
 | `method` | `Client.ReadArtifact` | ReadArtifact downloads bounded immutable content only after the server has authorized the exact tenant/principal/artifact tuple. |
 | `method` | `Client.ReviseAgent` | ReviseAgent creates another immutable Agent revision through the admin surface. |
+| `method` | `Client.RevisePolicy` | RevisePolicy creates the next immutable revision of a tenant Policy. |
 | `method` | `Client.SendInput` | SendInput idempotently admits bounded Input into a Session. |
 | `type` | `ClientConfig` | ClientConfig contains every dependency and finite bound required by Client. |
 | `type` | `CloseSessionRequest` | CloseSessionRequest stops new admission and drains already accepted Input. |
@@ -73,6 +76,7 @@ This index is derived only from the declared public `sdk/go` source files. It li
 | `type` | `ContentPartKind` | ContentPartKind identifies one bounded Input content representation. |
 | `const` | `ContentText` | ContentText contains bounded UTF-8 text. |
 | `type` | `CreateAgentRequest` | CreateAgentRequest registers the first immutable revision of an Agent specification. |
+| `type` | `CreatePolicyRequest` | CreatePolicyRequest creates the first immutable revision of a named Policy. |
 | `type` | `CreateSessionRequest` | CreateSessionRequest creates a Session pinned to one exact Agent revision. |
 | `type` | `CredentialSource` | CredentialSource authorizes one request without exposing credential bytes to Client diagnostics. |
 | `method` | `CredentialSource.Authorize` | Authorize applies one request-scoped credential without exposing it to Client diagnostics. |
@@ -137,6 +141,12 @@ This index is derived only from the declared public `sdk/go` source files. It li
 | `func` | `ParseRequestID` | ParseRequestID validates an externally supplied request correlation ID. |
 | `func` | `ParseSessionID` | ParseSessionID validates an externally supplied Session ID. |
 | `func` | `ParseTurnID` | ParseTurnID validates an externally supplied Turn ID. |
+| `type` | `Policy` | Policy is one immutable, versioned tenant authorization policy. Tool execution consumes its durable revision digest; it never receives policy administration authority. |
+| `method` | `Policy.Clone` | Clone returns an independent immutable Policy snapshot. |
+| `type` | `PolicyDecision` | PolicyDecision is the closed disposition an immutable Policy revision gives one named Tool. It conveys no credential or executable capability. |
+| `const` | `PolicyDenied` | PolicyDenied prevents the named Tool from receiving execution authority. |
+| `const` | `PolicyRequiresApproval` | PolicyRequiresApproval requires a later durable human decision before the named Tool can receive a bounded capability grant. |
+| `type` | `PolicyRule` | PolicyRule is one bounded, model-independent authorization rule for a named Tool. |
 | `type` | `RequestID` | RequestID correlates one HTTP attempt without identifying durable work. |
 | `method` | `RequestID.LogValue` | LogValue returns a redacted request correlation ID for structured logs. |
 | `method` | `RequestID.MarshalJSON` | MarshalJSON encodes a validated request correlation ID. |
@@ -146,20 +156,24 @@ This index is derived only from the declared public `sdk/go` source files. It li
 | `type` | `RequestIDSource` | RequestIDSource creates a fresh opaque correlation ID for each HTTP attempt. |
 | `method` | `RequestIDSource.NextRequestID` | NextRequestID creates one fresh opaque correlation ID. |
 | `type` | `ReviseAgentRequest` | ReviseAgentRequest creates another immutable revision of an existing Agent. |
+| `type` | `RevisePolicyRequest` | RevisePolicyRequest creates the next immutable revision of one named Policy. |
 | `type` | `RuntimeClient` | RuntimeClient is the Temporal-free application contract for durable Agent Runtime commands. |
 | `method` | `RuntimeClient.CancelTurn` | CancelTurn explicitly requests durable Turn cancellation. |
 | `method` | `RuntimeClient.CloseSession` | CloseSession closes Input admission and drains accepted work. |
 | `method` | `RuntimeClient.CreateAgent` | CreateAgent creates the first immutable Agent revision through the admin surface. |
+| `method` | `RuntimeClient.CreatePolicy` | CreatePolicy creates the first immutable revision of a tenant Policy. |
 | `method` | `RuntimeClient.CreateSession` | CreateSession creates a principal-owned Session pinned to one Agent revision. |
 | `method` | `RuntimeClient.DecideApproval` | DecideApproval records one idempotent owner decision for a pending Approval. |
 | `method` | `RuntimeClient.Events` | Events resumes bounded Product-event observation after an opaque Cursor. |
 | `method` | `RuntimeClient.GetAgentRevision` | GetAgentRevision reads one immutable Agent revision through the admin surface. |
+| `method` | `RuntimeClient.GetPolicy` | GetPolicy reads one immutable Policy revision through the admin surface. |
 | `method` | `RuntimeClient.IdempotencyStatus` | IdempotencyStatus reads one retained receipt without re-executing work. |
 | `method` | `RuntimeClient.InspectApproval` | InspectApproval returns the caller-authorized state of one Approval. |
 | `method` | `RuntimeClient.InspectSession` | InspectSession returns caller-safe Session state without backend identifiers. |
 | `method` | `RuntimeClient.InspectTurn` | InspectTurn returns one caller-safe Turn snapshot. |
 | `method` | `RuntimeClient.ReadArtifact` | ReadArtifact downloads one caller-authorized immutable artifact. |
 | `method` | `RuntimeClient.ReviseAgent` | ReviseAgent creates another immutable Agent revision through the admin surface. |
+| `method` | `RuntimeClient.RevisePolicy` | RevisePolicy creates the next immutable revision of a tenant Policy. |
 | `method` | `RuntimeClient.SendInput` | SendInput idempotently admits bounded Input into a Session. |
 | `type` | `SendInputRequest` | SendInputRequest idempotently submits bounded content to a Session. |
 | `type` | `SendInputResult` | SendInputResult identifies both the accepted Input and its exactly-one Turn. |

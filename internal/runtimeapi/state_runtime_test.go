@@ -240,6 +240,74 @@ func TestStateRuntimePersistsApprovalExpiryBeforeRefusingLateDecision(t *testing
 	}
 }
 
+func TestStateRuntimeAdministratorsManageImmutablePolicyRevisions(t *testing.T) {
+	t.Parallel()
+
+	runtime := newMemoryStateRuntime(t)
+	ctx := context.Background()
+	admin := runtimeapi.Identity{Tenant: "tenant-a", Principal: "admin", Admin: true}
+	member := runtimeapi.Identity{Tenant: "tenant-a", Principal: "member"}
+	policy, err := runtime.CreatePolicy(ctx, admin, agentruntime.CreatePolicyRequest{
+		IdempotencyKey: "create-policy",
+		Name:           "workspace-write",
+		Rules:          []agentruntime.PolicyRule{{ToolName: "write", Decision: agentruntime.PolicyRequiresApproval}},
+	})
+	if err != nil || policy.Name != "workspace-write" || policy.Revision != 1 || policy.Digest == "" {
+		t.Fatalf("create policy = %#v, %v", policy, err)
+	}
+	if replay, err := runtime.CreatePolicy(ctx, admin, agentruntime.CreatePolicyRequest{
+		IdempotencyKey: "create-policy",
+		Name:           "workspace-write",
+		Rules:          []agentruntime.PolicyRule{{ToolName: "write", Decision: agentruntime.PolicyRequiresApproval}},
+	}); err != nil || !reflect.DeepEqual(replay, policy) {
+		t.Fatalf("replay policy = %#v, %v; want %#v", replay, err, policy)
+	}
+	if _, err := runtime.CreatePolicy(ctx, member, agentruntime.CreatePolicyRequest{IdempotencyKey: "forbidden-policy", Name: "other", Rules: []agentruntime.PolicyRule{{ToolName: "write", Decision: agentruntime.PolicyDenied}}}); !hasFailure(err, agentruntime.FailureInvalidInput) {
+		t.Fatalf("non-admin policy creation error = %v, want safe admin refusal", err)
+	}
+	revised, err := runtime.RevisePolicy(ctx, admin, agentruntime.RevisePolicyRequest{
+		IdempotencyKey:   "revise-policy",
+		Name:             policy.Name,
+		ExpectedRevision: policy.Revision,
+		Rules:            []agentruntime.PolicyRule{{ToolName: "write", Decision: agentruntime.PolicyDenied}},
+	})
+	if err != nil || revised.Revision != 2 || revised.Digest == policy.Digest {
+		t.Fatalf("revise policy = %#v, %v", revised, err)
+	}
+	if previous, err := runtime.GetPolicy(ctx, admin, policy.Name, 1); err != nil || !reflect.DeepEqual(previous, policy) {
+		t.Fatalf("read immutable prior policy = %#v, %v; want %#v", previous, err, policy)
+	}
+}
+
+func TestStateRuntimeHTTPAndSDKKeepPolicyAdministrationSeparateFromSessionCallers(t *testing.T) {
+	runtime := newMemoryStateRuntime(t)
+	handler, err := runtimeapi.NewHandler(runtimeapi.Config{
+		Runtime: runtime,
+		Authenticator: staticAuth{identities: map[string]runtimeapi.Identity{
+			"admin-token-000000": {Tenant: "tenant-a", Principal: "admin", Admin: true},
+			"alice-token-000000": {Tenant: "tenant-a", Principal: "alice"},
+		}},
+		RequestIDs: &requestIDs{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(handler)
+	defer server.Close()
+	admin := newStateRuntimeHTTPClient(t, server.URL, "admin-token-000000")
+	policy, err := admin.CreatePolicy(context.Background(), agentruntime.CreatePolicyRequest{IdempotencyKey: "http-create-policy", Name: "workspace-write", Rules: []agentruntime.PolicyRule{{ToolName: "write", Decision: agentruntime.PolicyRequiresApproval}}})
+	if err != nil || policy.Revision != 1 {
+		t.Fatalf("SDK create Policy = %#v, %v", policy, err)
+	}
+	if got, err := admin.GetPolicy(context.Background(), policy.Name, policy.Revision); err != nil || !reflect.DeepEqual(got, policy) {
+		t.Fatalf("SDK get Policy = %#v, %v; want %#v", got, err, policy)
+	}
+	alice := newStateRuntimeHTTPClient(t, server.URL, "alice-token-000000")
+	if _, err := alice.GetPolicy(context.Background(), policy.Name, policy.Revision); !hasFailure(err, agentruntime.FailureNotFound) {
+		t.Fatalf("non-admin Policy read error = %v, want non-enumerating denial", err)
+	}
+}
+
 func TestStateRuntimeHTTPAndSDKExposeExpiredApprovalAndItsDurableReceipt(t *testing.T) {
 	runtime, _, compiler, store, fakeClock := newMemoryStateAuthority(t)
 	ctx := context.Background()

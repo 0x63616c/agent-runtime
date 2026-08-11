@@ -19,6 +19,56 @@ type ToolDefinition struct {
 	Description string `json:"description"`
 }
 
+// PolicyDecision is the closed disposition an immutable Policy revision gives
+// one named Tool. It conveys no credential or executable capability.
+type PolicyDecision string
+
+const (
+	// PolicyDenied prevents the named Tool from receiving execution authority.
+	PolicyDenied PolicyDecision = "denied"
+	// PolicyRequiresApproval requires a later durable human decision before the
+	// named Tool can receive a bounded capability grant.
+	PolicyRequiresApproval PolicyDecision = "requires_approval"
+)
+
+// PolicyRule is one bounded, model-independent authorization rule for a named Tool.
+type PolicyRule struct {
+	ToolName string         `json:"tool_name"`
+	Decision PolicyDecision `json:"decision"`
+}
+
+// Policy is one immutable, versioned tenant authorization policy. Tool
+// execution consumes its durable revision digest; it never receives policy
+// administration authority.
+type Policy struct {
+	Name      string       `json:"name"`
+	Revision  uint64       `json:"revision"`
+	Digest    string       `json:"digest"`
+	Rules     []PolicyRule `json:"rules"`
+	CreatedAt time.Time    `json:"created_at"`
+}
+
+// Clone returns an independent immutable Policy snapshot.
+func (policy Policy) Clone() Policy {
+	policy.Rules = append([]PolicyRule(nil), policy.Rules...)
+	return policy
+}
+
+// CreatePolicyRequest creates the first immutable revision of a named Policy.
+type CreatePolicyRequest struct {
+	IdempotencyKey string       `json:"idempotency_key"`
+	Name           string       `json:"name"`
+	Rules          []PolicyRule `json:"rules"`
+}
+
+// RevisePolicyRequest creates the next immutable revision of one named Policy.
+type RevisePolicyRequest struct {
+	IdempotencyKey   string       `json:"idempotency_key"`
+	Name             string       `json:"name"`
+	ExpectedRevision uint64       `json:"expected_revision"`
+	Rules            []PolicyRule `json:"rules"`
+}
+
 // CreateAgentRequest registers the first immutable revision of an Agent specification.
 type CreateAgentRequest struct {
 	IdempotencyKey string           `json:"idempotency_key"`

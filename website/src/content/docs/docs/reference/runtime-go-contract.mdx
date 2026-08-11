@@ -13,7 +13,9 @@ or telemetry implementation.
 
 ## What exists
 
-The package defines strict opaque IDs; immutable Agent revision and
+The package defines strict opaque IDs; immutable Agent and Policy revisions;
+Policy revisions have a canonical digest and only bounded named-Tool
+dispositions, never credentials or executable authority. It also defines
 revision-pinned Session snapshots; bounded text and Artifact-reference Input;
 serialized Turn states; stable safe Failure codes; ordered bounded Product
 events; opaque Cursors and explicit Gaps; and a narrow `RuntimeClient`
@@ -47,5 +49,5 @@ mismatches.
 The standalone API role still uses explicitly labelled `memory-unsafe`
 storage. It does not prove restart durability. PostgreSQL/outbox authority,
 Temporal workflow execution, model/tool/approval execution, Artifact transfer,
-and live push streaming remain unimplemented. No M5 milestone requirement is
-complete on the strength of this slice alone.
+and live push streaming are independently tracked implementation paths. No M5
+milestone requirement is complete on the strength of this slice alone.

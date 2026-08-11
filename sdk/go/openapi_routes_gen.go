@@ -3,19 +3,23 @@
 package agentruntime
 
 const (
-	openAPIContractSHA256          = "a5aadb169074938e7ff23e4827f3146a92a98cb89ca7ab75f90b2c4ee83577ca"
+	openAPIContractSHA256          = "19a3fc341efb9ec1c452c3272991bcf0a1a7512e97b5298c1da0a307900d0733"
 	openAPIMethodCancelTurn        = "POST"
 	openAPIPathCancelTurn          = "/v1/sessions/{session_id}/turns/{turn_id}/cancel"
 	openAPIMethodCloseSession      = "POST"
 	openAPIPathCloseSession        = "/v1/sessions/{session_id}/close"
 	openAPIMethodCreateAgent       = "POST"
 	openAPIPathCreateAgent         = "/v1/admin/agents"
+	openAPIMethodCreatePolicy      = "POST"
+	openAPIPathCreatePolicy        = "/v1/admin/policies"
 	openAPIMethodCreateSession     = "POST"
 	openAPIPathCreateSession       = "/v1/sessions"
 	openAPIMethodDecideApproval    = "POST"
 	openAPIPathDecideApproval      = "/v1/approvals/{approval_id}/decide"
 	openAPIMethodGetAgentRevision  = "GET"
 	openAPIPathGetAgentRevision    = "/v1/admin/agents/{agent_id}/revisions/{revision_id}"
+	openAPIMethodGetPolicy         = "GET"
+	openAPIPathGetPolicy           = "/v1/admin/policies/{policy_name}/revisions/{revision}"
 	openAPIMethodIdempotencyStatus = "GET"
 	openAPIPathIdempotencyStatus   = "/v1/idempotency"
 	openAPIMethodInspectApproval   = "GET"
@@ -30,6 +34,8 @@ const (
 	openAPIPathReadArtifact        = "/v1/artifacts/{artifact_id}"
 	openAPIMethodReviseAgent       = "POST"
 	openAPIPathReviseAgent         = "/v1/admin/agents/{agent_id}/revisions"
+	openAPIMethodRevisePolicy      = "POST"
+	openAPIPathRevisePolicy        = "/v1/admin/policies/{policy_name}/revisions"
 	openAPIMethodSendInput         = "POST"
 	openAPIPathSendInput           = "/v1/sessions/{session_id}/inputs"
 )
