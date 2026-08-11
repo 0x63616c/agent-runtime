@@ -654,6 +654,117 @@ func TestDurableBrokeredToolLifecyclePersistsApprovalAndFinalization(t *testing.
 	if err != nil || len(page.Calls) != 1 || page.Truncated || page.Calls[0].State != agentruntime.ToolCallSucceeded || page.Calls[0].Approval == nil || page.Calls[0].Approval.State != agentruntime.ApprovalApproved || page.Calls[0].Grant == nil || page.Calls[0].Grant.Uses != 1 || page.Calls[0].Execution == nil || page.Calls[0].Execution.Failure != nil {
 		t.Fatalf("restarted durable Tool inspection = %#v, %v", page, err)
 	}
+	// A worker may have submitted an external operation before losing its
+	// acknowledgement. After the lease expires and the process restarts, the
+	// replacement worker is allowed to observe only that exact operation ID.
+	// When the external status remains unknown, it must retain uncertainty
+	// rather than invent success or submit the effect again.
+	uncertainSessionMutation, err := compiler.CompileCreateSession(runtimestate.CreateSessionCommand{Scope: ownerScope, IdempotencyKey: "durable-tool-uncertain-session", RevisionID: registered.Result().Revision.RevisionID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	uncertainSession := apply(uncertainSessionMutation).Result().Session.SessionID
+	uncertainInput, err := content.StageInputEnvelope(ctx, tenant, []agentruntime.ContentPart{{Kind: agentruntime.ContentText, Text: "unknown external effect must reconcile safely"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	uncertainMutation, err := compiler.CompileAdmitInput(runtimestate.AdmitInputCommand{Scope: ownerScope, IdempotencyKey: "durable-tool-uncertain-input", SessionID: uncertainSession, Input: uncertainInput})
+	if err != nil {
+		t.Fatal(err)
+	}
+	uncertainTurn := apply(uncertainMutation).Result().Turn.TurnID
+	uncertainDescriptor, err := content.StageToolActionDescriptor(ctx, tenant, descriptorBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	uncertainAdmission, err := broker.Admit(ctx, runtimetool.AdmissionRequest{Tenant: tenant, Principal: principal, SessionID: uncertainSession, TurnID: uncertainTurn, ToolCallID: "tcall_1234567890ABCDEM", ApprovalID: "appr_1234567890ABCDEM", PolicyName: "durable-tool-policy", PolicyRevision: 1, ToolName: "sandbox", ActionDigest: digest, CapabilityDigest: digest, Action: agentruntime.ApprovalAction{Verb: "write", Target: "workspace-service"}, MaximumUses: 1, ExpiresAt: source.Now().Add(time.Hour), Descriptor: uncertainDescriptor, IdempotencyKey: "durable-tool-uncertain-admission"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := restarted.DecideApproval(ctx, runtimeapi.Identity{Tenant: string(tenant), Principal: string(principal)}, agentruntime.DecideApprovalRequest{ApprovalID: uncertainAdmission.ApprovalID, Decision: agentruntime.ApprovalApproved, IdempotencyKey: "durable-tool-uncertain-approve"}); err != nil {
+		t.Fatal(err)
+	}
+	acceptedAdapter := newAcceptedThenLostDurableToolAdapter()
+	initialWorker, err := runtimetool.NewWorker(runtimetool.Config{Store: store, Tenants: store, Compiler: compiler, Planner: planner, Clock: source, Content: content, Adapter: acceptedAdapter, Claimer: "durable-tool-lost-after-acceptance-worker"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	runWorkerUntilAcceptedEffectIsLost(t, ctx, initialWorker)
+	state, err = store.LoadRuntimeState(ctx, workerScope)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var uncertainExecution runtimestate.ToolExecutionRecord
+	var uncertainOutbox runtimestate.OutboxRecord
+	for _, execution := range state.ToolExecutions {
+		if execution.ToolCallID == uncertainAdmission.ToolCallID {
+			uncertainExecution = execution
+			break
+		}
+	}
+	if uncertainExecution.OperationID == "" || uncertainExecution.State != runtimestate.ToolExecutionIntent || acceptedAdapter.executes != 1 || acceptedAdapter.acceptedOperationID != uncertainExecution.OperationID {
+		t.Fatalf("initial external effect was not accepted before worker loss: execution=%#v adapter=%#v", uncertainExecution, acceptedAdapter)
+	}
+	for _, record := range state.Outbox {
+		if record.Aggregate == "tool_execution" && record.ToolCallID == uncertainAdmission.ToolCallID && record.OperationID == uncertainExecution.OperationID {
+			uncertainOutbox = record
+			break
+		}
+	}
+	if uncertainOutbox.OutboxID == "" || uncertainOutbox.State != runtimestate.OutboxClaimed || uncertainOutbox.ClaimUntil == nil {
+		t.Fatalf("accepted external effect did not retain its lost claim: %#v", uncertainOutbox)
+	}
+	uncertainOperationID := uncertainExecution.OperationID
+	if err := source.Advance(11 * time.Second); err != nil {
+		t.Fatal(err)
+	}
+	pool.Close()
+	pool, err = pgxpool.New(ctx, dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err = runtimepostgres.NewRuntimeStateStore(pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	restarted, err = runtimeapi.NewStateRuntime(runtimeapi.StateRuntimeConfig{Content: content, Compiler: compiler, Planner: planner, Store: store, ModelProfiles: []string{"balanced"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	uncertainAdapter := newUncertainDurableToolAdapter()
+	uncertainWorker, err := runtimetool.NewWorker(runtimetool.Config{Store: store, Tenants: store, Compiler: compiler, Planner: planner, Clock: source, Content: content, Adapter: uncertainAdapter, Claimer: "durable-tool-uncertain-recovery-worker"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := uncertainWorker.ScanOnce(ctx); err != nil {
+		t.Fatal(err)
+	}
+	state, err = store.LoadRuntimeState(ctx, workerScope)
+	if err != nil {
+		t.Fatal(err)
+	}
+	uncertainExecution = runtimestate.ToolExecutionRecord{}
+	for _, execution := range state.ToolExecutions {
+		if execution.OperationID == uncertainOperationID {
+			uncertainExecution = execution
+			break
+		}
+	}
+	if uncertainExecution.State != runtimestate.ToolExecutionUncertain || uncertainExecution.Result != nil || uncertainExecution.Failure == nil || uncertainExecution.Failure.Message != "external operation status is unknown" || uncertainAdapter.executes != 0 || uncertainAdapter.reconciles != 1 || uncertainAdapter.reconciledOperationID != uncertainOperationID || len(state.Artifacts) != 1 {
+		t.Fatalf("uncertain durable recovery resubmitted or retained a false result: execution=%#v adapter=%#v artifacts=%#v", uncertainExecution, uncertainAdapter, state.Artifacts)
+	}
+	uncertainPage, err := restarted.InspectToolCalls(ctx, runtimeapi.Identity{Tenant: string(tenant), Principal: string(principal)}, uncertainSession, uncertainTurn)
+	if err != nil || len(uncertainPage.Calls) != 1 || uncertainPage.Calls[0].State != agentruntime.ToolCallUncertain || uncertainPage.Calls[0].Execution == nil || uncertainPage.Calls[0].Execution.Result != nil || uncertainPage.Calls[0].Execution.Failure == nil || uncertainPage.Calls[0].Execution.Failure.Message != "external operation status is unknown" {
+		t.Fatalf("public uncertain durable tool result = %#v, %v", uncertainPage, err)
+	}
+	uncertainEvents, err := restarted.Events(ctx, runtimeapi.Identity{Tenant: string(tenant), Principal: string(principal)}, uncertainSession, "", 128)
+	uncertainPublic, marshalErr := json.Marshal(struct {
+		Tools  agentruntime.ToolCallPage `json:"tools"`
+		Events agentruntime.EventPage    `json:"events"`
+	}{Tools: uncertainPage, Events: uncertainEvents})
+	if err != nil || marshalErr != nil || !durableHasPublicFinalization(uncertainEvents.Events, uncertainTurn) || bytes.Contains(uncertainPublic, []byte("audit-probe-secret")) {
+		t.Fatalf("public uncertain durable tool terminal state = tools=%#v events=%#v err=%v marshal=%v", uncertainPage, uncertainEvents, err, marshalErr)
+	}
 	state, err = store.LoadRuntimeState(ctx, workerScope)
 	if err != nil {
 		t.Fatal(err)
@@ -926,6 +1037,75 @@ func (adapter *durableToolAdapter) Execute(_ context.Context, request runtimetoo
 func (adapter *durableToolAdapter) Reconcile(_ context.Context, request runtimetool.Request) (runtimetool.Response, error) {
 	adapter.reconciles++
 	return runtimetool.Response{Output: []byte(`{"result":"workspace action reconciled","operation_id":"` + string(request.OperationID) + `"}`), MediaType: "application/json"}, nil
+}
+
+var errDurableToolProcessLostAfterAcceptance = errors.New("durable tool worker lost after external acceptance")
+
+// acceptedThenLostDurableToolAdapter models a provider that has accepted the
+// operation ID before the worker process disappears. Its panic is recovered by
+// the integration harness, leaving the claimed durable intent unacknowledged.
+type acceptedThenLostDurableToolAdapter struct {
+	executes            int
+	acceptedOperationID runtimestate.OperationID
+}
+
+func newAcceptedThenLostDurableToolAdapter() *acceptedThenLostDurableToolAdapter {
+	return &acceptedThenLostDurableToolAdapter{}
+}
+
+func (adapter *acceptedThenLostDurableToolAdapter) ExternalEffectContract() runtimetool.ExternalEffectContract {
+	return runtimetool.ExternalEffectContract{IdempotencyKey: "operation_id", Reconciles: true}
+}
+
+func (adapter *acceptedThenLostDurableToolAdapter) Execute(_ context.Context, request runtimetool.Request) (runtimetool.Response, error) {
+	adapter.executes++
+	adapter.acceptedOperationID = request.OperationID
+	panic(errDurableToolProcessLostAfterAcceptance)
+}
+
+func (adapter *acceptedThenLostDurableToolAdapter) Reconcile(_ context.Context, _ runtimetool.Request) (runtimetool.Response, error) {
+	return runtimetool.Response{Failure: &agentruntime.Failure{Code: agentruntime.FailureInternal, Message: "lost worker adapter cannot reconcile"}}, nil
+}
+
+func runWorkerUntilAcceptedEffectIsLost(t *testing.T, ctx context.Context, worker *runtimetool.Worker) {
+	t.Helper()
+	defer func() {
+		if recovered := recover(); recovered != errDurableToolProcessLostAfterAcceptance {
+			t.Fatalf("worker loss after external acceptance = %#v, want %v", recovered, errDurableToolProcessLostAfterAcceptance)
+		}
+	}()
+	if err := worker.ScanOnce(ctx); err != nil {
+		t.Fatal(err)
+	}
+	t.Fatal("worker completed after external acceptance, want simulated process loss")
+}
+
+// uncertainDurableToolAdapter models an external provider that accepted an
+// operation before its acknowledgement was lost, then cannot expose its final
+// status after the worker restarts. Reconcile is intentionally the only path
+// the proof permits after the durable lease has expired.
+type uncertainDurableToolAdapter struct {
+	executes, reconciles  int
+	reconciledOperationID runtimestate.OperationID
+}
+
+func newUncertainDurableToolAdapter() *uncertainDurableToolAdapter {
+	return &uncertainDurableToolAdapter{}
+}
+
+func (adapter *uncertainDurableToolAdapter) ExternalEffectContract() runtimetool.ExternalEffectContract {
+	return runtimetool.ExternalEffectContract{IdempotencyKey: "operation_id", Reconciles: true}
+}
+
+func (adapter *uncertainDurableToolAdapter) Execute(_ context.Context, _ runtimetool.Request) (runtimetool.Response, error) {
+	adapter.executes++
+	return runtimetool.Response{Failure: &agentruntime.Failure{Code: agentruntime.FailureInternal, Message: "unexpected external effect resubmission"}}, nil
+}
+
+func (adapter *uncertainDurableToolAdapter) Reconcile(_ context.Context, request runtimetool.Request) (runtimetool.Response, error) {
+	adapter.reconciles++
+	adapter.reconciledOperationID = request.OperationID
+	return runtimetool.Response{Uncertain: true, Failure: &agentruntime.Failure{Code: agentruntime.FailureUnavailable, Message: "external operation status is unknown"}}, nil
 }
 
 // newDurableHTTPSAdapter exercises the concrete TLS control client. It drives
