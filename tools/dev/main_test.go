@@ -196,24 +196,24 @@ func TestLocalStackProjectsTheReviewedEightRoleTopology(t *testing.T) {
 	}
 	expectedRoleCredentials := map[stack.ResourceID][]string{
 		"api":             nil,
-		"orchestration":   {"STATE_DATABASE_DSN", "TEMPORAL_AUTH_TOKEN"},
-		"model":           {"CONVERSATION_ACCESS_TOKEN", "MODEL_API_KEY"},
-		"tool":            {"SANDBOX_CONTROL_TOKEN", "TOOL_BROKER_TOKEN"},
+		"orchestration":   {"STATE_DATABASE_DSN", "TEMPORAL_AUTH_TOKEN", "ORCHESTRATION_PAYLOAD_BLOB_ACCESS_KEY", "ORCHESTRATION_PAYLOAD_BLOB_SECRET_KEY"},
+		"model":           {"CONVERSATION_ACCESS_TOKEN", "MODEL_API_KEY", "LOCAL_DEMO_STATE_DSN", "LOCAL_DEMO_CONTENT_ACCESS_KEY", "LOCAL_DEMO_CONTENT_SECRET_KEY"},
+		"tool":            {"SANDBOX_CONTROL_TOKEN", "TOOL_BROKER_TOKEN", "LOCAL_DEMO_STATE_DSN", "LOCAL_DEMO_CONTENT_ACCESS_KEY", "LOCAL_DEMO_CONTENT_SECRET_KEY"},
 		"blob-role":       {"BLOB_STORAGE_CREDENTIAL"},
 		"codec":           {"CODEC_BLOB_CREDENTIAL"},
 		"sandbox-control": {"SANDBOX_HOST_CA", "SANDBOX_STATE_DSN"},
 		"sandbox-host":    {"SANDBOX_HOST_IDENTITY", "SANDBOX_CONTROL_TOKEN"},
 	}
 	expectedRoles := map[stack.ResourceID]roles.Role{
-		"api": roles.RoleAPI, "orchestration": roles.RoleOrchestration,
+		"api": roles.RoleAPI, "orchestration": roles.RoleOrchestrationCodec,
 		"model": roles.RoleModel, "tool": roles.RoleTool, "blob-role": roles.RoleBlob,
 		"codec": roles.RoleCodec, "sandbox-control": roles.RoleSandboxControl, "sandbox-host": roles.RoleSandboxHost,
 	}
 	expectedEgress := map[stack.ResourceID][]stack.ResourceID{
 		"api":             {"state", "telemetry"},
-		"orchestration":   {"state", "telemetry", "temporal"},
-		"model":           {"api", "egress-proxy", "telemetry"},
-		"tool":            {"api", "sandbox-control", "telemetry"},
+		"orchestration":   {"blob", "state", "telemetry", "temporal"},
+		"model":           {"api", "blob", "egress-proxy", "state", "telemetry"},
+		"tool":            {"api", "blob", "sandbox-control", "state", "telemetry"},
 		"blob-role":       {"blob", "telemetry"},
 		"codec":           {"blob", "telemetry"},
 		"sandbox-control": {"state", "telemetry"},
@@ -322,18 +322,20 @@ func TestMaterializeSecretsKeepsValuesPrivateAndStablePerStack(t *testing.T) {
 		t.Fatalf("parse Secret manifests: %v", err)
 	}
 	expectedSecretKeys := map[string][]string{
-		"ar-safe-stack-state-db-secret":              {"POSTGRES_PASSWORD", "STATE_DATABASE_DSN"},
-		"ar-safe-stack-temporal-auth-secret":         {"TEMPORAL_AUTH_TOKEN"},
-		"ar-safe-stack-conversation-secret":          {"CONVERSATION_ACCESS_TOKEN"},
-		"ar-safe-stack-model-secret":                 {"MODEL_API_KEY"},
-		"ar-safe-stack-tool-broker-secret":           {"TOOL_BROKER_TOKEN"},
-		"ar-safe-stack-sandbox-control-secret":       {"SANDBOX_CONTROL_TOKEN"},
-		"ar-safe-stack-blob-storage-secret":          {"BLOB_STORAGE_CREDENTIAL", "MINIO_ROOT_PASSWORD", "MINIO_ROOT_USER"},
-		"ar-safe-stack-codec-blob-secret":            {"CODEC_BLOB_CREDENTIAL"},
-		"ar-safe-stack-sandbox-host-ca-secret":       {"SANDBOX_HOST_CA"},
-		"ar-safe-stack-sandbox-state-secret":         {"SANDBOX_STATE_DSN"},
-		"ar-safe-stack-sandbox-host-identity-secret": {"SANDBOX_HOST_IDENTITY"},
-		"ar-safe-stack-temporal-db-secret":           {"POSTGRES_PASSWORD"},
+		"ar-safe-stack-state-db-secret":                   {"POSTGRES_PASSWORD", "STATE_DATABASE_DSN"},
+		"ar-safe-stack-temporal-auth-secret":              {"TEMPORAL_AUTH_TOKEN"},
+		"ar-safe-stack-conversation-secret":               {"CONVERSATION_ACCESS_TOKEN"},
+		"ar-safe-stack-model-secret":                      {"MODEL_API_KEY", "LOCAL_DEMO_STATE_DSN", "LOCAL_DEMO_CONTENT_ACCESS_KEY", "LOCAL_DEMO_CONTENT_SECRET_KEY"},
+		"ar-safe-stack-tool-broker-secret":                {"TOOL_BROKER_TOKEN", "LOCAL_DEMO_STATE_DSN", "LOCAL_DEMO_CONTENT_ACCESS_KEY", "LOCAL_DEMO_CONTENT_SECRET_KEY"},
+		"ar-safe-stack-sandbox-control-secret":            {"SANDBOX_CONTROL_TOKEN"},
+		"ar-safe-stack-blob-storage-secret":               {"BLOB_STORAGE_CREDENTIAL", "MINIO_ROOT_PASSWORD", "MINIO_ROOT_USER"},
+		"ar-safe-stack-orchestration-payload-blob-secret": {"ORCHESTRATION_PAYLOAD_BLOB_ACCESS_KEY", "ORCHESTRATION_PAYLOAD_BLOB_SECRET_KEY"},
+		"ar-safe-stack-runtime-api-secret":                {"AR_RUNTIME_MINIO_ACCESS_KEY", "AR_RUNTIME_MINIO_SECRET_KEY", "RUNTIME_API_ADMIN_TOKEN", "RUNTIME_API_DEVELOPER_TOKEN"},
+		"ar-safe-stack-codec-blob-secret":                 {"CODEC_BLOB_CREDENTIAL"},
+		"ar-safe-stack-sandbox-host-ca-secret":            {"SANDBOX_HOST_CA"},
+		"ar-safe-stack-sandbox-state-secret":              {"SANDBOX_STATE_DSN"},
+		"ar-safe-stack-sandbox-host-identity-secret":      {"SANDBOX_HOST_IDENTITY"},
+		"ar-safe-stack-temporal-db-secret":                {"POSTGRES_PASSWORD"},
 	}
 	if len(secrets.Items) != len(expectedSecretKeys) {
 		t.Fatalf("generated Secret count = %d, want %d", len(secrets.Items), len(expectedSecretKeys))

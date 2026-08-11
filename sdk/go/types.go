@@ -52,10 +52,13 @@ type CapabilityGrant struct {
 
 // ToolExecution is a caller-safe terminal or in-progress tool observation.
 type ToolExecution struct {
-	State       ToolCallState `json:"state"`
-	Failure     *Failure      `json:"failure,omitempty"`
-	CreatedAt   time.Time     `json:"created_at"`
-	CompletedAt *time.Time    `json:"completed_at,omitempty"`
+	State ToolCallState `json:"state"`
+	// Result is the immutable owner-readable artifact produced by a successful
+	// tool execution. It is absent for failed, uncertain, and in-progress work.
+	Result      *ArtifactReference `json:"result,omitempty"`
+	Failure     *Failure           `json:"failure,omitempty"`
+	CreatedAt   time.Time          `json:"created_at"`
+	CompletedAt *time.Time         `json:"completed_at,omitempty"`
 }
 
 // Clone returns an independent ToolExecution snapshot.
@@ -64,6 +67,10 @@ func (execution *ToolExecution) Clone() *ToolExecution {
 		return nil
 	}
 	clone := *execution
+	if execution.Result != nil {
+		value := *execution.Result
+		clone.Result = &value
+	}
 	clone.Failure = execution.Failure.Clone()
 	if execution.CompletedAt != nil {
 		value := *execution.CompletedAt

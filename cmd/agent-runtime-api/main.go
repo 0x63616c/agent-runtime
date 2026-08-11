@@ -1,14 +1,13 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"flag"
 	"fmt"
-	"io"
 	"log/slog"
 	"os"
 	"os/signal"
-	"strings"
 	"syscall"
 
 	"github.com/0x63616c/agent-runtime/internal/runtimeapiprocess"
@@ -22,18 +21,11 @@ func main() {
 }
 
 func run() error {
-	arguments := flag.NewFlagSet("agent-runtime-api", flag.ContinueOnError)
-	configPath := arguments.String("config", "", "absolute path to the strict runtime API configuration")
-	configEnvironment := arguments.String("config-env", "", "environment variable containing the strict runtime API configuration")
-	check := arguments.Bool("check", false, "validate configuration and required environment values then exit")
-	if err := arguments.Parse(os.Args[1:]); err != nil {
+	config, check, err := loadConfig(os.Args[1:], os.LookupEnv)
+	if err != nil {
 		return err
 	}
-	config, parseErr := parseConfiguration(*configPath, *configEnvironment, arguments.NArg())
-	if parseErr != nil {
-		return parseErr
-	}
-	if *check {
+	if check {
 		return runtimeapiprocess.Check(config, os.LookupEnv)
 	}
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
@@ -44,31 +36,42 @@ func run() error {
 	})
 }
 
-func parseConfiguration(configPath, configEnvironment string, arguments int) (runtimeapiprocess.Config, error) {
-	if arguments != 0 || (configPath == "" && configEnvironment == "") || (configPath != "" && configEnvironment != "") {
-		return runtimeapiprocess.Config{}, fmt.Errorf("pass exactly one of --config or --config-env")
+func loadConfig(argumentsInput []string, lookup func(string) (string, bool)) (runtimeapiprocess.Config, bool, error) {
+	arguments := flag.NewFlagSet("agent-runtime-api", flag.ContinueOnError)
+	configPath := arguments.String("config", "", "absolute path to the strict runtime API configuration")
+	configEnvironment := arguments.String("config-env", "", "environment variable containing the strict runtime API configuration")
+	check := arguments.Bool("check", false, "validate configuration without listening")
+	if err := arguments.Parse(argumentsInput); err != nil {
+		return runtimeapiprocess.Config{}, false, fmt.Errorf("parse runtime API command: %w", err)
 	}
-	var input io.Reader
-	if configPath != "" {
-		if configPath[0] != '/' {
-			return runtimeapiprocess.Config{}, fmt.Errorf("--config must be an explicit absolute path")
+	if (*configPath == "" && *configEnvironment == "") || (*configPath != "" && *configEnvironment != "") || arguments.NArg() != 0 {
+		return runtimeapiprocess.Config{}, false, fmt.Errorf("validate runtime API command: exactly one of --config or --config-env is required")
+	}
+	if *configPath != "" {
+		if (*configPath)[0] != '/' {
+			return runtimeapiprocess.Config{}, false, fmt.Errorf("validate runtime API command: --config must be an explicit absolute path")
 		}
-		file, err := os.Open(configPath)
+		file, err := os.Open(*configPath)
 		if err != nil {
-			return runtimeapiprocess.Config{}, fmt.Errorf("open configuration: %w", err)
+			return runtimeapiprocess.Config{}, false, fmt.Errorf("open runtime API configuration: %w", err)
 		}
-		defer file.Close()
-		input = file
-	} else {
-		value, found := os.LookupEnv(configEnvironment)
-		if !found {
-			return runtimeapiprocess.Config{}, fmt.Errorf("read configuration environment %q: not set", configEnvironment)
+		config, parseErr := runtimeapiprocess.Parse(file)
+		closeErr := file.Close()
+		if parseErr != nil {
+			return runtimeapiprocess.Config{}, false, parseErr
 		}
-		input = strings.NewReader(value)
+		if closeErr != nil {
+			return runtimeapiprocess.Config{}, false, fmt.Errorf("close runtime API configuration: %w", closeErr)
+		}
+		return config, *check, nil
 	}
-	config, err := runtimeapiprocess.Parse(input)
+	value, found := lookup(*configEnvironment)
+	if !found || value == "" {
+		return runtimeapiprocess.Config{}, false, fmt.Errorf("read runtime API configuration: %s is unavailable", *configEnvironment)
+	}
+	config, err := runtimeapiprocess.Parse(bytes.NewReader([]byte(value)))
 	if err != nil {
-		return runtimeapiprocess.Config{}, err
+		return runtimeapiprocess.Config{}, false, err
 	}
-	return config, nil
+	return config, *check, nil
 }

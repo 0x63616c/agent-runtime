@@ -433,7 +433,9 @@ func materializeSecretsForProfile(stackName, profile, root string, reader io.Rea
 		blobReference, blobFound := secretReferenceByID(references, "blob-storage-secret")
 		orchestrationReference, orchestrationFound := secretReferenceByID(references, "orchestration-payload-blob-secret")
 		runtimeAPIReference, runtimeAPIFound := secretReferenceByID(references, "runtime-api-secret")
-		if !stateFound || !sandboxFound || !blobFound || !orchestrationFound || !runtimeAPIFound {
+		modelReference, modelFound := secretReferenceByID(references, "model-secret")
+		toolReference, toolFound := secretReferenceByID(references, "tool-broker-secret")
+		if !stateFound || !sandboxFound || !blobFound || !orchestrationFound || !runtimeAPIFound || !modelFound || !toolFound {
 			return nil, fmt.Errorf("materialize local development secrets: reviewed Stack is missing required state credential references")
 		}
 		statePassword := state.Values[stateReference.name]["POSTGRES_PASSWORD"]
@@ -444,6 +446,13 @@ func materializeSecretsForProfile(stackName, profile, root string, reader io.Rea
 		state.Values[orchestrationReference.name]["ORCHESTRATION_PAYLOAD_BLOB_SECRET_KEY"] = state.Values[blobReference.name]["MINIO_ROOT_PASSWORD"]
 		state.Values[runtimeAPIReference.name]["AR_RUNTIME_MINIO_ACCESS_KEY"] = state.Values[blobReference.name]["MINIO_ROOT_USER"]
 		state.Values[runtimeAPIReference.name]["AR_RUNTIME_MINIO_SECRET_KEY"] = state.Values[blobReference.name]["MINIO_ROOT_PASSWORD"]
+		if profile == "local" {
+			for _, reference := range []localSecretReference{modelReference, toolReference} {
+				state.Values[reference.name]["LOCAL_DEMO_STATE_DSN"] = state.Values[stateReference.name]["STATE_DATABASE_DSN"]
+				state.Values[reference.name]["LOCAL_DEMO_CONTENT_ACCESS_KEY"] = state.Values[blobReference.name]["MINIO_ROOT_USER"]
+				state.Values[reference.name]["LOCAL_DEMO_CONTENT_SECRET_KEY"] = state.Values[blobReference.name]["MINIO_ROOT_PASSWORD"]
+			}
+		}
 		encoded, marshalErr := json.Marshal(state)
 		if marshalErr != nil {
 			return nil, fmt.Errorf("encode local development secret state: %w", marshalErr)
@@ -457,7 +466,9 @@ func materializeSecretsForProfile(stackName, profile, root string, reader io.Rea
 	blobReference, blobFound := secretReferenceByID(references, "blob-storage-secret")
 	orchestrationReference, orchestrationFound := secretReferenceByID(references, "orchestration-payload-blob-secret")
 	runtimeAPIReference, runtimeAPIFound := secretReferenceByID(references, "runtime-api-secret")
-	if !stateFound || !sandboxFound || !blobFound || !orchestrationFound || !runtimeAPIFound {
+	modelReference, modelFound := secretReferenceByID(references, "model-secret")
+	toolReference, toolFound := secretReferenceByID(references, "tool-broker-secret")
+	if !stateFound || !sandboxFound || !blobFound || !orchestrationFound || !runtimeAPIFound || !modelFound || !toolFound {
 		return nil, fmt.Errorf("materialize local development secrets: reviewed Stack is missing required credential references")
 	}
 	statePassword := state.Values[stateReference.name]["POSTGRES_PASSWORD"]
@@ -467,6 +478,13 @@ func materializeSecretsForProfile(stackName, profile, root string, reader io.Rea
 	state.Values[orchestrationReference.name]["ORCHESTRATION_PAYLOAD_BLOB_SECRET_KEY"] = state.Values[blobReference.name]["MINIO_ROOT_PASSWORD"]
 	state.Values[runtimeAPIReference.name]["AR_RUNTIME_MINIO_ACCESS_KEY"] = state.Values[blobReference.name]["MINIO_ROOT_USER"]
 	state.Values[runtimeAPIReference.name]["AR_RUNTIME_MINIO_SECRET_KEY"] = state.Values[blobReference.name]["MINIO_ROOT_PASSWORD"]
+	if profile == "local" {
+		for _, reference := range []localSecretReference{modelReference, toolReference} {
+			state.Values[reference.name]["LOCAL_DEMO_STATE_DSN"] = state.Values[stateReference.name]["STATE_DATABASE_DSN"]
+			state.Values[reference.name]["LOCAL_DEMO_CONTENT_ACCESS_KEY"] = state.Values[blobReference.name]["MINIO_ROOT_USER"]
+			state.Values[reference.name]["LOCAL_DEMO_CONTENT_SECRET_KEY"] = state.Values[blobReference.name]["MINIO_ROOT_PASSWORD"]
+		}
+	}
 	metadata, err := localSecretControllerMetadata(stackName, profile, root)
 	if err != nil {
 		return nil, err

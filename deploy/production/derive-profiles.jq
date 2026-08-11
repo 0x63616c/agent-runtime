@@ -37,6 +37,31 @@ def runtime_api_config_namespace($namespace):
       else . end))
   else . end;
 
+# This explicit local-only operator fixture is the sole deterministic provider
+# used by the disposable Tilt demonstration. It is not derived into CI or
+# production and has no production credential or provider claim.
+def local_demo_fixture($namespace; $profile):
+  if $profile != "local" then .
+  elif .id == "model" or .id == "tool" then
+    .kubernetes.environment |= map(
+      if .name == "RUNTIME_ROLE_CONFIG" then
+        .value |= (fromjson |
+          .local_demo_worker = {enabled:true,mode:"local-demo-v1",state_dsn_environment:"LOCAL_DEMO_STATE_DSN",content_endpoint:("blob." + $namespace + ".svc:9000"),content_access_key_environment:"LOCAL_DEMO_CONTENT_ACCESS_KEY",content_secret_key_environment:"LOCAL_DEMO_CONTENT_SECRET_KEY",content_bucket:$namespace} |
+          tojson)
+      else . end) |
+    .kubernetes.secret_environment += (if .id == "model" then
+      [{name:"LOCAL_DEMO_STATE_DSN",secret:"model-secret",key:"LOCAL_DEMO_STATE_DSN"},{name:"LOCAL_DEMO_CONTENT_ACCESS_KEY",secret:"model-secret",key:"LOCAL_DEMO_CONTENT_ACCESS_KEY"},{name:"LOCAL_DEMO_CONTENT_SECRET_KEY",secret:"model-secret",key:"LOCAL_DEMO_CONTENT_SECRET_KEY"}]
+    else
+      [{name:"LOCAL_DEMO_STATE_DSN",secret:"tool-broker-secret",key:"LOCAL_DEMO_STATE_DSN"},{name:"LOCAL_DEMO_CONTENT_ACCESS_KEY",secret:"tool-broker-secret",key:"LOCAL_DEMO_CONTENT_ACCESS_KEY"},{name:"LOCAL_DEMO_CONTENT_SECRET_KEY",secret:"tool-broker-secret",key:"LOCAL_DEMO_CONTENT_SECRET_KEY"}]
+    end)
+  elif .id == "model-secret" or .id == "tool-broker-secret" then
+    .secret_reference.keys += ["LOCAL_DEMO_STATE_DSN","LOCAL_DEMO_CONTENT_ACCESS_KEY","LOCAL_DEMO_CONTENT_SECRET_KEY"]
+  elif .id == "model-egress" then
+    .kubernetes.network.allowed_egress += ["blob","state"] | .kubernetes.network.allowed_egress |= unique
+  elif .id == "tool-egress" then
+    .kubernetes.network.allowed_egress += ["blob","state"] | .kubernetes.network.allowed_egress |= unique
+  else . end;
+
 def dns_capability:
   if .kind == "kubernetes" and .kubernetes.kind == "NetworkPolicy" and ((.kubernetes.network.allowed_egress | length) > 0) then
     .kubernetes.network.allow_dns = true
@@ -48,6 +73,7 @@ def profile_resource($namespace; $profile):
   lifecycle($profile) |
   role_config_namespace($namespace) |
   runtime_api_config_namespace($namespace) |
+	local_demo_fixture($namespace; $profile) |
   dns_capability |
   if .kind == "secret_reference" then
     .secret_reference.provider = (if $profile == "production" then "external-secrets" else "local-generated" end) |

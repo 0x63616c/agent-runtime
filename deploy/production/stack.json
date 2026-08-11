@@ -129,7 +129,10 @@
             "reference": "ar-agent-runtime-model-secret",
             "version": "v1",
             "keys": [
-              "MODEL_API_KEY"
+              "MODEL_API_KEY",
+              "LOCAL_DEMO_STATE_DSN",
+              "LOCAL_DEMO_CONTENT_ACCESS_KEY",
+              "LOCAL_DEMO_CONTENT_SECRET_KEY"
             ]
           }
         },
@@ -151,7 +154,10 @@
             "reference": "ar-agent-runtime-tool-broker-secret",
             "version": "v1",
             "keys": [
-              "TOOL_BROKER_TOKEN"
+              "TOOL_BROKER_TOKEN",
+              "LOCAL_DEMO_STATE_DSN",
+              "LOCAL_DEMO_CONTENT_ACCESS_KEY",
+              "LOCAL_DEMO_CONTENT_SECRET_KEY"
             ]
           }
         },
@@ -752,7 +758,7 @@
             "environment": [
               {
                 "name": "RUNTIME_ROLE_CONFIG",
-                "value": "{\"version\":1,\"role\":\"model\",\"namespace\":\"ar-agent-runtime\",\"listen_address\":\"0.0.0.0:8082\",\"dependencies\":[{\"name\":\"conversation\",\"endpoint\":\"http://api.ar-agent-runtime.svc:8080\",\"secret_environment\":\"CONVERSATION_ACCESS_TOKEN\"},{\"name\":\"egress-proxy\",\"endpoint\":\"http://egress-proxy.ar-agent-runtime.svc:8088\"},{\"name\":\"model\",\"endpoint\":\"https://model-provider.example.invalid\",\"secret_environment\":\"MODEL_API_KEY\"},{\"name\":\"telemetry\",\"endpoint\":\"http://telemetry.ar-agent-runtime.svc:4318\"}]}"
+                "value": "{\"version\":1,\"role\":\"model\",\"namespace\":\"ar-agent-runtime\",\"listen_address\":\"0.0.0.0:8082\",\"dependencies\":[{\"name\":\"conversation\",\"endpoint\":\"http://api.ar-agent-runtime.svc:8080\",\"secret_environment\":\"CONVERSATION_ACCESS_TOKEN\"},{\"name\":\"egress-proxy\",\"endpoint\":\"http://egress-proxy.ar-agent-runtime.svc:8088\"},{\"name\":\"model\",\"endpoint\":\"https://model-provider.example.invalid\",\"secret_environment\":\"MODEL_API_KEY\"},{\"name\":\"telemetry\",\"endpoint\":\"http://telemetry.ar-agent-runtime.svc:4318\"}],\"local_demo_worker\":{\"enabled\":true,\"mode\":\"local-demo-v1\",\"state_dsn_environment\":\"LOCAL_DEMO_STATE_DSN\",\"content_endpoint\":\"blob.ar-agent-runtime.svc:9000\",\"content_access_key_environment\":\"LOCAL_DEMO_CONTENT_ACCESS_KEY\",\"content_secret_key_environment\":\"LOCAL_DEMO_CONTENT_SECRET_KEY\",\"content_bucket\":\"ar-agent-runtime\"}}"
               }
             ],
             "secret_environment": [
@@ -765,6 +771,21 @@
                 "name": "MODEL_API_KEY",
                 "secret": "model-secret",
                 "key": "MODEL_API_KEY"
+              },
+              {
+                "name": "LOCAL_DEMO_STATE_DSN",
+                "secret": "model-secret",
+                "key": "LOCAL_DEMO_STATE_DSN"
+              },
+              {
+                "name": "LOCAL_DEMO_CONTENT_ACCESS_KEY",
+                "secret": "model-secret",
+                "key": "LOCAL_DEMO_CONTENT_ACCESS_KEY"
+              },
+              {
+                "name": "LOCAL_DEMO_CONTENT_SECRET_KEY",
+                "secret": "model-secret",
+                "key": "LOCAL_DEMO_CONTENT_SECRET_KEY"
               }
             ],
             "readiness": {
@@ -832,7 +853,7 @@
             "environment": [
               {
                 "name": "RUNTIME_ROLE_CONFIG",
-                "value": "{\"version\":1,\"role\":\"tool\",\"namespace\":\"ar-agent-runtime\",\"listen_address\":\"0.0.0.0:8083\",\"dependencies\":[{\"name\":\"sandbox-control\",\"endpoint\":\"http://sandbox-control.ar-agent-runtime.svc:8086\",\"secret_environment\":\"SANDBOX_CONTROL_TOKEN\"},{\"name\":\"telemetry\",\"endpoint\":\"http://telemetry.ar-agent-runtime.svc:4318\"},{\"name\":\"tool-broker\",\"endpoint\":\"http://api.ar-agent-runtime.svc:8080\",\"secret_environment\":\"TOOL_BROKER_TOKEN\"}]}"
+                "value": "{\"version\":1,\"role\":\"tool\",\"namespace\":\"ar-agent-runtime\",\"listen_address\":\"0.0.0.0:8083\",\"dependencies\":[{\"name\":\"sandbox-control\",\"endpoint\":\"http://sandbox-control.ar-agent-runtime.svc:8086\",\"secret_environment\":\"SANDBOX_CONTROL_TOKEN\"},{\"name\":\"telemetry\",\"endpoint\":\"http://telemetry.ar-agent-runtime.svc:4318\"},{\"name\":\"tool-broker\",\"endpoint\":\"http://api.ar-agent-runtime.svc:8080\",\"secret_environment\":\"TOOL_BROKER_TOKEN\"}],\"local_demo_worker\":{\"enabled\":true,\"mode\":\"local-demo-v1\",\"state_dsn_environment\":\"LOCAL_DEMO_STATE_DSN\",\"content_endpoint\":\"blob.ar-agent-runtime.svc:9000\",\"content_access_key_environment\":\"LOCAL_DEMO_CONTENT_ACCESS_KEY\",\"content_secret_key_environment\":\"LOCAL_DEMO_CONTENT_SECRET_KEY\",\"content_bucket\":\"ar-agent-runtime\"}}"
               }
             ],
             "secret_environment": [
@@ -845,6 +866,21 @@
                 "name": "TOOL_BROKER_TOKEN",
                 "secret": "tool-broker-secret",
                 "key": "TOOL_BROKER_TOKEN"
+              },
+              {
+                "name": "LOCAL_DEMO_STATE_DSN",
+                "secret": "tool-broker-secret",
+                "key": "LOCAL_DEMO_STATE_DSN"
+              },
+              {
+                "name": "LOCAL_DEMO_CONTENT_ACCESS_KEY",
+                "secret": "tool-broker-secret",
+                "key": "LOCAL_DEMO_CONTENT_ACCESS_KEY"
+              },
+              {
+                "name": "LOCAL_DEMO_CONTENT_SECRET_KEY",
+                "secret": "tool-broker-secret",
+                "key": "LOCAL_DEMO_CONTENT_SECRET_KEY"
               }
             ],
             "readiness": {
@@ -2130,7 +2166,9 @@
           "dependencies": [
             "model",
             "api",
+            "blob",
             "egress-proxy",
+            "state",
             "telemetry"
           ],
           "retention": {
@@ -2149,7 +2187,9 @@
               "subject": "model",
               "allowed_egress": [
                 "api",
+                "blob",
                 "egress-proxy",
+                "state",
                 "telemetry"
               ],
               "allow_dns": true
@@ -2165,7 +2205,9 @@
           "dependencies": [
             "tool",
             "api",
+            "blob",
             "sandbox-control",
+            "state",
             "telemetry"
           ],
           "retention": {
@@ -2184,7 +2226,9 @@
               "subject": "tool",
               "allowed_egress": [
                 "api",
+                "blob",
                 "sandbox-control",
+                "state",
                 "telemetry"
               ],
               "allow_dns": true
@@ -5177,7 +5221,9 @@
           "dependencies": [
             "model",
             "api",
+            "blob",
             "egress-proxy",
+            "state",
             "telemetry"
           ],
           "retention": {
@@ -5212,7 +5258,9 @@
           "dependencies": [
             "tool",
             "api",
+            "blob",
             "sandbox-control",
+            "state",
             "telemetry"
           ],
           "retention": {
@@ -8224,7 +8272,9 @@
           "dependencies": [
             "model",
             "api",
+            "blob",
             "egress-proxy",
+            "state",
             "telemetry"
           ],
           "retention": {
@@ -8259,7 +8309,9 @@
           "dependencies": [
             "tool",
             "api",
+            "blob",
             "sandbox-control",
+            "state",
             "telemetry"
           ],
           "retention": {

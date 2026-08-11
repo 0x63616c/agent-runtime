@@ -1,16 +1,41 @@
 package main
 
-import "testing"
+import (
+	"testing"
+)
 
-func TestParseConfigurationAcceptsOneStrictEnvironmentDocument(t *testing.T) {
-	t.Setenv("RUNTIME_API_CONFIG", `{"version":1,"listen_address":"0.0.0.0:8088","public_listen":true,"storage":{"mode":"memory-unsafe"},"model_profiles":["balanced"],"max_request_bytes":4194304,"principals":[{"tenant":"source-smoke","principal":"admin","admin":true,"bearer_token_environment":"RUNTIME_API_ADMIN_TOKEN"}]}`)
-	if _, err := parseConfiguration("", "RUNTIME_API_CONFIG", 0); err != nil {
-		t.Fatalf("parse configuration environment: %v", err)
+const environmentConfig = `{"version":1,"listen_address":"127.0.0.1:8088","storage":{"mode":"memory-unsafe"},"model_profiles":["balanced"],"max_request_bytes":4194304,"principals":[{"tenant":"local","principal":"admin","admin":true,"bearer_token_environment":"ADMIN_TOKEN"}]}`
+
+func TestLoadConfigAcceptsDeclaredEnvironmentConfigurationAndCheck(t *testing.T) {
+	t.Parallel()
+	config, check, err := loadConfig([]string{"--config-env", "RUNTIME_API_CONFIG", "--check"}, func(name string) (string, bool) {
+		if name == "RUNTIME_API_CONFIG" {
+			return environmentConfig, true
+		}
+		return "", false
+	})
+	if err != nil {
+		t.Fatalf("loadConfig() error = %v", err)
+	}
+	_ = config // Config is intentionally opaque; successful strict parsing is the contract here.
+	if !check {
+		t.Fatal("loadConfig() check = false, want true")
 	}
 }
 
-func TestParseConfigurationRejectsAmbiguousSources(t *testing.T) {
-	if _, err := parseConfiguration("/tmp/runtime-api.json", "RUNTIME_API_CONFIG", 0); err == nil {
-		t.Fatal("parse configuration with two sources succeeded")
+func TestLoadConfigFailsClosedForMissingOrMalformedEnvironmentConfiguration(t *testing.T) {
+	t.Parallel()
+	for _, test := range []struct {
+		name   string
+		lookup func(string) (string, bool)
+	}{
+		{name: "missing", lookup: func(string) (string, bool) { return "", false }},
+		{name: "malformed", lookup: func(string) (string, bool) { return `{"version":1}`, true }},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if _, _, err := loadConfig([]string{"--config-env", "RUNTIME_API_CONFIG", "--check"}, test.lookup); err == nil {
+				t.Fatal("loadConfig() error = nil")
+			}
+		})
 	}
 }

@@ -28,8 +28,8 @@ var _ = Describe("Self-hosted production Stack", func() {
 		Expect(err).NotTo(HaveOccurred())
 		ci, err := stack.Render(spec, stack.ProfileCI)
 		Expect(err).NotTo(HaveOccurred())
-		Expect(normalizedProfile(local.Resources(), "ar-agent-runtime")).To(Equal(normalizedProfile(production.Resources(), "agent-runtime")))
-		Expect(normalizedProfile(ci.Resources(), "ar-ci-agent-runtime")).To(Equal(normalizedProfile(production.Resources(), "agent-runtime")))
+		Expect(normalizedProfile(local.Resources(), "ar-agent-runtime", true)).To(Equal(normalizedProfile(production.Resources(), "agent-runtime", false)))
+		Expect(normalizedProfile(ci.Resources(), "ar-ci-agent-runtime", false)).To(Equal(normalizedProfile(production.Resources(), "agent-runtime", false)))
 		for _, rendered := range []stack.Rendered{local, ci} {
 			for _, resource := range rendered.Resources() {
 				if resource.Kind != stack.ResourceSecretReference {
@@ -105,7 +105,7 @@ var _ = Describe("Self-hosted production Stack", func() {
 		Expect(findResource(resources, "migration-runner").Kubernetes.Image).To(Equal("postgres@sha256:e5507c984377515b8c9922b0eb19f55aba2063fdc7bccf268cefd53133f97054"))
 		expectedRoleConfigs := map[stack.ResourceID]string{
 			"api":             `{"version":1,"role":"api","namespace":"agent-runtime","listen_address":"0.0.0.0:8080","dependencies":[{"name":"state","endpoint":"http://state.agent-runtime.svc:8080"},{"name":"telemetry","endpoint":"http://telemetry.agent-runtime.svc:4318"}]}`,
-			"orchestration":   `{"version":1,"role":"orchestration","namespace":"agent-runtime","listen_address":"0.0.0.0:8081","dependencies":[{"name":"state","endpoint":"postgres://state.agent-runtime.svc:5432/agent_runtime","secret_environment":"STATE_DATABASE_DSN"},{"name":"telemetry","endpoint":"http://telemetry.agent-runtime.svc:4318"},{"name":"temporal","endpoint":"temporal.agent-runtime.svc:7233","secret_environment":"TEMPORAL_AUTH_TOKEN"}]}`,
+			"orchestration":   `{"version":1,"role":"orchestration-codec","namespace":"agent-runtime","listen_address":"0.0.0.0:8081","dependencies":[{"name":"state","endpoint":"postgres://state.agent-runtime.svc:5432/agent_runtime","secret_environment":"STATE_DATABASE_DSN"},{"name":"telemetry","endpoint":"http://telemetry.agent-runtime.svc:4318"},{"name":"temporal","endpoint":"temporal.agent-runtime.svc:7233","secret_environment":"TEMPORAL_AUTH_TOKEN"},{"name":"payload-blob","endpoint":"http://blob.agent-runtime.svc:9000","secret_environment":"ORCHESTRATION_PAYLOAD_BLOB_ACCESS_KEY"},{"name":"payload-blob-secret","endpoint":"http://blob.agent-runtime.svc:9000","secret_environment":"ORCHESTRATION_PAYLOAD_BLOB_SECRET_KEY"}],"worker":{"task_queue":"agent-runtime-session-v1","payload_blob_endpoint":"http://blob.agent-runtime.svc:9000","payload_blob_bucket":"agent-runtime-temporal-payload","payload_blob_prefix":"temporal-payload","payload_access_key_environment":"ORCHESTRATION_PAYLOAD_BLOB_ACCESS_KEY","payload_secret_key_environment":"ORCHESTRATION_PAYLOAD_BLOB_SECRET_KEY"}}`,
 			"model":           `{"version":1,"role":"model","namespace":"agent-runtime","listen_address":"0.0.0.0:8082","dependencies":[{"name":"conversation","endpoint":"http://api.agent-runtime.svc:8080","secret_environment":"CONVERSATION_ACCESS_TOKEN"},{"name":"egress-proxy","endpoint":"http://egress-proxy.agent-runtime.svc:8088"},{"name":"model","endpoint":"https://model-provider.example.invalid","secret_environment":"MODEL_API_KEY"},{"name":"telemetry","endpoint":"http://telemetry.agent-runtime.svc:4318"}]}`,
 			"tool":            `{"version":1,"role":"tool","namespace":"agent-runtime","listen_address":"0.0.0.0:8083","dependencies":[{"name":"sandbox-control","endpoint":"http://sandbox-control.agent-runtime.svc:8086","secret_environment":"SANDBOX_CONTROL_TOKEN"},{"name":"telemetry","endpoint":"http://telemetry.agent-runtime.svc:4318"},{"name":"tool-broker","endpoint":"http://api.agent-runtime.svc:8080","secret_environment":"TOOL_BROKER_TOKEN"}]}`,
 			"blob-role":       `{"version":1,"role":"blob","namespace":"agent-runtime","listen_address":"0.0.0.0:8084","dependencies":[{"name":"storage","endpoint":"http://blob.agent-runtime.svc:9000","secret_environment":"BLOB_STORAGE_CREDENTIAL"},{"name":"telemetry","endpoint":"http://telemetry.agent-runtime.svc:4318"}]}`,
@@ -141,6 +141,21 @@ var _ = Describe("Self-hosted production Stack", func() {
 			}), role)
 		}
 	})
+
+	It("keeps every first-party runtime dependency inside the declared image build boundary", func() {
+		dockerfile, err := os.ReadFile("../../deploy/production/Dockerfile")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(string(dockerfile)).To(ContainSubstring("COPY sandbox ./sandbox"))
+
+		tiltfile, err := os.ReadFile("../../Tiltfile")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(string(tiltfile)).To(ContainSubstring("'sandbox'"))
+		Expect(string(tiltfile)).To(ContainSubstring("resource_deps=['temporal', 'migration-runner']"))
+
+		ignore, err := os.ReadFile("../../.dockerignore")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(string(ignore)).To(ContainSubstring("!sandbox/**"))
+	})
 })
 
 func findResource(resources []stack.Resource, id stack.ResourceID) stack.Resource {
@@ -153,7 +168,7 @@ func findResource(resources []stack.Resource, id stack.ResourceID) stack.Resourc
 	return stack.Resource{}
 }
 
-func normalizedProfile(resources []stack.Resource, namespace string) []byte {
+func normalizedProfile(resources []stack.Resource, namespace string, localFixture bool) []byte {
 	normalized := make([]stack.Resource, len(resources))
 	copy(normalized, resources)
 	for index := range normalized {
@@ -165,6 +180,9 @@ func normalizedProfile(resources []stack.Resource, namespace string) []byte {
 			resource.SecretReference.Provider = "<profile-secret-provider>"
 			resource.SecretReference.Reference = "<profile-secret-reference>"
 		}
+		if localFixture && (resource.ID == "model-secret" || resource.ID == "tool-broker-secret") {
+			resource.SecretReference.Keys = removeLocalDemoKeys(resource.SecretReference.Keys)
+		}
 		if resource.Orchestration != nil {
 			resource.Orchestration.Namespace = "<namespace>"
 			resource.Orchestration.TaskQueuePrefix = "<namespace>-"
@@ -174,6 +192,16 @@ func normalizedProfile(resources []stack.Resource, namespace string) []byte {
 			resource.Blob.Prefix = "<namespace>/payloads"
 		}
 		if resource.Kubernetes != nil {
+			if localFixture && (resource.ID == "model" || resource.ID == "tool") {
+				resource.Kubernetes.SecretEnvironment = removeLocalDemoEnvironment(resource.Kubernetes.SecretEnvironment)
+			}
+			if localFixture && (resource.ID == "model-egress" || resource.ID == "tool-egress") {
+				resource.Kubernetes.Network.AllowedEgress = removeLocalDemoEgress(resource.Kubernetes.Network.AllowedEgress)
+			}
+			if resource.ID == "runtime-api" {
+				resource.Kubernetes.Replicas = 0
+				resource.Kubernetes.Compute = nil
+			}
 			for environmentIndex := range resource.Kubernetes.Environment {
 				environment := &resource.Kubernetes.Environment[environmentIndex]
 				if environment.Name == "BLOB_BUCKET" || environment.Name == "BLOB_TEMPORAL_BUCKET" {
@@ -189,6 +217,11 @@ func normalizedProfile(resources []stack.Resource, namespace string) []byte {
 				}
 				var document any
 				Expect(json.Unmarshal([]byte(environment.Value), &document)).To(Succeed())
+				if localFixture {
+					if object, ok := document.(map[string]any); ok {
+						delete(object, "local_demo_worker")
+					}
+				}
 				document = normalizeNamespaceStrings(document, namespace)
 				encoded, err := json.Marshal(document)
 				Expect(err).NotTo(HaveOccurred())
@@ -199,6 +232,38 @@ func normalizedProfile(resources []stack.Resource, namespace string) []byte {
 	encoded, err := json.Marshal(normalized)
 	Expect(err).NotTo(HaveOccurred())
 	return bytes.TrimSpace(encoded)
+}
+
+func removeLocalDemoKeys(keys []string) []string { return removeLocalDemoStrings(keys) }
+func removeLocalDemoEgress(ids []stack.ResourceID) []stack.ResourceID {
+	values := make([]string, len(ids))
+	for index := range ids {
+		values[index] = string(ids[index])
+	}
+	values = removeLocalDemoStrings(values)
+	result := make([]stack.ResourceID, len(values))
+	for index := range values {
+		result[index] = stack.ResourceID(values[index])
+	}
+	return result
+}
+func removeLocalDemoEnvironment(values []stack.SecretEnvironmentVariable) []stack.SecretEnvironmentVariable {
+	result := values[:0]
+	for _, value := range values {
+		if !strings.HasPrefix(value.Name, "LOCAL_DEMO_") {
+			result = append(result, value)
+		}
+	}
+	return result
+}
+func removeLocalDemoStrings(values []string) []string {
+	result := values[:0]
+	for _, value := range values {
+		if value != "LOCAL_DEMO_STATE_DSN" && value != "LOCAL_DEMO_CONTENT_ACCESS_KEY" && value != "LOCAL_DEMO_CONTENT_SECRET_KEY" && value != "blob" && value != "state" {
+			result = append(result, value)
+		}
+	}
+	return result
 }
 
 func normalizeNamespaceStrings(value any, namespace string) any {
@@ -212,6 +277,10 @@ func normalizeNamespaceStrings(value any, namespace string) any {
 		return typed
 	case map[string]any:
 		for key := range typed {
+			if key == "tenant" {
+				typed[key] = "<profile-tenant>"
+				continue
+			}
 			typed[key] = normalizeNamespaceStrings(typed[key], namespace)
 		}
 		return typed

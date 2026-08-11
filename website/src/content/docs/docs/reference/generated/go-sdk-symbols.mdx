@@ -78,7 +78,7 @@ This index is derived only from the declared public `sdk/go` source files. It li
 | `method` | `Client.InspectTurn` | InspectTurn returns one caller-safe Turn snapshot. |
 | `method` | `Client.ListApprovals` | ListApprovals returns the caller-authorized bounded Approval inbox. |
 | `method` | `Client.OpenArtifact` | OpenArtifact opens a bounded Artifact response. Reaching EOF verifies its declared Digest trailer; Close permits cancellation before completion. |
-| `method` | `Client.ReadArtifact` | ReadArtifact downloads bounded immutable content only after the server has authorized the exact tenant/principal/artifact tuple. |
+| `method` | `Client.ReadArtifact` | ReadArtifact downloads a Content-Length-bounded immutable response only after the server has authorized the exact tenant/principal/artifact tuple. Call OpenArtifact for a trailer-verified streaming response. |
 | `method` | `Client.ReviseAgent` | ReviseAgent creates another immutable Agent revision through the admin surface. |
 | `method` | `Client.RevisePolicy` | RevisePolicy creates the next immutable revision of a tenant Policy. |
 | `method` | `Client.SendInput` | SendInput idempotently admits bounded Input into a Session. |
