@@ -47,3 +47,33 @@ func (executor HostProcessExecutor) ExecuteAuthenticated(ctx context.Context, en
 	defer cancel()
 	return errors.Join(err, executor.Host.CancelDispatch(cancelCtx, envelope))
 }
+
+// ExecuteWithOutput forwards only stdout/stderr chunks to sandboxhostprocess,
+// which signs, journals, and acknowledges them before terminal completion.
+func (executor HostProcessExecutor) ExecuteWithOutput(ctx context.Context, envelope sandboxhostprotocol.Envelope, emit sandboxhostprotocol.GuestOutputEmitter) error {
+	if executor.Host == nil || emit == nil {
+		return fmt.Errorf("execute Firecracker guest output: %w", ErrCapabilityUnavailable)
+	}
+	return fmt.Errorf("execute Firecracker guest output: %w", ErrCapabilityUnavailable)
+}
+
+// ExecuteAuthenticatedWithOutput preserves exact control trust and forwards
+// each stdout/stderr chunk before allowing the durable terminal path to run.
+func (executor HostProcessExecutor) ExecuteAuthenticatedWithOutput(ctx context.Context, envelope sandboxhostprotocol.Envelope, authenticatedEnvelope []byte, emit sandboxhostprotocol.GuestOutputEmitter) error {
+	if executor.Host == nil || emit == nil {
+		return fmt.Errorf("execute authenticated Firecracker guest output: %w", ErrCapabilityUnavailable)
+	}
+	result, err := executor.Host.DispatchAuthenticated(ctx, envelope, authenticatedEnvelope)
+	if err != nil {
+		return err
+	}
+	for _, output := range result.Outputs {
+		if output.Stream != "stdout" && output.Stream != "stderr" {
+			continue
+		}
+		if err := emit(ctx, sandboxhostprotocol.GuestOutput{Stream: output.Stream, Sequence: output.Sequence, Data: append([]byte(nil), output.Data...)}); err != nil {
+			return err
+		}
+	}
+	return fmt.Errorf("authenticated Firecracker guest dispatch: %w", ErrCapabilityUnavailable)
+}

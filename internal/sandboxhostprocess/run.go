@@ -87,6 +87,14 @@ func RunOnceWithExecutor(ctx context.Context, config Config, lookup SecretLookup
 			return err
 		}
 	}
+	for _, pending := range journal.PendingOutputs() {
+		if err := sendOutput(ctx, client, config.controlURL, pending.Wire); err != nil {
+			return err
+		}
+		if err := journal.AcknowledgeOutput(pending.ReceiptKey, sandboxhostprotocol.Digest(pending.Wire)); err != nil {
+			return err
+		}
+	}
 	if err := recoverIncompleteExecutions(ctx, source.Now().UTC(), journal, ed25519.PrivateKey(hostPrivate), func(sendCtx context.Context, wire []byte) error {
 		return sendResult(sendCtx, client, config.controlURL, wire)
 	}); err != nil {
@@ -134,8 +142,10 @@ func RunOnceWithExecutor(ctx context.Context, config Config, lookup SecretLookup
 	if config.testFaultAfterReceipt {
 		return ErrInjectedReceiptFault
 	}
-	if err := executeEnvelopeWithAfterTerminalSend(ctx, envelope, source.Now().UTC(), journal, ed25519.PrivateKey(hostPrivate), bindAuthenticatedEnvelope(executor, response.body), func(sendCtx context.Context, wire []byte) error {
+	if err := executeEnvelopeWithOutputAfterTerminalSend(ctx, envelope, source.Now().UTC(), journal, ed25519.PrivateKey(hostPrivate), bindAuthenticatedEnvelope(executor, response.body), func(sendCtx context.Context, wire []byte) error {
 		return sendResult(sendCtx, client, config.controlURL, wire)
+	}, func(sendCtx context.Context, wire []byte) error {
+		return sendOutput(sendCtx, client, config.controlURL, wire)
 	}, context.WithDeadline, func() error {
 		if config.testFaultAfterResultSend {
 			return ErrInjectedResultAcknowledgementFault
@@ -159,6 +169,14 @@ func sendResult(ctx context.Context, client *http.Client, controlURL string, wir
 		return err
 	}
 	return requireControlStatus(resultResponse.status, "result control endpoint is unavailable", "result was not accepted")
+}
+
+func sendOutput(ctx context.Context, client *http.Client, controlURL string, wire []byte) error {
+	response, err := do(ctx, client, controlURL+"/sandbox.host-control/v1/output", wire)
+	if err != nil {
+		return err
+	}
+	return requireControlStatus(response.status, "output control endpoint is unavailable", "output was not accepted")
 }
 
 type response struct {

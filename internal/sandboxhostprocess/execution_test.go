@@ -61,9 +61,45 @@ func TestAuthenticatedExecutorReceivesOnlyTheExactVerifiedControlWire(t *testing
 	}
 }
 
+func TestExecuteEnvelopeStagesAndAcknowledgesOutputBeforeTerminalResult(t *testing.T) {
+	envelope, now := executionEnvelope()
+	journal := executionJournal(t, envelope)
+	executor := outputReportingExecutor{emit: func(ctx context.Context, emit OutputEmitter) error {
+		return emit(ctx, ExecutionOutput{Stream: "stdout", Sequence: 0, Data: []byte("bounded")})
+	}}
+	var outputs, results [][]byte
+	err := executeEnvelopeWithOutput(context.Background(), envelope, now, journal, executionPrivateKey(), executor, func(_ context.Context, wire []byte) error {
+		results = append(results, append([]byte(nil), wire...))
+		return nil
+	}, func(_ context.Context, wire []byte) error {
+		outputs = append(outputs, append([]byte(nil), wire...))
+		return nil
+	}, func(ctx context.Context, _ time.Time) (context.Context, context.CancelFunc) { return ctx, func() {} })
+	if err != nil {
+		t.Fatalf("executeEnvelopeWithOutput() error = %v", err)
+	}
+	if len(outputs) != 1 || len(results) != 2 || resultState(t, results[1]) != "succeeded" {
+		t.Fatalf("outputs=%d results=%d terminal=%q", len(outputs), len(results), resultState(t, results[1]))
+	}
+	if len(journal.PendingOutputs()) != 0 || len(journal.PendingResults()) != 0 {
+		t.Fatal("output or terminal acknowledgement remained pending")
+	}
+}
+
 type recordingAuthenticatedExecutor struct {
 	envelope sandboxhostprotocol.Envelope
 	wire     []byte
+}
+
+type outputReportingExecutor struct {
+	emit func(context.Context, OutputEmitter) error
+}
+
+func (executor outputReportingExecutor) Execute(context.Context, sandboxhostprotocol.Envelope) error {
+	return nil
+}
+func (executor outputReportingExecutor) ExecuteWithOutput(ctx context.Context, _ sandboxhostprotocol.Envelope, emit OutputEmitter) error {
+	return executor.emit(ctx, emit)
 }
 
 func (executor *recordingAuthenticatedExecutor) Execute(context.Context, sandboxhostprotocol.Envelope) error {

@@ -4,6 +4,7 @@ package sandboxhostprotocol
 
 import (
 	"bytes"
+	"context"
 	"crypto/ed25519"
 	"crypto/sha256"
 	"encoding/base64"
@@ -108,6 +109,17 @@ type Output struct {
 	ObservedAt      time.Time `json:"observed_at"`
 	Signature       string    `json:"signature"`
 }
+
+// GuestOutput is one bounded guest chunk before the host signs and durably
+// acknowledges its public-control metadata.
+type GuestOutput struct {
+	Stream   string
+	Sequence uint64
+	Data     []byte
+}
+
+// GuestOutputEmitter accepts one guest chunk at the host-control durability boundary.
+type GuestOutputEmitter func(context.Context, GuestOutput) error
 
 // SignEnvelope returns exact canonical bytes with an Ed25519 signature over
 // the same object with Signature omitted.

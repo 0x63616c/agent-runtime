@@ -100,6 +100,13 @@ type AuthenticatedGuestDispatchChannel interface {
 	ExecuteAuthenticatedDispatch(context.Context, sandboxhostprotocol.Envelope, []byte) error
 }
 
+// AuthenticatedGuestResultChannel returns bounded authenticated guest output
+// before its terminal result for a durable host-control owner.
+type AuthenticatedGuestResultChannel interface {
+	AuthenticatedGuestDispatchChannel
+	DispatchAuthenticated(context.Context, sandboxhostprotocol.Envelope, []byte) (GuestDispatchResult, error)
+}
+
 // LinuxJailerHost is the Linux/KVM-only SmokeHost adapter composed from real host ports.
 type LinuxJailerHost struct {
 	PreflightState KVMPreflight
@@ -164,23 +171,31 @@ func (host *LinuxJailerHost) ExecuteDispatch(ctx context.Context, envelope sandb
 // the exact control-signed wire retained through verification so the private
 // guest frame cannot be rebound to a different lease-fenced envelope.
 func (host *LinuxJailerHost) ExecuteAuthenticatedDispatch(ctx context.Context, envelope sandboxhostprotocol.Envelope, authenticatedEnvelope []byte) error {
+	_, err := host.DispatchAuthenticated(ctx, envelope, authenticatedEnvelope)
+	return err
+}
+
+// DispatchAuthenticated returns only the bounded result/output exchange from
+// the exact launched guest. It remains unavailable until protected profile
+// evidence permits real guest execution.
+func (host *LinuxJailerHost) DispatchAuthenticated(ctx context.Context, envelope sandboxhostprotocol.Envelope, authenticatedEnvelope []byte) (GuestDispatchResult, error) {
 	if err := contextError(ctx); err != nil {
-		return err
+		return GuestDispatchResult{}, err
 	}
 	if host == nil || len(authenticatedEnvelope) == 0 || envelope.HostID == "" || envelope.AssignmentID == "" || envelope.FencingToken == 0 || envelope.CapabilityDigest == "" {
-		return fmt.Errorf("%w: authenticated fenced host envelope is required", ErrCapabilityUnavailable)
+		return GuestDispatchResult{}, fmt.Errorf("%w: authenticated fenced host envelope is required", ErrCapabilityUnavailable)
 	}
 	host.mu.Lock()
 	launched, cleaning, plan, guest := host.launched, host.cleaning || host.cleaned, cloneLinuxJailerPlan(host.plan), host.Guest
 	host.mu.Unlock()
 	if !launched || cleaning || !validCompiledPlan(plan) || envelope.SandboxID != plan.VMID() || sandbox.Digest(envelope.CapabilityDigest) != plan.Capabilities().Digest || firecrackerProfilesUnavailable(plan.Capabilities()) {
-		return fmt.Errorf("%w: launch state, exact capability digest, and certified guest profile are required", ErrCapabilityUnavailable)
+		return GuestDispatchResult{}, fmt.Errorf("%w: launch state, exact capability digest, and certified guest profile are required", ErrCapabilityUnavailable)
 	}
-	dispatch, ok := guest.(AuthenticatedGuestDispatchChannel)
+	dispatch, ok := guest.(AuthenticatedGuestResultChannel)
 	if !ok {
-		return fmt.Errorf("%w: authenticated guest dispatch channel is not composed", ErrCapabilityUnavailable)
+		return GuestDispatchResult{}, fmt.Errorf("%w: authenticated guest result channel is not composed", ErrCapabilityUnavailable)
 	}
-	return dispatch.ExecuteAuthenticatedDispatch(ctx, envelope, authenticatedEnvelope)
+	return dispatch.DispatchAuthenticated(ctx, envelope, authenticatedEnvelope)
 }
 
 // CancelDispatch forwards a lease-fenced cancellation only to the exact
