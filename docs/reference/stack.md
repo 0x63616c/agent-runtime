@@ -128,15 +128,25 @@ schedule sets; a non-empty set fails visibly rather than being silently
 ignored. Task-queue prefixes are consumed by the later worker composition and
 are not provider namespace state.
 
-`tilt up -- --stack=<name>` is the canonical local application command. The
-`just dev` wrapper derives or validates the same name, renders the reviewed
-`local` profile from `deploy/production/stack.json`, substitutes only
-stack-scoped development image references, and applies the resulting typed
-manifest through Tilt. It does not retain a second three-role resource source.
-Each invocation uses the explicit OrbStack context, an `ar-<stack>` namespace,
-and an OS-selected Tilt dashboard port; it never writes the current kubeconfig
-context. `just dev-reset` addresses the eight declared runtime-role Deployments
-only after the stored namespace identity and containment labels are verified.
+`just dev kubeconfig=/absolute/kubeconfig actor=<operator>` is the canonical
+local application command. It derives or validates the Stack name, renders the
+reviewed `local` profile from `deploy/production/stack.json`, and first runs
+the audited `stackctl bootstrap` action with the supplied absolute kubeconfig,
+explicit `orbstack` context, migration root, bounded actor, append-only private
+audit log, and mode-0600 bootstrap capability. Tilt then substitutes only
+stack-scoped development image references and applies the resulting typed
+manifest. Once the owned Temporal Deployment is Ready, its `stack-reconcile`
+resource runs audited `stackctl reconcile --providers-only`, including the
+declared Temporal namespace. This avoids taking ownership of Tilt's dynamic
+development-image fields while retaining the same bootstrap authority, declared
+migration, and provider checks; runtime processes never create infrastructure
+as a startup side effect. Each invocation uses an `ar-<stack>` namespace and an
+OS-selected Tilt dashboard port; it never writes the current kubeconfig
+context. `tools/dev down` first proves the same namespace was deleted, then
+retires only its matching private bootstrap capability, so a later `up` never
+mistakes a deleted Stack for a live owner. `just dev-reset` addresses the eight declared runtime-role
+Deployments only after the stored namespace identity and containment labels are
+verified.
 
 ## Disposable NetworkPolicy harness
 

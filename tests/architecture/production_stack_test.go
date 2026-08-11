@@ -28,8 +28,8 @@ var _ = Describe("Self-hosted production Stack", func() {
 		Expect(err).NotTo(HaveOccurred())
 		ci, err := stack.Render(spec, stack.ProfileCI)
 		Expect(err).NotTo(HaveOccurred())
-		Expect(normalizedProfile(local.Resources(), "ar-agent-runtime")).To(Equal(normalizedProfile(production.Resources(), "agent-runtime")))
-		Expect(normalizedProfile(ci.Resources(), "ar-ci-agent-runtime")).To(Equal(normalizedProfile(production.Resources(), "agent-runtime")))
+		Expect(normalizedProfile(local.Resources(), "ar-agent-runtime", true)).To(Equal(normalizedProfile(production.Resources(), "agent-runtime", false)))
+		Expect(normalizedProfile(ci.Resources(), "ar-ci-agent-runtime", false)).To(Equal(normalizedProfile(production.Resources(), "agent-runtime", false)))
 		for _, rendered := range []stack.Rendered{local, ci} {
 			for _, resource := range rendered.Resources() {
 				if resource.Kind != stack.ResourceSecretReference {
@@ -141,6 +141,21 @@ var _ = Describe("Self-hosted production Stack", func() {
 			}), role)
 		}
 	})
+
+	It("keeps every first-party runtime dependency inside the declared image build boundary", func() {
+		dockerfile, err := os.ReadFile("../../deploy/production/Dockerfile")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(string(dockerfile)).To(ContainSubstring("COPY sandbox ./sandbox"))
+
+		tiltfile, err := os.ReadFile("../../Tiltfile")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(string(tiltfile)).To(ContainSubstring("'sandbox'"))
+		Expect(string(tiltfile)).To(ContainSubstring("resource_deps=['temporal', 'migration-runner']"))
+
+		ignore, err := os.ReadFile("../../.dockerignore")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(string(ignore)).To(ContainSubstring("!sandbox/**"))
+	})
 })
 
 func findResource(resources []stack.Resource, id stack.ResourceID) stack.Resource {
@@ -153,7 +168,7 @@ func findResource(resources []stack.Resource, id stack.ResourceID) stack.Resourc
 	return stack.Resource{}
 }
 
-func normalizedProfile(resources []stack.Resource, namespace string) []byte {
+func normalizedProfile(resources []stack.Resource, namespace string, localFixture bool) []byte {
 	normalized := make([]stack.Resource, len(resources))
 	copy(normalized, resources)
 	for index := range normalized {
@@ -165,6 +180,9 @@ func normalizedProfile(resources []stack.Resource, namespace string) []byte {
 			resource.SecretReference.Provider = "<profile-secret-provider>"
 			resource.SecretReference.Reference = "<profile-secret-reference>"
 		}
+		if localFixture && (resource.ID == "model-secret" || resource.ID == "tool-broker-secret") {
+			resource.SecretReference.Keys = removeLocalDemoKeys(resource.SecretReference.Keys)
+		}
 		if resource.Orchestration != nil {
 			resource.Orchestration.Namespace = "<namespace>"
 			resource.Orchestration.TaskQueuePrefix = "<namespace>-"
@@ -174,13 +192,36 @@ func normalizedProfile(resources []stack.Resource, namespace string) []byte {
 			resource.Blob.Prefix = "<namespace>/payloads"
 		}
 		if resource.Kubernetes != nil {
+			if localFixture && (resource.ID == "model" || resource.ID == "tool") {
+				resource.Kubernetes.SecretEnvironment = removeLocalDemoEnvironment(resource.Kubernetes.SecretEnvironment)
+			}
+			if localFixture && (resource.ID == "model-egress" || resource.ID == "tool-egress") {
+				resource.Kubernetes.Network.AllowedEgress = removeLocalDemoEgress(resource.Kubernetes.Network.AllowedEgress)
+			}
+			if resource.ID == "runtime-api" {
+				resource.Kubernetes.Replicas = 0
+				resource.Kubernetes.Compute = nil
+			}
 			for environmentIndex := range resource.Kubernetes.Environment {
 				environment := &resource.Kubernetes.Environment[environmentIndex]
+				if environment.Name == "BLOB_BUCKET" || environment.Name == "BLOB_TEMPORAL_BUCKET" {
+					environment.Value = "<namespace>"
+					continue
+				}
+				if environment.Name == "RUNTIME_API_CONFIG" {
+					environment.Value = "<profile-runtime-api-config>"
+					continue
+				}
 				if environment.Name != "RUNTIME_ROLE_CONFIG" {
 					continue
 				}
 				var document any
 				Expect(json.Unmarshal([]byte(environment.Value), &document)).To(Succeed())
+				if localFixture {
+					if object, ok := document.(map[string]any); ok {
+						delete(object, "local_demo_worker")
+					}
+				}
 				document = normalizeNamespaceStrings(document, namespace)
 				encoded, err := json.Marshal(document)
 				Expect(err).NotTo(HaveOccurred())
@@ -191,6 +232,38 @@ func normalizedProfile(resources []stack.Resource, namespace string) []byte {
 	encoded, err := json.Marshal(normalized)
 	Expect(err).NotTo(HaveOccurred())
 	return bytes.TrimSpace(encoded)
+}
+
+func removeLocalDemoKeys(keys []string) []string { return removeLocalDemoStrings(keys) }
+func removeLocalDemoEgress(ids []stack.ResourceID) []stack.ResourceID {
+	values := make([]string, len(ids))
+	for index := range ids {
+		values[index] = string(ids[index])
+	}
+	values = removeLocalDemoStrings(values)
+	result := make([]stack.ResourceID, len(values))
+	for index := range values {
+		result[index] = stack.ResourceID(values[index])
+	}
+	return result
+}
+func removeLocalDemoEnvironment(values []stack.SecretEnvironmentVariable) []stack.SecretEnvironmentVariable {
+	result := values[:0]
+	for _, value := range values {
+		if !strings.HasPrefix(value.Name, "LOCAL_DEMO_") {
+			result = append(result, value)
+		}
+	}
+	return result
+}
+func removeLocalDemoStrings(values []string) []string {
+	result := values[:0]
+	for _, value := range values {
+		if value != "LOCAL_DEMO_STATE_DSN" && value != "LOCAL_DEMO_CONTENT_ACCESS_KEY" && value != "LOCAL_DEMO_CONTENT_SECRET_KEY" && value != "blob" && value != "state" {
+			result = append(result, value)
+		}
+	}
+	return result
 }
 
 func normalizeNamespaceStrings(value any, namespace string) any {
@@ -204,6 +277,10 @@ func normalizeNamespaceStrings(value any, namespace string) any {
 		return typed
 	case map[string]any:
 		for key := range typed {
+			if key == "tenant" {
+				typed[key] = "<profile-tenant>"
+				continue
+			}
 			typed[key] = normalizeNamespaceStrings(typed[key], namespace)
 		}
 		return typed

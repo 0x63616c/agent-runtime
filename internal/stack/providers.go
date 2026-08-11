@@ -256,7 +256,7 @@ func (adapter KubectlDeclaredProviderAdapter) verifySecretReference(ctx context.
 	}
 	expectedSecretLabels := map[string]string{partOfLabel: document.Labels.PartOf, stackLabel: document.Stack, profileLabel: string(document.Profile), externalControllerLabel: "local-generated"}
 	expectedAnnotations := map[string]string{bootstrapUIDAnnotation: namespace.Metadata.UID, renderDigestAnnotation: document.Digest}
-	if secret.Metadata.UID == "" || secret.Metadata.ResourceVersion == "" || !equalStringMap(secret.Metadata.Labels, expectedSecretLabels) || !equalStringMap(secret.Metadata.Annotations, expectedAnnotations) {
+	if secret.Metadata.UID == "" || secret.Metadata.ResourceVersion == "" || !equalStringMapAllowingTiltManager(secret.Metadata.Labels, expectedSecretLabels) || !equalStringMapAllowingTiltLastApplied(secret.Metadata.Annotations, expectedAnnotations) {
 		return verifiedSecretIdentity{}, errors.New("verify local-generated Secret reference: identity binding differs from desired state")
 	}
 	return verifiedSecretIdentity{uid: secret.Metadata.UID, resourceVersion: secret.Metadata.ResourceVersion}, nil
@@ -330,8 +330,42 @@ func onlyExpectedNamespaceLabels(labels map[string]string, namespace string) boo
 			if value == namespace {
 				continue
 			}
+		case "app.kubernetes.io/managed-by":
+			if value == "tilt" {
+				continue
+			}
 		}
 		return false
+	}
+	return true
+}
+
+func equalStringMapAllowingTiltManager(actual, expected map[string]string) bool {
+	if equalStringMap(actual, expected) {
+		return true
+	}
+	if actual["app.kubernetes.io/managed-by"] != "tilt" || len(actual) != len(expected)+1 {
+		return false
+	}
+	for key, value := range expected {
+		if actual[key] != value {
+			return false
+		}
+	}
+	return true
+}
+
+func equalStringMapAllowingTiltLastApplied(actual, expected map[string]string) bool {
+	if equalStringMap(actual, expected) {
+		return true
+	}
+	if actual["kubectl.kubernetes.io/last-applied-configuration"] == "" || len(actual) != len(expected)+1 {
+		return false
+	}
+	for key, value := range expected {
+		if actual[key] != value {
+			return false
+		}
 	}
 	return true
 }

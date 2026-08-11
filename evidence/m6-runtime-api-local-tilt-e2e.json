@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "observed_at_utc": "2026-08-11T11:12:33Z",
+  "proof_level": "local_tilt_e2e",
+  "scope": "One isolated local Stack lifecycle and Durable Chat public-contract flow. This is not Codex subscription-canary evidence and does not complete MOD-001 through MOD-005 or EX-001's restart/cancel coverage.",
+  "commands": [
+    "go run ./tools/dev up --stack=m6-runtime-api --root . --kubeconfig=/absolute/kubeconfig --actor=m6-local-operator",
+    "go run ./tools/dev reconcile --stack=m6-runtime-api --root .",
+    "go run ./tools/dev api --stack=m6-runtime-api --root .",
+    "go run ./examples/durable-chat/cmd/durable-chat --mode=terminal --runtime-url=http://127.0.0.1:<forwarded-port>",
+    "tilt get uiresource stack-reconcile --port <owned-dashboard-port> -o json"
+  ],
+  "result": "passed",
+  "observations": {
+    "ownership": "Exactly one bootstrap-owned local namespace and one tools/dev up plus Tilt process pair were present during the accepted run.",
+    "lifecycle": "The bounded stack-reconcile resource was healthy after migration-runner and Temporal readiness; its append-only audit recorded an explicit m6-local-operator reconcile for the local/orbstack target.",
+    "workloads": "migration-runner, Temporal, runtime-api, and all three orchestration workers were Ready; the orchestration worker remained started on the declared per-stack Temporal task queue.",
+    "durable_chat": "The public terminal created a Session from an admin-created Agent revision, queued one Input, read a non-empty Product-event page/cursor, and resumed the Session. The API forward was stopped after the flow."
+  },
+  "redaction": "No kubeconfig bytes, generated Secret values, bearer tokens, request headers, raw input text, local state/capability files, raw pod logs, dashboard snapshots, or internal backend identifiers are retained."
+}
