@@ -3,6 +3,8 @@ package runtimeapi_test
 import (
 	"context"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"reflect"
 	"strings"
 	"testing"
@@ -235,6 +237,88 @@ func TestStateRuntimePersistsApprovalExpiryBeforeRefusingLateDecision(t *testing
 	}
 	if !foundExpiryAudit {
 		t.Fatalf("expiry audit facts = %#v, want approval.expired", state.Audit)
+	}
+}
+
+func TestStateRuntimeHTTPAndSDKExposeExpiredApprovalAndItsDurableReceipt(t *testing.T) {
+	runtime, _, compiler, store, fakeClock := newMemoryStateAuthority(t)
+	ctx := context.Background()
+	admin := runtimeapi.Identity{Tenant: "tenant-a", Principal: "admin", Admin: true}
+	alice := runtimeapi.Identity{Tenant: "tenant-a", Principal: "alice"}
+	agent, err := runtime.CreateAgent(ctx, admin, agentruntime.CreateAgentRequest{IdempotencyKey: "http-expiry-agent", Name: "assistant", ModelProfile: "balanced", Instructions: "safe"})
+	if err != nil {
+		t.Fatalf("create Agent: %v", err)
+	}
+	session, err := runtime.CreateSession(ctx, alice, agentruntime.CreateSessionRequest{IdempotencyKey: "http-expiry-session", AgentRevision: agent.RevisionID})
+	if err != nil {
+		t.Fatalf("create Session: %v", err)
+	}
+	accepted, err := runtime.SendInput(ctx, alice, agentruntime.SendInputRequest{SessionID: session.ID, IdempotencyKey: "http-expiry-input", Parts: []agentruntime.ContentPart{{Kind: agentruntime.ContentText, Text: "write file"}}})
+	if err != nil {
+		t.Fatalf("send Input: %v", err)
+	}
+	tenant, _ := runtimecontent.ParseTenantID("tenant-a")
+	principal, _ := runtimecontent.ParsePrincipalID("alice")
+	digest := "sha256:" + strings.Repeat("c", 64)
+	intent, err := compiler.CompileRecordToolIntent(runtimestate.RecordToolIntentCommand{Scope: runtimestate.MutationScope{Tenant: tenant, Principal: principal, Authority: runtimestate.AuthorityRuntimeWorker}, IdempotencyKey: "http-expiry-intent", SessionID: session.ID, TurnID: accepted.Turn.ID, ToolCallID: "tcall_1234567890ABCDEF", ToolName: "write", ActionDigest: digest, PolicyRevisionDigest: digest})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Apply(ctx, intent); err != nil {
+		t.Fatal(err)
+	}
+	request, err := compiler.CompileRequestApproval(runtimestate.RequestApprovalCommand{Scope: runtimestate.MutationScope{Tenant: tenant, Principal: principal, Authority: runtimestate.AuthorityRuntimeWorker}, IdempotencyKey: "http-expiry-request", SessionID: session.ID, TurnID: accepted.Turn.ID, ToolCallID: "tcall_1234567890ABCDEF", ApprovalID: "appr_1234567890ABCDEF", ActionDigest: digest, PolicyRevisionDigest: digest, CapabilityDigest: digest, MaximumUses: 1, ExpiresAt: fakeClock.Now().Add(time.Minute)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Apply(ctx, request); err != nil {
+		t.Fatal(err)
+	}
+	if err := fakeClock.Advance(time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	handler, err := runtimeapi.NewHandler(runtimeapi.Config{Runtime: runtime, Authenticator: staticAuth{identities: map[string]runtimeapi.Identity{"alice-token-000000": alice}}, RequestIDs: &requestIDs{}})
+	if err != nil {
+		t.Fatalf("new handler: %v", err)
+	}
+	server := httptest.NewServer(handler)
+	defer server.Close()
+	credential, err := agentruntime.NewStaticBearerCredential("alice-token-000000")
+	if err != nil {
+		t.Fatalf("new credential: %v", err)
+	}
+	client, err := agentruntime.NewClient(agentruntime.ClientConfig{BaseURL: server.URL, HTTPClient: http.DefaultClient, Credentials: credential, RequestIDs: &requestIDs{}})
+	if err != nil {
+		t.Fatalf("new SDK client: %v", err)
+	}
+	approvalID, _ := agentruntime.ParseApprovalID("appr_1234567890ABCDEF")
+	_, err = client.DecideApproval(ctx, agentruntime.DecideApprovalRequest{ApprovalID: approvalID, Decision: agentruntime.ApprovalApproved, IdempotencyKey: "http-expiry-decision"})
+	if !hasFailure(err, agentruntime.FailureConflict) {
+		t.Fatalf("SDK late approval decision error = %v, want safe conflict", err)
+	}
+	if _, err := client.DecideApproval(ctx, agentruntime.DecideApprovalRequest{ApprovalID: approvalID, Decision: agentruntime.ApprovalApproved, IdempotencyKey: "http-expiry-decision"}); !hasFailure(err, agentruntime.FailureConflict) {
+		t.Fatalf("SDK replayed late approval decision error = %v, want safe conflict", err)
+	}
+	expired, err := client.InspectApproval(ctx, approvalID)
+	if err != nil || expired.State != agentruntime.ApprovalExpired {
+		t.Fatalf("SDK inspect expired Approval = %#v, %v", expired, err)
+	}
+	status, err := client.IdempotencyStatus(ctx, "http-expiry-decision")
+	if err != nil || status.Command != string(runtimestate.CommandDecideApproval) {
+		t.Fatalf("SDK idempotency status = %#v, %v", status, err)
+	}
+	state, err := store.LoadRuntimeState(ctx, runtimestate.MutationScope{Tenant: tenant})
+	if err != nil {
+		t.Fatalf("load approval state after HTTP replay: %v", err)
+	}
+	expiryAudits := 0
+	for _, fact := range state.Audit {
+		if fact.Kind == "approval.expired" {
+			expiryAudits++
+		}
+	}
+	if expiryAudits != 1 {
+		t.Fatalf("approval expiry audit count = %d, want 1", expiryAudits)
 	}
 }
 
