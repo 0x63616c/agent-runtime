@@ -56,4 +56,4 @@ psql "$admin_dsn" --set=ON_ERROR_STOP=1 --command "DROP DATABASE ${restore_datab
 
 AR_RUNTIME_POSTGRES_DSN="$AR_RUNTIME_API_POSTGRES_DSN" \
   go test -race -tags=integration ./internal/runtimepostgres -count=1
-go test -race -tags=integration ./internal/runtimeapiprocess ./internal/runtimeorchestration -run 'Test(DurablePostgresMinIOAPIProcessSurvivesRestart|CodecEnabledWorkerStartsAgainstDurableDependenciesAndRestarts)' -count=1
+go test -race -tags=integration ./internal/runtimeapiprocess ./internal/runtimeorchestration ./internal/runtimetool -run 'Test(DurablePostgresMinIOAPIProcessSurvivesRestart|CodecEnabledWorkerStartsAgainstDurableDependenciesAndRestarts|DurableToolLifecyclePersistsDescriptorApprovalAndFinalization)' -count=1
