@@ -199,6 +199,9 @@ func (w *Worker) process(ctx context.Context, r runtimestate.OutboxRecord, recov
 	if x.State != runtimestate.ToolExecutionIntent {
 		return nil
 	}
+	if !w.executionDispatchAllowed(s, x) {
+		return w.recordDispatchRefusal(ctx, r)
+	}
 	descriptor, err := w.descriptorReader.ReadToolActionDescriptor(ctx, r.Tenant, r.Principal, r.SessionID, r.TurnID, r.ToolCallID)
 	if err != nil {
 		if ctx.Err() != nil || errors.Is(err, runtimecontent.ErrUnavailable) {
@@ -235,11 +238,20 @@ func (w *Worker) process(ctx context.Context, r runtimestate.OutboxRecord, recov
 		}
 		h, err := w.content.StageArtifact(ctx, r.Tenant, mediaType, out.Output)
 		if err == nil {
-			c, err := w.content.ValidateArtifactHandoff(h)
+			artifact, compileErr := w.compiler.CompileRegisterArtifact(runtimestate.RegisterArtifactCommand{Scope: runtimestate.MutationScope{Tenant: r.Tenant, Principal: r.Principal, Authority: runtimestate.AuthorityRuntimeWorker}, IdempotencyKey: "tool-output-" + string(r.OperationID), SessionID: r.SessionID, TurnID: r.TurnID, Artifact: h})
+			if compileErr == nil {
+				plan, persistErr := w.persistPlan(ctx, artifact)
+				if persistErr == nil {
+					v := plan.Result().Artifact.Reference
+					result = &v
+					state = runtimestate.ToolExecutionSucceeded
+				} else {
+					err = persistErr
+				}
+			} else {
+				err = compileErr
+			}
 			if err == nil {
-				v := c.Reference
-				result = &v
-				state = runtimestate.ToolExecutionSucceeded
 			} else {
 				failure = &agentruntime.Failure{Code: agentruntime.FailureUnavailable, Message: "tool output could not be durably finalized"}
 				state = runtimestate.ToolExecutionUncertain
@@ -256,6 +268,33 @@ func (w *Worker) process(ctx context.Context, r runtimestate.OutboxRecord, recov
 	m, e := w.compiler.CompileRecordToolExecutionOutcome(runtimestate.RecordToolExecutionOutcomeCommand{Scope: runtimestate.MutationScope{Tenant: r.Tenant, Principal: r.Principal, Authority: runtimestate.AuthorityRuntimeWorker}, IdempotencyKey: "tool-outcome-" + string(r.OperationID), SessionID: r.SessionID, TurnID: r.TurnID, ToolCallID: r.ToolCallID, OperationID: r.OperationID, Outcome: state, Result: result, Failure: failure})
 	if e != nil {
 		return e
+	}
+	return w.persist(ctx, m)
+}
+
+func (w *Worker) executionDispatchAllowed(state runtimestate.RuntimeState, execution runtimestate.ToolExecutionRecord) bool {
+	turnRunning := false
+	for _, turn := range state.Turns {
+		if turn.SessionID == execution.SessionID && turn.TurnID == execution.TurnID && turn.Principal == execution.Principal && turn.State == agentruntime.TurnRunning {
+			turnRunning = true
+			break
+		}
+	}
+	if !turnRunning {
+		return false
+	}
+	for _, grant := range state.Grants {
+		if grant.GrantID == execution.GrantID && grant.Principal == execution.Principal {
+			return grant.RevokedAt == nil && w.clock.Now().Before(grant.ExpiresAt)
+		}
+	}
+	return false
+}
+
+func (w *Worker) recordDispatchRefusal(ctx context.Context, r runtimestate.OutboxRecord) error {
+	m, err := w.compiler.CompileRecordToolExecutionOutcome(runtimestate.RecordToolExecutionOutcomeCommand{Scope: runtimestate.MutationScope{Tenant: r.Tenant, Principal: r.Principal, Authority: runtimestate.AuthorityRuntimeWorker}, IdempotencyKey: "tool-outcome-" + string(r.OperationID), SessionID: r.SessionID, TurnID: r.TurnID, ToolCallID: r.ToolCallID, OperationID: r.OperationID, Outcome: runtimestate.ToolExecutionFailed, Failure: &agentruntime.Failure{Code: agentruntime.FailureInvalidInput, Message: "tool execution is no longer authorized"}})
+	if err != nil {
+		return err
 	}
 	return w.persist(ctx, m)
 }
@@ -279,15 +318,23 @@ func (w *Worker) ack(ctx context.Context, r runtimestate.OutboxRecord) error {
 	return e
 }
 func (w *Worker) persist(ctx context.Context, m runtimestate.CompiledMutation) error {
+	_, err := w.persistPlan(ctx, m)
+	return err
+}
+
+func (w *Worker) persistPlan(ctx context.Context, m runtimestate.CompiledMutation) (runtimestate.TransitionPlan, error) {
 	s, e := w.store.LoadRuntimeState(ctx, m.ReceiptBinding().Scope)
 	if e != nil {
-		return e
+		return runtimestate.TransitionPlan{}, e
 	}
 	p, e := w.planner.Plan(ctx, s, m)
 	if e != nil {
-		return e
+		return runtimestate.TransitionPlan{}, e
 	}
-	return w.store.PersistTransitionPlan(ctx, p)
+	if e = w.store.PersistTransitionPlan(ctx, p); e != nil {
+		return runtimestate.TransitionPlan{}, e
+	}
+	return p, nil
 }
 func (w *Worker) transition(ctx context.Context, r runtimestate.OutboxRecord, f func(runtimestate.OutboxRecord) (runtimestate.CompiledMutation, error)) (runtimestate.OutboxRecord, error) {
 	s, e := w.store.LoadRuntimeState(ctx, runtimestate.MutationScope{Tenant: r.Tenant, Authority: runtimestate.AuthorityOutboxPublisher})

@@ -24,6 +24,7 @@ func TestWorkerFinalizesAuthorizedToolActionsAndReconcilesLostClaims(t *testing.
 		recovering  bool
 		corrupt     bool
 		missing     bool
+		cancel      bool
 		wantExecute int
 		wantRecon   int
 		wantState   runtimestate.ToolExecutionState
@@ -32,6 +33,7 @@ func TestWorkerFinalizesAuthorizedToolActionsAndReconcilesLostClaims(t *testing.
 		{name: "lost claim reconciles without reexecution", recovering: true, wantRecon: 1, wantState: runtimestate.ToolExecutionSucceeded},
 		{name: "corrupt descriptor is refused before execution", corrupt: true, wantState: runtimestate.ToolExecutionFailed},
 		{name: "missing descriptor is refused before execution", missing: true, wantState: runtimestate.ToolExecutionFailed},
+		{name: "cancelled execution intent is finalized without dispatch", cancel: true, wantState: runtimestate.ToolExecutionFailed},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			ctx := context.Background()
@@ -89,6 +91,15 @@ func TestWorkerFinalizesAuthorizedToolActionsAndReconcilesLostClaims(t *testing.
 					t.Fatal(err)
 				}
 			}
+			if test.cancel {
+				cancel, err := compiler.CompileCancelTurn(runtimestate.CancelTurnCommand{Scope: runtimestate.MutationScope{Tenant: tenant, Principal: principal, Authority: runtimestate.AuthoritySessionOwner}, IdempotencyKey: "cancel-intended-tool", SessionID: session, TurnID: turn})
+				if err != nil {
+					t.Fatal(err)
+				}
+				if _, err = store.Apply(ctx, cancel); err != nil {
+					t.Fatal(err)
+				}
+			}
 			adapter := &recordingAdapter{response: runtimetool.Response{Output: []byte("sandbox operation completed")}}
 			worker, err := runtimetool.NewWorker(runtimetool.Config{Store: store, Tenants: store, Compiler: compiler, Planner: planner, Clock: source, Content: content, Adapter: adapter, Claimer: "tool-worker"})
 			if err != nil {
@@ -100,7 +111,7 @@ func TestWorkerFinalizesAuthorizedToolActionsAndReconcilesLostClaims(t *testing.
 			if adapter.executes != test.wantExecute || adapter.reconciles != test.wantRecon {
 				t.Fatalf("adapter calls = execute=%d reconcile=%d, want %d/%d", adapter.executes, adapter.reconciles, test.wantExecute, test.wantRecon)
 			}
-			if !test.corrupt && !test.missing && (!bytes.Equal(adapter.last.Descriptor, descriptor) || adapter.last.SessionID != session || adapter.last.TurnID != turn || adapter.last.OperationID != execution.OperationID) {
+			if !test.corrupt && !test.missing && !test.cancel && (!bytes.Equal(adapter.last.Descriptor, descriptor) || adapter.last.SessionID != session || adapter.last.TurnID != turn || adapter.last.OperationID != execution.OperationID) {
 				t.Fatalf("adapter request = %#v, want authorized descriptor and exact operation provenance", adapter.last)
 			}
 			state, err := store.LoadRuntimeState(ctx, runtimestate.MutationScope{Tenant: tenant, Authority: runtimestate.AuthorityRuntimeWorker})
@@ -112,6 +123,12 @@ func TestWorkerFinalizesAuthorizedToolActionsAndReconcilesLostClaims(t *testing.
 			}
 			if test.corrupt && (state.ToolExecutions[0].Failure == nil || state.ToolExecutions[0].Failure.Message != "verified tool action descriptor is invalid") {
 				t.Fatalf("corrupt descriptor outcome = %#v", state.ToolExecutions[0])
+			}
+			if test.cancel && (state.ToolExecutions[0].Failure == nil || state.ToolExecutions[0].Failure.Message != "tool execution is no longer authorized" || state.Grants[0].RevokedAt == nil) {
+				t.Fatalf("cancelled tool outcome = %#v grants=%#v", state.ToolExecutions[0], state.Grants)
+			}
+			if !test.corrupt && !test.missing && !test.cancel && (len(state.Artifacts) != 1 || state.ToolExecutions[0].Result == nil || state.Artifacts[0].Reference != *state.ToolExecutions[0].Result) {
+				t.Fatalf("tool output must be owner-readable artifact = artifacts=%#v execution=%#v", state.Artifacts, state.ToolExecutions[0])
 			}
 			if len(state.Events) == 0 || state.Events[len(state.Events)-1].Kind != agentruntime.EventSandboxOperationFinalized {
 				t.Fatalf("tool terminal event = %#v, want durable sandbox finalization", state.Events)
