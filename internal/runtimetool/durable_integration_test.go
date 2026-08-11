@@ -9,6 +9,7 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"io"
 	"net/http/httptest"
 	"os"
 	"runtime"
@@ -30,6 +31,8 @@ import (
 	"github.com/minio/minio-go/v7"
 	"github.com/minio/minio-go/v7/pkg/credentials"
 )
+
+const durableOversizedToolOutputBytes = 8<<20 + 1
 
 // TestDurableBrokeredToolLifecyclePersistsApprovalAndFinalization proves the
 // broker-to-artifact lifecycle against disposable PostgreSQL and MinIO. The
@@ -221,6 +224,109 @@ func TestDurableBrokeredToolLifecyclePersistsApprovalAndFinalization(t *testing.
 	if err != nil || strings.Contains(string(download.Body), "integration-output-secret") || !strings.Contains(string(download.Body), "[REDACTED]") {
 		t.Fatalf("durable redacted output = %#v, %v", download, err)
 	}
+	// Read the exact object through the configured MinIO client as well as the
+	// owner-authorized API. This makes the redaction claim about persisted
+	// bytes, not merely about a projection returned by StateRuntime.
+	artifactKey := string(tenant) + "/tool-durable-integration/v1/sha256/" + strings.TrimPrefix(state.Artifacts[0].Reference.Digest, "sha256:")
+	storedArtifact, err := minioClient.GetObject(ctx, bucket, artifactKey, minio.GetObjectOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	storedBytes, readErr := io.ReadAll(storedArtifact)
+	closeErr := storedArtifact.Close()
+	if readErr != nil || closeErr != nil || !bytes.Equal(storedBytes, download.Body) || bytes.Contains(storedBytes, []byte("integration-output-secret")) || !bytes.Contains(storedBytes, []byte("[REDACTED]")) {
+		t.Fatalf("persisted MinIO tool output was not redacted: size=%d owner_match=%t raw_secret=%t redaction=%t read=%v close=%v", len(storedBytes), bytes.Equal(storedBytes, download.Body), bytes.Contains(storedBytes, []byte("integration-output-secret")), bytes.Contains(storedBytes, []byte("[REDACTED]")), readErr, closeErr)
+	}
+	// The public Tool projection carries only the immutable Artifact reference;
+	// the companion Product event announces finalization without copying output.
+	toolPage, err := publicRuntime.InspectToolCalls(ctx, runtimeapi.Identity{Tenant: string(tenant), Principal: string(principal)}, session, turn)
+	if err != nil || len(toolPage.Calls) != 1 || toolPage.Calls[0].Execution == nil || toolPage.Calls[0].Execution.Result == nil || toolPage.Calls[0].Execution.Result.ID != state.Artifacts[0].ArtifactID || toolPage.Calls[0].Execution.Result.SHA256 != strings.TrimPrefix(state.Artifacts[0].Reference.Digest, "sha256:") {
+		t.Fatalf("public durable tool result reference = %#v, %v", toolPage, err)
+	}
+	eventPage, err := publicRuntime.Events(ctx, runtimeapi.Identity{Tenant: string(tenant), Principal: string(principal)}, session, "", 128)
+	if err != nil || !durableHasPublicFinalization(eventPage.Events, turn) {
+		t.Fatalf("public durable tool finalization event = %#v, %v", eventPage, err)
+	}
+	publicBytes, marshalErr := json.Marshal(struct {
+		Tools  agentruntime.ToolCallPage `json:"tools"`
+		Events agentruntime.EventPage    `json:"events"`
+	}{Tools: toolPage, Events: eventPage})
+	if marshalErr != nil || bytes.Contains(publicBytes, []byte("integration-output-secret")) || bytes.Contains(publicBytes, []byte("[REDACTED]")) {
+		t.Fatalf("public durable tool result or event leaked output: tool_calls=%d events=%d raw_secret=%t redaction=%t err=%v", len(toolPage.Calls), len(eventPage.Events), bytes.Contains(publicBytes, []byte("integration-output-secret")), bytes.Contains(publicBytes, []byte("[REDACTED]")), marshalErr)
+	}
+	// A separate approved action returns an oversized secret-shaped response.
+	// Snapshot the isolated tenant prefix after its descriptor is staged: its
+	// failure must not add an Artifact object or any durable representation of
+	// the oversized output.
+	oversizedSessionMutation, err := compiler.CompileCreateSession(runtimestate.CreateSessionCommand{Scope: ownerScope, IdempotencyKey: "durable-tool-oversized-session", RevisionID: registered.Result().Revision.RevisionID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	oversizedSession := apply(oversizedSessionMutation).Result().Session.SessionID
+	oversizedInput, err := content.StageInputEnvelope(ctx, tenant, []agentruntime.ContentPart{{Kind: agentruntime.ContentText, Text: "oversized action must have no retained output"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	oversizedMutation, err := compiler.CompileAdmitInput(runtimestate.AdmitInputCommand{Scope: ownerScope, IdempotencyKey: "durable-tool-oversized-input", SessionID: oversizedSession, Input: oversizedInput})
+	if err != nil {
+		t.Fatal(err)
+	}
+	oversizedTurn := apply(oversizedMutation).Result().Turn.TurnID
+	oversizedDescriptor, err := content.StageToolActionDescriptor(ctx, tenant, []byte(`{"action":"workspace.write","path":"oversized.txt"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	objectsBeforeOversized := durableMinIOObjectBodies(t, ctx, minioClient, bucket, string(tenant)+"/")
+	oversized, err := broker.Admit(ctx, runtimetool.AdmissionRequest{Tenant: tenant, Principal: principal, SessionID: oversizedSession, TurnID: oversizedTurn, ToolCallID: "tcall_1234567890ABCDEN", ApprovalID: "appr_1234567890ABCDEN", PolicyName: "durable-tool-policy", PolicyRevision: 1, ToolName: "sandbox", ActionDigest: digest, CapabilityDigest: digest, Action: agentruntime.ApprovalAction{Verb: "write", Target: "workspace-service"}, MaximumUses: 1, ExpiresAt: source.Now().Add(time.Hour), Descriptor: oversizedDescriptor, IdempotencyKey: "durable-tool-oversized-admission"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := publicRuntime.DecideApproval(ctx, runtimeapi.Identity{Tenant: string(tenant), Principal: string(principal)}, agentruntime.DecideApprovalRequest{ApprovalID: oversized.ApprovalID, Decision: agentruntime.ApprovalApproved, IdempotencyKey: "durable-tool-oversized-approve"}); err != nil {
+		t.Fatal(err)
+	}
+	oversizedAdapter := newOversizedDurableToolAdapter()
+	oversizedWorker, err := runtimetool.NewWorker(runtimetool.Config{Store: store, Tenants: store, Compiler: compiler, Planner: planner, Clock: source, Content: content, Adapter: oversizedAdapter, Claimer: "durable-tool-oversized-worker"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := oversizedWorker.ScanOnce(ctx); err != nil {
+		t.Fatal(err)
+	}
+	state, err = store.LoadRuntimeState(ctx, workerScope)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var oversizedExecution runtimestate.ToolExecutionRecord
+	for _, execution := range state.ToolExecutions {
+		if execution.ToolCallID == oversized.ToolCallID {
+			oversizedExecution = execution
+			break
+		}
+	}
+	if oversizedAdapter.executes != 1 || oversizedExecution.State != runtimestate.ToolExecutionFailed || oversizedExecution.Result != nil || oversizedExecution.Failure == nil || oversizedExecution.Failure.Message != "tool output exceeds the safe retention limit" || len(state.Artifacts) != 1 {
+		t.Fatalf("oversized durable tool outcome retained output: execution=%#v artifacts=%#v calls=%d", oversizedExecution, state.Artifacts, oversizedAdapter.executes)
+	}
+	objectsAfterOversized := durableMinIOObjectBodies(t, ctx, minioClient, bucket, string(tenant)+"/")
+	if !durableMinIOObjectsEqual(objectsBeforeOversized, objectsAfterOversized) {
+		t.Fatalf("oversized durable tool output created an object: before=%v after=%v", durableMinIOObjectKeys(objectsBeforeOversized), durableMinIOObjectKeys(objectsAfterOversized))
+	}
+	for key, value := range objectsAfterOversized {
+		if bytes.Contains(value, []byte("integration-output-secret")) || bytes.Contains(value, []byte("oversized-output-secret")) {
+			t.Fatalf("MinIO object %q retained a raw tool-output secret", key)
+		}
+	}
+	oversizedPage, err := publicRuntime.InspectToolCalls(ctx, runtimeapi.Identity{Tenant: string(tenant), Principal: string(principal)}, oversizedSession, oversizedTurn)
+	if err != nil || len(oversizedPage.Calls) != 1 || oversizedPage.Calls[0].Execution == nil || oversizedPage.Calls[0].Execution.State != agentruntime.ToolCallFailed || oversizedPage.Calls[0].Execution.Result != nil || oversizedPage.Calls[0].Execution.Failure == nil || oversizedPage.Calls[0].Execution.Failure.Message != "tool output exceeds the safe retention limit" {
+		t.Fatalf("public oversized durable tool result = %#v, %v", oversizedPage, err)
+	}
+	oversizedEvents, err := publicRuntime.Events(ctx, runtimeapi.Identity{Tenant: string(tenant), Principal: string(principal)}, oversizedSession, "", 128)
+	oversizedPublic, marshalErr := json.Marshal(struct {
+		Tools  agentruntime.ToolCallPage `json:"tools"`
+		Events agentruntime.EventPage    `json:"events"`
+	}{Tools: oversizedPage, Events: oversizedEvents})
+	if err != nil || marshalErr != nil || !durableHasPublicFinalization(oversizedEvents.Events, oversizedTurn) || bytes.Contains(oversizedPublic, []byte("oversized-output-secret")) {
+		t.Fatalf("public oversized durable tool terminal state = tools=%#v events=%#v err=%v marshal=%v", oversizedPage, oversizedEvents, err, marshalErr)
+	}
 	// A grant can be revoked only before its execution intent. Once a real
 	// external operation has a durable terminal observation, the owner receives
 	// a stable conflict instead of a fictional undo claim.
@@ -353,7 +459,7 @@ func TestDurableBrokeredToolLifecyclePersistsApprovalAndFinalization(t *testing.
 		t.Fatal(err)
 	}
 	state, err = store.LoadRuntimeState(ctx, workerScope)
-	if err != nil || len(state.ToolExecutions) != 2 || adapter.executes != 1 || adapter.reconciles != 1 || !durableHasAuditKind(state.Audit, "capability_grant.expired") {
+	if err != nil || len(state.ToolExecutions) != 3 || adapter.executes != 1 || adapter.reconciles != 1 || !durableHasAuditKind(state.Audit, "capability_grant.expired") {
 		t.Fatalf("expired durable grant = executions=%#v calls=%d/%d audit=%#v err=%v", state.ToolExecutions, adapter.executes, adapter.reconciles, state.Audit, err)
 	}
 	// Owner revocation before the worker records an execution intent is also a
@@ -411,7 +517,7 @@ func TestDurableBrokeredToolLifecyclePersistsApprovalAndFinalization(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(state.ToolExecutions) != 2 || adapter.executes != 1 || adapter.reconciles != 1 || !durableGrantRevokedWithoutUse(state.Grants, revoked.ToolCallID) || !durableHasAuditKind(state.Audit, "capability_grant.revoked") || !durableHasAuditKind(state.Audit, "revoke_capability_grant.terminal") {
+	if len(state.ToolExecutions) != 3 || adapter.executes != 1 || adapter.reconciles != 1 || !durableGrantRevokedWithoutUse(state.Grants, revoked.ToolCallID) || !durableHasAuditKind(state.Audit, "capability_grant.revoked") || !durableHasAuditKind(state.Audit, "revoke_capability_grant.terminal") {
 		t.Fatalf("revoked durable grant dispatched or lost terminal audit: executions=%#v calls=%d/%d grants=%#v audit=%#v", state.ToolExecutions, adapter.executes, adapter.reconciles, state.Grants, state.Audit)
 	}
 	// Cancellation reaches the same worker through the public owner API.  It
@@ -454,7 +560,7 @@ func TestDurableBrokeredToolLifecyclePersistsApprovalAndFinalization(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(state.ToolExecutions) != 2 || adapter.executes != 1 || adapter.reconciles != 1 || !durableGrantRevokedWithoutUse(state.Grants, cancelled.ToolCallID) || !durableHasAuditKind(state.Audit, "capability_grant.revoked") || !durableHasAuditKind(state.Audit, "cancel_turn.terminal") {
+	if len(state.ToolExecutions) != 3 || adapter.executes != 1 || adapter.reconciles != 1 || !durableGrantRevokedWithoutUse(state.Grants, cancelled.ToolCallID) || !durableHasAuditKind(state.Audit, "capability_grant.revoked") || !durableHasAuditKind(state.Audit, "cancel_turn.terminal") {
 		t.Fatalf("cancelled durable turn dispatched or lost terminal audit: executions=%#v calls=%d/%d grants=%#v audit=%#v", state.ToolExecutions, adapter.executes, adapter.reconciles, state.Grants, state.Audit)
 	}
 	// A policy refusal must be just as durable and correlated as a pending or
@@ -482,7 +588,7 @@ func TestDurableBrokeredToolLifecyclePersistsApprovalAndFinalization(t *testing.
 		t.Fatalf("durable denied tool admission = %v, want denied", err)
 	}
 	state, err = store.LoadRuntimeState(ctx, workerScope)
-	if err != nil || len(state.ToolExecutions) != 2 || adapter.executes != 1 || adapter.reconciles != 1 || durableHasToolIntent(state.ToolIntents, "tcall_1234567890ABCDEK") {
+	if err != nil || len(state.ToolExecutions) != 3 || adapter.executes != 1 || adapter.reconciles != 1 || durableHasToolIntent(state.ToolIntents, "tcall_1234567890ABCDEK") {
 		t.Fatalf("denied durable admission retained authority or dispatched: executions=%#v calls=%d intents=%#v err=%v", state.ToolExecutions, adapter.executes, state.ToolIntents, err)
 	}
 	unknownDescriptor, err := content.StageToolActionDescriptor(ctx, tenant, descriptorBytes)
@@ -493,7 +599,7 @@ func TestDurableBrokeredToolLifecyclePersistsApprovalAndFinalization(t *testing.
 		t.Fatalf("durable unavailable-policy admission = %v, want denied", err)
 	}
 	state, err = store.LoadRuntimeState(ctx, workerScope)
-	if err != nil || len(state.ToolExecutions) != 2 || adapter.executes != 1 || adapter.reconciles != 1 || durableHasToolIntent(state.ToolIntents, "tcall_1234567890ABCDEL") {
+	if err != nil || len(state.ToolExecutions) != 3 || adapter.executes != 1 || adapter.reconciles != 1 || durableHasToolIntent(state.ToolIntents, "tcall_1234567890ABCDEL") {
 		t.Fatalf("unavailable-policy durable admission retained authority or dispatched: executions=%#v calls=%d intents=%#v err=%v", state.ToolExecutions, adapter.executes, state.ToolIntents, err)
 	}
 	lateSessionMutation, err := compiler.CompileCreateSession(runtimestate.CreateSessionCommand{Scope: ownerScope, IdempotencyKey: "durable-tool-late-session", RevisionID: registered.Result().Revision.RevisionID})
@@ -663,6 +769,57 @@ func durableToolAuditFact(t *testing.T, facts []runtimestate.AuditFactRecord, re
 	return runtimestate.AuditFactRecord{}
 }
 
+func durableHasPublicFinalization(events []agentruntime.Event, turnID agentruntime.TurnID) bool {
+	for _, event := range events {
+		if event.Kind == agentruntime.EventSandboxOperationFinalized && event.TurnID == turnID {
+			return true
+		}
+	}
+	return false
+}
+
+func durableMinIOObjectBodies(t *testing.T, ctx context.Context, client *minio.Client, bucket, prefix string) map[string][]byte {
+	t.Helper()
+	bodies := map[string][]byte{}
+	for object := range client.ListObjects(ctx, bucket, minio.ListObjectsOptions{Prefix: prefix, Recursive: true}) {
+		if object.Err != nil {
+			t.Fatal(object.Err)
+		}
+		reader, err := client.GetObject(ctx, bucket, object.Key, minio.GetObjectOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		body, readErr := io.ReadAll(reader)
+		closeErr := reader.Close()
+		if readErr != nil || closeErr != nil {
+			t.Fatalf("read MinIO object %q: read=%v close=%v", object.Key, readErr, closeErr)
+		}
+		bodies[object.Key] = body
+	}
+	return bodies
+}
+
+func durableMinIOObjectsEqual(left, right map[string][]byte) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for key, leftBody := range left {
+		rightBody, exists := right[key]
+		if !exists || !bytes.Equal(leftBody, rightBody) {
+			return false
+		}
+	}
+	return true
+}
+
+func durableMinIOObjectKeys(objects map[string][]byte) []string {
+	keys := make([]string, 0, len(objects))
+	for key := range objects {
+		keys = append(keys, key)
+	}
+	return keys
+}
+
 func mustToolMutation(t *testing.T, mutation runtimestate.CompiledMutation, err error) runtimestate.CompiledMutation {
 	t.Helper()
 	if err != nil {
@@ -743,9 +900,16 @@ func (ids *durableToolIDs) NextIdentifier(kind runtimestate.IdentifierKind) (str
 // PostgreSQL/MinIO lifecycle proof. It accepts only the runtime-owned
 // operation identity and returns a bounded safe result; it does not model a
 // sandbox or create any Firecracker isolation claim.
-type durableToolAdapter struct{ executes, reconciles int }
+type durableToolAdapter struct {
+	executes, reconciles int
+	output               []byte
+}
 
 func newDurableToolAdapter() *durableToolAdapter { return &durableToolAdapter{} }
+
+func newOversizedDurableToolAdapter() *durableToolAdapter {
+	return &durableToolAdapter{output: bytes.Repeat([]byte("oversized-output-secret"), durableOversizedToolOutputBytes/len("oversized-output-secret")+1)}
+}
 
 func (adapter *durableToolAdapter) ExternalEffectContract() runtimetool.ExternalEffectContract {
 	return runtimetool.ExternalEffectContract{IdempotencyKey: "operation_id", Reconciles: true}
@@ -753,6 +917,9 @@ func (adapter *durableToolAdapter) ExternalEffectContract() runtimetool.External
 
 func (adapter *durableToolAdapter) Execute(_ context.Context, request runtimetool.Request) (runtimetool.Response, error) {
 	adapter.executes++
+	if adapter.output != nil {
+		return runtimetool.Response{Output: append([]byte(nil), adapter.output...), MediaType: "text/plain"}, nil
+	}
 	return runtimetool.Response{Output: []byte(`{"result":"workspace action completed","token=integration-output-secret","operation_id":"` + string(request.OperationID) + `"}`), MediaType: "application/json"}, nil
 }
 
