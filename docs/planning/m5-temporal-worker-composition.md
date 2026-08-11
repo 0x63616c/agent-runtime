@@ -70,21 +70,23 @@ to equal the durable operation ID, submits once, and uses `GetOperation` rather
 than resubmitting during recovery. Its unit evidence uses the sandbox client
 contract fake and an HTTPS sandbox control-handler composition; the latter uses
 the handler's deterministic in-memory control ledger and is not production
-durability evidence. A disposable PostgreSQL control-process/Temporal
-retained-history scenario remains required before TMP-010 can close. The owned
-Temporal development-server test now captures and replays the private Input →
-Approval → sandbox-finalization → Session-complete route vocabulary. The
+durability evidence. The owned Temporal development-server test now captures
+and replays the private Input → Approval → sandbox-finalization →
+Session-complete route vocabulary. The
 publisher test follows
 the actual state transition from persisted tool intent through a principal
 approval decision, then through a fenced `uncertain` model invocation caused
 by producer loss and a terminal `turn.failed` outbox route. It verifies that
 both routes are accepted only after their durable records are claimed and
 published. The Temporal test environment separately retains an ordered Input
-→ Approval → sandbox-finalization → Session-complete scenario; sandbox
-finalization is still a safe vocabulary/worker-lifecycle test, not external
-sandbox-execution evidence. TMP-010 still needs its full durable-state and
-retained-history evidence bundle; M6/M7 consume these foundations later but
-do not own their acceptance rows.
+→ Approval → sandbox-finalization → Session-complete scenario as a checked-in
+binary history corpus with its bounded payload blobs. The disposable
+PostgreSQL/MinIO integration also loses the acknowledgement after Temporal
+accepts one exact input route, recreates the publisher client, reclaims the
+expired lease, and records `published` without a second state dispatch.
+Sandbox finalization is still a safe vocabulary/worker-lifecycle test, not
+external sandbox-execution evidence. M6/M7 consume these foundations later
+but do not own their acceptance rows.
 
 Required retained evidence:
 
@@ -94,10 +96,13 @@ Required retained evidence:
 - `go test -tags=integration ./internal/runtimeorchestration` starts Temporal
   dev server through the owned factory. The durable role integration uses the
   PostgreSQL/MinIO harness and a separate payload bucket.
-- replay evidence must replay captured Session history using the registered
-  private workflow before promotion. A replay test is not a claim that a
-  runtime-content object was available to the worker.
+- `internal/runtimeorchestration/testdata/session-workflow-v1-history.json`
+  is the checked-in historic v1 corpus. CI decodes its serialized Temporal
+  history and bounded codec blobs, then replays it with the registered private
+  workflow. A replay test is not a claim that a runtime-content object was
+  available to the worker.
 - `deploy/runtimeapi/run-durable-integration.sh` starts disposable PostgreSQL
   and MinIO, runs the migration/rollback-negative and state-store integration
-  suite, then proves durable API restart plus codec-worker outbox drain/restart
-  against a Temporal development server.
+  suite, then proves durable API restart, codec-worker outbox drain/restart,
+  PostgreSQL-to-Temporal lost-ack/restart recovery, and historic replay against
+  a Temporal development server.
