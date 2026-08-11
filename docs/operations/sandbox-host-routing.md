@@ -33,6 +33,17 @@ operator-enrolled M4 profile, distinct observation key, compiled stage
 identity, or Firecracker grant. It remains operator-only and is not a public
 sandbox API or a Firecracker execution claim.
 
+The separate M4 composition root accepts a just-staged implementation, a
+durable host-instance journal, a bounded guest-nonce source, the enrolled
+observation private key, and the concrete mutually authenticated stage-ready
+transport. It deliberately has no configurable M4 identity: only the staged
+implementation may compile that identity immediately before the canonical
+`stage-ready` submission. It retries only that idempotent submission, records
+the locally verified M3 command before the staged implementation can consume
+it, and requires cleanup proof after every staged attempt. This orders the
+private handoff and refusal/retry/cleanup behavior; it does not yet compose a
+real Jailer, guest transport, terminal observation, or Linux/KVM evidence.
+
 ## Deployment declarations
 
 Apply every ordered `deploy/sandboxcontrol/migrations/*.up.sql` before starting
