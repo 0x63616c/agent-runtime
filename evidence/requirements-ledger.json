@@ -1149,11 +1149,39 @@
     },
     {
       "id": "TMP-002",
-      "status": "not_started"
+      "status": "completed",
+      "evidence": [
+        {
+          "revision": "6197e7ec3854aaab1b0a57b78ddbd162c5020f1f",
+          "utc_time": "2026-08-11T23:46:40Z",
+          "proof_level": "integration",
+          "command_id": "m5-durable-public-sdk-lifecycle",
+          "artifact_ref": "m5-temporal-public-6197e7e",
+          "result": "passed"
+        }
+      ]
     },
     {
       "id": "TMP-003",
-      "status": "not_started"
+      "status": "completed",
+      "evidence": [
+        {
+          "revision": "6197e7ec3854aaab1b0a57b78ddbd162c5020f1f",
+          "utc_time": "2026-08-11T23:46:40Z",
+          "proof_level": "workflow",
+          "command_id": "m5-temporal-workflow-bounds",
+          "artifact_ref": "m5-temporal-public-6197e7e",
+          "result": "passed"
+        },
+        {
+          "revision": "6197e7ec3854aaab1b0a57b78ddbd162c5020f1f",
+          "utc_time": "2026-08-11T23:46:40Z",
+          "proof_level": "integration",
+          "command_id": "m5-durable-public-sdk-lifecycle",
+          "artifact_ref": "m5-temporal-public-6197e7e",
+          "result": "passed"
+        }
+      ]
     },
     {
       "id": "TMP-004",

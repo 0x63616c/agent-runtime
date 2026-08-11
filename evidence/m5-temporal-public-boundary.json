@@ -1,0 +1,34 @@
+{
+  "version": 1,
+  "milestone": "M5 durable agent runtime",
+  "implementation_revision": "6197e7ec3854aaab1b0a57b78ddbd162c5020f1f",
+  "utc_time": "2026-08-11T23:46:40Z",
+  "requirements": ["TMP-002", "TMP-003"],
+  "commands": [
+    {
+      "id": "m5-temporal-workflow-bounds",
+      "command": "go test -race ./internal/runtimeorchestration -run ^TestSessionWorkflowRejectsOversizedPrivatePayloads$ -count=1",
+      "result": "passed"
+    },
+    {
+      "id": "m5-durable-public-sdk-lifecycle",
+      "command": "deploy/runtimeapi/run-durable-integration.sh",
+      "result": "passed"
+    }
+  ],
+  "coverage": {
+    "TMP-002": "A public Go SDK client calls the real HTTP handler backed by disposable PostgreSQL and MinIO. An idempotent Input replay returns the same Input and Turn IDs; the state-owned outbox starts and signals a real private Temporal Session workflow exactly once.",
+    "TMP-003": "The workflow rejects oversized continuation state and durable command metadata before activity dispatch. The durable harness replays the checked-in historic workflow corpus through the owned Temporal codec factory."
+  },
+  "documentation": [
+    "docs/planning/m5-temporal-worker-composition.md",
+    "docs/architecture/system.md",
+    "docs/reference/runtime-go-contract.md"
+  ],
+  "limitations": [
+    "The HTTP handler, PostgreSQL, MinIO, and Temporal development server are disposable integration dependencies, not a protected production deployment.",
+    "The typed public SDK observation exposes runtime-owned Input and Turn IDs; this evidence does not assert raw HTTP field omission for Temporal identifiers, task queues, payloads, database positions, or backend configuration.",
+    "This evidence does not execute a live provider or an external sandbox command.",
+    "This evidence does not prove Firecracker or Linux KVM isolation."
+  ]
+}

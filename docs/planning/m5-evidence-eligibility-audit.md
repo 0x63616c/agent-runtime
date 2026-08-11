@@ -1,13 +1,16 @@
 # M5 evidence eligibility audit
 
-Source revision: `3d1e1c4ab5483d5ca3956ef03f19bfe4724782e3`.
+Initial mapping revision: `3d1e1c4ab5483d5ca3956ef03f19bfe4724782e3`.
+The `TMP-002` and `TMP-003` supplement is bound to
+`6197e7ec3854aaab1b0a57b78ddbd162c5020f1f`.
 
 This audit maps each M5 requirement to the current implementation proof. It is
 not a completion claim: a row changes to `completed` only in the atomic bundle
 which retains a matching redacted command result. The first bundle promotes
-only the cohesive private-Temporal rows `TMP-004`, `TMP-009`, and `TMP-010`,
-backed by
+the private-Temporal rows `TMP-004`, `TMP-009`, and `TMP-010`, backed by
 [`m5-temporal-core-integration.json`](../../evidence/m5-temporal-core-integration.json).
+The public-boundary supplement for `TMP-002` and `TMP-003` is
+[`m5-temporal-public-boundary.json`](../../evidence/m5-temporal-public-boundary.json).
 
 | Rows | Current implementation/test map | Evidence disposition |
 | --- | --- | --- |
@@ -49,8 +52,8 @@ backed by
 | DAT-011 | state-owned cursor/event tests and PostgreSQL-to-Temporal route recovery. | Defer with the PostgreSQL state bundle. |
 | DAT-012 | outbox acknowledgement-loss and child-process kill/recovery integrations. | Defer with the PostgreSQL state bundle. |
 | DAT-013 | production-adapter disposable matrix covers migration, conflict, recovery, expiry/gap, restore, erasure, and cross-tenant denial. | Not eligible until the protected operations report exists. |
-| TMP-002 | `TestSessionWorkflowRunsThroughTheOwnedFactoryAgainstTemporal` and workflow route matrix. | Not eligible: retained real-server proof signals the private workflow directly rather than through a public API/SDK lifecycle. |
-| TMP-003 | deterministic state/route tests and retained history replay. | Not eligible: workflow input/command payload bounds and a serialization guard are missing. |
+| TMP-002 | `TestPublicSDKInputStartsAndSignalsThePrivateSessionWorkflow` drives public Go SDK/HTTP admission through PostgreSQL outbox to a real private Temporal worker. | Promoted with disposable integration evidence; the typed SDK observation exposes runtime-owned Input and Turn IDs, while raw HTTP field omission is not asserted. |
+| TMP-003 | `TestSessionWorkflowRejectsOversizedPrivatePayloads` rejects oversized continuation/command metadata before dispatch; durable harness replays historic workflow corpus. | Promoted with workflow bound and replay evidence. |
 | TMP-004 | Continue-As-New plus checked-in v1 historic replay and versioning guide. | Promoted in this bundle. |
 | TMP-009 | `TestDispatchStateCommandClassifiesRetrySafetyWithoutRepeatingUnknownEffects`, retry, and cancellation workflow tests. | Promoted in this bundle. |
 | TMP-010 | terminal-effect route matrix, historic replay, acknowledgement-loss, and process-kill durable integrations. | Promoted in this bundle. |
