@@ -18,6 +18,9 @@ The package currently defines:
 - explicit Session (`open`, `closing`, `completed`, `cancelled`, `failed`) and
   Turn (`queued`, `running`, `succeeded`, `failed`, `cancelled`) states;
 - stable safe Failure codes and an `errors.As`-compatible public Error;
+- optional provider-neutral token usage on an inspected Turn; a missing token
+  value remains unknown rather than becoming zero, and provider diagnostics are
+  never public data;
 - ordered bounded Product events, opaque replay cursors, and explicit Gap
   results requiring Session inspection;
 - requests for Agent creation/revision, Session creation, idempotent Input,

@@ -3,9 +3,14 @@
 package runtimetool_test
 
 import (
+	"bytes"
 	"context"
+	"encoding/pem"
+	"errors"
 	"fmt"
+	"net/http/httptest"
 	"os"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -15,6 +20,9 @@ import (
 	"github.com/0x63616c/agent-runtime/internal/runtimepostgres"
 	"github.com/0x63616c/agent-runtime/internal/runtimestate"
 	"github.com/0x63616c/agent-runtime/internal/runtimetool"
+	"github.com/0x63616c/agent-runtime/internal/sandboxcontrol"
+	"github.com/0x63616c/agent-runtime/internal/sandboxcontrolapi"
+	"github.com/0x63616c/agent-runtime/sandbox"
 	agentruntime "github.com/0x63616c/agent-runtime/sdk/go"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/minio/minio-go/v7"
@@ -106,7 +114,11 @@ func TestDurableToolLifecyclePersistsDescriptorApprovalAndFinalization(t *testin
 		t.Fatal(err)
 	}
 	accepted := apply(mutation)
-	descriptor, err := content.StageToolActionDescriptor(ctx, tenant, []byte("durable sandbox action"))
+	descriptorBytes, err := sandbox.EncodeControlOperationRequest(sandbox.OperationRequest{ID: "op_tool_durable_0001", Kind: sandbox.OperationCloseSandbox, CloseSandbox: &sandbox.CloseSandboxRequest{SandboxID: "sbx_tool_durable_0001"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	descriptor, err := content.StageToolActionDescriptor(ctx, tenant, descriptorBytes)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -142,11 +154,15 @@ func TestDurableToolLifecyclePersistsDescriptorApprovalAndFinalization(t *testin
 		t.Fatal(err)
 	}
 	apply(mutation)
-	worker, err := runtimetool.NewWorker(runtimetool.Config{Store: store, Tenants: store, Compiler: compiler, Planner: planner, Clock: source, Content: content, Adapter: &recordingAdapter{response: runtimetool.Response{Output: []byte("durably finalized")}}, Claimer: "durable-tool-worker"})
+	adapter, complete := newDurableHTTPSAdapter(t)
+	worker, err := runtimetool.NewWorker(runtimetool.Config{Store: store, Tenants: store, Compiler: compiler, Planner: planner, Clock: source, Content: content, Adapter: adapter, Claimer: "durable-tool-worker"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := worker.ScanOnce(ctx); err != nil {
+	done := make(chan error, 1)
+	go func() { done <- worker.ScanOnce(ctx) }()
+	complete()
+	if err := <-done; err != nil {
 		t.Fatal(err)
 	}
 	state, err = store.LoadRuntimeState(ctx, workerScope)
@@ -188,4 +204,86 @@ type durableToolIDs struct{ next uint64 }
 func (ids *durableToolIDs) NextIdentifier(kind runtimestate.IdentifierKind) (string, error) {
 	ids.next++
 	return fmt.Sprintf("%s_%016d", kind, ids.next), nil
+}
+
+// newDurableHTTPSAdapter exercises the concrete TLS control client. It drives
+// only the control-plane ledger to a terminal state; it does not assert that a
+// sandbox backend executed an external command.
+func newDurableHTTPSAdapter(t *testing.T) (runtimetool.Adapter, func()) {
+	t.Helper()
+	controlClock, err := clock.NewFake(time.Now().UTC())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ledger := sandboxcontrol.NewMemoryLedger()
+	limits := sandbox.ResourceLimits{MilliCPU: 100, MemoryBytes: 1024, RootDiskBytes: 1024, TmpfsBytes: 1024, PIDs: 10, ProcessCount: 10, OpenFiles: 10, Inodes: 10, Files: 10, Lifetime: time.Hour, ProducedOutputBytes: 1024, RetainedOutputBytes: 1024, TransferBytes: 1024, NetworkConnections: 10, VolumeBytes: 1024, SnapshotBytes: 1024}
+	handler, err := sandboxcontrolapi.NewHandler(sandboxcontrolapi.Config{
+		Store: ledger, Authenticator: durableControlAuthenticator{}, AssertionKey: bytes.Repeat([]byte{0x42}, 32), Entropy: bytes.NewReader(bytes.Repeat([]byte{0x99}, 128)), Clock: controlClock,
+		BindingLifetime: time.Hour, Retention: time.Hour, WaitInterval: time.Millisecond,
+		Wait: func(ctx context.Context, _ time.Duration) error {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			default:
+				return nil
+			}
+		},
+		Admission: sandbox.OperationAdmissionPolicy{Defaults: limits, Maximum: limits},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewTLSServer(handler)
+	t.Cleanup(server.Close)
+	roots := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: server.Certificate().Raw})
+	trust, err := sandbox.NewStaticTrustBundleSource(map[sandbox.TrustBundleRef]sandbox.TrustBundle{"trust/durable": {Version: "durable/v1", PEMRoots: roots}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	client, err := sandbox.NewClient(context.Background(), sandbox.ClientConfig{Endpoint: sandbox.Endpoint{URL: server.URL}, TLS: sandbox.TLSConfig{ServerName: server.Certificate().DNSNames[0], TrustBundleRef: "trust/durable"}, Credentials: durableControlCredentials{}, TrustBundles: trust, RequestTimeout: time.Second})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = client.Close(context.Background()) })
+	adapter, err := runtimetool.NewSandboxAdapter(client)
+	if err != nil {
+		t.Fatal(err)
+	}
+	complete := func() {
+		deadline := time.Now().Add(time.Second)
+		for time.Now().Before(deadline) {
+			operation, err := ledger.Get(context.Background(), "tenant-a:subject-a", "op_tool_durable_0001")
+			if err == nil {
+				operation, err = ledger.Transition(context.Background(), operation.Principal, operation.ID, operation.Version, sandboxcontrol.StateDispatched)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if _, err = ledger.Transition(context.Background(), operation.Principal, operation.ID, operation.Version, sandboxcontrol.StateSucceeded); err != nil {
+					t.Fatal(err)
+				}
+				return
+			}
+			runtime.Gosched()
+		}
+		t.Fatal("concrete HTTPS sandbox-control adapter did not submit the durable operation")
+	}
+	return adapter, complete
+}
+
+type durableControlCredentials struct{}
+
+func (durableControlCredentials) Apply(_ context.Context, sink sandbox.CredentialSink) error {
+	return sink.SetAuthorization("Bearer", "durable-tool-token")
+}
+
+type durableControlAuthenticator struct{}
+
+func (durableControlAuthenticator) Authenticate(ctx context.Context, authorization string) (sandboxcontrolapi.Identity, error) {
+	if err := ctx.Err(); err != nil {
+		return sandboxcontrolapi.Identity{}, err
+	}
+	if authorization != "Bearer durable-tool-token" {
+		return sandboxcontrolapi.Identity{}, errors.New("denied")
+	}
+	return sandboxcontrolapi.Identity{Authority: "issuer", Tenant: "tenant-a", Subject: "subject-a", Principal: "tenant-a:subject-a"}, nil
 }

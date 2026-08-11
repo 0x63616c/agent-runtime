@@ -325,21 +325,47 @@ func (failure *Failure) Clone() *Failure {
 	return &clone
 }
 
+// ModelUsage retains provider-neutral token accounting for the latest recorded
+// model invocation. Nil values remain unknown; they are never coerced to zero.
+type ModelUsage struct {
+	InputTokens  *uint64 `json:"input_tokens,omitempty"`
+	OutputTokens *uint64 `json:"output_tokens,omitempty"`
+}
+
+// Clone returns an independent ModelUsage snapshot.
+func (usage *ModelUsage) Clone() *ModelUsage {
+	if usage == nil {
+		return nil
+	}
+	clone := *usage
+	if usage.InputTokens != nil {
+		value := *usage.InputTokens
+		clone.InputTokens = &value
+	}
+	if usage.OutputTokens != nil {
+		value := *usage.OutputTokens
+		clone.OutputTokens = &value
+	}
+	return &clone
+}
+
 // Turn is an immutable snapshot of one durable progression from Input to outcome.
 type Turn struct {
-	ID          TurnID     `json:"id"`
-	InputID     InputID    `json:"input_id"`
-	Position    uint64     `json:"position"`
-	State       TurnState  `json:"state"`
-	StartedAt   *time.Time `json:"started_at,omitempty"`
-	CompletedAt *time.Time `json:"completed_at,omitempty"`
-	Failure     *Failure   `json:"failure,omitempty"`
+	ID          TurnID      `json:"id"`
+	InputID     InputID     `json:"input_id"`
+	Position    uint64      `json:"position"`
+	State       TurnState   `json:"state"`
+	StartedAt   *time.Time  `json:"started_at,omitempty"`
+	CompletedAt *time.Time  `json:"completed_at,omitempty"`
+	Failure     *Failure    `json:"failure,omitempty"`
+	Usage       *ModelUsage `json:"usage,omitempty"`
 }
 
 // Clone returns an independent Turn snapshot.
 func (turn Turn) Clone() Turn {
 	clone := turn
 	clone.Failure = turn.Failure.Clone()
+	clone.Usage = turn.Usage.Clone()
 	if turn.StartedAt != nil {
 		value := *turn.StartedAt
 		clone.StartedAt = &value

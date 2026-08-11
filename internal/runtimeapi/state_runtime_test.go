@@ -418,6 +418,67 @@ func TestStateRuntimeHTTPAndSDKExposeExpiredApprovalAndItsDurableReceipt(t *test
 	}
 }
 
+func TestStateRuntimeHTTPAndSDKExposeProviderNeutralUsageAndSafeModelFailure(t *testing.T) {
+	runtime, _, compiler, store, _ := newMemoryStateAuthority(t)
+	ctx := context.Background()
+	admin := runtimeapi.Identity{Tenant: "tenant-a", Principal: "admin", Admin: true}
+	alice := runtimeapi.Identity{Tenant: "tenant-a", Principal: "alice"}
+	agent, err := runtime.CreateAgent(ctx, admin, agentruntime.CreateAgentRequest{IdempotencyKey: "usage-agent", Name: "assistant", ModelProfile: "balanced", Instructions: "safe"})
+	if err != nil {
+		t.Fatalf("create Agent: %v", err)
+	}
+	session, err := runtime.CreateSession(ctx, alice, agentruntime.CreateSessionRequest{IdempotencyKey: "usage-session", AgentRevision: agent.RevisionID})
+	if err != nil {
+		t.Fatalf("create Session: %v", err)
+	}
+	accepted, err := runtime.SendInput(ctx, alice, agentruntime.SendInputRequest{SessionID: session.ID, IdempotencyKey: "usage-input", Parts: []agentruntime.ContentPart{{Kind: agentruntime.ContentText, Text: "produce a bounded outcome"}}})
+	if err != nil {
+		t.Fatalf("send Input: %v", err)
+	}
+	tenant, _ := runtimecontent.ParseTenantID("tenant-a")
+	principal, _ := runtimecontent.ParsePrincipalID("alice")
+	workerScope := runtimestate.MutationScope{Tenant: tenant, Principal: principal, Authority: runtimestate.AuthorityRuntimeWorker}
+	state, err := store.LoadRuntimeState(ctx, workerScope)
+	if err != nil {
+		t.Fatal(err)
+	}
+	begin, err := compiler.CompileBeginInvocationAttempt(runtimestate.BeginInvocationAttemptCommand{Scope: workerScope, IdempotencyKey: "usage-invocation", SessionID: session.ID, TurnID: accepted.Turn.ID, OperationID: "op_model_usage_0001", ExpectedSessionVersion: state.Sessions[0].Version, ExpectedTurnVersion: state.Turns[0].Version})
+	if err != nil {
+		t.Fatal(err)
+	}
+	beginPlan, err := store.Apply(ctx, begin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	inputTokens := uint64(42)
+	failure := &agentruntime.Failure{Code: agentruntime.FailureUnavailable, Message: "model outcome is unavailable", Retryable: true}
+	invocation := beginPlan.Result().Invocation
+	outcome, err := compiler.CompileRecordInvocationOutcome(runtimestate.RecordInvocationOutcomeCommand{Scope: workerScope, IdempotencyKey: "usage-outcome", SessionID: session.ID, TurnID: accepted.Turn.ID, OperationID: invocation.OperationID, Ordinal: invocation.Ordinal, Fence: invocation.Fence, Outcome: runtimestate.InvocationFailed, Failure: failure, Usage: &runtimestate.ModelUsage{InputTokens: &inputTokens}, ExpectedSessionVersion: beginPlan.Result().Session.Version, ExpectedTurnVersion: beginPlan.Result().Turn.Version})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Apply(ctx, outcome); err != nil {
+		t.Fatal(err)
+	}
+	settle, err := compiler.CompileSettleTurn(runtimestate.SettleTurnCommand{Scope: workerScope, IdempotencyKey: "usage-settle", SessionID: session.ID, TurnID: accepted.Turn.ID, ExpectedSessionVersion: beginPlan.Result().Session.Version, ExpectedTurnVersion: beginPlan.Result().Turn.Version, Outcome: runtimestate.TerminalOutcome{OperationID: invocation.OperationID, Ordinal: invocation.Ordinal, Fence: invocation.Fence, State: agentruntime.TurnFailed, Failure: failure}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Apply(ctx, settle); err != nil {
+		t.Fatal(err)
+	}
+	handler, err := runtimeapi.NewHandler(runtimeapi.Config{Runtime: runtime, Authenticator: staticAuth{identities: map[string]runtimeapi.Identity{"alice-token-000000": alice}}, RequestIDs: &requestIDs{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(handler)
+	defer server.Close()
+	turn, err := newStateRuntimeHTTPClient(t, server.URL, "alice-token-000000").InspectTurn(ctx, session.ID, accepted.Turn.ID)
+	if err != nil || turn.State != agentruntime.TurnFailed || turn.Failure == nil || turn.Failure.Code != agentruntime.FailureUnavailable || turn.Usage == nil || turn.Usage.InputTokens == nil || *turn.Usage.InputTokens != inputTokens || turn.Usage.OutputTokens != nil {
+		t.Fatalf("SDK inspect model outcome = %#v, %v; want safe failure and unknown output usage", turn, err)
+	}
+}
+
 func TestStateRuntimeHTTPAndSDKRejectExpiredMutationReceiptWithoutReplayingWork(t *testing.T) {
 	runtime, _, _, _, fakeClock := newMemoryStateAuthorityWithRetention(t, testRetention{duration: time.Minute})
 	handler, err := runtimeapi.NewHandler(runtimeapi.Config{Runtime: runtime, Authenticator: staticAuth{identities: map[string]runtimeapi.Identity{

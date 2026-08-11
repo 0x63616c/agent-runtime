@@ -359,7 +359,11 @@ func (runtime *StateRuntime) InspectTurn(ctx context.Context, identity Identity,
 	if err != nil {
 		return agentruntime.Turn{}, runtimeFailure("inspect Turn", err)
 	}
-	return publicTurn(record), nil
+	state, err := runtime.store.LoadRuntimeState(ctx, scope)
+	if err != nil {
+		return agentruntime.Turn{}, runtimeFailure("inspect Turn usage", err)
+	}
+	return publicTurnWithUsage(record, latestInvocationUsage(state, record)), nil
 }
 
 // Events reads a bounded cursor-resumable page of principal-scoped Product events.
@@ -547,7 +551,44 @@ func publicPolicy(record runtimestate.PolicyRevisionRecord) agentruntime.Policy 
 }
 
 func publicTurn(record runtimestate.TurnRecord) agentruntime.Turn {
-	return agentruntime.Turn{ID: record.TurnID, InputID: record.InputID, Position: record.Position, State: record.State, StartedAt: record.StartedAt, CompletedAt: record.CompletedAt, Failure: record.Failure.Clone()}
+	return publicTurnWithUsage(record, nil)
+}
+
+func publicTurnWithUsage(record runtimestate.TurnRecord, usage *runtimestate.ModelUsage) agentruntime.Turn {
+	return agentruntime.Turn{ID: record.TurnID, InputID: record.InputID, Position: record.Position, State: record.State, StartedAt: record.StartedAt, CompletedAt: record.CompletedAt, Failure: record.Failure.Clone(), Usage: publicModelUsage(usage)}
+}
+
+func latestInvocationUsage(state runtimestate.RuntimeState, turn runtimestate.TurnRecord) *runtimestate.ModelUsage {
+	var latest *runtimestate.InvocationRecord
+	for index := range state.Invocations {
+		invocation := &state.Invocations[index]
+		if invocation.Tenant != turn.Tenant || invocation.Principal != turn.Principal || invocation.SessionID != turn.SessionID || invocation.TurnID != turn.TurnID || invocation.State == runtimestate.InvocationIntent {
+			continue
+		}
+		if latest == nil || invocation.Ordinal > latest.Ordinal || invocation.Ordinal == latest.Ordinal && invocation.Fence > latest.Fence {
+			latest = invocation
+		}
+	}
+	if latest == nil {
+		return nil
+	}
+	return latest.Usage.Clone()
+}
+
+func publicModelUsage(usage *runtimestate.ModelUsage) *agentruntime.ModelUsage {
+	if usage == nil {
+		return nil
+	}
+	result := agentruntime.ModelUsage{}
+	if usage.InputTokens != nil {
+		value := *usage.InputTokens
+		result.InputTokens = &value
+	}
+	if usage.OutputTokens != nil {
+		value := *usage.OutputTokens
+		result.OutputTokens = &value
+	}
+	return &result
 }
 
 func publicArtifact(record runtimestate.ArtifactRecord) agentruntime.ArtifactReference {

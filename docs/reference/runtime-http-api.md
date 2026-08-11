@@ -16,6 +16,12 @@ credential material. Agent catalog operations require a tenant administrator. Se
 owned by the authenticated tenant and principal; absent and unauthorized
 resources return the same safe `not_found` classification.
 
+An inspected terminal Turn can additionally include provider-neutral token
+usage from its latest recorded model invocation. Omitted usage fields mean the
+provider did not report them; they never mean zero. Provider error payloads and
+provider-specific diagnostics remain private, while the public Turn exposes
+only the runtime-owned safe Failure contract.
+
 `GET /v1/idempotency` requires an `Idempotency-Key` header and returns only the
 caller-scoped retained receipt status. It never replays a command or exposes
 the canonical request body. Receipt retention is configured at the durable

@@ -136,6 +136,8 @@ This index is derived only from the declared public `sdk/go` source files. It li
 | `const` | `MaxInputParts` | MaxInputParts bounds the number of public Input parts accepted in one request. |
 | `const` | `MaxSessionViewQueuedTurns` | MaxSessionViewQueuedTurns bounds the queued Turns included in one Session inspection. |
 | `const` | `MaxTextPartBytes` | MaxTextPartBytes bounds one public text Input part. |
+| `type` | `ModelUsage` | ModelUsage retains provider-neutral token accounting for the latest recorded model invocation. Nil values remain unknown; they are never coerced to zero. |
+| `method` | `ModelUsage.Clone` | Clone returns an independent ModelUsage snapshot. |
 | `func` | `NewClient` | NewClient validates a bounded, explicit public HTTP client configuration. |
 | `func` | `NewStaticBearerCredential` | NewStaticBearerCredential validates and owns a copy of one bearer token. |
 | `func` | `ParseAgentID` | ParseAgentID validates an externally supplied Agent ID. |
