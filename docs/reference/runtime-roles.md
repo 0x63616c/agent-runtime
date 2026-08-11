@@ -25,6 +25,14 @@ their response contains only `role`, `namespace`, and `status`.
 Temporal Session worker from its explicit task queue and dedicated payload
 bucket/prefix. It receives no public API or runtime-content credential.
 
+An `orchestration-codec` worker may additionally declare an `audit_sink` with
+an explicit `https` endpoint and a `timeout_seconds` value from 1 through 60.
+It delivers only an already-committed, bounded audit fact through the durable
+outbox. The field contains no credential and cannot make the state transition
+fail closed: a sink outage leaves the route lease-reclaimable for at-least-once
+delivery. Omitting the field leaves external audit export disabled; no current
+reference Stack declares a production sink.
+
 `egress-proxy` is a separately deployed infrastructure process, not a runtime
 role. It takes an explicit bind address and one or more exact
 `--allowed-target host:port` values. `--check` validates its finite inventory

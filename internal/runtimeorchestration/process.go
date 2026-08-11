@@ -7,6 +7,8 @@ import (
 	"context"
 	"crypto/rand"
 	"fmt"
+	"net/http"
+	"net/url"
 	"time"
 
 	"github.com/0x63616c/agent-runtime/internal/clock"
@@ -34,6 +36,11 @@ type ProcessConfig struct {
 	PayloadBlobPrefix   string
 	PayloadAccessKey    string
 	PayloadSecretKey    string
+	// AuditSinkEndpoint enables optional delivery of already-committed audit
+	// facts. It must be an explicit HTTPS endpoint; the worker never treats it
+	// as a fail-closed state mutation boundary.
+	AuditSinkEndpoint string
+	AuditSinkTimeout  time.Duration
 }
 
 // Wait is the private scheduling seam used between durable outbox scans.
@@ -107,7 +114,11 @@ func RunWithWait(ctx context.Context, config ProcessConfig, wait Wait) error {
 	if err != nil {
 		return err
 	}
-	publisher, err := NewPublisher(PublisherConfig{Store: state, Tenants: state, Compiler: compiler, Planner: planner, Clock: processClock{}, Publisher: temporalSessionPublisher{client: owned, taskQueue: config.TaskQueue}, Claimer: "orchestration-codec"})
+	audit, err := configuredAuditExporter(config)
+	if err != nil {
+		return err
+	}
+	publisher, err := NewPublisher(PublisherConfig{Store: state, Tenants: state, Compiler: compiler, Planner: planner, Clock: processClock{}, Publisher: temporalSessionPublisher{client: owned, taskQueue: config.TaskQueue}, AuditExporter: audit, Claimer: "orchestration-codec"})
 	if err != nil {
 		return err
 	}
@@ -205,7 +216,28 @@ func validateProcessConfig(config ProcessConfig) error {
 	if config.DatabaseDSN == "" || config.TemporalEndpoint == "" || config.TemporalToken == "" || config.Namespace == "" || config.TaskQueue == "" || config.PayloadBlobEndpoint == "" || config.PayloadBlobBucket == "" || config.PayloadBlobPrefix == "" || config.PayloadAccessKey == "" || config.PayloadSecretKey == "" {
 		return errors.New("run runtime orchestration worker: complete codec-enabled role configuration is required")
 	}
+	if _, err := configuredAuditExporter(config); err != nil {
+		return err
+	}
 	return nil
+}
+
+func configuredAuditExporter(config ProcessConfig) (AuditExporter, error) {
+	if config.AuditSinkEndpoint == "" {
+		if config.AuditSinkTimeout != 0 {
+			return nil, errors.New("run runtime orchestration worker: audit sink timeout requires an endpoint")
+		}
+		return nil, nil
+	}
+	endpoint, err := url.Parse(config.AuditSinkEndpoint)
+	if err != nil || endpoint.Scheme != "https" || endpoint.Host == "" || endpoint.User != nil || endpoint.RawQuery != "" || endpoint.ForceQuery || endpoint.Fragment != "" || config.AuditSinkTimeout < time.Second || config.AuditSinkTimeout > time.Minute {
+		return nil, errors.New("run runtime orchestration worker: audit sink must be an explicit bounded HTTPS endpoint")
+	}
+	exporter, err := NewHTTPAuditExporter(config.AuditSinkEndpoint, &http.Client{Timeout: config.AuditSinkTimeout})
+	if err != nil {
+		return nil, errors.Wrap(err, "run runtime orchestration worker: configure audit sink")
+	}
+	return exporter, nil
 }
 
 var _ SessionWorkflowPublisher = temporalSessionPublisher{}

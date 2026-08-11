@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/0x63616c/agent-runtime/internal/roles"
 	"github.com/0x63616c/agent-runtime/internal/runtimeorchestration"
@@ -109,6 +110,12 @@ func serveCodecWorker(ctx context.Context, config roles.Config, plan roles.Plan,
 	if !dsnFound || !tokenFound || !accessFound || !secretFound {
 		return fmt.Errorf("compose orchestration-codec role: required private credential is unavailable")
 	}
+	auditEndpoint := ""
+	auditTimeout := time.Duration(0)
+	if worker.AuditSink != nil {
+		auditEndpoint = worker.AuditSink.Endpoint
+		auditTimeout = time.Duration(worker.AuditSink.TimeoutSeconds) * time.Second
+	}
 	roleContext, cancel := context.WithCancel(ctx)
 	defer cancel()
 	results := make(chan error, 2)
@@ -125,6 +132,8 @@ func serveCodecWorker(ctx context.Context, config roles.Config, plan roles.Plan,
 			PayloadBlobPrefix:   worker.PayloadBlobPrefix,
 			PayloadAccessKey:    accessKey,
 			PayloadSecretKey:    secretKey,
+			AuditSinkEndpoint:   auditEndpoint,
+			AuditSinkTimeout:    auditTimeout,
 		})
 	}()
 	err := <-results

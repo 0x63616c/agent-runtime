@@ -41,7 +41,7 @@ credentials would destroy the trust boundary.
 | --- | --- | --- | --- |
 | `api` | state, telemetry | none in this early composition slice | Temporal, model, tool, blob, sandbox secrets |
 | `orchestration` | state, telemetry, Temporal | `STATE_DATABASE_DSN`, `TEMPORAL_AUTH_TOKEN` | Model, tool, blob, sandbox-host secrets |
-| `orchestration-codec` | state metadata, telemetry, Temporal, dedicated temporal-payload bucket/prefix and task queue | `STATE_DATABASE_DSN`, `TEMPORAL_AUTH_TOKEN`, `ORCHESTRATION_PAYLOAD_BLOB_ACCESS_KEY`, `ORCHESTRATION_PAYLOAD_BLOB_SECRET_KEY` | Public/API credentials, runtime-content bucket/prefix, model, tool, sandbox-host secrets |
+| `orchestration-codec` | state metadata, telemetry, Temporal, dedicated temporal-payload bucket/prefix and task queue; optional HTTPS audit sink | `STATE_DATABASE_DSN`, `TEMPORAL_AUTH_TOKEN`, `ORCHESTRATION_PAYLOAD_BLOB_ACCESS_KEY`, `ORCHESTRATION_PAYLOAD_BLOB_SECRET_KEY` | Public/API credentials, runtime-content bucket/prefix, model, tool, sandbox-host secrets |
 | `model` | conversation, egress proxy, model, telemetry | `CONVERSATION_ACCESS_TOKEN`, `MODEL_API_KEY` | Temporal, state DB, tool, storage, host secrets |
 | `tool` | sandbox control, telemetry, tool broker | `SANDBOX_CONTROL_TOKEN`, `TOOL_BROKER_TOKEN` | Temporal, model, state DB, blob credentials |
 | `blob` | storage, telemetry | `BLOB_STORAGE_CREDENTIAL` | Temporal, model, tool and sandbox credentials |
@@ -123,7 +123,13 @@ Before a production rollout, the platform operator must define and test:
   PostgreSQL backup/restore drill: it backs up a tenant row, removes it from
   the source, restores into a fresh database, and verifies recovery. This is
   not a production PITR procedure; the platform operator must retain and
-  authorize the production backup/PITR runbook and its evidence. The upgrade uses a transaction
+  authorize the production backup/PITR runbook and its evidence. A production
+  drill must restore into an isolated target, select a documented recovery
+  point from the platform-managed WAL archive, verify tenant isolation and the
+  exact recovered durable row set, then destroy only that isolated target. The
+  checked-in Stack does not declare a WAL archive, recovery target, or native
+  partition maintenance job, so this remains an explicit external
+  production-run evidence blocker rather than an implied capability. The upgrade uses a transaction
   advisory lock plus migration fingerprint and physical-schema checks, then
   declares normalized tenant, Agent revision, Session,
   content-reference Input, Turn, Product-event, audit, and outbox tables. It
@@ -136,6 +142,13 @@ Before a production rollout, the platform operator must define and test:
   The `orchestration-codec` role publishes only durable outbox routes with
   lease recovery and no runtime-content credential. This foundation does not
   yet provide tenant RLS or least-privilege database-role enforcement.
+- An optional `orchestration-codec.worker.audit_sink` may point only to an
+  explicit HTTPS endpoint with a 1–60 second timeout. It exports committed,
+  redacted facts through the durable outbox and never turns audit delivery into
+  a transactionally fail-closed runtime mutation. No reference Stack enables
+  it: a platform/security operator must provision the transport identity,
+  sink retention, outage alert, access control, and a live delivery/recovery
+  record before declaring an operational audit sink.
 - Blob bucket/prefix lifecycle, retention, backup/restore, encryption and
   credential rotation.
 - Codec ingress hosts and CORS origins. Routing hosts are Stack Ingress rules;

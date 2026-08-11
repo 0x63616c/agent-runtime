@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/url"
 	"regexp"
 	"slices"
 	"sort"
@@ -87,6 +88,10 @@ func (config Config) Worker() *WorkerConfig {
 		return nil
 	}
 	clone := *config.worker
+	if config.worker.AuditSink != nil {
+		sink := *config.worker.AuditSink
+		clone.AuditSink = &sink
+	}
 	return &clone
 }
 
@@ -109,6 +114,17 @@ type WorkerConfig struct {
 	PayloadBlobPrefix           string `json:"payload_blob_prefix"`
 	PayloadAccessKeyEnvironment string `json:"payload_access_key_environment"`
 	PayloadSecretKeyEnvironment string `json:"payload_secret_key_environment"`
+	// AuditSink is an optional operator-owned HTTPS delivery endpoint for
+	// already-committed audit facts. Leaving it absent preserves the base
+	// worker's no-mandatory-external-sink behavior.
+	AuditSink *AuditSinkConfig `json:"audit_sink,omitempty"`
+}
+
+// AuditSinkConfig declares one bounded HTTPS audit-delivery capability. It
+// contains no credentials; transport authorization is operator-owned.
+type AuditSinkConfig struct {
+	Endpoint       string `json:"endpoint"`
+	TimeoutSeconds int    `json:"timeout_seconds"`
 }
 
 // Dependency describes one role-visible operator endpoint and optional secret environment reference.
@@ -240,10 +256,18 @@ func validateWorker(role Role, worker *WorkerConfig) error {
 		}
 		return nil
 	}
-	if worker == nil || !validWorkerSegment(worker.TaskQueue) || !validEndpoint(worker.PayloadBlobEndpoint) || !validWorkerSegment(worker.PayloadBlobBucket) || !validWorkerPrefix(worker.PayloadBlobPrefix) || worker.PayloadAccessKeyEnvironment != "ORCHESTRATION_PAYLOAD_BLOB_ACCESS_KEY" || worker.PayloadSecretKeyEnvironment != "ORCHESTRATION_PAYLOAD_BLOB_SECRET_KEY" {
+	if worker == nil || !validWorkerSegment(worker.TaskQueue) || !validEndpoint(worker.PayloadBlobEndpoint) || !validWorkerSegment(worker.PayloadBlobBucket) || !validWorkerPrefix(worker.PayloadBlobPrefix) || worker.PayloadAccessKeyEnvironment != "ORCHESTRATION_PAYLOAD_BLOB_ACCESS_KEY" || worker.PayloadSecretKeyEnvironment != "ORCHESTRATION_PAYLOAD_BLOB_SECRET_KEY" || !validAuditSink(worker.AuditSink) {
 		return errors.New("validate runtime role configuration: orchestration-codec worker capability is incomplete")
 	}
 	return nil
+}
+
+func validAuditSink(sink *AuditSinkConfig) bool {
+	if sink == nil {
+		return true
+	}
+	endpoint, err := url.Parse(sink.Endpoint)
+	return err == nil && endpoint.Scheme == "https" && endpoint.Host != "" && endpoint.User == nil && endpoint.RawQuery == "" && !endpoint.ForceQuery && endpoint.Fragment == "" && sink.TimeoutSeconds >= 1 && sink.TimeoutSeconds <= 60
 }
 
 func validWorkerSegment(value string) bool {

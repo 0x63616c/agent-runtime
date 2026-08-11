@@ -64,6 +64,26 @@ var _ = Describe("Operator role configuration", func() {
 		Expect(err).To(MatchError(ContainSubstring("worker capability is incomplete")))
 	})
 
+	It("permits only a bounded HTTPS optional audit sink on the codec worker", func() {
+		withSink := strings.Replace(orchestrationCodecConfig, `"payload_secret_key_environment":"ORCHESTRATION_PAYLOAD_BLOB_SECRET_KEY"`, `"payload_secret_key_environment":"ORCHESTRATION_PAYLOAD_BLOB_SECRET_KEY","audit_sink":{"endpoint":"https://audit.example.invalid/v1/facts","timeout_seconds":5}`, 1)
+		config, err := roles.Parse(strings.NewReader(withSink))
+		Expect(err).NotTo(HaveOccurred())
+		worker := config.Worker()
+		Expect(worker.AuditSink).NotTo(BeNil())
+		Expect(worker.AuditSink.Endpoint).To(Equal("https://audit.example.invalid/v1/facts"))
+		worker.AuditSink.Endpoint = "https://mutated.example.invalid"
+		Expect(config.Worker().AuditSink.Endpoint).To(Equal("https://audit.example.invalid/v1/facts"))
+
+		for _, invalid := range []string{
+			strings.Replace(withSink, `https://audit.example.invalid/v1/facts`, `http://audit.example.invalid/v1/facts`, 1),
+			strings.Replace(withSink, `"timeout_seconds":5`, `"timeout_seconds":0`, 1),
+			strings.Replace(withSink, `https://audit.example.invalid/v1/facts`, `https://audit.example.invalid/v1/facts?token=forbidden`, 1),
+		} {
+			_, err := roles.Parse(strings.NewReader(invalid))
+			Expect(err).To(MatchError(ContainSubstring("worker capability is incomplete")))
+		}
+	})
+
 	It("refuses application configuration and reports missing secrets without their values", func() {
 		_, err := roles.Parse(strings.NewReader(strings.Replace(orchestrationConfig, `"role": "orchestration",`, `"role": "orchestration", "agents":[{"name":"not-an-operator-setting"}],`, 1)))
 		Expect(err).To(HaveOccurred())
