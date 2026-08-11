@@ -246,6 +246,10 @@ func (store *RuntimeStateStore) EraseTenantAndContent(ctx context.Context, autho
 	if _, err := tx.Exec(ctx, `DELETE FROM runtime.runtime_state_snapshots WHERE tenant_id = $1`, string(request.Tenant)); err != nil {
 		return result, runtimestate.ErrUnavailable
 	}
+	// V5 retention scheduling is tenant-owned metadata. Remove it in the same
+	// bound transaction before deleting the catalog row; leaving it would make
+	// the foreign-key restriction turn an authorized erase into an unavailable
+	// outcome after content had already been erased.
 	if _, err := tx.Exec(ctx, `DELETE FROM runtime.tenant_retention_jobs WHERE tenant_id = $1`, string(request.Tenant)); err != nil {
 		return result, runtimestate.ErrUnavailable
 	}

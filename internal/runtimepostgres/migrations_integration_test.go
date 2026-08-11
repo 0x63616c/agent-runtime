@@ -544,7 +544,10 @@ func openRuntimePool(t *testing.T) *pgxpool.Pool {
 func resetRuntimeV2(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
 	t.Helper()
 	if _, err := pool.Exec(ctx, `
-		DROP TABLE IF EXISTS runtime.runtime_state_snapshots, runtime.outbox_leases, runtime.mutation_receipts,
+		-- Keep the v5 authority reset symmetrical: the migration ledger must
+		-- never be dropped while tenant_retention_jobs remains, otherwise a
+		-- fresh v5 migration attempts to recreate an orphaned table.
+		DROP TABLE IF EXISTS runtime.tenant_retention_jobs, runtime.runtime_state_snapshots, runtime.outbox_leases, runtime.mutation_receipts,
 			runtime.invocations, runtime.runtime_outbox, runtime.audit_records, runtime.session_events,
 			runtime.turns, runtime.inputs, runtime.sessions, runtime.agent_revisions,
 			runtime.tenant_retention_jobs, runtime.pending_content_deletions,

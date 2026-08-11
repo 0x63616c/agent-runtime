@@ -102,6 +102,13 @@ func TestDurableWorkspaceAgentBinariesUseOnlyThePublicAPI(t *testing.T) {
 	}
 	tenant, _ := runtimecontent.ParseTenantID("workspacee2e")
 	principal, _ := runtimecontent.ParsePrincipalID("alice")
+	policyState, err := store.LoadRuntimeState(ctx, runtimestate.MutationScope{Tenant: tenant, Authority: runtimestate.AuthorityRuntimeWorker})
+	if err != nil || len(policyState.Policies) != 1 {
+		t.Fatalf("public Policy is not visible through the durable worker state authority: state=%#v err=%v", policyState.Policies, err)
+	}
+	if policyState.Policies[0].Name != policy.Name || policyState.Policies[0].Revision != policy.Revision || len(policyState.Policies[0].Rules) != 1 || policyState.Policies[0].Rules[0] != (agentruntime.PolicyRule{ToolName: "write", Decision: agentruntime.PolicyRequiresApproval}) {
+		t.Fatalf("public Policy does not preserve broker admission rule: public=%#v durable=%#v", policy, policyState.Policies[0])
+	}
 	broker, err := runtimetool.NewBroker(runtimetool.BrokerConfig{Store: store, Compiler: compiler, Planner: planner, Clock: source})
 	if err != nil {
 		t.Fatal(err)
@@ -123,7 +130,7 @@ func TestDurableWorkspaceAgentBinariesUseOnlyThePublicAPI(t *testing.T) {
 		if e != nil {
 			t.Fatal(e)
 		}
-		_, e = broker.Admit(ctx, runtimetool.AdmissionRequest{Tenant: tenant, Principal: principal, SessionID: session.ID, TurnID: accepted.Turn.ID, ToolCallID: "tcall_" + suffix + "00000000", ApprovalID: id, PolicyName: policy.Name, PolicyRevision: policy.Revision, ToolName: "write", ActionDigest: "sha256:" + strings.Repeat("a", 64), CapabilityDigest: "sha256:" + strings.Repeat("b", 64), Action: agentruntime.ApprovalAction{Verb: "write", Target: "workspace/" + suffix}, MaximumUses: 1, ExpiresAt: expiry, Descriptor: descriptor, IdempotencyKey: "workspace-e2e-admit-" + suffix})
+		_, e = broker.Admit(ctx, runtimetool.AdmissionRequest{Tenant: tenant, Principal: principal, SessionID: session.ID, TurnID: accepted.Turn.ID, ToolCallID: "tcall_" + suffix + "00000000", ApprovalID: id, PolicyName: policy.Name, PolicyRevision: policy.Revision, ToolName: "write", ActionDigest: "sha256:" + strings.Repeat("a", 64), CapabilityDigest: "sha256:" + strings.Repeat("b", 64), Action: agentruntime.ApprovalAction{Verb: "write", Target: "workspace-service"}, MaximumUses: 1, ExpiresAt: expiry, Descriptor: descriptor, IdempotencyKey: "workspace-e2e-admit-" + suffix})
 		if e != nil {
 			t.Fatal(e)
 		}
@@ -138,7 +145,7 @@ func TestDurableWorkspaceAgentBinariesUseOnlyThePublicAPI(t *testing.T) {
 	webURL, stopWeb := startWorkspaceBinary(t, "web", baseURL, secrets["ALICE_TOKEN"])
 	defer stopWeb()
 	body := getWorkspacePage(t, webURL)
-	if !strings.Contains(body, "write workspace/APPROVEA") || !strings.Contains(body, "Workspace sandbox execution is unavailable") {
+	if !strings.Contains(body, "write workspace-service") || !strings.Contains(body, "Workspace sandbox execution is unavailable") {
 		t.Fatalf("web workspace page omitted safe state: %q", body)
 	}
 	postWorkspaceForm(t, webURL+"/approvals/"+approveID.String()+"/approve", "web-approve")
@@ -275,7 +282,8 @@ func getWorkspacePage(t *testing.T, endpoint string) string {
 }
 func postWorkspaceForm(t *testing.T, endpoint, key string) {
 	t.Helper()
-	response, err := http.PostForm(endpoint, url.Values{"key": {key}})
+	client := &http.Client{CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse }}
+	response, err := client.PostForm(endpoint, url.Values{"key": {key}})
 	if err != nil {
 		t.Fatal(err)
 	}
