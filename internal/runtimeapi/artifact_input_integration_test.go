@@ -34,12 +34,12 @@ func TestDurableRuntimeUsesNonSuperApplicationLoginWithTenantRLS(t *testing.T) {
 	}
 	defer pool.Close()
 	var user string
-	var superuser, bypassRLS bool
-	if err := pool.QueryRow(ctx, `SELECT current_user, rolsuper, rolbypassrls FROM pg_roles WHERE rolname = current_user`).Scan(&user, &superuser, &bypassRLS); err != nil {
+	var superuser, bypassRLS, applicationMember, operatorMember bool
+	if err := pool.QueryRow(ctx, `SELECT current_user, rolsuper, rolbypassrls, pg_has_role(current_user, 'runtime_state_app', 'member'), pg_has_role(current_user, 'runtime_state_operator', 'member') FROM pg_roles WHERE rolname = current_user`).Scan(&user, &superuser, &bypassRLS, &applicationMember, &operatorMember); err != nil {
 		t.Fatalf("read application login privileges: %v", err)
 	}
-	if user == "" || superuser || bypassRLS {
-		t.Fatalf("application login = %q superuser=%t bypass_rls=%t, want constrained RLS subject", user, superuser, bypassRLS)
+	if user == "" || superuser || bypassRLS || !applicationMember || operatorMember {
+		t.Fatalf("application login = %q superuser=%t bypass_rls=%t app_member=%t operator_member=%t, want app-only constrained RLS subject", user, superuser, bypassRLS, applicationMember, operatorMember)
 	}
 	var unbound int
 	if err := pool.QueryRow(ctx, `SELECT count(*) FROM runtime.runtime_state_snapshots`).Scan(&unbound); err != nil {

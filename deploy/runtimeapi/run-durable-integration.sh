@@ -40,9 +40,12 @@ minio_password=$(awk -F= '/^AR_RUNTIME_API_MINIO_PASSWORD=/{print $2}' "$environ
 runtime_admin_dsn="postgres://runtime_api:${postgres_password}@127.0.0.1:${postgres_port}/agent_runtime?sslmode=disable"
 runtime_application_user=runtime_integration_app
 runtime_application_password=$(openssl rand -hex 24)
+runtime_worker_user=runtime_integration_worker
+runtime_worker_password=$(openssl rand -hex 24)
 docker compose --project-name "$project_name" --env-file "$environment_file" --file "$compose_file" exec --no-TTY postgres \
-  psql -v ON_ERROR_STOP=1 -U runtime_api -d agent_runtime --command "CREATE ROLE ${runtime_application_user} LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE INHERIT NOREPLICATION NOBYPASSRLS PASSWORD '${runtime_application_password}'; GRANT runtime_state_app, runtime_state_operator TO ${runtime_application_user};"
+  psql -v ON_ERROR_STOP=1 -U runtime_api -d agent_runtime --command "CREATE ROLE ${runtime_application_user} LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE INHERIT NOREPLICATION NOBYPASSRLS PASSWORD '${runtime_application_password}'; CREATE ROLE ${runtime_worker_user} LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE INHERIT NOREPLICATION NOBYPASSRLS PASSWORD '${runtime_worker_password}'; GRANT runtime_state_app TO ${runtime_application_user}; GRANT runtime_state_app, runtime_state_operator TO ${runtime_worker_user};"
 export AR_RUNTIME_API_POSTGRES_DSN="postgres://${runtime_application_user}:${runtime_application_password}@127.0.0.1:${postgres_port}/agent_runtime?sslmode=disable"
+runtime_worker_dsn="postgres://${runtime_worker_user}:${runtime_worker_password}@127.0.0.1:${postgres_port}/agent_runtime?sslmode=disable"
 export AR_RUNTIME_API_MINIO_ENDPOINT="127.0.0.1:${minio_port}"
 export AR_RUNTIME_API_MINIO_ACCESS_KEY=agent-runtime-api
 export AR_RUNTIME_API_MINIO_SECRET_KEY="$minio_password"
@@ -74,16 +77,19 @@ AR_RUNTIME_POSTGRES_DSN="$runtime_admin_dsn" \
   go test -race -tags=integration ./internal/runtimepostgres -count=1
 
 reset_runtime_schema
-go test -race -tags=integration ./internal/runtimeapi -run 'Test(DurableStateRuntimeAuthorizesArtifactInputReferences|DurablePostgresMinIOCollectorDeletesExpiredUnreferencedArtifact|DurablePostgresMinIOTenantErasurePreservesAnotherTenant)' -count=1
+go test -race -tags=integration ./internal/runtimeapi -run 'Test(DurableRuntimeUsesNonSuperApplicationLoginWithTenantRLS|DurableStateRuntimeAuthorizesArtifactInputReferences|DurablePostgresMinIOCollectorDeletesExpiredUnreferencedArtifact|DurablePostgresMinIOTenantErasurePreservesAnotherTenant)' -count=1
 
 reset_runtime_schema
 go test -race -tags=integration ./internal/runtimeapiprocess -run 'TestDurablePostgresMinIOAPIProcessSurvivesRestart' -count=1
 
 reset_runtime_schema
-go test -race -tags=integration ./internal/runtimemodel -run 'Test(DurableModelProducerLossFinalizesGapAndReplays|DurableModelNormalizedStreamFinalizesOwnerReadableOutput)' -count=1
+AR_RUNTIME_API_POSTGRES_DSN="$runtime_worker_dsn" \
+  go test -race -tags=integration ./internal/runtimemodel -run 'Test(DurableModelProducerLossFinalizesGapAndReplays|DurableModelNormalizedStreamFinalizesOwnerReadableOutput)' -count=1
 
 reset_runtime_schema
-go test -race -tags=integration ./internal/runtimeorchestration -run 'Test(CodecEnabledWorkerStartsAgainstDurableDependenciesAndRestarts|PostgresOutboxReclaimsLiveTemporalRouteAfterAcknowledgementLoss|PostgresOutboxRecoversAcrossActualPublisherProcessKills|PostgresOutboxReclaimsAuditExportAfterSinkOutage|SessionWorkflowReplaysCheckedInHistoricLifecycle)' -count=1
+AR_RUNTIME_API_POSTGRES_DSN="$runtime_worker_dsn" \
+  go test -race -tags=integration ./internal/runtimeorchestration -run 'Test(CodecEnabledWorkerStartsAgainstDurableDependenciesAndRestarts|PostgresOutboxReclaimsLiveTemporalRouteAfterAcknowledgementLoss|PostgresOutboxRecoversAcrossActualPublisherProcessKills|PostgresOutboxReclaimsAuditExportAfterSinkOutage|SessionWorkflowReplaysCheckedInHistoricLifecycle)' -count=1
 
 reset_runtime_schema
-go test -race -tags=integration ./internal/runtimetool -run 'TestDurableToolLifecyclePersistsDescriptorApprovalAndFinalization' -count=1
+AR_RUNTIME_API_POSTGRES_DSN="$runtime_worker_dsn" \
+  go test -race -tags=integration ./internal/runtimetool -run 'TestDurableToolLifecyclePersistsDescriptorApprovalAndFinalization' -count=1
