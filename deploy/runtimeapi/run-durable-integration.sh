@@ -75,7 +75,6 @@ psql "$admin_dsn" --set=ON_ERROR_STOP=1 --command "DROP DATABASE ${restore_datab
 reset_runtime_schema
 AR_RUNTIME_POSTGRES_DSN="$runtime_admin_dsn" \
   go test -race -tags=integration ./internal/runtimepostgres -count=1
-
 reset_runtime_schema
 go test -race -tags=integration ./internal/runtimeapi -run 'Test(DurableRuntimeUsesNonSuperApplicationLoginWithTenantRLS|DurableStateRuntimeAuthorizesArtifactInputReferences|DurableStateRuntimeProjectsTerminalSessionStates|DurablePostgresMinIOCollectorDeletesExpiredUnreferencedArtifact|DurablePostgresMinIOTenantErasurePreservesAnotherTenant)' -count=1
 
@@ -97,3 +96,6 @@ AR_RUNTIME_API_POSTGRES_DSN="$runtime_worker_dsn" \
 reset_runtime_schema
 AR_RUNTIME_API_POSTGRES_DSN="$runtime_worker_dsn" \
   go test -race -tags=integration ./internal/runtimetool -run 'TestDurableToolLifecyclePersistsDescriptorApprovalAndFinalization' -count=1
+
+reset_runtime_schema
+go test -race -tags=integration ./examples/durable-chat -run 'TestDurableChatReconnectsAndCancelsThroughRestartedDurableAPIProcess' -count=1
