@@ -36,9 +36,10 @@ documentation:
   producer-loss finalization, lifecycle/GC classification, production
   PostgreSQL retention/partition/erasure/backup-restore evidence, and
   process-kill outbox recovery.
-- TMP-009–010: the retry decision table including uncertain external effect
-  and incompatible policy, plus Temporal test-environment approval and
-  sandbox-operation lifecycle scenarios.
+- TMP-010: retained Temporal test-environment approval, sandbox-operation,
+  and event-finalization lifecycle scenarios. TMP-009 has a closed retry
+  decision table and focused classification proof, but remains part of the
+  final M5 evidence bundle.
 
 The existing M5 implementation must not claim these rows or request its
 independent review until this table is closed with named evidence.

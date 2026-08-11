@@ -30,16 +30,24 @@ completed route ends the private workflow only after its durable outbox record
 is accepted. Other safe outbox events are acknowledged without inventing a
 new effect.
 
-The M5 activity performs only this reversible state-route verification. It
-propagates cancellation, treats invalid or rejected durable routes as
-non-retryable, and permits transient state-backend errors to retry under the
-bounded Temporal policy. It does not call a model, tool, approval service, or
-sandbox, so it cannot yet classify an unknown external effect or an
-incompatible persisted policy. TMP-009 nevertheless remains M5 terminal work:
-it requires an explicit retry decision table and proof for those cases before
-this implementation seam can be accepted. TMP-010 likewise remains M5
-terminal work for the approval and sandbox-operation scenarios; M6/M7 consume
-those foundations later but do not own their acceptance rows.
+The M5 activity performs only this reversible state-route verification. Its
+retry decision is deliberately closed and covered by
+`TestDispatchStateCommandClassifiesRetrySafetyWithoutRepeatingUnknownEffects`:
+
+| Condition | Activity outcome | Automatic retry |
+| --- | --- | --- |
+| Caller/workflow cancellation | Propagate cancellation unchanged. | No replacement activity. |
+| Invalid, absent, or integrity-rejected durable route | Non-retryable `runtime.deterministic_outbox_route`. | No. |
+| State backend unavailable | Preserve a storage-neutral transient error. | Yes, within Temporal's bounded policy. |
+| Unknown external-effect result | Non-retryable `runtime.uncertain_external_effect`; reconciliation owns the next decision. | No. |
+| Incompatible persisted policy | Non-retryable `runtime.incompatible_persisted_policy`. | No. |
+
+The current dispatcher has no model, tool, approval service, or sandbox
+credential, so the latter two cases are classification guards rather than a
+claim that the dispatcher executes those effects. TMP-010 remains terminal
+work for retained Temporal-environment approval, sandbox-operation, and event
+finalization scenarios; M6/M7 consume those foundations later but do not own
+their acceptance rows.
 
 Required retained evidence:
 
