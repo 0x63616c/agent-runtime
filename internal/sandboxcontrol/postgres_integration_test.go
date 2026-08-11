@@ -5,15 +5,21 @@ package sandboxcontrol
 import (
 	"context"
 	"crypto/ed25519"
+	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"os"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/0x63616c/agent-runtime/internal/firecrackerbootprobeprotocol"
 	"github.com/0x63616c/agent-runtime/internal/firecrackerbootprobev2"
+	"github.com/0x63616c/agent-runtime/internal/firecrackerlaunchgrant"
 	"github.com/0x63616c/agent-runtime/internal/sandboxhostprotocol"
+	"github.com/0x63616c/agent-runtime/sandbox"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -37,7 +43,12 @@ func TestPostgresBootProbeV2RefusesRevokedAndStaleLeaseSessions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	host := HostEnrollment{HostID: "host_v2", Tenant: "tenant_v2", Pool: "pool_v2", Generation: 1, ProtocolVersion: sandboxhostprotocol.Version, CertificateDigest: digest("1"), SigningPublicKey: public, CapabilityDigest: digest("2"), Status: HostActive, ExpiresAt: now.Add(time.Hour)}
+	observationPublic, observationPrivate, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	profile := BootProbeProfile{VMID: "sandbox-v2", FixtureVersion: "fixture-v2", PlanDigest: sandboxDigest('a'), FixtureDigest: sandboxDigest('b'), AuthorityDigest: sandboxDigest('c')}
+	host := HostEnrollment{HostID: "host_v2", Tenant: "tenant_v2", Pool: "pool_v2", Generation: 1, ProtocolVersion: sandboxhostprotocol.Version, CertificateDigest: digest("1"), SigningPublicKey: public, ObservationPublicKey: observationPublic, BootProbeProfile: profile, CapabilityDigest: digest("2"), Status: HostActive, ExpiresAt: now.Add(time.Hour)}
 	if err := ledger.ProvisionHost(ctx, host, AttestationInput{Profile: AttestationProfileLocalMetadata}, nil); err != nil {
 		t.Fatal(err)
 	}
@@ -59,6 +70,27 @@ func TestPostgresBootProbeV2RefusesRevokedAndStaleLeaseSessions(t *testing.T) {
 	recovered, didCreate, err := ledger.CreateBootProbeSession(ctx, identity, op.Principal, op.ID, "host-instance-01", replayedInitial, now.Add(time.Second))
 	if err != nil || didCreate || recovered.Version != created.Version || string(recovered.Wire) != string(created.Wire) || recovered.Session.Lifecycle.Phase != firecrackerbootprobev2.LifecyclePrepared {
 		t.Fatalf("CreateBootProbeSession(lost response) = %#v,%t,%v; want prepared persisted snapshot %#v", recovered, didCreate, err, created)
+	}
+	controlPublic, controlPrivate, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stageWire := signedStageReady(t, created, profile, observationPrivate)
+	verified, err := firecrackerbootprobeprotocol.VerifyStageReady(ctx, stageWire, now.Add(time.Second), integrationBootProbeTrust{host: host, controlPublicKey: controlPublic})
+	if err != nil {
+		t.Fatalf("VerifyStageReady() error = %v", err)
+	}
+	command, err := ledger.SealBootProbeStageReady(ctx, identity, verified, stageWire, controlPrivate, now.Add(time.Second))
+	if err != nil {
+		t.Fatalf("SealBootProbeStageReady() error = %v", err)
+	}
+	commandRetry, err := ledger.SealBootProbeStageReady(ctx, identity, verified, stageWire, controlPrivate, now.Add(time.Second))
+	if err != nil || string(commandRetry) != string(command) {
+		t.Fatalf("SealBootProbeStageReady(lost response) = %q, %v; want exact command %q", commandRetry, err, command)
+	}
+	sealed, err := ledger.LoadBootProbeSession(ctx, "host-instance-01")
+	if err != nil || sealed.Version != created.Version+1 || sealed.Session.Lifecycle.Phase != firecrackerbootprobev2.LifecycleLaunchAuthorized {
+		t.Fatalf("sealed v2 session = %#v, %v", sealed, err)
 	}
 	successor := created.Session.Delivery.Current
 	successor.EnvelopeID = "fc-envelope-02"
@@ -113,6 +145,37 @@ func TestPostgresBootProbeV2RefusesRevokedAndStaleLeaseSessions(t *testing.T) {
 	if err != nil || secondQuarantine.Version != firstQuarantine.Version || string(secondQuarantine.Wire) != string(firstQuarantine.Wire) {
 		t.Fatalf("repeat v2 quarantine rolled back or changed cleanup = %#v, %v; want %#v", secondQuarantine, err, firstQuarantine)
 	}
+}
+
+func sandboxDigest(character byte) sandbox.Digest {
+	return sandbox.Digest("sha256:" + strings.Repeat(string(character), 64))
+}
+
+type integrationBootProbeTrust struct {
+	host             HostEnrollment
+	controlPublicKey ed25519.PublicKey
+}
+
+func (trust integrationBootProbeTrust) ResolveBootProbeHostTrust(_ context.Context, hostID string, generation uint64) (firecrackerbootprobeprotocol.HostTrust, error) {
+	if hostID != trust.host.HostID || generation != trust.host.Generation {
+		return firecrackerbootprobeprotocol.HostTrust{}, ErrHostDenied
+	}
+	return firecrackerbootprobeprotocol.HostTrust{HostID: hostID, HostGeneration: generation, ControlPublicKey: trust.controlPublicKey, ObservationPublicKey: trust.host.ObservationPublicKey}, nil
+}
+
+func signedStageReady(t *testing.T, snapshot firecrackerbootprobev2.Snapshot, profile BootProbeProfile, privateKey ed25519.PrivateKey) []byte {
+	t.Helper()
+	stage := firecrackerbootprobeprotocol.StageReady{ProtocolVersion: firecrackerbootprobeprotocol.Version, Kind: firecrackerbootprobeprotocol.StageReadyKind, HostInstanceSessionID: snapshot.Session.Delivery.HostInstanceSessionID, ExpectedVersion: snapshot.Version, Binding: snapshot.Session.Delivery.Binding, Delivery: snapshot.Session.Delivery.Current, M4: firecrackerlaunchgrant.TrustedM4Identity{VMID: profile.VMID, FixtureVersion: profile.FixtureVersion, PlanDigest: profile.PlanDigest, FixtureDigest: profile.FixtureDigest, StageDigest: sandboxDigest('d'), AuthorityDigest: profile.AuthorityDigest}, GuestNonce: "YWJjZGVmZ2hpamtsbW5vcA"}
+	unsigned, err := json.Marshal(stage)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stage.Signature = base64.RawURLEncoding.EncodeToString(ed25519.Sign(privateKey, unsigned))
+	wire, err := json.Marshal(stage)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return wire
 }
 
 func TestPostgresLedgerSurvivesRestartAndReconcilesExpiredAuthority(t *testing.T) {

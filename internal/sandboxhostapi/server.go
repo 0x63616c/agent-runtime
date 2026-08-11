@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/0x63616c/agent-runtime/internal/clock"
+	"github.com/0x63616c/agent-runtime/internal/firecrackerbootprobeprotocol"
 	"github.com/0x63616c/agent-runtime/internal/firecrackerbootprobev2"
 	"github.com/0x63616c/agent-runtime/internal/sandboxcontrol"
 	"github.com/0x63616c/agent-runtime/internal/sandboxhostprotocol"
@@ -24,13 +25,14 @@ import (
 )
 
 const (
-	pullPath             = "/sandbox.host-control/v1/pull"
-	receiptPath          = "/sandbox.host-control/v1/receipt"
-	heartbeatPath        = "/sandbox.host-control/v1/heartbeat"
-	outputPath           = "/sandbox.host-control/v1/output"
-	resultPath           = "/sandbox.host-control/v1/result"
-	bootProbePreparePath = "/sandbox.host-control/v2/firecracker-boot-probe/prepare"
-	maxBodyBytes         = 1 << 20
+	pullPath                = "/sandbox.host-control/v1/pull"
+	receiptPath             = "/sandbox.host-control/v1/receipt"
+	heartbeatPath           = "/sandbox.host-control/v1/heartbeat"
+	outputPath              = "/sandbox.host-control/v1/output"
+	resultPath              = "/sandbox.host-control/v1/result"
+	bootProbePreparePath    = "/sandbox.host-control/v2/firecracker-boot-probe/prepare"
+	bootProbeStageReadyPath = "/sandbox.host-control/v2/firecracker-boot-probe/stage-ready"
+	maxBodyBytes            = 1 << 20
 )
 
 // Config contains explicit durable authority and signing material supplied by
@@ -82,8 +84,46 @@ func NewHandler(config Config) (http.Handler, error) {
 	mux.HandleFunc("POST "+resultPath, server.result)
 	if config.BootProbeStore != nil {
 		mux.HandleFunc("POST "+bootProbePreparePath, server.bootProbePrepare)
+		mux.HandleFunc("POST "+bootProbeStageReadyPath, server.bootProbeStageReady)
 	}
 	return secureHeaders(mux), nil
+}
+
+func (server *server) bootProbeStageReady(writer http.ResponseWriter, request *http.Request) {
+	identity, enrollment, ok := server.authenticatePeer(writer, request)
+	if !ok {
+		return
+	}
+	wire, ok := readBody(request)
+	if !ok {
+		writeDenied(writer)
+		return
+	}
+	now := server.config.Clock.Now().UTC()
+	verified, err := firecrackerbootprobeprotocol.VerifyStageReady(request.Context(), wire, now, bootProbeTrust{identity: identity, enrollment: enrollment, controlPublicKey: server.config.ControlTrust.Current.PublicKey})
+	if err != nil {
+		writeDenied(writer)
+		return
+	}
+	command, err := server.config.BootProbeStore.SealBootProbeStageReady(request.Context(), identity, verified, wire, server.config.ControlSigningKey, now)
+	if err != nil {
+		writeStoreError(writer, err)
+		return
+	}
+	writeWire(writer, command)
+}
+
+type bootProbeTrust struct {
+	identity         sandboxcontrol.HostIdentity
+	enrollment       sandboxcontrol.HostEnrollment
+	controlPublicKey ed25519.PublicKey
+}
+
+func (trust bootProbeTrust) ResolveBootProbeHostTrust(_ context.Context, hostID string, generation uint64) (firecrackerbootprobeprotocol.HostTrust, error) {
+	if hostID != trust.identity.HostID || generation != trust.identity.Generation || trust.enrollment.HostID != hostID || trust.enrollment.Generation != generation {
+		return firecrackerbootprobeprotocol.HostTrust{}, sandboxcontrol.ErrHostDenied
+	}
+	return firecrackerbootprobeprotocol.HostTrust{HostID: hostID, HostGeneration: generation, ControlPublicKey: append(ed25519.PublicKey(nil), trust.controlPublicKey...), ObservationPublicKey: append(ed25519.PublicKey(nil), trust.enrollment.ObservationPublicKey...)}, nil
 }
 
 func (server *server) bootProbePrepare(writer http.ResponseWriter, request *http.Request) {

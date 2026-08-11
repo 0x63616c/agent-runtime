@@ -3,6 +3,7 @@ package sandboxcontrol
 import (
 	"context"
 	"crypto/ed25519"
+	"encoding/json"
 	"math"
 	"time"
 
@@ -25,6 +26,13 @@ func (ledger *PostgresLedger) ProvisionHost(ctx context.Context, enrollment Host
 	if !validHostEnrollment(enrollment) {
 		return errors.New("provision PostgreSQL sandbox host: invalid bounded enrollment")
 	}
+	var profileWire []byte
+	if enrollment.BootProbeProfile.present() {
+		profileWire, err = json.Marshal(enrollment.BootProbeProfile)
+		if err != nil {
+			return errors.Wrap(err, "encode sandbox host boot-probe profile")
+		}
+	}
 	err = ledger.transaction(ctx, "provision PostgreSQL sandbox host", func(tx pgx.Tx) error {
 		var maximumGeneration *int64
 		if err := tx.QueryRow(ctx, `SELECT MAX(generation) FROM runtime.sandbox_host_enrollments WHERE host_id=$1`, enrollment.HostID).Scan(&maximumGeneration); err != nil {
@@ -46,12 +54,12 @@ func (ledger *PostgresLedger) ProvisionHost(ctx context.Context, enrollment Host
 		result, err := tx.Exec(ctx, `
 			INSERT INTO runtime.sandbox_host_enrollments
 				(host_id, tenant, pool, generation, protocol_version, certificate_digest,
-				 signing_public_key, capability_digest, attestation_digest, attestation_profile, attestation_state, status, expires_at)
-			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,NULLIF($9,''),$10,$11,$12,$13)
+				 signing_public_key, observation_public_key, boot_probe_profile, capability_digest, attestation_digest, attestation_profile, attestation_state, status, expires_at)
+			VALUES ($1,$2,$3,$4,$5,$6,$7,CASE WHEN octet_length($8::bytea)=0 THEN NULL ELSE $8::bytea END,CASE WHEN octet_length($9::bytea)=0 THEN NULL ELSE $9::bytea END,$10,NULLIF($11,''),$12,$13,$14,$15)
 			ON CONFLICT (host_id, generation) DO NOTHING`,
 			enrollment.HostID, enrollment.Tenant, enrollment.Pool, int64(enrollment.Generation),
 			enrollment.ProtocolVersion, enrollment.CertificateDigest, []byte(enrollment.SigningPublicKey),
-			enrollment.CapabilityDigest, enrollment.AttestationDigest, enrollment.AttestationProfile, enrollment.AttestationState, enrollment.Status, enrollment.ExpiresAt.UTC())
+			[]byte(enrollment.ObservationPublicKey), profileWire, enrollment.CapabilityDigest, enrollment.AttestationDigest, enrollment.AttestationProfile, enrollment.AttestationState, enrollment.Status, enrollment.ExpiresAt.UTC())
 		if err != nil {
 			return errors.Wrap(err, "write sandbox host enrollment")
 		}
@@ -557,17 +565,23 @@ type hostRowScanner interface{ Scan(...any) error }
 func scanHost(row hostRowScanner) (HostEnrollment, error) {
 	var host HostEnrollment
 	var generation int64
-	var publicKey []byte
+	var publicKey, observationPublicKey, profileWire []byte
 	var attestation, quarantine *string
 	var lastAuthenticated *time.Time
 	err := row.Scan(&host.HostID, &host.Tenant, &host.Pool, &generation, &host.ProtocolVersion,
-		&host.CertificateDigest, &publicKey, &host.CapabilityDigest, &attestation, &host.AttestationProfile, &host.AttestationState,
+		&host.CertificateDigest, &publicKey, &observationPublicKey, &profileWire, &host.CapabilityDigest, &attestation, &host.AttestationProfile, &host.AttestationState,
 		&host.Status, &host.ExpiresAt, &lastAuthenticated, &quarantine)
 	if err != nil {
 		return HostEnrollment{}, err
 	}
 	host.Generation = uint64(generation)
 	host.SigningPublicKey = append(ed25519.PublicKey(nil), publicKey...)
+	host.ObservationPublicKey = append(ed25519.PublicKey(nil), observationPublicKey...)
+	if len(profileWire) != 0 {
+		if err := json.Unmarshal(profileWire, &host.BootProbeProfile); err != nil || !host.BootProbeProfile.valid() {
+			return HostEnrollment{}, errors.New("decode persisted sandbox host boot-probe profile")
+		}
+	}
 	host.ExpiresAt = host.ExpiresAt.UTC()
 	if attestation != nil {
 		host.AttestationDigest = *attestation
@@ -582,7 +596,7 @@ func scanHost(row hostRowScanner) (HostEnrollment, error) {
 }
 
 const selectHostGenerationSQL = `SELECT host_id, tenant, pool, generation, protocol_version,
-	certificate_digest, signing_public_key, capability_digest, attestation_digest, attestation_profile, attestation_state,
+	certificate_digest, signing_public_key, observation_public_key, boot_probe_profile, capability_digest, attestation_digest, attestation_profile, attestation_state,
 	status, expires_at, last_authenticated_at, quarantine_reason
 	FROM runtime.sandbox_host_enrollments WHERE host_id=$1 AND generation=$2`
 
