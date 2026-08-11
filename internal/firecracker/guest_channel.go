@@ -2,15 +2,18 @@ package firecracker
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/base64"
 	"fmt"
+	"io"
 	"net"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/0x63616c/agent-runtime/internal/sandboxauthority"
 	"github.com/0x63616c/agent-runtime/internal/sandboxhostprotocol"
 )
 
@@ -62,6 +65,7 @@ type UnixGuestControlChannel struct {
 	fixtureVersion string
 	closed         bool
 	connections    map[net.Conn]struct{}
+	proxySessions  map[*sandboxauthority.ProxySession]struct{}
 }
 
 // NewUnixGuestControlChannel constructs a channel before the exact staged UDS
@@ -70,7 +74,7 @@ func NewUnixGuestControlChannel(dialer unixSocketDialer) (*UnixGuestControlChann
 	if dialer == nil {
 		return nil, fmt.Errorf("create guest control channel: %w", ErrSmokeUnavailable)
 	}
-	return &UnixGuestControlChannel{dial: dialer, connections: make(map[net.Conn]struct{})}, nil
+	return &UnixGuestControlChannel{dial: dialer, connections: make(map[net.Conn]struct{}), proxySessions: make(map[*sandboxauthority.ProxySession]struct{})}, nil
 }
 
 // BindGuestIdentity fixes the exact boot VM and verified fixture identity once.
@@ -232,6 +236,105 @@ func (channel *UnixGuestControlChannel) CancelDispatch(ctx context.Context, enve
 	return nil
 }
 
+// ProxyAuthenticated relays one bounded, control-signed guest proxy request
+// over the exact private AF_VSOCK channel. It accepts neither a guest-selected
+// resolver nor a general stream: one signed input produces at most one bounded
+// response and every close path revokes the host-owned proxy session.
+func (channel *UnixGuestControlChannel) ProxyAuthenticated(ctx context.Context, envelope sandboxhostprotocol.Envelope, authenticatedEnvelope []byte, session *sandboxauthority.ProxySession, now time.Time, resolver sandboxauthority.Resolver, dialer sandboxauthority.Dialer) (GuestDispatchResult, error) {
+	if channel == nil {
+		return GuestDispatchResult{}, fmt.Errorf("proxy guest control: %w", ErrCapabilityUnavailable)
+	}
+	if err := contextError(ctx); err != nil {
+		return GuestDispatchResult{}, err
+	}
+	if _, ok := ctx.Deadline(); !ok {
+		return GuestDispatchResult{}, fmt.Errorf("proxy guest control: %w", ErrCapabilityUnavailable)
+	}
+	if session == nil {
+		return GuestDispatchResult{}, fmt.Errorf("proxy guest control: %w", ErrCapabilityUnavailable)
+	}
+	payload, err := DecodeGuestProxyPayload(envelope.Payload)
+	if err != nil || envelope.OperationKind != GuestProxyOperationKind || payload.Request.SandboxID != envelope.SandboxID || payload.Request.ProcessID != envelope.ProcessID || payload.Request.OperationID != envelope.OperationID || payload.Request.FencingToken != envelope.FencingToken {
+		return GuestDispatchResult{}, fmt.Errorf("proxy guest control: %w", ErrCapabilityUnavailable)
+	}
+	frame, err := EncodeAuthenticatedGuestDispatch(envelope, authenticatedEnvelope)
+	if err != nil {
+		return GuestDispatchResult{}, err
+	}
+	channel.mu.Lock()
+	vmID := channel.vmID
+	if !channel.closed {
+		channel.proxySessions[session] = struct{}{}
+	}
+	closed := channel.closed
+	channel.mu.Unlock()
+	if closed || payload.Request.VMID != vmID {
+		return GuestDispatchResult{}, fmt.Errorf("proxy guest control: %w", ErrCapabilityUnavailable)
+	}
+	defer func() {
+		channel.mu.Lock()
+		delete(channel.proxySessions, session)
+		channel.mu.Unlock()
+		_ = session.Close(context.Background())
+	}()
+
+	connection, reader, err := channel.open(ctx)
+	if err != nil {
+		return GuestDispatchResult{}, err
+	}
+	defer channel.release(connection)
+	stopCancellation := context.AfterFunc(ctx, func() {
+		_ = session.Close(context.Background())
+		_ = connection.Close()
+	})
+	defer stopCancellation()
+	if _, err := fmt.Fprintf(connection, "PROXY %s\n", base64.RawURLEncoding.EncodeToString(frame)); err != nil {
+		return GuestDispatchResult{}, fmt.Errorf("write authenticated guest proxy: %w", err)
+	}
+	request, err := readGuestProxyOpen(reader)
+	if err != nil || !sameGuestProxyRequest(request, payload.Request) {
+		return GuestDispatchResult{}, fmt.Errorf("read guest proxy open: %w", ErrCapabilityUnavailable)
+	}
+	remote, err := session.Connect(ctx, request, now, resolver, dialer)
+	if err != nil {
+		return GuestDispatchResult{}, err
+	}
+	defer remote.Close()
+	if deadline, ok := ctx.Deadline(); ok {
+		if err := remote.SetDeadline(deadline); err != nil {
+			return GuestDispatchResult{}, fmt.Errorf("bound guest proxy deadline: %w", err)
+		}
+	}
+	if _, err := fmt.Fprintf(connection, "PROXY_CONNECTED %s\n", envelope.EnvelopeID); err != nil {
+		return GuestDispatchResult{}, fmt.Errorf("write guest proxy connection: %w", err)
+	}
+	input, err := readGuestProxyData(reader, envelope.EnvelopeID)
+	if err != nil || !bytes.Equal(input, payload.Input) {
+		return GuestDispatchResult{}, fmt.Errorf("read guest proxy input: %w", ErrCapabilityUnavailable)
+	}
+	if err := writeAll(remote, input); err != nil {
+		return GuestDispatchResult{}, fmt.Errorf("write proxied guest input: %w", err)
+	}
+	if writer, ok := remote.(interface{ CloseWrite() error }); ok {
+		if err := writer.CloseWrite(); err != nil {
+			return GuestDispatchResult{}, fmt.Errorf("finish proxied guest input: %w", err)
+		}
+	}
+	output, err := io.ReadAll(io.LimitReader(remote, maximumGuestProxyBytes+1))
+	if err != nil || len(output) > maximumGuestProxyBytes {
+		return GuestDispatchResult{}, fmt.Errorf("read proxied guest output: %w", ErrCapabilityUnavailable)
+	}
+	if len(output) > 0 {
+		if _, err := fmt.Fprintf(connection, "PROXY_OUTPUT %s 0 %s %s\n", envelope.EnvelopeID, sandboxhostprotocol.Digest(output), base64.RawURLEncoding.EncodeToString(output)); err != nil {
+			return GuestDispatchResult{}, fmt.Errorf("write proxied guest output: %w", err)
+		}
+	}
+	if _, err := fmt.Fprintf(connection, "PROXY_RESULT SUCCEEDED %s\n", envelope.EnvelopeID); err != nil {
+		return GuestDispatchResult{}, fmt.Errorf("write proxied guest result: %w", err)
+	}
+	return readGuestDispatchResult(reader, envelope.EnvelopeID)
+}
+
 // Close tears down every in-flight private guest exchange before the Jailer
 // reaper terminates its process. Once closed, the channel cannot be reused.
 func (channel *UnixGuestControlChannel) Close(ctx context.Context) error {
@@ -251,10 +354,17 @@ func (channel *UnixGuestControlChannel) Close(ctx context.Context) error {
 	for connection := range channel.connections {
 		connections = append(connections, connection)
 	}
+	proxySessions := make([]*sandboxauthority.ProxySession, 0, len(channel.proxySessions))
+	for session := range channel.proxySessions {
+		proxySessions = append(proxySessions, session)
+	}
 	channel.mu.Unlock()
 	var closeErr error
 	for _, connection := range connections {
 		closeErr = joinGuestControlError(closeErr, connection.Close())
+	}
+	for _, session := range proxySessions {
+		closeErr = joinGuestControlError(closeErr, session.Close(ctx))
 	}
 	return closeErr
 }
@@ -344,6 +454,52 @@ func readGuestDispatchResult(reader *bufio.Reader, envelopeID string) (GuestDisp
 		}
 		return GuestDispatchResult{}, fmt.Errorf("read guest terminal result: %w", ErrCapabilityUnavailable)
 	}
+}
+
+func readGuestProxyOpen(reader *bufio.Reader) (sandboxauthority.ProxySessionRequest, error) {
+	line, err := readGuestControlResponse(reader)
+	if err != nil {
+		return sandboxauthority.ProxySessionRequest{}, err
+	}
+	fields := strings.Split(line, " ")
+	if len(fields) != 2 || fields[0] != "PROXY_OPEN" {
+		return sandboxauthority.ProxySessionRequest{}, fmt.Errorf("invalid guest proxy open")
+	}
+	frame, err := base64.RawURLEncoding.DecodeString(fields[1])
+	if err != nil {
+		return sandboxauthority.ProxySessionRequest{}, fmt.Errorf("decode guest proxy open: %w", err)
+	}
+	return DecodeGuestProxyOpen(frame)
+}
+
+func readGuestProxyData(reader *bufio.Reader, envelopeID string) ([]byte, error) {
+	line, err := readGuestControlResponse(reader)
+	if err != nil {
+		return nil, err
+	}
+	fields := strings.Split(line, " ")
+	if len(fields) != 3 || fields[0] != "PROXY_DATA" || fields[1] != envelopeID {
+		return nil, fmt.Errorf("invalid guest proxy data")
+	}
+	data, err := base64.RawURLEncoding.DecodeString(fields[2])
+	if err != nil || len(data) > maximumGuestProxyBytes {
+		return nil, fmt.Errorf("decode guest proxy data")
+	}
+	return data, nil
+}
+
+func writeAll(writer io.Writer, value []byte) error {
+	for len(value) > 0 {
+		written, err := writer.Write(value)
+		if err != nil {
+			return err
+		}
+		if written <= 0 {
+			return io.ErrShortWrite
+		}
+		value = value[written:]
+	}
+	return nil
 }
 
 func validGuestOutputStream(stream string) bool {

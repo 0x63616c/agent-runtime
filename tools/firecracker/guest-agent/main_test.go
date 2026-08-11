@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/0x63616c/agent-runtime/internal/firecracker"
+	"github.com/0x63616c/agent-runtime/internal/sandboxauthority"
 	"github.com/0x63616c/agent-runtime/internal/sandboxhostprotocol"
 )
 
@@ -187,6 +188,42 @@ func TestServeGuestControlAcknowledgesABoundedCancellationWithoutStartingWork(t 
 	}
 	if got, want := connection.String(), "OK sandbox-001 fixture-v1\nCANCELLED envelope-001\n"; got != want {
 		t.Fatalf("guest control response = %q, want %q", got, want)
+	}
+}
+
+func TestServeGuestControlRelaysOnlyTheSignedBoundedProxyOperation(t *testing.T) {
+	var serial bytes.Buffer
+	request := sandboxauthority.ProxySessionRequest{
+		SandboxID: "sandbox-001", ProcessID: "process-001", OperationID: "operation-001", VMID: "sandbox-001", FencingToken: 9,
+		Destination: sandboxauthority.EgressDestination{Domain: "api.example.invalid", Protocol: "tcp", Port: 443},
+	}
+	payload, err := json.Marshal(firecracker.GuestProxyPayload{Version: firecracker.GuestProxyOperationKind, Request: request, Input: []byte("request")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	envelope := sandboxhostprotocol.Envelope{EnvelopeID: "envelope-001", DeliveryID: "delivery-001", FencingToken: 9, SandboxID: "sandbox-001", ProcessID: "process-001", OperationID: "operation-001", OperationKind: firecracker.GuestProxyOperationKind, Payload: payload}
+	envelope.PayloadDigest = sandboxhostprotocol.Digest(payload)
+	authenticated, err := json.Marshal(envelope)
+	if err != nil {
+		t.Fatal(err)
+	}
+	frame, err := firecracker.EncodeAuthenticatedGuestDispatch(envelope, authenticated)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response := []byte("response")
+	open, err := firecracker.EncodeGuestProxyOpen(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	connection := &recordingGuestConnection{requests: strings.NewReader("CONNECT sandbox-001 fixture-v1\nPROXY " + base64.RawURLEncoding.EncodeToString(frame) + "\nPROXY_CONNECTED envelope-001\nPROXY_OUTPUT envelope-001 0 " + sandboxhostprotocol.Digest(response) + " " + base64.RawURLEncoding.EncodeToString(response) + "\nPROXY_RESULT SUCCEEDED envelope-001\n")}
+	listener := &recordingGuestListener{connection: connection}
+	if err := serveGuestControl("sandbox-001", "fixture-v1", &serial, func() (guestControlListener, error) { return listener, nil }, func(context.Context) error { return nil }); err != nil {
+		t.Fatalf("serveGuestControl() error = %v", err)
+	}
+	want := "OK sandbox-001 fixture-v1\nPROXY_OPEN " + base64.RawURLEncoding.EncodeToString(open) + "\nPROXY_DATA envelope-001 cmVxdWVzdA\nOUTPUT envelope-001 stdout 0 " + sandboxhostprotocol.Digest(response) + " " + base64.RawURLEncoding.EncodeToString(response) + "\nRESULT SUCCEEDED envelope-001\n"
+	if got := connection.String(); got != want {
+		t.Fatalf("guest proxy response = %q, want %q", got, want)
 	}
 }
 

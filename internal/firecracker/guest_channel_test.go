@@ -6,11 +6,15 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"io"
 	"net"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
+	"github.com/0x63616c/agent-runtime/internal/sandboxauthority"
 	"github.com/0x63616c/agent-runtime/internal/sandboxhostprotocol"
 )
 
@@ -186,6 +190,194 @@ func TestGuestDispatchResultRefusesTamperedOrOutOfOrderOutputBeforeTerminalState
 	}
 }
 
+func TestUnixGuestControlChannelRelaysOnlyTheSignedLeaseBoundProxyRequest(t *testing.T) {
+	now := time.Date(2026, 8, 10, 0, 0, 0, 0, time.UTC)
+	request := sandboxauthority.ProxySessionRequest{
+		SandboxID: "sandbox-001", ProcessID: "process-001", OperationID: "operation-001", VMID: "sandbox-001", FencingToken: 9,
+		Destination: sandboxauthority.EgressDestination{Domain: "api.example.invalid", Protocol: "tcp", Port: 443},
+	}
+	payload, err := json.Marshal(GuestProxyPayload{Version: GuestProxyOperationKind, Request: request, Input: []byte("request")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	envelope := sandboxhostprotocol.Envelope{EnvelopeID: "envelope-001", DeliveryID: "delivery-001", FencingToken: 9, SandboxID: "sandbox-001", ProcessID: "process-001", OperationID: "operation-001", OperationKind: GuestProxyOperationKind, Payload: payload}
+	envelope.PayloadDigest = sandboxhostprotocol.Digest(payload)
+	authenticated, err := json.Marshal(envelope)
+	if err != nil {
+		t.Fatal(err)
+	}
+	remoteClient, remoteServer := net.Pipe()
+	remoteDone := make(chan struct{})
+	go func() {
+		defer close(remoteDone)
+		defer remoteServer.Close()
+		got := make([]byte, len("request"))
+		if _, err := io.ReadFull(remoteServer, got); err != nil || string(got) != "request" {
+			return
+		}
+		_, _ = remoteServer.Write([]byte("response"))
+	}()
+	dialer := &guestChannelDialer{handler: func(connection net.Conn) {
+		defer connection.Close()
+		reader := bufio.NewReader(connection)
+		if line := guestChannelTestReadLine(t, reader); line != "CONNECT sandbox-001 fixture-v1" {
+			t.Errorf("CONNECT = %q", line)
+			return
+		}
+		_, _ = connection.Write([]byte("OK sandbox-001 fixture-v1\n"))
+		fields := strings.Fields(guestChannelTestReadLine(t, reader))
+		if len(fields) != 2 || fields[0] != "PROXY" {
+			t.Errorf("operation = %v, want PROXY", fields)
+			return
+		}
+		frame, decodeErr := base64.RawURLEncoding.DecodeString(fields[1])
+		if decodeErr != nil {
+			t.Errorf("decode proxy frame: %v", decodeErr)
+			return
+		}
+		gotEnvelope, _, decodeErr := DecodeAuthenticatedGuestDispatch(frame)
+		if decodeErr != nil || gotEnvelope.EnvelopeID != envelope.EnvelopeID {
+			t.Errorf("DecodeAuthenticatedGuestDispatch() = %#v, %v", gotEnvelope, decodeErr)
+			return
+		}
+		open, encodeErr := EncodeGuestProxyOpen(request)
+		if encodeErr != nil {
+			t.Errorf("EncodeGuestProxyOpen() error = %v", encodeErr)
+			return
+		}
+		_, _ = fmt.Fprintf(connection, "PROXY_OPEN %s\n", base64.RawURLEncoding.EncodeToString(open))
+		if line := guestChannelTestReadLine(t, reader); line != "PROXY_CONNECTED envelope-001" {
+			t.Errorf("connected = %q", line)
+			return
+		}
+		if _, err := connection.Write([]byte("PROXY_DATA envelope-001 cmVxdWVzdA\n")); err != nil {
+			t.Errorf("write proxy data: %v", err)
+			return
+		}
+		output := []byte("response")
+		if line := guestChannelTestReadLine(t, reader); line != "PROXY_OUTPUT envelope-001 0 "+sandboxhostprotocol.Digest(output)+" "+base64.RawURLEncoding.EncodeToString(output) {
+			t.Errorf("proxy output = %q", line)
+			return
+		}
+		if line := guestChannelTestReadLine(t, reader); line != "PROXY_RESULT SUCCEEDED envelope-001" {
+			t.Errorf("proxy result = %q", line)
+			return
+		}
+		_, _ = fmt.Fprintf(connection, "OUTPUT envelope-001 stdout 0 %s %s\n", sandboxhostprotocol.Digest(output), base64.RawURLEncoding.EncodeToString(output))
+		_, _ = connection.Write([]byte("RESULT SUCCEEDED envelope-001\n"))
+	}}
+	channel, err := NewUnixGuestControlChannel(dialer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := channel.BindGuestIdentity(context.Background(), "sandbox-001", "fixture-v1"); err != nil {
+		t.Fatal(err)
+	}
+	if err := channel.Bind(context.Background(), "/srv/jailer/sandbox-001/root/run/firecracker.vsock"); err != nil {
+		t.Fatal(err)
+	}
+	lease := sandboxauthority.EgressLease{Principal: "principal-001", SandboxID: "sandbox-001", ProcessID: "process-001", OperationID: "operation-001", ExpiresAt: now.Add(time.Minute), Rules: []sandboxauthority.EgressRule{{Domain: "api.example.invalid", Protocol: "tcp", Ports: []sandboxauthority.PortRange{{First: 443, Last: 443}}}}}
+	session, err := sandboxauthority.NewProxySession(lease, "sandbox-001", 9, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	result, err := channel.ProxyAuthenticated(ctx, envelope, authenticated, session, now, guestChannelResolver("8.8.8.8"), guestChannelDialerFunc(func(context.Context, string, string) (net.Conn, error) { return remoteClient, nil }))
+	if err != nil || result.State != "SUCCEEDED" || len(result.Outputs) != 1 || string(result.Outputs[0].Data) != "response" {
+		t.Fatalf("ProxyAuthenticated() = (%#v, %v), want bounded relayed result", result, err)
+	}
+	<-remoteDone
+	dialer.wait()
+}
+
+func TestUnixGuestControlChannelRefusesSubstitutedProxyOpenBeforeDialing(t *testing.T) {
+	now := time.Date(2026, 8, 10, 0, 0, 0, 0, time.UTC)
+	request := sandboxauthority.ProxySessionRequest{SandboxID: "sandbox-001", ProcessID: "process-001", OperationID: "operation-001", VMID: "sandbox-001", FencingToken: 9, Destination: sandboxauthority.EgressDestination{Domain: "api.example.invalid", Protocol: "tcp", Port: 443}}
+	payload, _ := json.Marshal(GuestProxyPayload{Version: GuestProxyOperationKind, Request: request})
+	envelope := sandboxhostprotocol.Envelope{EnvelopeID: "envelope-001", DeliveryID: "delivery-001", FencingToken: 9, SandboxID: "sandbox-001", ProcessID: "process-001", OperationID: "operation-001", OperationKind: GuestProxyOperationKind, Payload: payload}
+	envelope.PayloadDigest = sandboxhostprotocol.Digest(payload)
+	authenticated, _ := json.Marshal(envelope)
+	dialer := &guestChannelDialer{handler: func(connection net.Conn) {
+		defer connection.Close()
+		reader := bufio.NewReader(connection)
+		_ = guestChannelTestReadLine(t, reader)
+		_, _ = connection.Write([]byte("OK sandbox-001 fixture-v1\n"))
+		_ = guestChannelTestReadLine(t, reader)
+		request.FencingToken++
+		open, _ := EncodeGuestProxyOpen(request)
+		_, _ = fmt.Fprintf(connection, "PROXY_OPEN %s\n", base64.RawURLEncoding.EncodeToString(open))
+	}}
+	channel, _ := NewUnixGuestControlChannel(dialer)
+	_ = channel.BindGuestIdentity(context.Background(), "sandbox-001", "fixture-v1")
+	_ = channel.Bind(context.Background(), "/srv/jailer/sandbox-001/root/run/firecracker.vsock")
+	lease := sandboxauthority.EgressLease{Principal: "principal-001", SandboxID: "sandbox-001", ProcessID: "process-001", OperationID: "operation-001", ExpiresAt: now.Add(time.Minute), Rules: []sandboxauthority.EgressRule{{Domain: "api.example.invalid", Protocol: "tcp", Ports: []sandboxauthority.PortRange{{First: 443, Last: 443}}}}}
+	session, _ := sandboxauthority.NewProxySession(lease, "sandbox-001", 9, now)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if _, err := channel.ProxyAuthenticated(ctx, envelope, authenticated, session, now, guestChannelResolver("8.8.8.8"), guestChannelDialerFunc(func(context.Context, string, string) (net.Conn, error) {
+		t.Fatal("dialled substituted proxy request")
+		return nil, nil
+	})); !errors.Is(err, ErrCapabilityUnavailable) {
+		t.Fatalf("ProxyAuthenticated() error = %v, want capability unavailable", err)
+	}
+	dialer.wait()
+}
+
+func TestUnixGuestControlChannelReaperClosesTheBoundProxySession(t *testing.T) {
+	now := time.Date(2026, 8, 10, 0, 0, 0, 0, time.UTC)
+	request := sandboxauthority.ProxySessionRequest{SandboxID: "sandbox-001", ProcessID: "process-001", OperationID: "operation-001", VMID: "sandbox-001", FencingToken: 9, Destination: sandboxauthority.EgressDestination{Domain: "api.example.invalid", Protocol: "tcp", Port: 443}}
+	payload, _ := json.Marshal(GuestProxyPayload{Version: GuestProxyOperationKind, Request: request})
+	envelope := sandboxhostprotocol.Envelope{EnvelopeID: "envelope-001", DeliveryID: "delivery-001", FencingToken: 9, SandboxID: "sandbox-001", ProcessID: "process-001", OperationID: "operation-001", OperationKind: GuestProxyOperationKind, Payload: payload}
+	envelope.PayloadDigest = sandboxhostprotocol.Digest(payload)
+	authenticated, _ := json.Marshal(envelope)
+	remoteClient, remoteServer := net.Pipe()
+	remoteClosed := make(chan error, 1)
+	go func() {
+		_, err := remoteServer.Read(make([]byte, 1))
+		remoteClosed <- err
+		_ = remoteServer.Close()
+	}()
+	connected := make(chan struct{})
+	dialer := &guestChannelDialer{handler: func(connection net.Conn) {
+		defer connection.Close()
+		reader := bufio.NewReader(connection)
+		_ = guestChannelTestReadLine(t, reader)
+		_, _ = connection.Write([]byte("OK sandbox-001 fixture-v1\n"))
+		_ = guestChannelTestReadLine(t, reader)
+		open, _ := EncodeGuestProxyOpen(request)
+		_, _ = fmt.Fprintf(connection, "PROXY_OPEN %s\n", base64.RawURLEncoding.EncodeToString(open))
+		if line := guestChannelTestReadLine(t, reader); line != "PROXY_CONNECTED envelope-001" {
+			return
+		}
+		close(connected)
+		_, _ = reader.ReadByte()
+	}}
+	channel, _ := NewUnixGuestControlChannel(dialer)
+	_ = channel.BindGuestIdentity(context.Background(), "sandbox-001", "fixture-v1")
+	_ = channel.Bind(context.Background(), "/srv/jailer/sandbox-001/root/run/firecracker.vsock")
+	lease := sandboxauthority.EgressLease{Principal: "principal-001", SandboxID: "sandbox-001", ProcessID: "process-001", OperationID: "operation-001", ExpiresAt: now.Add(time.Minute), Rules: []sandboxauthority.EgressRule{{Domain: "api.example.invalid", Protocol: "tcp", Ports: []sandboxauthority.PortRange{{First: 443, Last: 443}}}}}
+	session, _ := sandboxauthority.NewProxySession(lease, "sandbox-001", 9, now)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	result := make(chan error, 1)
+	go func() {
+		_, err := channel.ProxyAuthenticated(ctx, envelope, authenticated, session, now, guestChannelResolver("8.8.8.8"), guestChannelDialerFunc(func(context.Context, string, string) (net.Conn, error) { return remoteClient, nil }))
+		result <- err
+	}()
+	<-connected
+	if err := channel.Close(context.Background()); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	if err := <-result; err == nil {
+		t.Fatal("ProxyAuthenticated() completed after reaper close")
+	}
+	if err := <-remoteClosed; err == nil {
+		t.Fatal("reaper left the outbound proxy connection open")
+	}
+	dialer.wait()
+}
+
 type guestChannelDialer struct {
 	mu      sync.Mutex
 	calls   []string
@@ -226,4 +418,16 @@ func guestChannelTestReadLine(t *testing.T, reader *bufio.Reader) string {
 		return ""
 	}
 	return strings.TrimSuffix(line, "\n")
+}
+
+type guestChannelResolver string
+
+func (resolver guestChannelResolver) Resolve(context.Context, string) ([]net.IPAddr, error) {
+	return []net.IPAddr{{IP: net.ParseIP(string(resolver))}}, nil
+}
+
+type guestChannelDialerFunc func(context.Context, string, string) (net.Conn, error)
+
+func (dialer guestChannelDialerFunc) DialContext(ctx context.Context, network, address string) (net.Conn, error) {
+	return dialer(ctx, network, address)
 }
