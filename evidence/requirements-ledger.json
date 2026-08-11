@@ -438,8 +438,8 @@
       "status": "completed",
       "evidence": [
         {
-          "revision": "3c3de94a8d1218b5d0dbabccb1780da77acbb92d",
-          "utc_time": "2026-08-11T14:17:08Z",
+          "revision": "104b91cd35bffcc8ab2e2670051c63d25095bfab",
+          "utc_time": "2026-08-11T14:32:49Z",
           "proof_level": "local_tilt_e2e",
           "command_id": "m8-research-dossier-local-tilt-e2e",
           "artifact_ref": "m8-research-dossier-local-tilt-e2e",
