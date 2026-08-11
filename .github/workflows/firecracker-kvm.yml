@@ -11,7 +11,7 @@ permissions:
 
 jobs:
   smoke:
-    name: protected-linux-kvm-smoke
+    name: protected-linux-kvm-preflight
     runs-on: [self-hosted, linux, x64, kvm, firecracker-protected]
     environment: firecracker-kvm
     timeout-minutes: 15
@@ -29,7 +29,7 @@ jobs:
         uses: extractions/setup-just@53165ef7e734c5c07cb06b3c8e7b647c5aa16db3 # v4
         with:
           just-version: 1.58.0
-      - name: Run fail-closed KVM integration harness
+      - name: Run fail-closed KVM preflight
         env:
           FIRECRACKER_RUNNER_CONTRACT: protected-linux-kvm-v1
         run: just firecracker-integration evidence/firecracker-kvm-report.json

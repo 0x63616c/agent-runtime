@@ -8,7 +8,9 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
+	"github.com/0x63616c/agent-runtime/internal/sandboxauthority"
 	"github.com/0x63616c/agent-runtime/internal/sandboxhostprotocol"
 	"github.com/0x63616c/agent-runtime/sandbox"
 )
@@ -116,6 +118,14 @@ type AuthenticatedGuestResultChannel interface {
 type AuthenticatedGuestSecretChannel interface {
 	AuthenticatedGuestResultChannel
 	DispatchAuthenticatedSecret(context.Context, sandboxhostprotocol.Envelope, []byte, *SecretExecutionAuthority, sandboxhostprotocol.GuestOutputEmitter) error
+}
+
+// AuthenticatedGuestProxyChannel is the private host-controlled egress
+// extension. The host creates the exact lease session and owns DNS plus dial;
+// the guest can neither substitute those dependencies nor open a tunnel.
+type AuthenticatedGuestProxyChannel interface {
+	AuthenticatedGuestResultChannel
+	ProxyAuthenticated(context.Context, sandboxhostprotocol.Envelope, []byte, *sandboxauthority.ProxySession, time.Time, sandboxauthority.Resolver, sandboxauthority.Dialer) (GuestDispatchResult, error)
 }
 
 // LinuxJailerHost is the Linux/KVM-only SmokeHost adapter composed from real host ports.
@@ -230,6 +240,33 @@ func (host *LinuxJailerHost) DispatchAuthenticatedSecret(ctx context.Context, en
 		return fmt.Errorf("%w: certified secret guest channel is not composed", ErrCapabilityUnavailable)
 	}
 	return channel.DispatchAuthenticatedSecret(ctx, envelope, authenticatedEnvelope, authority, emit)
+}
+
+// DispatchAuthenticatedProxy is the only future egress composition door. It
+// creates one exact lease/fence session after host control authentication and
+// remains unavailable until the no-route profile has protected evidence.
+func (host *LinuxJailerHost) DispatchAuthenticatedProxy(ctx context.Context, envelope sandboxhostprotocol.Envelope, authenticatedEnvelope []byte, authority *ProxyExecutionAuthority) (GuestDispatchResult, error) {
+	if err := contextError(ctx); err != nil {
+		return GuestDispatchResult{}, err
+	}
+	if host == nil || authority == nil || len(authenticatedEnvelope) == 0 || envelope.OperationKind != GuestProxyOperationKind || envelope.HostID == "" || envelope.AssignmentID == "" || envelope.FencingToken == 0 || envelope.CapabilityDigest == "" {
+		return GuestDispatchResult{}, fmt.Errorf("%w: authenticated fenced proxy command is required", ErrCapabilityUnavailable)
+	}
+	host.mu.Lock()
+	launched, cleaning, plan, guest := host.launched, host.cleaning || host.cleaned, cloneLinuxJailerPlan(host.plan), host.Guest
+	host.mu.Unlock()
+	if !launched || cleaning || !validCompiledPlan(plan) || envelope.SandboxID != plan.VMID() || sandbox.Digest(envelope.CapabilityDigest) != plan.Capabilities().Digest || firecrackerProfilesUnavailable(plan.Capabilities()) {
+		return GuestDispatchResult{}, fmt.Errorf("%w: certified mandatory-proxy profile is unavailable", ErrCapabilityUnavailable)
+	}
+	channel, ok := guest.(AuthenticatedGuestProxyChannel)
+	if !ok {
+		return GuestDispatchResult{}, fmt.Errorf("%w: certified proxy guest channel is not composed", ErrCapabilityUnavailable)
+	}
+	session, err := authority.Begin(envelope)
+	if err != nil {
+		return GuestDispatchResult{}, err
+	}
+	return channel.ProxyAuthenticated(ctx, envelope, authenticatedEnvelope, session, authority.now(), authority.resolve(), authority.dial())
 }
 
 // CancelDispatch forwards a lease-fenced cancellation only to the exact

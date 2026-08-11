@@ -16,6 +16,7 @@ import (
 type HostProcessExecutor struct {
 	Host    *LinuxJailerHost
 	Secrets *SecretExecutionAuthority
+	Egress  *ProxyExecutionAuthority
 }
 
 // Execute hands an already-verified envelope to the sole Firecracker guest-dispatch gate.
@@ -71,6 +72,27 @@ func (executor HostProcessExecutor) ExecuteAuthenticatedWithOutput(ctx context.C
 			return fmt.Errorf("execute authenticated Firecracker secret command: %w", ErrCapabilityUnavailable)
 		}
 		return executor.Host.DispatchAuthenticatedSecret(ctx, envelope, authenticatedEnvelope, executor.Secrets, emit)
+	}
+	if envelope.OperationKind == GuestProxyOperationKind {
+		if executor.Egress == nil {
+			return fmt.Errorf("execute authenticated Firecracker guest proxy: %w", ErrCapabilityUnavailable)
+		}
+		result, err := executor.Host.DispatchAuthenticatedProxy(ctx, envelope, authenticatedEnvelope, executor.Egress)
+		if err != nil {
+			return err
+		}
+		for _, output := range result.Outputs {
+			if output.Stream != "stdout" && output.Stream != "stderr" {
+				continue
+			}
+			if err := emit(ctx, sandboxhostprotocol.GuestOutput{Stream: output.Stream, Sequence: output.Sequence, Data: append([]byte(nil), output.Data...)}); err != nil {
+				return err
+			}
+		}
+		if result.State == "SUCCEEDED" {
+			return nil
+		}
+		return fmt.Errorf("authenticated Firecracker guest proxy result: %w", ErrCapabilityUnavailable)
 	}
 	result, err := executor.Host.DispatchAuthenticated(ctx, envelope, authenticatedEnvelope)
 	if err != nil {
