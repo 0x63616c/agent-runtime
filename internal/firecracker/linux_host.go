@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/0x63616c/agent-runtime/internal/sandboxhostprotocol"
 	"github.com/0x63616c/agent-runtime/sandbox"
 )
 
@@ -83,6 +84,15 @@ type GuestControlChannel interface {
 	Close(context.Context) error
 }
 
+// GuestDispatchChannel is the private guest-operation extension point. A
+// production implementation may be composed only after its profile's exact
+// capability has been certified; this repository currently binds no such
+// implementation.
+type GuestDispatchChannel interface {
+	GuestControlChannel
+	ExecuteDispatch(context.Context, sandboxhostprotocol.Envelope) error
+}
+
 // LinuxJailerHost is the Linux/KVM-only SmokeHost adapter composed from real host ports.
 type LinuxJailerHost struct {
 	PreflightState KVMPreflight
@@ -115,6 +125,41 @@ type LinuxJailerHost struct {
 	cleanupDone    chan struct{}
 	cleanupProof   CleanupProof
 	cleanupErr     error
+}
+
+// ExecuteDispatch is the only Firecracker handoff for an already authenticated
+// and fenced host envelope. It fails closed while every Firecracker authority
+// descriptor remains unavailable and never lets a guest select capabilities.
+func (host *LinuxJailerHost) ExecuteDispatch(ctx context.Context, envelope sandboxhostprotocol.Envelope) error {
+	if err := contextError(ctx); err != nil {
+		return err
+	}
+	if host == nil || envelope.HostID == "" || envelope.AssignmentID == "" || envelope.FencingToken == 0 || envelope.CapabilityDigest == "" {
+		return fmt.Errorf("%w: authenticated fenced host envelope is required", ErrCapabilityUnavailable)
+	}
+	host.mu.Lock()
+	launched, cleaning, plan, guest := host.launched, host.cleaning || host.cleaned, cloneLinuxJailerPlan(host.plan), host.Guest
+	host.mu.Unlock()
+	if !launched || cleaning || !validCompiledPlan(plan) || sandbox.Digest(envelope.CapabilityDigest) != plan.Capabilities().Digest {
+		return fmt.Errorf("%w: launch state and exact capability digest are required", ErrCapabilityUnavailable)
+	}
+	if firecrackerProfilesUnavailable(plan.Capabilities()) {
+		return fmt.Errorf("%w: no certified Firecracker guest authority profile is active", ErrCapabilityUnavailable)
+	}
+	dispatch, ok := guest.(GuestDispatchChannel)
+	if !ok {
+		return fmt.Errorf("%w: certified guest dispatch channel is not composed", ErrCapabilityUnavailable)
+	}
+	return dispatch.ExecuteDispatch(ctx, envelope)
+}
+
+func firecrackerProfilesUnavailable(snapshot sandbox.CapabilitySnapshot) bool {
+	for _, descriptor := range []sandbox.CapabilityDescriptor{snapshot.Isolation, snapshot.Transfer, snapshot.Mounts, snapshot.Volumes, snapshot.Snapshots, snapshot.Egress, snapshot.Secrets} {
+		if descriptor.State != sandbox.CapabilityUnavailable {
+			return false
+		}
+	}
+	return true
 }
 
 type firecrackerMachineConfig struct {

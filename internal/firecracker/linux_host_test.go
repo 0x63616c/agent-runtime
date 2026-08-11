@@ -8,6 +8,8 @@ import (
 	"reflect"
 	"syscall"
 	"testing"
+
+	"github.com/0x63616c/agent-runtime/internal/sandboxhostprotocol"
 )
 
 func TestExpectedJailRootIncludesTheJailerExecutableBaseName(t *testing.T) {
@@ -82,6 +84,15 @@ func TestLinuxJailerHostOrdersTheNoNICRESTLaunchAndGuestControlPorts(t *testing.
 	}
 	if got, want := processes.process.steps, []string{"terminate", "wait", "cleanup"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("process steps = %v, want %v", got, want)
+	}
+}
+
+func TestLinuxJailerHostRefusesAuthenticatedDispatchUntilACertifiedProfileExists(t *testing.T) {
+	plan := mustCompile(t, validProfile())
+	host := newLinuxJailerHost(plan, verifiedPlanFixtures(plan), &recordingJailerStarter{}, &recordingFirecrackerHTTP{}, &recordingGuestChannel{})
+	envelope := sandboxhostprotocol.Envelope{HostID: "host_01", AssignmentID: "assignment_01", FencingToken: 1, CapabilityDigest: string(plan.Capabilities().Digest)}
+	if err := host.ExecuteDispatch(context.Background(), envelope); !errors.Is(err, ErrCapabilityUnavailable) {
+		t.Fatalf("ExecuteDispatch() = %v, want unavailable before any guest authority profile", err)
 	}
 }
 
