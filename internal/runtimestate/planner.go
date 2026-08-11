@@ -313,6 +313,8 @@ func (planner *RuntimeStatePlanner) Plan(ctx context.Context, prior RuntimeState
 		result, effects, err = planner.revokeCapabilityGrant(&state, mutation.mutation.receipt, command, now)
 	case ExpireCapabilityGrantCommand:
 		result, effects, err = planner.expireCapabilityGrant(&state, mutation.mutation.receipt, command, now)
+	case DenyToolAdmissionCommand:
+		result, effects, err = planner.denyToolAdmission(&state, mutation.mutation.receipt, command, now)
 	case BeginToolExecutionCommand:
 		result, effects, err = planner.beginToolExecution(&state, mutation.mutation.receipt, command, now)
 	case RecordToolExecutionOutcomeCommand:
@@ -779,6 +781,14 @@ func (planner *RuntimeStatePlanner) expireCapabilityGrant(state *RuntimeState, b
 		return PlanResult{}, effects, err
 	}
 	return PlanResult{}, EffectSet{}, ErrNotFoundOrDenied
+}
+
+func (planner *RuntimeStatePlanner) denyToolAdmission(state *RuntimeState, binding ReceiptBinding, c DenyToolAdmissionCommand, now time.Time) (PlanResult, EffectSet, error) {
+	if findTurn(state, binding.Scope, c.SessionID, c.TurnID) < 0 {
+		return PlanResult{}, EffectSet{}, ErrNotFoundOrDenied
+	}
+	effects, err := planner.auditOnly(state, binding, "tool.admission_denied", c.SessionID, c.TurnID, now)
+	return PlanResult{}, effects, err
 }
 
 func (planner *RuntimeStatePlanner) beginToolExecution(state *RuntimeState, binding ReceiptBinding, c BeginToolExecutionCommand, now time.Time) (PlanResult, EffectSet, error) {

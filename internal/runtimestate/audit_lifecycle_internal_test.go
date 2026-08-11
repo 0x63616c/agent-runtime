@@ -6,7 +6,7 @@ func TestEveryClosedMutationVocabularyHasDurableAuditLifecyclePhases(t *testing.
 	commands := []CommandKind{
 		CommandRegisterAgentRevision, CommandRegisterPolicyRevision, CommandCreateSession,
 		CommandAdmitInput, CommandRegisterArtifact, CommandAppendConversation,
-		CommandRecordToolIntent, CommandRequestApproval, CommandDecideApproval, CommandRevokeCapabilityGrant, CommandExpireCapabilityGrant,
+		CommandRecordToolIntent, CommandRequestApproval, CommandDecideApproval, CommandRevokeCapabilityGrant, CommandExpireCapabilityGrant, CommandDenyToolAdmission,
 		CommandConsumeCapabilityGrant, CommandBeginToolExecution, CommandRecordToolOutcome,
 		CommandBeginInvocation, CommandRecordOutcome, CommandSettleTurn, CommandCancelTurn,
 		CommandCloseSession, CommandClaimOutbox, CommandAcknowledgeOutbox,

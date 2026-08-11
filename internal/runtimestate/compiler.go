@@ -30,6 +30,7 @@ const (
 	CommandDecideApproval         CommandKind = "decide_approval"
 	CommandRevokeCapabilityGrant  CommandKind = "revoke_capability_grant"
 	CommandExpireCapabilityGrant  CommandKind = "expire_capability_grant"
+	CommandDenyToolAdmission      CommandKind = "deny_tool_admission"
 	CommandConsumeCapabilityGrant CommandKind = "consume_capability_grant"
 	CommandBeginToolExecution     CommandKind = "begin_tool_execution"
 	CommandRecordToolOutcome      CommandKind = "record_tool_execution_outcome"
@@ -48,6 +49,16 @@ type ReceiptBinding struct {
 	IdempotencyKey string
 	Command        CommandKind
 	RequestDigest  RequestDigest
+}
+
+// CompileDenyToolAdmission records a non-enumerating broker refusal after the
+// model handoff has already been normalized. It never retains a descriptor.
+func (compiler *Compiler) CompileDenyToolAdmission(command DenyToolAdmissionCommand) (CompiledMutation, error) {
+	command = command.Owned()
+	if err := validateWorkerCommand(command.Scope, command.SessionID, command.TurnID, OperationID(command.ToolCallID)); err != nil || !validOpaque(command.ToolCallID, 128) {
+		return CompiledMutation{}, errors.New("compile deny tool admission: invalid command")
+	}
+	return compiler.compile(CommandDenyToolAdmission, command.Scope, command.IdempotencyKey, command, command)
 }
 
 // CompiledMutation is an opaque canonical command accepted by RuntimeStatePlanner.
