@@ -22,18 +22,19 @@ const (
 	// InputEnvelopeMediaTypeV1 identifies the canonical identity-free Input envelope.
 	InputEnvelopeMediaTypeV1 = "application/vnd.agent-runtime.input+cbor;version=1"
 	// ConversationEntryMediaTypeV1 identifies opaque immutable semantic context.
-	ConversationEntryMediaTypeV1  = "application/vnd.agent-runtime.conversation-entry+octets;version=1"
-	maximumSpecificationBytes     = 1 << 20
-	maximumInputEnvelopeBytes     = 2<<20 + 4<<10
-	maximumArtifactBytes          = 8 << 20
-	maximumArtifactMediaTypeBytes = 255
-	maximumConversationEntryBytes = 2 << 20
-	maximumInstructionsBytes      = 256 * 1024
-	maximumToolDescriptionBytes   = 4096
-	maximumNameBytes              = 128
-	maximumTools                  = 64
-	maximumTenantIDBytes          = 128
-	maximumContentRootBytes       = 128
+	ConversationEntryMediaTypeV1    = "application/vnd.agent-runtime.conversation-entry+octets;version=1"
+	ToolActionDescriptorMediaTypeV1 = "application/vnd.agent-runtime.tool-action+octets;version=1"
+	maximumSpecificationBytes       = 1 << 20
+	maximumInputEnvelopeBytes       = 2<<20 + 4<<10
+	maximumArtifactBytes            = 8 << 20
+	maximumArtifactMediaTypeBytes   = 255
+	maximumConversationEntryBytes   = 2 << 20
+	maximumInstructionsBytes        = 256 * 1024
+	maximumToolDescriptionBytes     = 4096
+	maximumNameBytes                = 128
+	maximumTools                    = 64
+	maximumTenantIDBytes            = 128
+	maximumContentRootBytes         = 128
 )
 
 var (
@@ -116,6 +117,10 @@ type ConversationEntryCommitment struct {
 	Tenant    TenantID
 	Reference Reference
 }
+type ToolActionDescriptorCommitment struct {
+	Tenant    TenantID
+	Reference Reference
+}
 
 // ContentHandoff is an opaque, in-process proof that Store wrote and read back one tenant-bound immutable content object.
 //
@@ -137,6 +142,7 @@ const (
 	contentKindInputEnvelope
 	contentKindArtifact
 	contentKindConversationEntry
+	contentKindToolActionDescriptor
 )
 
 // ContentHandoffValidator validates opaque staged-content commitments before a runtime state command persists their metadata.
@@ -145,6 +151,7 @@ type ContentHandoffValidator interface {
 	ValidateInputEnvelopeHandoff(ContentHandoff) (InputEnvelopeCommitment, error)
 	ValidateArtifactHandoff(ContentHandoff) (ArtifactCommitment, error)
 	ValidateConversationEntryHandoff(ContentHandoff) (ConversationEntryCommitment, error)
+	ValidateToolActionDescriptorHandoff(ContentHandoff) (ToolActionDescriptorCommitment, error)
 }
 
 // ImmutableObjectStore conditionally stores and bounded-reads runtime-owned immutable bytes.
@@ -539,6 +546,25 @@ func (store *Store) StageConversationEntry(ctx context.Context, tenant TenantID,
 		return ContentHandoff{}, err
 	}
 	return ContentHandoff{issuer: store, tenant: tenant, reference: reference, kind: contentKindConversationEntry}, nil
+}
+
+// StageToolActionDescriptor stores one opaque immutable, adapter-authorized tool action descriptor.
+func (store *Store) StageToolActionDescriptor(ctx context.Context, tenant TenantID, body []byte) (ContentHandoff, error) {
+	if store == nil || !validTenantID(tenant) || len(body) == 0 || len(body) > maximumConversationEntryBytes {
+		return ContentHandoff{}, ErrNotFoundOrDenied
+	}
+	copyBody := append([]byte(nil), body...)
+	reference := referenceForMediaType(copyBody, ToolActionDescriptorMediaTypeV1)
+	if err := store.putVerified(ctx, tenant, reference, copyBody, "stage tool action descriptor"); err != nil {
+		return ContentHandoff{}, err
+	}
+	return ContentHandoff{issuer: store, tenant: tenant, reference: reference, kind: contentKindToolActionDescriptor}, nil
+}
+func (store *Store) ValidateToolActionDescriptorHandoff(h ContentHandoff) (ToolActionDescriptorCommitment, error) {
+	if store == nil || h.issuer != store || h.kind != contentKindToolActionDescriptor || !validTenantID(h.tenant) || h.reference.MediaType != ToolActionDescriptorMediaTypeV1 || h.reference.SizeBytes <= 0 || h.reference.SizeBytes > maximumConversationEntryBytes || !validDigest(h.reference.Digest) {
+		return ToolActionDescriptorCommitment{}, ErrNotFoundOrDenied
+	}
+	return ToolActionDescriptorCommitment{Tenant: h.tenant, Reference: h.reference}, nil
 }
 
 // ValidateConversationEntryHandoff returns only a tenant-bound immutable
