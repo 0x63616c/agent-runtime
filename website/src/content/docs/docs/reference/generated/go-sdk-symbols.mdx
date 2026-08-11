@@ -101,6 +101,7 @@ This index is derived only from the declared public `sdk/go` source files. It li
 | `const` | `EventInputAccepted` | EventInputAccepted reports durable idempotent Input admission. |
 | `type` | `EventKind` | EventKind identifies a stable Product-event vocabulary entry. |
 | `type` | `EventPage` | EventPage is one bounded replay page and its next opaque position. |
+| `const` | `EventProducerGap` | EventProducerGap reports that a producer outcome could not be recovered and the following terminal event is the durable finalization boundary. |
 | `const` | `EventSandboxOperationFinalized` | EventSandboxOperationFinalized reports that a sandbox-backed operation reached a durable terminal outcome. Backend handles remain private. |
 | `const` | `EventSessionClosing` | EventSessionClosing reports that no new Input is accepted while queued work drains. |
 | `const` | `EventSessionCompleted` | EventSessionCompleted reports a terminal drained Session. |

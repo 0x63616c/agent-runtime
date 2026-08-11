@@ -395,6 +395,9 @@ const (
 	EventTurnFailed EventKind = "turn.failed"
 	// EventTurnCancelled reports one terminal cancelled outcome.
 	EventTurnCancelled EventKind = "turn.cancelled"
+	// EventProducerGap reports that a producer outcome could not be recovered
+	// and the following terminal event is the durable finalization boundary.
+	EventProducerGap EventKind = "producer.gap"
 	// EventApprovalResolved reports a terminal approved, denied, or expired
 	// approval without exposing an action or capability value.
 	EventApprovalResolved EventKind = "approval.resolved"

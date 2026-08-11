@@ -85,6 +85,9 @@ func TestWorkerFinalizesNewAndRecoveredModelIntentsWithoutBlindReinvoke(t *testi
 			if len(state.Invocations) != 1 || state.Invocations[0].State != test.wantState || (test.wantState == runtimestate.InvocationSucceeded && state.Invocations[0].Result == nil) || (test.wantState == runtimestate.InvocationUncertain && (state.Invocations[0].Failure == nil || state.Invocations[0].Failure.Message != "model invocation outcome is uncertain")) || len(state.Turns) != 1 || state.Turns[0].TurnID != turn || state.Turns[0].State != test.wantTurn || state.Sessions[0].SessionID != session {
 				t.Fatalf("final durable model state = %#v", state)
 			}
+			if test.wantState == runtimestate.InvocationUncertain && (len(state.Events) < 2 || state.Events[len(state.Events)-2].Kind != agentruntime.EventProducerGap || state.Events[len(state.Events)-1].Kind != agentruntime.EventTurnFailed) {
+				t.Fatalf("uncertain producer events = %#v, want ordered explicit gap then finalization", state.Events)
+			}
 			if record := invocationOutbox(t, ctx, store, tenant); record.State != runtimestate.OutboxPublished {
 				t.Fatalf("invocation outbox = %#v, want acknowledged after finalization", record)
 			}

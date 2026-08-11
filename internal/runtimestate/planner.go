@@ -751,6 +751,12 @@ func (planner *RuntimeStatePlanner) settle(state *RuntimeState, binding ReceiptB
 	session.UpdatedAt = now
 	kind := terminalEvent(turn.State)
 	kinds := []agentruntime.EventKind{kind}
+	if command.Outcome.OperationID != "" {
+		invocation := state.Invocations[findInvocation(state, binding.Scope, command.SessionID, command.TurnID, command.Outcome.OperationID)]
+		if invocation.State == InvocationUncertain {
+			kinds = []agentruntime.EventKind{agentruntime.EventProducerGap, kind}
+		}
+	}
 	promoted := planner.promote(state, session.SessionID, now)
 	if promoted != nil {
 		kinds = append(kinds, agentruntime.EventTurnStarted)

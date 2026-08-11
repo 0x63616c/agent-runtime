@@ -191,7 +191,7 @@ func TestPublisherDerivesTemporalRoutesOnlyFromClaimedDurableOutbox(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	if final := settledPlan.State(); len(final.Invocations) != 1 || final.Invocations[0].State != runtimestate.InvocationUncertain || settledPlan.Result().Turn.State != agentruntime.TurnFailed || len(settledPlan.Effects().Events) != 1 || settledPlan.Effects().Events[0].Kind != agentruntime.EventTurnFailed {
+	if final := settledPlan.State(); len(final.Invocations) != 1 || final.Invocations[0].State != runtimestate.InvocationUncertain || settledPlan.Result().Turn.State != agentruntime.TurnFailed || len(settledPlan.Effects().Events) != 2 || settledPlan.Effects().Events[0].Kind != agentruntime.EventProducerGap || settledPlan.Effects().Events[1].Kind != agentruntime.EventTurnFailed {
 		t.Fatalf("producer-loss finalization = %#v / %#v, want retained uncertain invocation and terminal failed route", settledPlan.Result(), settledPlan.Effects())
 	}
 	temporal := &recordingPublisher{}

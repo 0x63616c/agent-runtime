@@ -13,7 +13,7 @@
     "ToolDefinition": {"required": ["name", "description"]},
     "Policy": {"required": ["name", "revision", "digest", "rules", "created_at"]},
     "PolicyRule": {"required": ["tool_name", "decision"], "enums": {"decision": ["denied", "requires_approval"]}},
-    "Event": {"required": ["id", "cursor", "sequence", "kind", "session_id", "occurred_at"], "enums": {"kind": ["session.created", "input.accepted", "turn.queued", "turn.started", "turn.succeeded", "turn.failed", "turn.cancelled", "approval.resolved", "sandbox_operation.finalized", "session.closing", "session.completed"]}},
+    "Event": {"required": ["id", "cursor", "sequence", "kind", "session_id", "occurred_at"], "enums": {"kind": ["session.created", "input.accepted", "turn.queued", "turn.started", "turn.succeeded", "turn.failed", "turn.cancelled", "producer.gap", "approval.resolved", "sandbox_operation.finalized", "session.closing", "session.completed"]}},
     "Failure": {"required": ["code", "message", "retryable"], "enums": {"code": ["invalid_input", "conflict", "not_found", "unavailable", "internal"]}}
   }
 }

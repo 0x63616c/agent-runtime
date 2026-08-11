@@ -6,6 +6,11 @@ requires each listed route, success status, required schema field, and closed
 enum member to remain available. Additive optional fields, routes, and enum
 members require an OpenAPI/SDK/docs update but may remain v1-compatible.
 
+For example, `producer.gap` is an additive Event vocabulary member. It is
+emitted before the terminal Event when a producer outcome cannot be recovered,
+so callers can inspect the durable terminal state rather than treating a
+missing live stream segment as success.
+
 Removing or renaming a route, required field, ID format, failure/event value,
 Agent/Policy/Tool field, or changing its meaning is breaking. It requires the
 next permitted semantic-version boundary, a new compatibility baseline, and a
