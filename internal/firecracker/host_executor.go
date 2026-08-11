@@ -19,6 +19,7 @@ type HostProcessExecutor struct {
 	Egress   *ProxyExecutionAuthority
 	Transfer *TransferExecutionAuthority
 	Restore  *SnapshotRestoreExecutionAuthority
+	Mount    *MountExecutionAuthority
 }
 
 // ExecuteAuthenticatedTransfer is the private control-to-host data-plane door.
@@ -38,6 +39,27 @@ func (executor HostProcessExecutor) ExecuteAuthenticatedSnapshotRestore(ctx cont
 		return TransferReceipt{}, fmt.Errorf("execute authenticated Firecracker snapshot restore: %w", ErrCapabilityUnavailable)
 	}
 	return executor.Host.DispatchAuthenticatedSnapshotRestore(ctx, envelope, authenticatedEnvelope, executor.Restore, emit)
+}
+
+// ExecuteAuthenticatedMount is the private host-control door for one exact
+// jailed sharing lease. LinuxJailerHost keeps it unavailable until the daemon
+// profile has protected Linux/KVM evidence.
+func (executor HostProcessExecutor) ExecuteAuthenticatedMount(ctx context.Context, envelope sandboxhostprotocol.Envelope, authenticatedEnvelope []byte, emit MountReceiptEmitter) (MountReceipt, error) {
+	if executor.Host == nil || executor.Mount == nil || emit == nil {
+		return MountReceipt{}, fmt.Errorf("execute authenticated Firecracker mount: %w", ErrCapabilityUnavailable)
+	}
+	return executor.Host.DispatchAuthenticatedMount(ctx, envelope, authenticatedEnvelope, executor.Mount, emit)
+}
+
+// ReapAuthenticatedMount lets the durable host/reaper owner converge an exact
+// prior mount command after cancellation, host loss, or a lost control ack.
+// It deliberately does not require an available profile: cleanup must remain
+// possible even when capability certification is withdrawn.
+func (executor HostProcessExecutor) ReapAuthenticatedMount(ctx context.Context, envelope sandboxhostprotocol.Envelope) error {
+	if executor.Host == nil || executor.Mount == nil {
+		return fmt.Errorf("reap authenticated Firecracker mount: %w", ErrCapabilityUnavailable)
+	}
+	return executor.Mount.Reap(ctx, envelope)
 }
 
 // Execute hands an already-verified envelope to the sole Firecracker guest-dispatch gate.
