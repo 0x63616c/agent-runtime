@@ -592,7 +592,17 @@
     },
     {
       "id": "HITL-004",
-      "status": "not_started"
+      "status": "completed",
+      "evidence": [
+        {
+          "revision": "c3174ec16fe1132b91a6c649c8a1156f7e6f4081",
+          "utc_time": "2026-08-11T21:35:05Z",
+          "proof_level": "integration",
+          "command_id": "m7-hitl004-approval-event-audit-postgres-minio",
+          "artifact_ref": "m7-approval-event-audit-postgres-minio",
+          "result": "passed"
+        }
+      ]
     },
     {
       "id": "HITL-005",
