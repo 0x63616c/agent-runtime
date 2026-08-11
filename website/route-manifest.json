@@ -18,8 +18,7 @@
     "/docs/reference/generated/source-inventory",
     "/docs/security/verified-boundaries",
     "/docs/help/publication-operations",
-    "/docs/examples",
-    "/docs/examples/research-dossier"
+    "/docs/examples"
   ],
   "routes": [
     {"route": "/", "output": "index.html", "contains": "Build agents that can survive the real world."},
@@ -28,7 +27,6 @@
     {"route": "/docs/build-and-run/local-stack", "output": "docs/build-and-run/local-stack/index.html", "source": "src/content/docs/docs/build-and-run/local-stack.mdx", "contains": "Isolated local Stack"},
     {"route": "/docs/concepts/runtime-language", "output": "docs/concepts/runtime-language/index.html", "source": "src/content/docs/docs/concepts/runtime-language.mdx", "contains": "Runtime language"},
     {"route": "/docs/examples", "output": "docs/examples/index.html", "source": "src/content/docs/docs/examples/index.mdx", "contains": "Examples"},
-    {"route": "/docs/examples/research-dossier", "output": "docs/examples/research-dossier/index.html", "source": "src/content/docs/docs/examples/research-dossier.mdx", "contains": "Research Dossier"},
     {"route": "/docs/help/publication-operations", "output": "docs/help/publication-operations/index.html", "source": "src/content/docs/docs/help/publication-operations.mdx", "contains": "Publication operations"},
     {"route": "/docs/reference/overview", "output": "docs/reference/overview/index.html", "source": "src/content/docs/docs/reference/overview.mdx", "contains": "Reference status"},
     {"route": "/docs/reference/runtime-go-contract", "output": "docs/reference/runtime-go-contract/index.html", "source": "src/content/docs/docs/reference/runtime-go-contract.mdx", "contains": "Runtime Go contract"},
