@@ -485,7 +485,17 @@
     },
     {
       "id": "HITL-006",
-      "status": "not_started"
+      "status": "completed",
+      "evidence": [
+        {
+          "revision": "e916a7e2e8297332986e83274d3b34495390601e",
+          "utc_time": "2026-08-11T18:43:00Z",
+          "proof_level": "integration",
+          "command_id": "m7-workspace-public-client-postgres-minio",
+          "artifact_ref": "m7-workspace-public-client-postgres-minio",
+          "result": "passed"
+        }
+      ]
     },
     {
       "id": "INF-001",
