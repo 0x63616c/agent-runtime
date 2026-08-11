@@ -95,6 +95,17 @@ func NewManager(resolver SecretResolver, sink SecretSink, audit SecretAudit) (*M
 	return &Manager{resolver: resolver, sink: sink, audit: audit, active: map[string]activeSecret{}, pending: map[string]struct{}{}}, nil
 }
 
+// WithSink creates an independent command lifecycle with the same external
+// resolver and audit owner but a different ephemeral delivery sink. It is
+// used only to bind one authenticated transport session; active secret state
+// is never shared between sessions.
+func (manager *Manager) WithSink(sink SecretSink) (*Manager, error) {
+	if manager == nil || sink == nil {
+		return nil, fmt.Errorf("bind command secret sink: resolver, sink, and audit are required")
+	}
+	return NewManager(manager.resolver, sink, manager.audit)
+}
+
 // Deliver resolves and injects one short-lived secret just before command start.
 func (manager *Manager) Deliver(ctx context.Context, request SecretRequest, now time.Time) error {
 	if err := ctx.Err(); err != nil {
@@ -230,6 +241,33 @@ func (manager *Manager) AbortBeforeStart(ctx context.Context, processID string) 
 	manager.mu.Unlock()
 	if err := manager.audit.RecordSecretDelivery(ctx, SecretAuditFact{Principal: active.request.Principal, SandboxID: active.request.SandboxID, ProcessID: active.request.ProcessID, OperationID: active.request.OperationID, Version: active.version, ExpiresAt: active.request.ExpiresAt.UTC(), Event: "aborted-before-start"}); err != nil {
 		return fmt.Errorf("abort command secret: audit unavailable")
+	}
+	return nil
+}
+
+// AbandonAfterLostContact overwrites the host's retained redaction bytes when
+// a started guest stops acknowledging the secret lifecycle. It deliberately
+// does not claim revocation: the caller must retain a durable reaper-required
+// record for the guest process tree before any later capability promotion.
+func (manager *Manager) AbandonAfterLostContact(ctx context.Context, processID string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if manager == nil {
+		return fmt.Errorf("abandon command secret: %w", ErrLifecycle)
+	}
+	manager.mu.Lock()
+	active, ok := manager.active[processID]
+	if ok {
+		zero(active.bytes)
+		delete(manager.active, processID)
+	}
+	manager.mu.Unlock()
+	if !ok {
+		return fmt.Errorf("abandon command secret: %w", ErrLifecycle)
+	}
+	if err := manager.audit.RecordSecretDelivery(ctx, SecretAuditFact{Principal: active.request.Principal, SandboxID: active.request.SandboxID, ProcessID: active.request.ProcessID, OperationID: active.request.OperationID, Version: active.version, ExpiresAt: active.request.ExpiresAt.UTC(), Event: "lost-contact-reaper-required"}); err != nil {
+		return fmt.Errorf("abandon command secret: audit unavailable")
 	}
 	return nil
 }

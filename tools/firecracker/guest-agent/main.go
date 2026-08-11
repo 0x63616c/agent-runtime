@@ -5,6 +5,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -44,6 +45,29 @@ type guestControlListener interface {
 	Accept() (guestControlConnection, error)
 	Close() error
 	SetDeadline(time.Time) error
+}
+
+// guestSecretExecutor is the protected guest-side counterpart to the bounded
+// host secret session. A real implementation may return available only after
+// it can deliver to the sealed FD runner and prove complete tree reaping.
+type guestSecretExecutor interface {
+	Available() bool
+	Deliver(context.Context, []byte) error
+	Run(context.Context, json.RawMessage) (guestCommandResult, error)
+	RevokeAfterTreeReap(context.Context) error
+}
+
+type unavailableGuestSecretExecutor struct{}
+
+func (unavailableGuestSecretExecutor) Available() bool { return false }
+func (unavailableGuestSecretExecutor) Deliver(context.Context, []byte) error {
+	return fmt.Errorf("guest secret executor is unavailable")
+}
+func (unavailableGuestSecretExecutor) Run(context.Context, json.RawMessage) (guestCommandResult, error) {
+	return guestCommandResult{}, fmt.Errorf("guest secret executor is unavailable")
+}
+func (unavailableGuestSecretExecutor) RevokeAfterTreeReap(context.Context) error {
+	return fmt.Errorf("guest secret executor is unavailable")
 }
 
 func main() {
@@ -203,6 +227,21 @@ func serveGuestOperation(vmID string, connection guestControlConnection, frames 
 		}
 		return nil
 	}
+	if len(operation) == 2 && operation[0] == "SECRET_DISPATCH" {
+		frame, err := base64.RawURLEncoding.DecodeString(operation[1])
+		if err != nil {
+			return fmt.Errorf("invalid guest secret dispatch encoding")
+		}
+		envelope, _, err := firecracker.DecodeAuthenticatedGuestDispatch(frame)
+		if err != nil || envelope.SandboxID != vmID || envelope.EnvelopeID == "" || envelope.FencingToken == 0 || envelope.OperationKind != firecracker.GuestSecretCommandOperationKind {
+			return fmt.Errorf("invalid guest secret dispatch")
+		}
+		command, err := firecracker.DecodeGuestSecretCommand(envelope.Payload)
+		if err != nil || command.Secret.Principal != envelope.Principal || command.Secret.SandboxID != envelope.SandboxID || command.Secret.ProcessID != envelope.ProcessID || command.Secret.OperationID != envelope.OperationID || !command.Secret.ExpiresAt.Equal(envelope.ExpiresAt) {
+			return fmt.Errorf("invalid guest secret command")
+		}
+		return serveGuestSecretOperation(connection, frames, envelope, command, unavailableGuestSecretExecutor{})
+	}
 	if len(operation) == 2 && operation[0] == "PROXY" {
 		frame, err := base64.RawURLEncoding.DecodeString(operation[1])
 		if err != nil {
@@ -229,6 +268,82 @@ func serveGuestOperation(vmID string, connection guestControlConnection, frames 
 		return nil
 	}
 	return fmt.Errorf("invalid guest control operation")
+}
+
+func serveGuestSecretOperation(connection guestControlConnection, frames *bufio.Reader, envelope sandboxhostprotocol.Envelope, command firecracker.GuestSecretCommand, executor guestSecretExecutor) error {
+	if executor == nil || !executor.Available() {
+		if _, err := fmt.Fprintf(connection, "RESULT UNAVAILABLE %s\n", envelope.EnvelopeID); err != nil {
+			return fmt.Errorf("write guest secret unavailable result: %w", err)
+		}
+		return nil
+	}
+	request, err := firecracker.EncodeGuestSecretRequest(command.Secret)
+	if err != nil {
+		return fmt.Errorf("encode guest secret request: %w", err)
+	}
+	if _, err := fmt.Fprintf(connection, "SECRET_REQUEST %s %s\n", envelope.EnvelopeID, base64.RawURLEncoding.EncodeToString(request)); err != nil {
+		return fmt.Errorf("write guest secret request: %w", err)
+	}
+	value, err := readGuestSecretValue(frames, envelope.EnvelopeID)
+	if err != nil {
+		return err
+	}
+	if err := executor.Deliver(context.Background(), value); err != nil {
+		return fmt.Errorf("deliver sealed guest secret: %w", err)
+	}
+	if _, err := fmt.Fprintf(connection, "SECRET_READY %s\n", envelope.EnvelopeID); err != nil {
+		return fmt.Errorf("write guest secret ready: %w", err)
+	}
+	start, err := readControlFrame(frames, maximumControlLineBytes)
+	if err != nil || len(start) != 2 || start[0] != "SECRET_START" || start[1] != envelope.EnvelopeID {
+		return fmt.Errorf("invalid guest secret start")
+	}
+	result, runErr := executor.Run(context.Background(), command.Command)
+	sequence := uint64(0)
+	if len(result.stdout) > 0 {
+		if err := writeGuestOutput(connection, envelope.EnvelopeID, "stdout", sequence, result.stdout); err != nil {
+			return err
+		}
+		sequence++
+	}
+	if len(result.stderr) > 0 {
+		if err := writeGuestOutput(connection, envelope.EnvelopeID, "stderr", sequence, result.stderr); err != nil {
+			return err
+		}
+	}
+	if _, err := fmt.Fprintf(connection, "SECRET_TREE_REAPED %s\n", envelope.EnvelopeID); err != nil {
+		return fmt.Errorf("write guest secret tree reaped: %w", err)
+	}
+	revoke, err := readControlFrame(frames, maximumControlLineBytes)
+	if err != nil || len(revoke) != 2 || revoke[0] != "SECRET_REVOKE" || revoke[1] != envelope.EnvelopeID {
+		return fmt.Errorf("invalid guest secret revoke")
+	}
+	if err := executor.RevokeAfterTreeReap(context.Background()); err != nil {
+		return fmt.Errorf("revoke sealed guest secret: %w", err)
+	}
+	if _, err := fmt.Fprintf(connection, "SECRET_REVOKED %s\n", envelope.EnvelopeID); err != nil {
+		return fmt.Errorf("write guest secret revoked: %w", err)
+	}
+	state := "SUCCEEDED"
+	if runErr != nil {
+		state = "FAILED"
+	}
+	if _, err := fmt.Fprintf(connection, "RESULT %s %s\n", state, envelope.EnvelopeID); err != nil {
+		return fmt.Errorf("write guest secret result: %w", err)
+	}
+	return nil
+}
+
+func readGuestSecretValue(frames *bufio.Reader, envelopeID string) ([]byte, error) {
+	value, err := readControlFrame(frames, maximumDispatchLineBytes)
+	if err != nil || len(value) != 3 || value[0] != "SECRET_VALUE" || value[1] != envelopeID {
+		return nil, fmt.Errorf("invalid guest secret value")
+	}
+	decoded, err := base64.RawURLEncoding.DecodeString(value[2])
+	if err != nil || len(decoded) == 0 || len(decoded) > 16<<10 {
+		return nil, fmt.Errorf("invalid bounded guest secret value")
+	}
+	return decoded, nil
 }
 
 func serveGuestProxyOperation(connection guestControlConnection, frames *bufio.Reader, envelopeID string, proxy firecracker.GuestProxyPayload) error {

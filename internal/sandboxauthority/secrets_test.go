@@ -83,6 +83,25 @@ func TestManagerAbortsOnlyASinkProvenPrestartDeliveryAndZeroizesIt(t *testing.T)
 	}
 }
 
+func TestManagerLostContactZeroizesHostCopyButRecordsReaperRequirement(t *testing.T) {
+	now := time.Date(2026, 8, 10, 0, 0, 0, 0, time.UTC)
+	audit := &testAudit{}
+	manager, err := NewManager(&testResolver{value: SecretValue{Version: "v1", ExpiresAt: now.Add(time.Minute), Bytes: []byte("secret")}}, &testSink{}, audit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := testSecretRequest(now)
+	if err := manager.Deliver(context.Background(), request, now); err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.AbandonAfterLostContact(context.Background(), request.ProcessID); err != nil {
+		t.Fatalf("AbandonAfterLostContact() error = %v", err)
+	}
+	if len(manager.RedactionValues(request.ProcessID)) != 0 || len(audit.facts) != 2 || audit.facts[1].Event != "lost-contact-reaper-required" {
+		t.Fatalf("lost contact lifecycle = %#v", audit.facts)
+	}
+}
+
 type testResolver struct{ value SecretValue }
 
 func (resolver *testResolver) Resolve(context.Context, SecretRequest) (SecretValue, error) {

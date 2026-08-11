@@ -21,6 +21,7 @@ const (
 	maximumGuestControlResponseBytes = 48 << 10
 	maximumGuestOutputBytes          = 32 << 10
 	maximumGuestOutputChunks         = 4
+	maximumGuestSecretBytes          = 16 << 10
 )
 
 // GuestOutput is one bounded, ordered private guest-output chunk. Its caller
@@ -66,6 +67,19 @@ type UnixGuestControlChannel struct {
 	closed         bool
 	connections    map[net.Conn]struct{}
 	proxySessions  map[*sandboxauthority.ProxySession]struct{}
+}
+
+// guestSecretSession is the one-use, connection-bound SecretSink for an
+// authenticated guest command. Its textual frames are deliberately bounded
+// and never enter logs, audit facts, command payloads, or durable output.
+type guestSecretSession struct {
+	connection net.Conn
+	reader     *bufio.Reader
+	envelopeID string
+
+	mu         sync.Mutex
+	delivered  bool
+	treeReaped bool
 }
 
 // NewUnixGuestControlChannel constructs a channel before the exact staged UDS
@@ -206,6 +220,118 @@ func (channel *UnixGuestControlChannel) DispatchAuthenticated(ctx context.Contex
 		return GuestDispatchResult{}, fmt.Errorf("write authenticated guest dispatch: %w", err)
 	}
 	return readGuestDispatchResult(reader, envelope.EnvelopeID)
+}
+
+// DispatchAuthenticatedSecret binds one resolver/Manager lifecycle to the
+// same authenticated vsock connection that proves the exact guest request.
+// Output is held until the guest proves tree reaping and the sink confirms
+// revocation, then literal-redacted chunks cross the durable host boundary.
+func (channel *UnixGuestControlChannel) DispatchAuthenticatedSecret(ctx context.Context, envelope sandboxhostprotocol.Envelope, authenticatedEnvelope []byte, authority *SecretExecutionAuthority, emit sandboxhostprotocol.GuestOutputEmitter) error {
+	if channel == nil || authority == nil || emit == nil {
+		return fmt.Errorf("dispatch authenticated guest secret: %w", ErrCapabilityUnavailable)
+	}
+	if err := contextError(ctx); err != nil {
+		return err
+	}
+	command, err := DecodeGuestSecretCommand(envelope.Payload)
+	if err != nil || envelope.OperationKind != GuestSecretCommandOperationKind || command.Secret.Principal != envelope.Principal || command.Secret.SandboxID != envelope.SandboxID || command.Secret.ProcessID != envelope.ProcessID || command.Secret.OperationID != envelope.OperationID || !command.Secret.ExpiresAt.Equal(envelope.ExpiresAt) {
+		return fmt.Errorf("dispatch authenticated guest secret: %w", ErrCapabilityUnavailable)
+	}
+	frame, err := EncodeAuthenticatedGuestDispatch(envelope, authenticatedEnvelope)
+	if err != nil {
+		return err
+	}
+	channel.mu.Lock()
+	vmID := channel.vmID
+	channel.mu.Unlock()
+	if envelope.SandboxID != vmID {
+		return fmt.Errorf("dispatch authenticated guest secret: %w", ErrCapabilityUnavailable)
+	}
+	connection, reader, err := channel.open(ctx)
+	if err != nil {
+		return err
+	}
+	defer channel.release(connection)
+	stopCancellation := context.AfterFunc(ctx, func() { _ = connection.Close() })
+	defer stopCancellation()
+	if _, err := fmt.Fprintf(connection, "SECRET_DISPATCH %s\n", base64.RawURLEncoding.EncodeToString(frame)); err != nil {
+		return fmt.Errorf("write authenticated guest secret dispatch: %w", err)
+	}
+	request, err := readGuestSecretRequest(reader, envelope.EnvelopeID)
+	if err != nil || request != command.Secret {
+		return fmt.Errorf("read guest secret request: %w", ErrCapabilityUnavailable)
+	}
+	session := &guestSecretSession{connection: connection, reader: reader, envelopeID: envelope.EnvelopeID}
+	scoped, err := authority.BindSink(session)
+	if err != nil {
+		return err
+	}
+	active, started, settled := false, false, false
+	defer func() {
+		if !active || settled {
+			return
+		}
+		if started {
+			_ = scoped.AbandonAfterLostContact(context.Background(), command.Secret.ProcessID)
+			return
+		}
+		_ = scoped.AbortBeforeStart(context.Background(), command.Secret.ProcessID)
+	}()
+	if _, err := scoped.Begin(ctx, envelope); err != nil {
+		return err
+	}
+	active = true
+	// Set this before writing: an interrupted write can leave the peer with a
+	// complete START frame, so only a Jailer reaper may settle that uncertainty.
+	started = true
+	if _, err := fmt.Fprintf(connection, "SECRET_START %s\n", envelope.EnvelopeID); err != nil {
+		return fmt.Errorf("write guest secret start: %w", err)
+	}
+	result, err := readGuestSecretResultBeforeReap(reader, envelope.EnvelopeID)
+	if err != nil {
+		return err
+	}
+	durableOutputs := make([]sandboxhostprotocol.GuestOutput, 0, len(result.Outputs))
+	for _, output := range result.Outputs {
+		if output.Stream != "stdout" && output.Stream != "stderr" {
+			continue
+		}
+		redacted := scoped.RedactOutput(command.Secret.ProcessID, output.Data)
+		durableOutputs = append(durableOutputs, sandboxhostprotocol.GuestOutput{Stream: output.Stream, Sequence: output.Sequence, Data: append([]byte(nil), redacted...)})
+		for index := range redacted {
+			redacted[index] = 0
+		}
+	}
+	session.markTreeReaped()
+	if err := scoped.RevokeAfterTreeReap(ctx, command.Secret.ProcessID); err != nil {
+		zeroGuestOutputs(durableOutputs)
+		return err
+	}
+	settled = true
+	terminal, err := readGuestSecretTerminal(reader, envelope.EnvelopeID)
+	if err != nil {
+		zeroGuestOutputs(durableOutputs)
+		return err
+	}
+	for index, output := range durableOutputs {
+		err := emit(ctx, output)
+		if err != nil {
+			zeroGuestOutputs(durableOutputs[index:])
+			return fmt.Errorf("durably emit redacted guest output: %w", err)
+		}
+	}
+	if terminal != "SUCCEEDED" {
+		return fmt.Errorf("authenticated guest secret result: %w", ErrCapabilityUnavailable)
+	}
+	return nil
+}
+
+func zeroGuestOutputs(outputs []sandboxhostprotocol.GuestOutput) {
+	for _, output := range outputs {
+		for index := range output.Data {
+			output.Data[index] = 0
+		}
+	}
 }
 
 // CancelDispatch asks the exact bound guest to cancel one fenced operation.
@@ -454,6 +580,131 @@ func readGuestDispatchResult(reader *bufio.Reader, envelopeID string) (GuestDisp
 		}
 		return GuestDispatchResult{}, fmt.Errorf("read guest terminal result: %w", ErrCapabilityUnavailable)
 	}
+}
+
+func readGuestSecretRequest(reader *bufio.Reader, envelopeID string) (sandboxauthority.SecretRequest, error) {
+	line, err := readGuestControlResponse(reader)
+	if err != nil {
+		return sandboxauthority.SecretRequest{}, err
+	}
+	fields := strings.Split(line, " ")
+	if len(fields) != 3 || fields[0] != "SECRET_REQUEST" || fields[1] != envelopeID {
+		return sandboxauthority.SecretRequest{}, fmt.Errorf("invalid guest secret request")
+	}
+	payload, err := base64.RawURLEncoding.DecodeString(fields[2])
+	if err != nil || len(payload) == 0 || len(payload) > maximumGuestControlResponseBytes {
+		return sandboxauthority.SecretRequest{}, fmt.Errorf("decode guest secret request")
+	}
+	return DecodeGuestSecretRequest(payload)
+}
+
+func readGuestSecretResultBeforeReap(reader *bufio.Reader, envelopeID string) (GuestDispatchResult, error) {
+	result := GuestDispatchResult{}
+	for {
+		line, err := readGuestControlResponse(reader)
+		if err != nil {
+			return GuestDispatchResult{}, fmt.Errorf("read guest secret result: %w", ErrCapabilityUnavailable)
+		}
+		fields := strings.Split(line, " ")
+		if len(fields) == 6 && fields[0] == "OUTPUT" && fields[1] == envelopeID && validGuestOutputStream(fields[2]) && len(result.Outputs) < maximumGuestOutputChunks {
+			sequence, sequenceErr := strconv.ParseUint(fields[3], 10, 64)
+			chunk, decodeErr := base64.RawURLEncoding.DecodeString(fields[5])
+			if sequenceErr != nil || sequence != uint64(len(result.Outputs)) || decodeErr != nil || len(chunk) == 0 || len(chunk) > maximumGuestOutputBytes || fields[4] != sandboxhostprotocol.Digest(chunk) {
+				return GuestDispatchResult{}, fmt.Errorf("read guest secret output: %w", ErrCapabilityUnavailable)
+			}
+			result.Outputs = append(result.Outputs, GuestOutput{Stream: fields[2], Sequence: sequence, Digest: fields[4], Data: append([]byte(nil), chunk...)})
+			continue
+		}
+		if len(fields) == 2 && fields[0] == "SECRET_TREE_REAPED" && fields[1] == envelopeID {
+			return result, nil
+		}
+		return GuestDispatchResult{}, fmt.Errorf("read guest secret tree reaping: %w", ErrCapabilityUnavailable)
+	}
+}
+
+func readGuestSecretTerminal(reader *bufio.Reader, envelopeID string) (string, error) {
+	line, err := readGuestControlResponse(reader)
+	if err != nil {
+		return "", fmt.Errorf("read guest secret terminal: %w", ErrCapabilityUnavailable)
+	}
+	fields := strings.Split(line, " ")
+	if len(fields) != 3 || fields[0] != "RESULT" || fields[2] != envelopeID || (fields[1] != "SUCCEEDED" && fields[1] != "FAILED") {
+		return "", fmt.Errorf("read guest secret terminal: %w", ErrCapabilityUnavailable)
+	}
+	return fields[1], nil
+}
+
+func (session *guestSecretSession) Deliver(ctx context.Context, request sandboxauthority.SecretRequest, value []byte) error {
+	if session == nil || len(value) == 0 || len(value) > maximumGuestSecretBytes || !validSecretRequestShape(request) {
+		return fmt.Errorf("deliver guest secret session: %w", ErrCapabilityUnavailable)
+	}
+	if err := contextError(ctx); err != nil {
+		return fmt.Errorf("deliver guest secret session: %w", ErrCapabilityUnavailable)
+	}
+	session.mu.Lock()
+	defer session.mu.Unlock()
+	if session.delivered {
+		return fmt.Errorf("deliver guest secret session: %w", ErrCapabilityUnavailable)
+	}
+	if _, err := fmt.Fprintf(session.connection, "SECRET_VALUE %s %s\n", session.envelopeID, base64.RawURLEncoding.EncodeToString(value)); err != nil {
+		return fmt.Errorf("write guest secret value: %w", err)
+	}
+	line, err := readGuestControlResponse(session.reader)
+	if err != nil || line != "SECRET_READY "+session.envelopeID {
+		return fmt.Errorf("confirm guest secret value: %w", ErrCapabilityUnavailable)
+	}
+	session.delivered = true
+	return nil
+}
+
+func (session *guestSecretSession) AbortBeforeStart(ctx context.Context, request sandboxauthority.SecretRequest) error {
+	if session == nil || !validSecretRequestShape(request) {
+		return fmt.Errorf("abort guest secret session: %w", ErrCapabilityUnavailable)
+	}
+	if err := contextError(ctx); err != nil {
+		return fmt.Errorf("abort guest secret session: %w", ErrCapabilityUnavailable)
+	}
+	session.mu.Lock()
+	defer session.mu.Unlock()
+	if !session.delivered {
+		return fmt.Errorf("abort guest secret session: %w", ErrCapabilityUnavailable)
+	}
+	if _, err := fmt.Fprintf(session.connection, "SECRET_ABORT %s\n", session.envelopeID); err != nil {
+		return fmt.Errorf("write guest secret abort: %w", err)
+	}
+	line, err := readGuestControlResponse(session.reader)
+	if err != nil || line != "SECRET_ABORTED "+session.envelopeID {
+		return fmt.Errorf("confirm guest secret abort: %w", ErrCapabilityUnavailable)
+	}
+	return nil
+}
+
+func (session *guestSecretSession) RevokeAfterTreeReap(ctx context.Context, request sandboxauthority.SecretRequest) error {
+	if session == nil || !validSecretRequestShape(request) {
+		return fmt.Errorf("revoke guest secret session: %w", ErrCapabilityUnavailable)
+	}
+	if err := contextError(ctx); err != nil {
+		return fmt.Errorf("revoke guest secret session: %w", ErrCapabilityUnavailable)
+	}
+	session.mu.Lock()
+	defer session.mu.Unlock()
+	if !session.delivered || !session.treeReaped {
+		return fmt.Errorf("revoke guest secret session: %w", ErrCapabilityUnavailable)
+	}
+	if _, err := fmt.Fprintf(session.connection, "SECRET_REVOKE %s\n", session.envelopeID); err != nil {
+		return fmt.Errorf("write guest secret revoke: %w", err)
+	}
+	line, err := readGuestControlResponse(session.reader)
+	if err != nil || line != "SECRET_REVOKED "+session.envelopeID {
+		return fmt.Errorf("confirm guest secret revoke: %w", ErrCapabilityUnavailable)
+	}
+	return nil
+}
+
+func (session *guestSecretSession) markTreeReaped() {
+	session.mu.Lock()
+	session.treeReaped = true
+	session.mu.Unlock()
 }
 
 func readGuestProxyOpen(reader *bufio.Reader) (sandboxauthority.ProxySessionRequest, error) {
