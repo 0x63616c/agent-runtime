@@ -350,6 +350,15 @@ func (adapter KubectlAdapter) runMigrations(ctx context.Context, target Operator
 		if rollback && previousMigrationMatches(*previous, migration) {
 			continue
 		}
+		if !rollback && migration.Version > 1 {
+			recorded, recordedErr := adapter.migrationRecorded(ctx, target, namespace, targetResource.Kubernetes, database.Database, user, migration.Version)
+			if recordedErr != nil {
+				return errors.Wrapf(recordedErr, "observe declared database migration %s version %d", resource.ID, migration.Version)
+			}
+			if recorded {
+				continue
+			}
+		}
 		artifact := migration.UpgradeArtifact
 		expectedDigest := migration.UpgradeDigest
 		if rollback {
@@ -373,6 +382,35 @@ func (adapter KubectlAdapter) runMigrations(ctx context.Context, target Operator
 		}
 	}
 	return nil
+}
+
+// migrationRecorded checks the durable migration journal before replaying a
+// historical migration. Version one creates the schema that owns this journal,
+// so it remains safely repeatable. Later migration artifacts can contain a
+// point-in-time schema assertion which a newer reviewed migration deliberately
+// changes; replaying such an artifact would turn a healthy upgraded database
+// into a false failure.
+func (adapter KubectlAdapter) migrationRecorded(ctx context.Context, target OperatorTarget, namespace string, workload *KubernetesResource, database, user string, version int) (bool, error) {
+	if workload == nil || version < 2 {
+		return false, errors.New("observe declared database migration: workload and version two or later are required")
+	}
+	query := fmt.Sprintf("SELECT CASE WHEN to_regclass('runtime.schema_migrations') IS NULL THEN 'pending' WHEN EXISTS (SELECT 1 FROM runtime.schema_migrations WHERE migration_version = %d) THEN 'recorded' ELSE 'pending' END", version)
+	arguments := []string{"exec", workload.Kind + "/" + workload.Name, "--namespace", namespace, "--", "psql", "-At", "-v", "ON_ERROR_STOP=1", "-U", user, "-d", database, "-c", query}
+	result, err := adapter.run(ctx, target, arguments, nil)
+	if err != nil {
+		return false, err
+	}
+	if result.ExitCode != 0 {
+		return false, kubectlExitError("observe database migration", result.ExitCode)
+	}
+	switch strings.TrimSpace(string(result.Output)) {
+	case "recorded":
+		return true, nil
+	case "pending":
+		return false, nil
+	default:
+		return false, errors.New("observe declared database migration: journal returned an invalid state")
+	}
 }
 
 // waitForDatabase closes the brief initdb gap after a workload becomes ready.

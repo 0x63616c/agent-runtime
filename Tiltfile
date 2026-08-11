@@ -46,19 +46,25 @@ stack_manifests = local('go run ./cmd/stackctl manifests --stack-file ' + stack_
 secret_manifests = local('go run ./tools/dev secrets --stack=' + stack + ' --profile=' + profile + ' --root=.', quiet=True)
 k8s_yaml([stack_manifests, secret_manifests])
 
-for workload in ['api', 'orchestration', 'model', 'tool', 'blob-role', 'codec', 'sandbox-control', 'sandbox-host', 'egress-proxy']:
-    docker_build('agent-runtime-dev/' + stack + '/' + workload, '.', dockerfile='deploy/production/Dockerfile', only=['cmd/runtime', 'cmd/egress-proxy', 'internal/roles', 'internal/egressproxy', 'deploy/production/Dockerfile', 'go.mod', 'go.sum'])
+for workload in ['api', 'runtime-api', 'orchestration', 'model', 'tool', 'blob-role', 'codec', 'sandbox-control', 'sandbox-host', 'egress-proxy']:
+    docker_build('agent-runtime-dev/' + stack + '/' + workload, '.', dockerfile='deploy/production/Dockerfile', only=['cmd/runtime', 'cmd/agent-runtime-api', 'cmd/egress-proxy', 'internal', 'sdk', 'temporalpayload', 'deploy/production/Dockerfile', 'go.mod', 'go.sum'])
 
 # The declared profile owns every dependency and policy. Tilt only orders the
 # reviewed resources and substitutes its stack-scoped development images.
 k8s_resource('state', pod_readiness='wait')
 k8s_resource('temporal-state', pod_readiness='wait')
 k8s_resource('temporal', resource_deps=['temporal-state'], pod_readiness='wait')
+# The local Stack's private bootstrap capability is created before Tilt starts.
+# Reconciliation is a separately audited operator action and runs only after
+# the owned Temporal Deployment reports Ready; runtime processes never create
+# their own namespace as a startup side effect.
+local_resource('stack-reconcile', cmd='go run ./tools/dev reconcile --stack=' + stack + ' --root=.', resource_deps=['temporal'])
 k8s_resource('blob', pod_readiness='wait')
 k8s_resource('telemetry', pod_readiness='wait')
 k8s_resource('egress-proxy', pod_readiness='wait')
 k8s_resource('migration-runner', resource_deps=['state'], pod_readiness='wait')
 k8s_resource('api', resource_deps=['state', 'telemetry'], pod_readiness='wait', links=[link('http://api:8080/readyz', 'API runtime readiness')])
+k8s_resource('runtime-api', resource_deps=['state', 'blob', 'migration-runner'], pod_readiness='wait')
 k8s_resource('orchestration', resource_deps=['state', 'temporal', 'telemetry'], pod_readiness='wait', links=[link('http://orchestration:8081/readyz', 'Orchestration runtime readiness')])
 k8s_resource('model', resource_deps=['api', 'egress-proxy', 'telemetry'], pod_readiness='wait')
 k8s_resource('tool', resource_deps=['api', 'sandbox-control', 'telemetry'], pod_readiness='wait')

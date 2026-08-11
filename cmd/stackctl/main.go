@@ -41,6 +41,7 @@ type stackOperator interface {
 	Observe(context.Context, stack.OperatorRequest, stack.Rendered) (stack.KubernetesObservation, error)
 	Diff(context.Context, stack.OperatorRequest, stack.Rendered) (stack.KubernetesDifference, error)
 	Reconcile(context.Context, stack.OperatorRequest, stack.Rendered) (stack.ReconcileResult, error)
+	ReconcileProviders(context.Context, stack.OperatorRequest, stack.Rendered) (stack.ReconcileResult, error)
 	Rollback(context.Context, stack.OperatorRequest, stack.Rendered, stack.Rendered) (stack.KubernetesObservation, error)
 	Teardown(context.Context, stack.OperatorRequest, stack.Rendered) error
 }
@@ -215,7 +216,13 @@ func runWithProbeAndOperator(ctx context.Context, arguments []string, output io.
 			}
 			return encodeOperatorResult(output, difference)
 		case "reconcile":
-			result, reconcileErr := operator.Reconcile(ctx, request.OperatorRequest, rendered)
+			var result stack.ReconcileResult
+			var reconcileErr error
+			if request.ProvidersOnly {
+				result, reconcileErr = operator.ReconcileProviders(ctx, request.OperatorRequest, rendered)
+			} else {
+				result, reconcileErr = operator.Reconcile(ctx, request.OperatorRequest, rendered)
+			}
 			if reconcileErr != nil {
 				return reconcileErr
 			}
@@ -313,6 +320,7 @@ type operatorArguments struct {
 	stack.OperatorRequest
 	Stack          string
 	CapabilityFile string
+	ProvidersOnly  bool
 }
 
 func parseOperatorArguments(command string, arguments []string) (operatorArguments, string, stack.Profile, string, string, error) {
@@ -328,13 +336,17 @@ func parseOperatorArguments(command string, arguments []string) (operatorArgumen
 	migrationRoot := flags.String("migration-root", "", "absolute root containing reviewed migration artifacts")
 	rollbackPath := flags.String("rollback-stack-file", "", "previous reviewed Stack document for rollback")
 	capabilityFile := flags.String("bootstrap-capability-file", "", "absolute private capability file created by stackctl bootstrap")
+	providersOnly := flags.Bool("providers-only", false, "reconcile only declared non-Kubernetes providers after an external controller has applied the reviewed manifest")
 	if err := flags.Parse(arguments); err != nil {
 		return operatorArguments{}, "", "", "", "", errors.Wrap(err, "parse Kubernetes operator arguments")
 	}
 	if flags.NArg() != 0 || *stackPath == "" || *stackName == "" || *profile == "" || *kubeconfig == "" || *contextName == "" || *actor == "" || *auditPath == "" || *migrationRoot == "" || *capabilityFile == "" || !filepath.IsAbs(*capabilityFile) || (command == "rollback" && *rollbackPath == "") || (command != "rollback" && *rollbackPath != "") {
 		return operatorArguments{}, "", "", "", "", errors.Newf("parse %s arguments: --stack-file, --stack, --profile, --kubeconfig, --context, --actor, --audit-file, --migration-root, and absolute --bootstrap-capability-file are required; --rollback-stack-file is required only for rollback", command)
 	}
-	return operatorArguments{Stack: *stackName, CapabilityFile: *capabilityFile, OperatorRequest: stack.OperatorRequest{Actor: *actor, Target: stack.OperatorTarget{Kubeconfig: *kubeconfig, Context: *contextName, MigrationRoot: *migrationRoot}}}, *stackPath, stack.Profile(*profile), *rollbackPath, *auditPath, nil
+	if *providersOnly && command != "reconcile" {
+		return operatorArguments{}, "", "", "", "", errors.Newf("parse %s arguments: --providers-only is valid only for reconcile", command)
+	}
+	return operatorArguments{Stack: *stackName, CapabilityFile: *capabilityFile, ProvidersOnly: *providersOnly, OperatorRequest: stack.OperatorRequest{Actor: *actor, Target: stack.OperatorTarget{Kubeconfig: *kubeconfig, Context: *contextName, MigrationRoot: *migrationRoot}}}, *stackPath, stack.Profile(*profile), *rollbackPath, *auditPath, nil
 }
 
 func requiresBootstrapAuthority(command string) bool {

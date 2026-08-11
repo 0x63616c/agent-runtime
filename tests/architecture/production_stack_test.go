@@ -174,8 +174,20 @@ func normalizedProfile(resources []stack.Resource, namespace string) []byte {
 			resource.Blob.Prefix = "<namespace>/payloads"
 		}
 		if resource.Kubernetes != nil {
+			if resource.ID == "runtime-api" {
+				resource.Kubernetes.Replicas = 0
+				resource.Kubernetes.Compute = nil
+			}
 			for environmentIndex := range resource.Kubernetes.Environment {
 				environment := &resource.Kubernetes.Environment[environmentIndex]
+				if environment.Name == "BLOB_BUCKET" || environment.Name == "BLOB_TEMPORAL_BUCKET" {
+					environment.Value = "<namespace>"
+					continue
+				}
+				if environment.Name == "RUNTIME_API_CONFIG" {
+					environment.Value = "<profile-runtime-api-config>"
+					continue
+				}
 				if environment.Name != "RUNTIME_ROLE_CONFIG" {
 					continue
 				}
@@ -204,6 +216,10 @@ func normalizeNamespaceStrings(value any, namespace string) any {
 		return typed
 	case map[string]any:
 		for key := range typed {
+			if key == "tenant" {
+				typed[key] = "<profile-tenant>"
+				continue
+			}
 			typed[key] = normalizeNamespaceStrings(typed[key], namespace)
 		}
 		return typed
