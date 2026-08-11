@@ -158,6 +158,66 @@ func TestArtifactReaderRequiresExactTenantPrincipalMetadataAuthorization(t *test
 	}
 }
 
+func TestToolActionDescriptorReaderRequiresExactWorkerProvenanceAndIntegrity(t *testing.T) {
+	store, objects, tenant, _ := testStore(t)
+	alice := testPrincipalID(t, "alice")
+	bob := testPrincipalID(t, "bob")
+	session := agentruntime.SessionID("sess_0000000000000001")
+	turn := agentruntime.TurnID("turn_0000000000000001")
+	handoff, err := store.StageToolActionDescriptor(context.Background(), tenant, []byte("canonical sandbox.control/v1 action"))
+	if err != nil {
+		t.Fatalf("stage tool descriptor: %v", err)
+	}
+	commitment, err := store.ValidateToolActionDescriptorHandoff(handoff)
+	if err != nil {
+		t.Fatalf("validate tool descriptor: %v", err)
+	}
+	repository := toolActionDescriptorRepository{tenant: tenant, principal: alice, session: session, turn: turn, toolCallID: "tcall_1234567890ABCDEF", commitment: commitment}
+	reader, err := runtimecontent.NewToolActionDescriptorReader(store, repository)
+	if err != nil {
+		t.Fatalf("new tool descriptor reader: %v", err)
+	}
+	got, err := reader.ReadToolActionDescriptor(context.Background(), tenant, alice, session, turn, "tcall_1234567890ABCDEF")
+	if err != nil || string(got) != "canonical sandbox.control/v1 action" {
+		t.Fatalf("read authorized descriptor = %q, %v", got, err)
+	}
+	gets := objects.gets
+	for _, denied := range []struct {
+		name      string
+		tenant    runtimecontent.TenantID
+		principal runtimecontent.PrincipalID
+		session   agentruntime.SessionID
+		turn      agentruntime.TurnID
+		tool      string
+	}{
+		{name: "cross principal", tenant: tenant, principal: bob, session: session, turn: turn, tool: "tcall_1234567890ABCDEF"},
+		{name: "cross session", tenant: tenant, principal: alice, session: "sess_0000000000000002", turn: turn, tool: "tcall_1234567890ABCDEF"},
+		{name: "cross turn", tenant: tenant, principal: alice, session: session, turn: "turn_0000000000000002", tool: "tcall_1234567890ABCDEF"},
+		{name: "cross tool call", tenant: tenant, principal: alice, session: session, turn: turn, tool: "tcall_1234567890ABCDEG"},
+	} {
+		t.Run(denied.name, func(t *testing.T) {
+			if _, err := reader.ReadToolActionDescriptor(context.Background(), denied.tenant, denied.principal, denied.session, denied.turn, denied.tool); !errors.Is(err, runtimecontent.ErrNotFoundOrDenied) {
+				t.Fatalf("descriptor read error = %v, want ErrNotFoundOrDenied", err)
+			}
+		})
+	}
+	if objects.gets != gets {
+		t.Fatalf("denied descriptor reads reached object storage: gets=%d want=%d", objects.gets, gets)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := reader.ReadToolActionDescriptor(ctx, tenant, alice, session, turn, "tcall_1234567890ABCDEF"); !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancelled descriptor read error = %v, want context.Canceled", err)
+	}
+	if objects.gets != gets {
+		t.Fatalf("cancelled descriptor read reached object storage: gets=%d want=%d", objects.gets, gets)
+	}
+	objects.values[objects.keys[0]][0] ^= 0xff
+	if _, err := reader.ReadToolActionDescriptor(context.Background(), tenant, alice, session, turn, "tcall_1234567890ABCDEF"); !errors.Is(err, runtimecontent.ErrIntegrity) {
+		t.Fatalf("corrupt descriptor read error = %v, want ErrIntegrity", err)
+	}
+}
+
 func TestInputEnvelopeReaderAuthorizesAndHydratesExactInputMetadata(t *testing.T) {
 	store, _, tenant, _ := testStore(t)
 	principal := testPrincipalID(t, "alice")
@@ -375,6 +435,22 @@ func (repository inputEnvelopeRepository) AuthorizeInputEnvelopeRead(context.Con
 
 type artifactRepository struct {
 	record runtimecontent.ArtifactRecord
+}
+
+type toolActionDescriptorRepository struct {
+	tenant     runtimecontent.TenantID
+	principal  runtimecontent.PrincipalID
+	session    agentruntime.SessionID
+	turn       agentruntime.TurnID
+	toolCallID string
+	commitment runtimecontent.ToolActionDescriptorCommitment
+}
+
+func (repository toolActionDescriptorRepository) AuthorizeToolActionDescriptorRead(_ context.Context, tenant runtimecontent.TenantID, principal runtimecontent.PrincipalID, session agentruntime.SessionID, turn agentruntime.TurnID, toolCallID string) (runtimecontent.ToolActionDescriptorCommitment, error) {
+	if tenant != repository.tenant || principal != repository.principal || session != repository.session || turn != repository.turn || toolCallID != repository.toolCallID {
+		return runtimecontent.ToolActionDescriptorCommitment{}, runtimecontent.ErrNotFoundOrDenied
+	}
+	return repository.commitment, nil
 }
 
 func (repository artifactRepository) AuthorizeArtifactRead(context.Context, runtimecontent.TenantID, runtimecontent.PrincipalID, agentruntime.ArtifactID) (runtimecontent.ArtifactRecord, error) {

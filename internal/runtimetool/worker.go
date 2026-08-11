@@ -19,9 +19,13 @@ type Request struct {
 	TurnID      agentruntime.TurnID
 	ToolCallID  string
 	OperationID runtimestate.OperationID
+	// Descriptor is the exact verified immutable sandbox-control action. It is
+	// supplied only after the worker's state authorization succeeds.
+	Descriptor []byte
 }
 type Response struct {
 	Output    []byte
+	MediaType string
 	Failure   *agentruntime.Failure
 	Uncertain bool
 }
@@ -40,21 +44,42 @@ type Config struct {
 	Claimer  string
 }
 type Worker struct {
-	store    runtimestate.RuntimeStateStore
-	tenants  runtimestate.OutboxTenantSource
-	compiler *runtimestate.Compiler
-	planner  *runtimestate.RuntimeStatePlanner
-	clock    clock.Clock
-	content  *runtimecontent.Store
-	adapter  Adapter
-	claimer  string
+	store            runtimestate.RuntimeStateStore
+	tenants          runtimestate.OutboxTenantSource
+	compiler         *runtimestate.Compiler
+	planner          *runtimestate.RuntimeStatePlanner
+	clock            clock.Clock
+	content          *runtimecontent.Store
+	descriptorReader *runtimecontent.ToolActionDescriptorReader
+	adapter          Adapter
+	claimer          string
 }
 
 func NewWorker(c Config) (*Worker, error) {
 	if c.Store == nil || c.Tenants == nil || c.Compiler == nil || c.Planner == nil || c.Clock == nil || c.Content == nil || c.Adapter == nil || c.Claimer == "" {
 		return nil, errors.New("create runtime tool worker: complete authority is required")
 	}
-	return &Worker{c.Store, c.Tenants, c.Compiler, c.Planner, c.Clock, c.Content, c.Adapter, c.Claimer}, nil
+	reader, err := runtimecontent.NewToolActionDescriptorReader(c.Content, descriptorRepository{store: c.Store, compiler: c.Compiler})
+	if err != nil {
+		return nil, err
+	}
+	return &Worker{store: c.Store, tenants: c.Tenants, compiler: c.Compiler, planner: c.Planner, clock: c.Clock, content: c.Content, descriptorReader: reader, adapter: c.Adapter, claimer: c.Claimer}, nil
+}
+
+// descriptorRepository is the only bridge from content reads to the sealed
+// state compiler capability. It deliberately does not expose a content
+// reference or object-store key to the tool adapter.
+type descriptorRepository struct {
+	store    runtimestate.RuntimeStateStore
+	compiler *runtimestate.Compiler
+}
+
+func (repository descriptorRepository) AuthorizeToolActionDescriptorRead(ctx context.Context, tenant runtimecontent.TenantID, principal runtimecontent.PrincipalID, sessionID agentruntime.SessionID, turnID agentruntime.TurnID, toolCallID string) (runtimecontent.ToolActionDescriptorCommitment, error) {
+	authorization, err := repository.compiler.CompileAuthorizeToolActionDescriptorRead(runtimestate.ToolActionDescriptorReadCommand{Scope: runtimestate.MutationScope{Tenant: tenant, Principal: principal, Authority: runtimestate.AuthorityRuntimeWorker}, SessionID: sessionID, TurnID: turnID, ToolCallID: toolCallID})
+	if err != nil {
+		return runtimecontent.ToolActionDescriptorCommitment{}, err
+	}
+	return repository.store.AuthorizeToolActionDescriptorRead(ctx, authorization)
 }
 func (w *Worker) ScanOnce(ctx context.Context) error {
 	ts, e := w.tenants.ListOutboxTenants(ctx)
@@ -103,7 +128,14 @@ func (w *Worker) process(ctx context.Context, r runtimestate.OutboxRecord, recov
 	if x.State != runtimestate.ToolExecutionIntent {
 		return nil
 	}
-	q := Request{r.Tenant, r.SessionID, r.TurnID, r.ToolCallID, r.OperationID}
+	descriptor, err := w.descriptorReader.ReadToolActionDescriptor(ctx, r.Tenant, r.Principal, r.SessionID, r.TurnID, r.ToolCallID)
+	if err != nil {
+		if ctx.Err() != nil || errors.Is(err, runtimecontent.ErrUnavailable) {
+			return err
+		}
+		return w.recordDescriptorFailure(ctx, r)
+	}
+	q := Request{Tenant: r.Tenant, SessionID: r.SessionID, TurnID: r.TurnID, ToolCallID: r.ToolCallID, OperationID: r.OperationID, Descriptor: descriptor}
 	var out Response
 	if recover {
 		out, e = w.adapter.Reconcile(ctx, q)
@@ -120,7 +152,11 @@ func (w *Worker) process(ctx context.Context, r runtimestate.OutboxRecord, recov
 		state = runtimestate.ToolExecutionUncertain
 	}
 	if len(out.Output) > 0 && failure == nil && !out.Uncertain {
-		h, err := w.content.StageArtifact(ctx, r.Tenant, "text/plain", out.Output)
+		mediaType := out.MediaType
+		if mediaType == "" {
+			mediaType = "text/plain"
+		}
+		h, err := w.content.StageArtifact(ctx, r.Tenant, mediaType, out.Output)
 		if err == nil {
 			c, err := w.content.ValidateArtifactHandoff(h)
 			if err == nil {
@@ -143,6 +179,14 @@ func (w *Worker) process(ctx context.Context, r runtimestate.OutboxRecord, recov
 	m, e := w.compiler.CompileRecordToolExecutionOutcome(runtimestate.RecordToolExecutionOutcomeCommand{Scope: runtimestate.MutationScope{Tenant: r.Tenant, Principal: r.Principal, Authority: runtimestate.AuthorityRuntimeWorker}, IdempotencyKey: "tool-outcome-" + string(r.OperationID), SessionID: r.SessionID, TurnID: r.TurnID, ToolCallID: r.ToolCallID, OperationID: r.OperationID, Outcome: state, Result: result, Failure: failure})
 	if e != nil {
 		return e
+	}
+	return w.persist(ctx, m)
+}
+
+func (w *Worker) recordDescriptorFailure(ctx context.Context, r runtimestate.OutboxRecord) error {
+	m, err := w.compiler.CompileRecordToolExecutionOutcome(runtimestate.RecordToolExecutionOutcomeCommand{Scope: runtimestate.MutationScope{Tenant: r.Tenant, Principal: r.Principal, Authority: runtimestate.AuthorityRuntimeWorker}, IdempotencyKey: "tool-outcome-" + string(r.OperationID), SessionID: r.SessionID, TurnID: r.TurnID, ToolCallID: r.ToolCallID, OperationID: r.OperationID, Outcome: runtimestate.ToolExecutionFailed, Failure: &agentruntime.Failure{Code: agentruntime.FailureInvalidInput, Message: "verified tool action descriptor is invalid"}})
+	if err != nil {
+		return err
 	}
 	return w.persist(ctx, m)
 }

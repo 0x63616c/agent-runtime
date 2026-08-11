@@ -220,6 +220,12 @@ type ArtifactRepository interface {
 	AuthorizeArtifactRead(context.Context, TenantID, PrincipalID, agentruntime.ArtifactID) (ArtifactRecord, error)
 }
 
+// ToolActionDescriptorRepository authorizes one exact immutable tool action
+// descriptor for a worker-owned operation.
+type ToolActionDescriptorRepository interface {
+	AuthorizeToolActionDescriptorRead(context.Context, TenantID, PrincipalID, agentruntime.SessionID, agentruntime.TurnID, string) (ToolActionDescriptorCommitment, error)
+}
+
 // AgentSpecificationReader reads Agent specification content only after repository authorization.
 type AgentSpecificationReader struct {
 	store      *Store
@@ -244,6 +250,14 @@ type ArtifactReader struct {
 	repository ArtifactRepository
 }
 
+// ToolActionDescriptorReader reads one immutable sandbox-control descriptor
+// only after a worker-specific state authorization. The descriptor object key
+// never crosses this boundary.
+type ToolActionDescriptorReader struct {
+	store      *Store
+	repository ToolActionDescriptorRepository
+}
+
 // agentSpecificationLocator is a package-private capability created only after repository authorization.
 type agentSpecificationLocator struct {
 	tenant     TenantID
@@ -262,6 +276,10 @@ type inputEnvelopeLocator struct {
 }
 
 type artifactLocator struct{ record ArtifactRecord }
+
+type toolActionDescriptorLocator struct {
+	commitment ToolActionDescriptorCommitment
+}
 
 // Store owns one explicit runtime content namespace.
 type Store struct {
@@ -307,6 +325,15 @@ func NewArtifactReader(store *Store, repository ArtifactRepository) (*ArtifactRe
 		return nil, errors.New("Artifact reader requires content store and repository authority")
 	}
 	return &ArtifactReader{store: store, repository: repository}, nil
+}
+
+// NewToolActionDescriptorReader constructs the worker-only immutable action
+// descriptor read boundary.
+func NewToolActionDescriptorReader(store *Store, repository ToolActionDescriptorRepository) (*ToolActionDescriptorReader, error) {
+	if store == nil || repository == nil {
+		return nil, errors.New("tool action descriptor reader requires content store and repository authority")
+	}
+	return &ToolActionDescriptorReader{store: store, repository: repository}, nil
 }
 
 // ReadAgentSpecification authorizes and reads one exact tenant-owned Agent revision.
@@ -413,6 +440,34 @@ func (reader *ArtifactReader) ReadArtifact(ctx context.Context, tenant TenantID,
 		return nil, ErrNotFoundOrDenied
 	}
 	return reader.store.getArtifact(ctx, artifactLocator{record: record})
+}
+
+// ReadToolActionDescriptor returns exact immutable sandbox-control bytes only
+// after a state-backed runtime-worker authorization for the same operation.
+func (reader *ToolActionDescriptorReader) ReadToolActionDescriptor(ctx context.Context, tenant TenantID, principal PrincipalID, sessionID agentruntime.SessionID, turnID agentruntime.TurnID, toolCallID string) ([]byte, error) {
+	if !validTenantID(tenant) || !validPrincipalID(principal) {
+		return nil, ErrNotFoundOrDenied
+	}
+	if _, err := agentruntime.ParseSessionID(sessionID.String()); err != nil {
+		return nil, ErrNotFoundOrDenied
+	}
+	if _, err := agentruntime.ParseTurnID(turnID.String()); err != nil || !validToolCallID(toolCallID) {
+		return nil, ErrNotFoundOrDenied
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, errors.Wrap(err, "authorize tool action descriptor read")
+	}
+	commitment, err := reader.repository.AuthorizeToolActionDescriptorRead(ctx, tenant, principal, sessionID, turnID, toolCallID)
+	if err != nil {
+		return nil, classifyObjectError("authorize tool action descriptor read", err, ErrNotFoundOrDenied)
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, errors.Wrap(err, "authorize tool action descriptor read")
+	}
+	if commitment.Tenant != tenant || !validToolActionDescriptorReference(commitment.Reference) {
+		return nil, ErrNotFoundOrDenied
+	}
+	return reader.store.getToolActionDescriptor(ctx, toolActionDescriptorLocator{commitment: commitment})
 }
 
 // PutAgentSpecification canonically encodes and conditionally stores one immutable specification.
@@ -677,6 +732,27 @@ func (store *Store) getArtifact(ctx context.Context, locator artifactLocator) ([
 	return append([]byte(nil), raw...), nil
 }
 
+func (store *Store) getToolActionDescriptor(ctx context.Context, locator toolActionDescriptorLocator) ([]byte, error) {
+	commitment := locator.commitment
+	if !validTenantID(commitment.Tenant) || !validToolActionDescriptorReference(commitment.Reference) {
+		return nil, ErrNotFoundOrDenied
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, errors.Wrap(err, "read tool action descriptor")
+	}
+	raw, err := store.objects.Get(ctx, store.key(commitment.Tenant, commitment.Reference.Digest), int(commitment.Reference.SizeBytes))
+	if err != nil {
+		return nil, classifyObjectError("read immutable tool action descriptor", err, ErrNotFoundOrDenied)
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, errors.Wrap(err, "read tool action descriptor")
+	}
+	if int64(len(raw)) != commitment.Reference.SizeBytes || referenceForMediaType(raw, ToolActionDescriptorMediaTypeV1).Digest != commitment.Reference.Digest {
+		return nil, ErrIntegrity
+	}
+	return append([]byte(nil), raw...), nil
+}
+
 func (store *Store) key(tenant TenantID, digest string) string {
 	return string(tenant) + "/" + store.contentRoot + "/v1/sha256/" + strings.TrimPrefix(digest, "sha256:")
 }
@@ -777,6 +853,14 @@ func validArtifactReference(reference Reference) bool {
 
 func validConversationEntryReference(reference Reference) bool {
 	return reference.MediaType == ConversationEntryMediaTypeV1 && reference.SizeBytes > 0 && reference.SizeBytes <= maximumConversationEntryBytes && validDigest(reference.Digest)
+}
+
+func validToolActionDescriptorReference(reference Reference) bool {
+	return reference.MediaType == ToolActionDescriptorMediaTypeV1 && reference.SizeBytes > 0 && reference.SizeBytes <= maximumConversationEntryBytes && validDigest(reference.Digest)
+}
+
+func validToolCallID(value string) bool {
+	return value != "" && len(value) <= 128 && utf8.ValidString(value) && !strings.ContainsAny(value, "\\\x00\r\n")
 }
 
 func validArtifactMediaType(value string) bool {

@@ -306,6 +306,12 @@ type ArtifactReadCommand struct {
 	Scope      MutationScope
 	ArtifactID agentruntime.ArtifactID
 }
+type ToolActionDescriptorReadCommand struct {
+	Scope      MutationScope
+	SessionID  agentruntime.SessionID
+	TurnID     agentruntime.TurnID
+	ToolCallID string
+}
 
 // CompiledReadAuthorization is an opaque validated reader capability for an adapter query.
 type CompiledReadAuthorization struct {
@@ -315,6 +321,8 @@ type CompiledReadAuthorization struct {
 	sessionID  agentruntime.SessionID
 	inputID    agentruntime.InputID
 	artifactID agentruntime.ArtifactID
+	turnID     agentruntime.TurnID
+	toolCallID string
 }
 
 // Scope returns the authenticated reader scope.
@@ -333,6 +341,9 @@ func (authorization CompiledReadAuthorization) Input() (agentruntime.SessionID, 
 // Artifact returns the exact authorized immutable artifact target.
 func (authorization CompiledReadAuthorization) Artifact() agentruntime.ArtifactID {
 	return authorization.artifactID
+}
+func (authorization CompiledReadAuthorization) ToolActionDescriptor() (agentruntime.SessionID, agentruntime.TurnID, string) {
+	return authorization.sessionID, authorization.turnID, authorization.toolCallID
 }
 
 // CompileAuthorizeAgentSpecificationBodyRead validates a tenant-scoped metadata reader request.
@@ -357,6 +368,12 @@ func (compiler *Compiler) CompileAuthorizeArtifactRead(command ArtifactReadComma
 		return CompiledReadAuthorization{}, errors.New("compile Artifact reader: invalid scope or target")
 	}
 	return CompiledReadAuthorization{scope: command.Scope, artifactID: command.ArtifactID}, nil
+}
+func (compiler *Compiler) CompileAuthorizeToolActionDescriptorRead(command ToolActionDescriptorReadCommand) (CompiledReadAuthorization, error) {
+	if err := validateScope(command.Scope, AuthorityRuntimeWorker, true); err != nil || validSession(command.SessionID) != nil || validTurn(command.TurnID) != nil || !validOpaque(command.ToolCallID, 128) {
+		return CompiledReadAuthorization{}, errors.New("compile tool action descriptor reader: invalid scope or target")
+	}
+	return CompiledReadAuthorization{scope: command.Scope, sessionID: command.SessionID, turnID: command.TurnID, toolCallID: command.ToolCallID}, nil
 }
 
 type compiledRegister struct {

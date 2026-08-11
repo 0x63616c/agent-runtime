@@ -324,6 +324,18 @@ func (store *MemoryRuntimeStateStore) AuthorizeArtifactRead(ctx context.Context,
 	}
 	return runtimecontent.ArtifactRecord{}, ErrNotFoundOrDenied
 }
+func (store *MemoryRuntimeStateStore) AuthorizeToolActionDescriptorRead(ctx context.Context, authorization CompiledReadAuthorization) (runtimecontent.ToolActionDescriptorCommitment, error) {
+	if err := requireScope(ctx, authorization.scope, AuthorityRuntimeWorker, true); err != nil {
+		return runtimecontent.ToolActionDescriptorCommitment{}, err
+	}
+	s := store.snapshot(authorization.scope.Tenant)
+	for _, v := range s.ToolIntents {
+		if v.Principal == authorization.scope.Principal && v.SessionID == authorization.sessionID && v.TurnID == authorization.turnID && v.ToolCallID == authorization.toolCallID {
+			return runtimecontent.ToolActionDescriptorCommitment{Tenant: v.Tenant, Reference: v.ActionDescriptor}, nil
+		}
+	}
+	return runtimecontent.ToolActionDescriptorCommitment{}, ErrNotFoundOrDenied
+}
 func (store *MemoryRuntimeStateStore) snapshot(tenant runtimecontent.TenantID) RuntimeState {
 	store.mu.RLock()
 	defer store.mu.RUnlock()

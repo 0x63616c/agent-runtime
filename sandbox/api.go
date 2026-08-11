@@ -173,6 +173,19 @@ func ResolveControlOperationRequest(input []byte, acceptedAt, retentionExpiresAt
 	return resolveControlOperationRequest(input, acceptedAt, retentionExpiresAt, policy)
 }
 
+// EncodeControlOperationRequest returns the canonical sandbox.control/v1
+// representation used for an immutable runtime tool-action descriptor.
+func EncodeControlOperationRequest(request OperationRequest) ([]byte, error) {
+	return encodeOperationRequestV1(request)
+}
+
+// DecodeControlOperationRequest accepts only canonical sandbox.control/v1
+// request bytes. Runtime workers use it after state authorizes the immutable
+// descriptor and before they submit any external effect.
+func DecodeControlOperationRequest(input []byte) (OperationRequest, error) {
+	return decodeOperationRequestV1(input)
+}
+
 type CreateSandboxRequest struct{ Spec SandboxSpec }
 type RestoreSandboxRequest struct {
 	SnapshotID SnapshotID

@@ -1159,6 +1159,7 @@ type RuntimeStateStore interface {
 	AuthorizeAgentSpecificationBodyRead(context.Context, CompiledReadAuthorization) (runtimecontent.AgentSpecificationBodyRecord, error)
 	AuthorizeInputEnvelopeRead(context.Context, CompiledReadAuthorization) (runtimecontent.InputEnvelopeRecord, error)
 	AuthorizeArtifactRead(context.Context, CompiledReadAuthorization) (runtimecontent.ArtifactRecord, error)
+	AuthorizeToolActionDescriptorRead(context.Context, CompiledReadAuthorization) (runtimecontent.ToolActionDescriptorCommitment, error)
 }
 
 // OutboxTenantSource is the deliberately narrow discovery capability used by

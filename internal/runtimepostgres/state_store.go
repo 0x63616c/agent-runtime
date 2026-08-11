@@ -403,6 +403,23 @@ func (store *RuntimeStateStore) AuthorizeArtifactRead(ctx context.Context, autho
 	}
 	return runtimecontent.ArtifactRecord{}, runtimestate.ErrNotFoundOrDenied
 }
+func (store *RuntimeStateStore) AuthorizeToolActionDescriptorRead(ctx context.Context, authorization runtimestate.CompiledReadAuthorization) (runtimecontent.ToolActionDescriptorCommitment, error) {
+	scope := authorization.Scope()
+	session, turn, tool := authorization.ToolActionDescriptor()
+	if !hasScope(scope, runtimestate.AuthorityRuntimeWorker, true) {
+		return runtimecontent.ToolActionDescriptorCommitment{}, runtimestate.ErrNotFoundOrDenied
+	}
+	state, err := store.LoadRuntimeState(ctx, scope)
+	if err != nil {
+		return runtimecontent.ToolActionDescriptorCommitment{}, err
+	}
+	for _, v := range state.ToolIntents {
+		if v.Tenant == scope.Tenant && v.Principal == scope.Principal && v.SessionID == session && v.TurnID == turn && v.ToolCallID == tool {
+			return runtimecontent.ToolActionDescriptorCommitment{Tenant: v.Tenant, Reference: v.ActionDescriptor}, nil
+		}
+	}
+	return runtimecontent.ToolActionDescriptorCommitment{}, runtimestate.ErrNotFoundOrDenied
+}
 
 func hasScope(scope runtimestate.MutationScope, authority runtimestate.Authority, principalRequired bool) bool {
 	if scope.Authority != authority || scope.Tenant == "" {
