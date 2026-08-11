@@ -49,14 +49,17 @@ The following are still required before any Firecracker foundation claim:
 ## Protected-runner commands
 
 `just firecracker-smoke` and `just firecracker-integration` deliberately fail
-closed on an ordinary developer host. Both are currently the same redacted
-preflight report; neither launches a VM or substitutes for the planned runtime
-integration suite. The `firecracker-kvm` workflow is correspondingly a
-protected-runner preflight job, restricted to the self-hosted `linux`, `x64`,
-`kvm`, and `firecracker-protected` contract, and uploads that report even on
+closed on an ordinary developer host. Given a reviewed v2 lock and explicit
+protected-runner VM identity, unprivileged UID/GID, delegated cgroup and every
+external limit owner, the command now provisions verified fixtures, copies one
+private rootfs, compiles the fixed no-NIC Jailer plan, and drives
+`SmokeHarness` through a real Jailer, guest serial marker, control request, and
+cleanup proof. Missing inputs still produce only a redacted blocked report. The
+`firecracker-kvm` workflow is restricted to the self-hosted `linux`, `x64`,
+`kvm`, and `firecracker-protected` contract and uploads that report even on
 failure. It cannot become `linux_kvm_e2e` evidence until a reviewed fixture
-lock and the enrolled M3 host-control bridge drive `SmokeHarness` through a
-real Jailer, guest serial marker, control request, and cleanup proof.
+lock and runner execute that path successfully; it remains separate from the
+enrolled M3 public-control runtime command/integration proof.
 
 ## Fixture-lock v2 groundwork
 

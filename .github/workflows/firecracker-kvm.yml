@@ -32,7 +32,17 @@ jobs:
       - name: Run fail-closed KVM preflight
         env:
           FIRECRACKER_RUNNER_CONTRACT: protected-linux-kvm-v1
-        run: just firecracker-integration evidence/firecracker-kvm-report.json
+          FIRECRACKER_JAILER_UID: ${{ vars.FIRECRACKER_JAILER_UID }}
+          FIRECRACKER_JAILER_GID: ${{ vars.FIRECRACKER_JAILER_GID }}
+          FIRECRACKER_CGROUP_PARENT: ${{ vars.FIRECRACKER_CGROUP_PARENT }}
+          FIRECRACKER_STACK_RESOURCE: ${{ vars.FIRECRACKER_STACK_RESOURCE }}
+          FIRECRACKER_EXTERNAL_OWNER: ${{ vars.FIRECRACKER_EXTERNAL_OWNER }}
+          FIRECRACKER_FIXTURE_LOCK: ${{ vars.FIRECRACKER_FIXTURE_LOCK }}
+        run: >-
+          just firecracker-integration evidence/firecracker-kvm-report.json
+          smoke-${{ github.run_id }} "${FIRECRACKER_JAILER_UID:-0}" "${FIRECRACKER_JAILER_GID:-0}"
+          "$FIRECRACKER_CGROUP_PARENT" "$FIRECRACKER_STACK_RESOURCE" "$FIRECRACKER_EXTERNAL_OWNER"
+          "${FIRECRACKER_FIXTURE_LOCK:-tools/firecracker/fixtures.lock}"
       - name: Retain redacted protected-run report
         if: always() && hashFiles('evidence/firecracker-kvm-report.json') != ''
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

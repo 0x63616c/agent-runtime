@@ -74,8 +74,10 @@ console=ttyS0 reboot=k panic=1 init=/sbin/init -- <vm-id> <fixture-version>
 
 The guest listener is not a host transport, proxy, or authorization boundary:
 the protected M3 host-control bridge must bind this byte protocol to a private
-per-VM vsock endpoint and authenticate/fence the request before launch. No
-host-side vsock composition or M3 launch path is implemented here.
+per-VM vsock endpoint and authenticate/fence the request before launch. The
+protected smoke command composes the private host-side vsock endpoint only for
+its exact boot PING; no enrolled M3 launch or public runtime-command path is
+implemented here.
 There is no guest NIC, shell, package manager, inherited environment, or secret
 fixture.
 

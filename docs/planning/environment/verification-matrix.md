@@ -20,8 +20,8 @@ evidence that must be retained by CI or the developer command.
 | Go SDK/API contracts | Standard CI | `just test` and generated-contract checks | Unit, integration, race, and public SDK compatibility checks; checked-in OpenAPI and Go reference outputs have no diff after regeneration. | Required on every PR |
 | Documentation contract | Standard CI | `just docs-check` | Astro Starlight production build, Pagefind search index, route-manifest/legacy-route check, generated-reference check, and executable code snippets/example commands. | Required on every PR |
 | Production sandbox policy | Linux test environment | `just sandbox-policy-test` | Default-deny network policy, allow-list handling, resource/time limits, no host-path mounts, no privilege escalation, and policy-to-audit-event mapping. The test uses a fake driver and does not pretend to prove KVM. | Required on every PR touching sandbox code |
-| Firecracker microVM boot (planned) | Dedicated Linux KVM runner | future protected-run command; current `just firecracker-smoke` is preflight only | A real guest must boot under Firecracker, emit a unique serial marker, respond over the chosen guest channel, shut down, and exit within the time limit. Artifact digests, Firecracker version, guest kernel/rootfs identity, and serial log must be retained. | Blocks any Firecracker foundation claim; not an untrusted-fork job |
-| Firecracker runtime contract (planned) | Dedicated Linux KVM runner | future protected-run command; current `just firecracker-integration` is the same preflight alias | The production Firecracker driver must perform one real command/turn in a jailed microVM, return stdout/stderr/exit state through the public sandbox interface, enforce timeout and filesystem boundary, and emit lifecycle events. | Blocks release candidate; no current command claims this execution |
+| Firecracker microVM boot (planned) | Dedicated Linux KVM runner | `just firecracker-smoke` with a reviewed v2 lock plus explicit runner UID/GID/cgroup/owner inputs | A real guest must boot under Firecracker, emit a unique serial marker, respond over the chosen guest channel, shut down, and exit within the time limit. Artifact digests, Firecracker version, guest kernel/rootfs identity, and serial log must be retained. Absent inputs produce a blocked report, not a pass. | Blocks any Firecracker foundation claim; not an untrusted-fork job |
+| Firecracker runtime contract (planned) | Dedicated Linux KVM runner | `just firecracker-integration` uses the same boot harness; an enrolled public-control command is still required | The production Firecracker driver must perform one real command/turn in a jailed microVM, return stdout/stderr/exit state through the public sandbox interface, enforce timeout and filesystem boundary, and emit lifecycle events. | Blocks release candidate; no current command claims this execution |
 
 ## Real Firecracker Linux/KVM proof path
 
@@ -94,9 +94,9 @@ production execution. See
 [getting started](https://github.com/firecracker-microvm/firecracker/blob/main/docs/getting-started.md)
 and [Jailer operation](https://github.com/firecracker-microvm/firecracker/blob/main/docs/jailer.md).
 
-The required protected-run smoke protocol must perform these concrete steps;
-the current `firecracker-smoke` command stops at fail-closed preflight until
-the listed fixture and M3 inputs exist:
+The required protected-run smoke protocol performs these concrete steps only
+after the listed fixture and runner inputs exist. Until then,
+`firecracker-smoke` writes a fail-closed blocked report:
 
 1. Assert the runner contract and fail with `KVM_UNAVAILABLE` before downloading
    or launching anything if it cannot be met.
