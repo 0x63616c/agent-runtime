@@ -18,6 +18,34 @@ type HostExecutor interface {
 	Execute(context.Context, sandboxhostprotocol.Envelope) error
 }
 
+// AuthenticatedHostExecutor optionally receives the exact control-signed wire
+// that sandboxhostprocess verified before it reached the durable effect seam.
+// The ordinary HostExecutor door remains for deterministic adapters that do
+// not have a guest data plane.
+type AuthenticatedHostExecutor interface {
+	HostExecutor
+	ExecuteAuthenticated(context.Context, sandboxhostprotocol.Envelope, []byte) error
+}
+
+type authenticatedEnvelopeExecutor struct {
+	HostExecutor
+	wire []byte
+}
+
+func (executor authenticatedEnvelopeExecutor) Execute(ctx context.Context, envelope sandboxhostprotocol.Envelope) error {
+	if authenticated, ok := executor.HostExecutor.(AuthenticatedHostExecutor); ok {
+		return authenticated.ExecuteAuthenticated(ctx, envelope, append([]byte(nil), executor.wire...))
+	}
+	return executor.HostExecutor.Execute(ctx, envelope)
+}
+
+func bindAuthenticatedEnvelope(executor HostExecutor, wire []byte) HostExecutor {
+	if _, ok := executor.(AuthenticatedHostExecutor); !ok || len(wire) == 0 {
+		return executor
+	}
+	return authenticatedEnvelopeExecutor{HostExecutor: executor, wire: append([]byte(nil), wire...)}
+}
+
 type executorFunc func(context.Context, sandboxhostprotocol.Envelope) error
 
 func (executor executorFunc) Execute(ctx context.Context, envelope sandboxhostprotocol.Envelope) error {

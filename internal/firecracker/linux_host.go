@@ -93,6 +93,13 @@ type GuestDispatchChannel interface {
 	ExecuteDispatch(context.Context, sandboxhostprotocol.Envelope) error
 }
 
+// AuthenticatedGuestDispatchChannel carries the exact already-verified
+// control-signed canonical envelope across the guest boundary.
+type AuthenticatedGuestDispatchChannel interface {
+	GuestDispatchChannel
+	ExecuteAuthenticatedDispatch(context.Context, sandboxhostprotocol.Envelope, []byte) error
+}
+
 // LinuxJailerHost is the Linux/KVM-only SmokeHost adapter composed from real host ports.
 type LinuxJailerHost struct {
 	PreflightState KVMPreflight
@@ -151,6 +158,53 @@ func (host *LinuxJailerHost) ExecuteDispatch(ctx context.Context, envelope sandb
 		return fmt.Errorf("%w: certified guest dispatch channel is not composed", ErrCapabilityUnavailable)
 	}
 	return dispatch.ExecuteDispatch(ctx, envelope)
+}
+
+// ExecuteAuthenticatedDispatch is the host-process-only guest path. It uses
+// the exact control-signed wire retained through verification so the private
+// guest frame cannot be rebound to a different lease-fenced envelope.
+func (host *LinuxJailerHost) ExecuteAuthenticatedDispatch(ctx context.Context, envelope sandboxhostprotocol.Envelope, authenticatedEnvelope []byte) error {
+	if err := contextError(ctx); err != nil {
+		return err
+	}
+	if host == nil || len(authenticatedEnvelope) == 0 || envelope.HostID == "" || envelope.AssignmentID == "" || envelope.FencingToken == 0 || envelope.CapabilityDigest == "" {
+		return fmt.Errorf("%w: authenticated fenced host envelope is required", ErrCapabilityUnavailable)
+	}
+	host.mu.Lock()
+	launched, cleaning, plan, guest := host.launched, host.cleaning || host.cleaned, cloneLinuxJailerPlan(host.plan), host.Guest
+	host.mu.Unlock()
+	if !launched || cleaning || !validCompiledPlan(plan) || envelope.SandboxID != plan.VMID() || sandbox.Digest(envelope.CapabilityDigest) != plan.Capabilities().Digest || firecrackerProfilesUnavailable(plan.Capabilities()) {
+		return fmt.Errorf("%w: launch state, exact capability digest, and certified guest profile are required", ErrCapabilityUnavailable)
+	}
+	dispatch, ok := guest.(AuthenticatedGuestDispatchChannel)
+	if !ok {
+		return fmt.Errorf("%w: authenticated guest dispatch channel is not composed", ErrCapabilityUnavailable)
+	}
+	return dispatch.ExecuteAuthenticatedDispatch(ctx, envelope, authenticatedEnvelope)
+}
+
+// CancelDispatch forwards a lease-fenced cancellation only to the exact
+// running guest selected by the immutable compiled plan. It is intentionally
+// unavailable until a future certified guest profile composes a cancellation
+// channel; cleanup still closes the whole channel before reaping the Jailer.
+func (host *LinuxJailerHost) CancelDispatch(ctx context.Context, envelope sandboxhostprotocol.Envelope) error {
+	if err := contextError(ctx); err != nil {
+		return err
+	}
+	if host == nil || envelope.EnvelopeID == "" || envelope.FencingToken == 0 {
+		return fmt.Errorf("%w: authenticated fenced guest cancellation is required", ErrCapabilityUnavailable)
+	}
+	host.mu.Lock()
+	launched, cleaning, plan, guest := host.launched, host.cleaning || host.cleaned, cloneLinuxJailerPlan(host.plan), host.Guest
+	host.mu.Unlock()
+	if !launched || cleaning || !validCompiledPlan(plan) || envelope.SandboxID != plan.VMID() || firecrackerProfilesUnavailable(plan.Capabilities()) {
+		return fmt.Errorf("%w: certified Firecracker guest cancellation is unavailable", ErrCapabilityUnavailable)
+	}
+	canceller, ok := guest.(GuestDispatchCanceller)
+	if !ok {
+		return fmt.Errorf("%w: certified guest cancellation channel is not composed", ErrCapabilityUnavailable)
+	}
+	return canceller.CancelDispatch(ctx, envelope)
 }
 
 func firecrackerProfilesUnavailable(snapshot sandbox.CapabilitySnapshot) bool {

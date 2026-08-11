@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"io"
 	"strings"
@@ -142,7 +143,11 @@ func TestServeGuestControlReturnsBoundedUnavailableResultForAnAuthenticatedDispa
 		Payload:      []byte("bounded"),
 	}
 	envelope.PayloadDigest = sandboxhostprotocol.Digest(envelope.Payload)
-	frame, err := firecracker.EncodeGuestDispatch(envelope)
+	authenticatedEnvelope, err := json.Marshal(envelope)
+	if err != nil {
+		t.Fatalf("marshal authenticated envelope: %v", err)
+	}
+	frame, err := firecracker.EncodeAuthenticatedGuestDispatch(envelope, authenticatedEnvelope)
 	if err != nil {
 		t.Fatalf("EncodeGuestDispatch() error = %v", err)
 	}

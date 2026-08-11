@@ -22,6 +22,13 @@ type GuestIdentityBinder interface {
 	BindGuestIdentity(context.Context, string, string) error
 }
 
+// GuestDispatchCanceller is the private cancellation extension of the bounded
+// guest operation protocol. It is separate from Close so a live guest can reap
+// one fenced operation before the host must reap the entire Jailer.
+type GuestDispatchCanceller interface {
+	CancelDispatch(context.Context, sandboxhostprotocol.Envelope) error
+}
+
 // UnixGuestControlChannel is the host-side private Firecracker vsock-UDS
 // channel. It exposes no TCP, proxy, or arbitrary destination surface.
 type UnixGuestControlChannel struct {
@@ -132,6 +139,62 @@ func (channel *UnixGuestControlChannel) ExecuteDispatch(ctx context.Context, env
 		return fmt.Errorf("read guest dispatch result: %w", ErrCapabilityUnavailable)
 	}
 	return fmt.Errorf("guest dispatch: %w", ErrCapabilityUnavailable)
+}
+
+// ExecuteAuthenticatedDispatch transports the exact control-signed canonical
+// envelope retained by sandboxhostprocess after control trust verification.
+func (channel *UnixGuestControlChannel) ExecuteAuthenticatedDispatch(ctx context.Context, envelope sandboxhostprotocol.Envelope, authenticatedEnvelope []byte) error {
+	frame, err := EncodeAuthenticatedGuestDispatch(envelope, authenticatedEnvelope)
+	if err != nil {
+		return err
+	}
+	channel.mu.Lock()
+	vmID := channel.vmID
+	channel.mu.Unlock()
+	if envelope.SandboxID != vmID {
+		return fmt.Errorf("dispatch guest control: %w", ErrCapabilityUnavailable)
+	}
+	connection, reader, err := channel.open(ctx)
+	if err != nil {
+		return err
+	}
+	defer channel.release(connection)
+	if _, err := fmt.Fprintf(connection, "DISPATCH %s\n", base64.RawURLEncoding.EncodeToString(frame)); err != nil {
+		return fmt.Errorf("write authenticated guest dispatch: %w", err)
+	}
+	line, err := readGuestControlResponse(reader)
+	if err != nil || line != "RESULT UNAVAILABLE "+envelope.EnvelopeID {
+		return fmt.Errorf("read authenticated guest dispatch result: %w", ErrCapabilityUnavailable)
+	}
+	return fmt.Errorf("authenticated guest dispatch: %w", ErrCapabilityUnavailable)
+}
+
+// CancelDispatch asks the exact bound guest to cancel one fenced operation.
+// It never accepts a caller-selected VM or a zero fence, and it leaves the
+// host's durable uncertain-result recovery as the terminal authority.
+func (channel *UnixGuestControlChannel) CancelDispatch(ctx context.Context, envelope sandboxhostprotocol.Envelope) error {
+	if channel == nil {
+		return fmt.Errorf("cancel guest dispatch: %w", ErrCapabilityUnavailable)
+	}
+	channel.mu.Lock()
+	vmID := channel.vmID
+	channel.mu.Unlock()
+	if envelope.EnvelopeID == "" || envelope.FencingToken == 0 || envelope.SandboxID != vmID {
+		return fmt.Errorf("cancel guest dispatch: %w", ErrCapabilityUnavailable)
+	}
+	connection, reader, err := channel.open(ctx)
+	if err != nil {
+		return err
+	}
+	defer channel.release(connection)
+	if _, err := fmt.Fprintf(connection, "CANCEL %s %d\n", envelope.EnvelopeID, envelope.FencingToken); err != nil {
+		return fmt.Errorf("write guest cancellation: %w", err)
+	}
+	line, err := readGuestControlResponse(reader)
+	if err != nil || line != "CANCELLED "+envelope.EnvelopeID {
+		return fmt.Errorf("read guest cancellation: %w", ErrCapabilityUnavailable)
+	}
+	return nil
 }
 
 // Close tears down every in-flight private guest exchange before the Jailer
