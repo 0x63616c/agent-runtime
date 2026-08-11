@@ -102,3 +102,10 @@ go test -race -tags=integration ./examples/durable-chat -run 'Test(DurableChatRe
 
 reset_runtime_schema
 go test -race -tags=integration ./internal/runtimeapiprocess -run 'TestDurableWorkspaceAgentBinariesUseOnlyThePublicAPI' -count=1
+
+# M8 remains an explicit public application proof, isolated from the M6/M7
+# package proofs above. It owns only disposable PostgreSQL, MinIO, and
+# Temporal test services; it is not a production deployment attestation.
+reset_runtime_schema
+go test -race -tags=integration ./internal/runtimeapiprocess \
+  -run '^TestResearchDossierRecoversLongRunningToolResearchThroughThePublicContract$' -count=1

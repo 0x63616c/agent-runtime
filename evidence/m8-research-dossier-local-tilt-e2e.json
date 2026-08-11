@@ -1,0 +1,30 @@
+{
+  "kind": "m8-research-dossier-local-tilt-e2e",
+  "timestamp_utc": "2026-08-11T14:17:08Z",
+  "stack": "m8-research-dossier",
+  "namespace": "ar-m8-research-dossier",
+  "authority": "public HTTP API and public Go SDK only",
+  "redaction": "tokens, credentials, capability material, and raw provider configuration omitted",
+  "convergence": {
+    "runtime_api_model_tool_state_dsn_sha256": "9d6a92015dc37e2838b347197df81b419b37ea29144281529020169073c153a7",
+    "result": "all three declared role bindings resolved to the same live scoped state DSN before seeding"
+  },
+  "session": "sess_83xZngSmkwPsGz5i",
+  "ordered_cycles": [
+    {"approval": "appr_523d799d1dc65ff0", "artifact": "art_dc702287435b3e79", "size_bytes": 525334, "sha256": "22897222c3b94855f2090ddfb8ac2fa560b343e081a550e376fcc7c2afd39185"},
+    {"approval": "appr_4b92591871ce4c2f", "artifact": "art_0764687f5ec33b7d", "size_bytes": 525334, "sha256": "e4115e5c223479e3acd7a5c3578e79fa0ffeea125d91dd205f1b5579cc71348c"},
+    {"approval": "appr_51a0f346ac368a17", "artifact": "art_107b252904edd411", "size_bytes": 525334, "sha256": "6201cc1e92914a6aa3903903d0799461b526d31e2d7f7761fa3055ebb53356a4"}
+  ],
+  "restart_resume": "runtime-api rollout restart resumed the same public session; terminal resume observed 16 events and cursor cur_42bc7f0afb8641fb",
+  "download": {
+    "artifact": "art_107b252904edd411",
+    "bytes_streamed": 525334,
+    "citation": "https://example.invalid/local-demo/op-tool-grant_sCuJY9kyPh36MOq8",
+    "digest_header_sha256": "6201cc1e92914a6aa3903903d0799461b526d31e2d7f7761fa3055ebb53356a4"
+  },
+  "clients": {
+    "terminal": "public SDK terminal resumed and listed all three artifacts",
+    "web": "loopback web artifacts route rendered all three artifacts"
+  },
+  "teardown": "pending verified owned Stack teardown after source gates"
+}

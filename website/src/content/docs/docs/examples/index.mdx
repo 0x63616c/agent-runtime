@@ -3,6 +3,8 @@ title: Examples
 description: Status of the three public-contract examples.
 ---
 
+import DocLink from '../../../../components/DocLink.astro';
+
 # Examples
 
 The sandbox contract has a small compile-tested Go construction example. It
@@ -20,6 +22,19 @@ The example is not a Codex subscription canary. The official production
 subscription Model surface remains blocked, so no example may label its model
 path subscription-verified until the protected live canary is retained.
 
+Durable Chat, Workspace Agent, and Research Dossier are public-contract
+applications. Research Dossier is available as a loopback web or terminal
+binary. It creates a durable Session, queues ordered research steps, resumes
+Product events from an opaque Cursor, lists only caller-authorized Artifact
+metadata, and downloads each retained dossier Artifact through the same public
+SDK contract. Its citation index is derived from retained Artifact bytes; the
+browser never receives the runtime bearer credential.
+
+See the <DocLink href="/docs/examples/research-dossier">Research Dossier tutorial</DocLink> for commands, the
+durable recovery model, and the boundary between public application calls and
+operator-composed model/tool workers. A local UI does not authorize an
+undeclared external tool or bypass the runtime Tool broker.
+
 Workspace Agent currently has a public-SDK approval inbox slice: it lists,
 inspects, approves, denies, and cancels the Turn behind an owner-scoped
 Approval without exposing action arguments, capability material, or sandbox
@@ -28,6 +43,6 @@ public HTTP/SDK contract. Its Workspace sandbox execution remains unavailable un
 protected Firecracker profile has Linux/KVM evidence; this is not a runnable
 Workspace Agent completion claim.
 
-Research Dossier is not yet implemented. The complete three-example local Tilt
-E2E suite is also not complete, so this page does not claim a clean local
-demonstration yet.
+Research Dossier has local public-contract evidence only. Its local fixture
+does not attest production deployment, a live provider subscription, or a
+Linux/KVM sandbox.

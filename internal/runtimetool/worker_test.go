@@ -127,6 +127,15 @@ func TestWorkerFinalizesAuthorizedToolActionsAndReconcilesLostClaims(t *testing.
 			if len(state.ToolExecutions) != 1 || state.ToolExecutions[0].State != test.wantState {
 				t.Fatalf("tool execution state = %#v, want %s", state.ToolExecutions, test.wantState)
 			}
+			if !test.cancel {
+				wantTurn := agentruntime.TurnSucceeded
+				if test.wantState != runtimestate.ToolExecutionSucceeded {
+					wantTurn = agentruntime.TurnFailed
+				}
+				if len(state.Turns) != 1 || state.Turns[0].State != wantTurn {
+					t.Fatalf("terminal tool outcome left Turn = %#v, want %s", state.Turns, wantTurn)
+				}
+			}
 			if test.corrupt && (state.ToolExecutions[0].Failure == nil || state.ToolExecutions[0].Failure.Message != "verified tool action descriptor is invalid") {
 				t.Fatalf("corrupt descriptor outcome = %#v", state.ToolExecutions[0])
 			}
@@ -139,8 +148,15 @@ func TestWorkerFinalizesAuthorizedToolActionsAndReconcilesLostClaims(t *testing.
 			if !test.corrupt && !test.missing && !test.cancel && !hasAuditKind(state.Audit, "capability_grant.exhausted") {
 				t.Fatalf("terminal max-use grant lacks exhausted audit: %#v", state.Audit)
 			}
-			if len(state.Events) == 0 || state.Events[len(state.Events)-1].Kind != agentruntime.EventSandboxOperationFinalized {
-				t.Fatalf("tool terminal event = %#v, want durable sandbox finalization", state.Events)
+			foundFinalizationEvent := false
+			for _, event := range state.Events {
+				if event.Kind == agentruntime.EventSandboxOperationFinalized && event.OperationID == execution.OperationID {
+					foundFinalizationEvent = true
+					break
+				}
+			}
+			if !foundFinalizationEvent {
+				t.Fatalf("tool terminal events = %#v, want durable sandbox finalization", state.Events)
 			}
 			foundFinalizationRoute := false
 			for _, record := range state.Outbox {

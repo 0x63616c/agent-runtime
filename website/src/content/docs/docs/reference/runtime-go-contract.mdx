@@ -64,6 +64,12 @@ authenticated, idempotent command that moves an owner Session from `open` or
 runtime-owned failure is observable as the safe `failed` Session state and
 `session.failed` Product event; it is not exposed as a caller command.
 
+`SessionArtifactLister` is another additive capability. Its
+`ListSessionArtifacts` method returns a bounded Session-owned Artifact metadata
+index without making content storage discoverable. Research Dossier uses this
+index to recover its retained research outputs after reconnect or API restart,
+then makes a separate authorized read for one selected dossier.
+
 The standalone API role still uses explicitly labelled `memory-unsafe`
 storage. It does not prove restart durability. The separate durable StateRuntime
 integration harness proves cancelled and failed projections, exact mutation

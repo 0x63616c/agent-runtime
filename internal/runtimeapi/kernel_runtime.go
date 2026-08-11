@@ -52,6 +52,12 @@ func (runtime kernelRuntime) ReadArtifact(context.Context, Identity, agentruntim
 	return agentruntime.ArtifactDownload{}, &agentruntime.Error{Failure: agentruntime.Failure{Code: agentruntime.FailureNotFound, Message: "resource not found"}}
 }
 
+// ListSessionArtifacts is intentionally unavailable in the legacy memory-only
+// kernel because its Artifact authority is not durable or content-backed.
+func (runtime kernelRuntime) ListSessionArtifacts(context.Context, Identity, agentruntime.SessionID) (agentruntime.ArtifactPage, error) {
+	return agentruntime.ArtifactPage{}, &agentruntime.Error{Failure: agentruntime.Failure{Code: agentruntime.FailureNotFound, Message: "resource not found"}}
+}
+
 // InspectApproval is unavailable in the legacy memory-only kernel. Durable
 // approval inspection requires the state authority.
 func (runtime kernelRuntime) InspectApproval(context.Context, Identity, agentruntime.ApprovalID) (agentruntime.Approval, error) {

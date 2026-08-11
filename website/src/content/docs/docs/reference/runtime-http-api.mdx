@@ -9,7 +9,7 @@ import DocLink from '../../../../components/DocLink.astro';
 
 [`api/openapi/openapi.yaml`](https://github.com/0x63616c/agent-runtime/blob/main/api/openapi/openapi.yaml)
 is the canonical `/v1` transport contract. The generated Go SDK and server
-route constants are checked against its fifteen operations.
+route constants are checked against its generated public operation set.
 
 The generated <DocLink href="/docs/reference/generated/http-operations">HTTP operation index</DocLink> lists
 the declared route, method, operation ID, and successful response statuses
@@ -64,6 +64,14 @@ The concrete Go client implements the separate additive `SessionCanceller`
 capability. Its `CancelSession` method maps to
 `POST /v1/sessions/{session_id}/cancel`; runtime-owned failure remains
 observation-only rather than a public mutation.
+
+`GET /v1/sessions/{session_id}/artifacts` is the separate bounded,
+owner-scoped Artifact index used by Research Dossier. It returns metadata for
+Artifacts belonging to that exact Session (up to 256 entries) but never bytes,
+bucket names, keys, or download URLs. The additive SDK
+`SessionArtifactLister` capability and `Client.ListSessionArtifacts` preserve
+the existing `RuntimeClient` source contract. Each listed Artifact still needs
+an exact caller-authorized `ReadArtifact` or `OpenArtifact` request.
 
 `GET /healthz` and `GET /readyz` are deliberately unauthenticated and return
 only the role and readiness state.

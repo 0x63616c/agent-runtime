@@ -135,25 +135,34 @@ func (w *Worker) ScanOnce(ctx context.Context) error {
 		if e := w.admitApprovedGrants(ctx, t); e != nil {
 			return e
 		}
-		p, e := w.store.ReadOutbox(ctx, runtimestate.OutboxQuery{Scope: runtimestate.MutationScope{Tenant: t, Authority: runtimestate.AuthorityOutboxPublisher}, Limit: 128})
-		if e != nil {
-			return e
-		}
-		for _, r := range p.Records {
-			if r.ToolCallID == "" || r.EventKind != "" || r.State == runtimestate.OutboxPublished || r.State == runtimestate.OutboxReconcile || (r.State == runtimestate.OutboxClaimed && r.ClaimUntil != nil && r.ClaimUntil.After(w.clock.Now())) {
-				continue
-			}
-			recovering := r.State == runtimestate.OutboxClaimed
-			claimed, e := w.claim(ctx, r)
+		// A busy durable tenant can retain far more than one page of already
+		// published state transitions.  Continue from the stable outbox cursor so
+		// a later pending tool operation cannot be starved behind those records.
+		for after := runtimestate.OutboxID(""); ; {
+			p, e := w.store.ReadOutbox(ctx, runtimestate.OutboxQuery{Scope: runtimestate.MutationScope{Tenant: t, Authority: runtimestate.AuthorityOutboxPublisher}, After: after, Limit: 128})
 			if e != nil {
 				return e
 			}
-			if e = w.process(ctx, claimed, recovering); e != nil {
-				return e
+			for _, r := range p.Records {
+				if r.ToolCallID == "" || r.EventKind != "" || r.State == runtimestate.OutboxPublished || r.State == runtimestate.OutboxReconcile || (r.State == runtimestate.OutboxClaimed && r.ClaimUntil != nil && r.ClaimUntil.After(w.clock.Now())) {
+					continue
+				}
+				recovering := r.State == runtimestate.OutboxClaimed
+				claimed, e := w.claim(ctx, r)
+				if e != nil {
+					return e
+				}
+				if e = w.process(ctx, claimed, recovering); e != nil {
+					return e
+				}
+				if e = w.ack(ctx, claimed); e != nil {
+					return e
+				}
 			}
-			if e = w.ack(ctx, claimed); e != nil {
-				return e
+			if len(p.Records) < 128 || p.Next == "" {
+				break
 			}
+			after = p.Next
 		}
 	}
 	return nil
@@ -328,7 +337,7 @@ func (w *Worker) process(ctx context.Context, r runtimestate.OutboxRecord, recov
 	if e != nil {
 		return e
 	}
-	return w.persist(ctx, m)
+	return w.persistToolOutcomeAndSettle(ctx, r, m, state, failure)
 }
 
 func redactToolOutput(value []byte) []byte {
@@ -358,19 +367,64 @@ func (w *Worker) executionDispatchAllowed(state runtimestate.RuntimeState, execu
 }
 
 func (w *Worker) recordDispatchRefusal(ctx context.Context, r runtimestate.OutboxRecord) error {
-	m, err := w.compiler.CompileRecordToolExecutionOutcome(runtimestate.RecordToolExecutionOutcomeCommand{Scope: runtimestate.MutationScope{Tenant: r.Tenant, Principal: r.Principal, Authority: runtimestate.AuthorityRuntimeWorker}, IdempotencyKey: "tool-outcome-" + string(r.OperationID), SessionID: r.SessionID, TurnID: r.TurnID, ToolCallID: r.ToolCallID, OperationID: r.OperationID, Outcome: runtimestate.ToolExecutionFailed, Failure: &agentruntime.Failure{Code: agentruntime.FailureInvalidInput, Message: "tool execution is no longer authorized"}})
+	failure := &agentruntime.Failure{Code: agentruntime.FailureInvalidInput, Message: "tool execution is no longer authorized"}
+	m, err := w.compiler.CompileRecordToolExecutionOutcome(runtimestate.RecordToolExecutionOutcomeCommand{Scope: runtimestate.MutationScope{Tenant: r.Tenant, Principal: r.Principal, Authority: runtimestate.AuthorityRuntimeWorker}, IdempotencyKey: "tool-outcome-" + string(r.OperationID), SessionID: r.SessionID, TurnID: r.TurnID, ToolCallID: r.ToolCallID, OperationID: r.OperationID, Outcome: runtimestate.ToolExecutionFailed, Failure: failure})
 	if err != nil {
 		return err
 	}
-	return w.persist(ctx, m)
+	return w.persistToolOutcomeAndSettle(ctx, r, m, runtimestate.ToolExecutionFailed, failure)
 }
 
 func (w *Worker) recordDescriptorFailure(ctx context.Context, r runtimestate.OutboxRecord) error {
-	m, err := w.compiler.CompileRecordToolExecutionOutcome(runtimestate.RecordToolExecutionOutcomeCommand{Scope: runtimestate.MutationScope{Tenant: r.Tenant, Principal: r.Principal, Authority: runtimestate.AuthorityRuntimeWorker}, IdempotencyKey: "tool-outcome-" + string(r.OperationID), SessionID: r.SessionID, TurnID: r.TurnID, ToolCallID: r.ToolCallID, OperationID: r.OperationID, Outcome: runtimestate.ToolExecutionFailed, Failure: &agentruntime.Failure{Code: agentruntime.FailureInvalidInput, Message: "verified tool action descriptor is invalid"}})
+	failure := &agentruntime.Failure{Code: agentruntime.FailureInvalidInput, Message: "verified tool action descriptor is invalid"}
+	m, err := w.compiler.CompileRecordToolExecutionOutcome(runtimestate.RecordToolExecutionOutcomeCommand{Scope: runtimestate.MutationScope{Tenant: r.Tenant, Principal: r.Principal, Authority: runtimestate.AuthorityRuntimeWorker}, IdempotencyKey: "tool-outcome-" + string(r.OperationID), SessionID: r.SessionID, TurnID: r.TurnID, ToolCallID: r.ToolCallID, OperationID: r.OperationID, Outcome: runtimestate.ToolExecutionFailed, Failure: failure})
 	if err != nil {
 		return err
 	}
-	return w.persist(ctx, m)
+	return w.persistToolOutcomeAndSettle(ctx, r, m, runtimestate.ToolExecutionFailed, failure)
+}
+
+// persistToolOutcomeAndSettle advances the same durable Turn after the
+// capability-bound Tool has reached a terminal outcome. Without this second
+// runtime-owned transition, a completed Tool would leave ordered public Input
+// stuck behind a running Turn forever.
+func (w *Worker) persistToolOutcomeAndSettle(ctx context.Context, record runtimestate.OutboxRecord, outcome runtimestate.CompiledMutation, executionState runtimestate.ToolExecutionState, failure *agentruntime.Failure) error {
+	plan, err := w.persistPlan(ctx, outcome)
+	if err != nil {
+		return err
+	}
+	var session runtimestate.SessionRecord
+	var turn runtimestate.TurnRecord
+	for _, candidate := range plan.State().Sessions {
+		if candidate.Tenant == record.Tenant && candidate.Principal == record.Principal && candidate.SessionID == record.SessionID {
+			session = candidate
+			break
+		}
+	}
+	for _, candidate := range plan.State().Turns {
+		if candidate.Tenant == record.Tenant && candidate.Principal == record.Principal && candidate.SessionID == record.SessionID && candidate.TurnID == record.TurnID {
+			turn = candidate
+			break
+		}
+	}
+	if session.SessionID == "" || turn.TurnID == "" {
+		return runtimestate.ErrIntegrity
+	}
+	if turn.State != agentruntime.TurnRunning {
+		// A concurrent owner cancellation is already terminal and authoritative.
+		// The Tool outcome remains auditable, but must not overwrite it.
+		return nil
+	}
+	state := agentruntime.TurnFailed
+	if executionState == runtimestate.ToolExecutionSucceeded {
+		state = agentruntime.TurnSucceeded
+		failure = nil
+	}
+	settle, err := w.compiler.CompileSettleTurn(runtimestate.SettleTurnCommand{Scope: runtimestate.MutationScope{Tenant: record.Tenant, Principal: record.Principal, Authority: runtimestate.AuthorityRuntimeWorker}, IdempotencyKey: "tool-settle-" + string(record.OperationID), SessionID: record.SessionID, TurnID: record.TurnID, ExpectedSessionVersion: session.Version, ExpectedTurnVersion: turn.Version, Outcome: runtimestate.TerminalOutcome{State: state, Failure: failure}})
+	if err != nil {
+		return err
+	}
+	return w.persist(ctx, settle)
 }
 func (w *Worker) claim(ctx context.Context, r runtimestate.OutboxRecord) (runtimestate.OutboxRecord, error) {
 	return w.transition(ctx, r, func(x runtimestate.OutboxRecord) (runtimestate.CompiledMutation, error) {

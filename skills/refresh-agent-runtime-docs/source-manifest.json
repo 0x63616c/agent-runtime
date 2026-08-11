@@ -47,6 +47,11 @@
         "evidence/issue-14-m1-stack-contract-e2e.json",
         "evidence/issue-14-two-stack-e2e.json",
         "evidence/requirements-ledger.json",
+        "examples/research-dossier/dossier.go",
+        "examples/research-dossier/keys.go",
+        "examples/research-dossier/terminal.go",
+        "examples/research-dossier/web.go",
+        "examples/research-dossier/cmd/research-dossier/main.go",
 		"examples/workspace-agent/approval.go",
 		"examples/workspace-agent/approval_test.go",
 		"examples/workspace-agent/terminal.go",
@@ -75,6 +80,7 @@
         "website/src/content/docs/docs/build-and-run/local-stack.mdx",
         "website/src/content/docs/docs/concepts/runtime-language.mdx",
         "website/src/content/docs/docs/examples/index.mdx",
+        "website/src/content/docs/docs/examples/research-dossier.mdx",
         "website/src/content/docs/docs/help/publication-operations.mdx",
         "website/src/content/docs/docs/reference/overview.mdx",
         "website/src/content/docs/docs/reference/postgresql-data-authority.mdx",
@@ -89,7 +95,7 @@
         "website/tsconfig.json"
       ],
       "artifactKind": "source-inventory",
-      "publicStatus": "M0, M1, M2, and generic M3 complete; M4/M5 implementation active"
+      "publicStatus": "Current public-contract source inventory; milestone acceptance remains evidence-gated"
     },
     {
       "output": "website/src/content/docs/docs/reference/generated/http-operations.mdx",
@@ -116,6 +122,7 @@
     "website/src/content/docs/docs/build-and-run/local-stack.mdx",
     "website/src/content/docs/docs/concepts/runtime-language.mdx",
     "website/src/content/docs/docs/examples/index.mdx",
+    "website/src/content/docs/docs/examples/research-dossier.mdx",
     "website/src/content/docs/docs/help/publication-operations.mdx",
     "website/src/content/docs/docs/reference/overview.mdx",
     "website/src/content/docs/docs/reference/postgresql-data-authority.mdx",

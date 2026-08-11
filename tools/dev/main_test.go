@@ -428,12 +428,12 @@ func TestMaterializeSecretsKeepsValuesPrivateAndStablePerStack(t *testing.T) {
 		"ar-safe-stack-sandbox-control-secret":            {"SANDBOX_CONTROL_TOKEN"},
 		"ar-safe-stack-blob-storage-secret":               {"BLOB_STORAGE_CREDENTIAL", "MINIO_ROOT_PASSWORD", "MINIO_ROOT_USER"},
 		"ar-safe-stack-orchestration-payload-blob-secret": {"ORCHESTRATION_PAYLOAD_BLOB_ACCESS_KEY", "ORCHESTRATION_PAYLOAD_BLOB_SECRET_KEY"},
-		"ar-safe-stack-runtime-api-secret":                {"AR_RUNTIME_MINIO_ACCESS_KEY", "AR_RUNTIME_MINIO_SECRET_KEY", "RUNTIME_API_ADMIN_TOKEN", "RUNTIME_API_DEVELOPER_TOKEN"},
 		"ar-safe-stack-codec-blob-secret":                 {"CODEC_BLOB_CREDENTIAL"},
 		"ar-safe-stack-sandbox-host-ca-secret":            {"SANDBOX_HOST_CA"},
 		"ar-safe-stack-sandbox-state-secret":              {"SANDBOX_STATE_DSN"},
 		"ar-safe-stack-sandbox-host-identity-secret":      {"SANDBOX_HOST_IDENTITY"},
 		"ar-safe-stack-temporal-db-secret":                {"POSTGRES_PASSWORD"},
+		"ar-safe-stack-runtime-api-secret":                {"AR_RUNTIME_MINIO_ACCESS_KEY", "AR_RUNTIME_MINIO_SECRET_KEY", "RUNTIME_API_ADMIN_TOKEN", "RUNTIME_API_DEVELOPER_TOKEN"},
 	}
 	if len(secrets.Items) != len(expectedSecretKeys) {
 		t.Fatalf("generated Secret count = %d, want %d", len(secrets.Items), len(expectedSecretKeys))

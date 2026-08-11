@@ -444,6 +444,8 @@ type recordingRuntime struct {
 	createSessionErr    error
 	artifact            agentruntime.ArtifactDownload
 	artifactErr         error
+	artifactPage        agentruntime.ArtifactPage
+	artifactPageErr     error
 	approval            agentruntime.Approval
 	approvalErr         error
 	decision            agentruntime.DecideApprovalRequest
@@ -481,6 +483,10 @@ func (runtime *recordingRuntime) GetPolicy(context.Context, runtimeapi.Identity,
 
 func (runtime *recordingRuntime) ReadArtifact(context.Context, runtimeapi.Identity, agentruntime.ArtifactID) (agentruntime.ArtifactDownload, error) {
 	return runtime.artifact.Clone(), runtime.artifactErr
+}
+
+func (runtime *recordingRuntime) ListSessionArtifacts(context.Context, runtimeapi.Identity, agentruntime.SessionID) (agentruntime.ArtifactPage, error) {
+	return runtime.artifactPage.Clone(), runtime.artifactPageErr
 }
 
 func (runtime *recordingRuntime) InspectApproval(context.Context, runtimeapi.Identity, agentruntime.ApprovalID) (agentruntime.Approval, error) {
@@ -535,6 +541,36 @@ func TestArtifactHTTPRouteStreamsAuthorizedRuntimeBytes(t *testing.T) {
 	}
 	if string(artifact.Body) != "artifact bytes" || artifact.Artifact != runtime.artifact.Artifact {
 		t.Fatalf("artifact download = %#v, want exact authorized bytes and metadata", artifact)
+	}
+}
+
+func TestSessionArtifactHTTPRouteListsOnlySafeArtifactMetadata(t *testing.T) {
+	runtime := &recordingRuntime{artifactPage: agentruntime.ArtifactPage{Artifacts: []agentruntime.ArtifactReference{{ID: "art_0000000000000001", MediaType: "text/plain", SizeBytes: 14, SHA256: "4659fc0570122b0e0aa14f4ff7c261b1fe51795a01ba79963f462ebf40d7520d"}}}}
+	handler, err := runtimeapi.NewHandler(runtimeapi.Config{Runtime: runtime, Authenticator: staticAuth{identities: map[string]runtimeapi.Identity{"alice-token-000000": {Tenant: "tenant-a", Principal: "alice"}}}, RequestIDs: &requestIDs{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(handler)
+	defer server.Close()
+	page, err := newClient(server.URL, "alice-token-000000", &requestIDs{}).ListSessionArtifacts(context.Background(), "sess_0000000000000001")
+	if err != nil || len(page.Artifacts) != 1 || page.Artifacts[0] != runtime.artifactPage.Artifacts[0] || page.Truncated {
+		t.Fatalf("list session artifacts = %#v, %v", page, err)
+	}
+}
+
+func TestSessionArtifactHTTPRouteEncodesAnEmptyArtifactCollectionAsArray(t *testing.T) {
+	runtime := &recordingRuntime{artifactPage: agentruntime.ArtifactPage{}}
+	handler, err := runtimeapi.NewHandler(runtimeapi.Config{Runtime: runtime, Authenticator: staticAuth{identities: map[string]runtimeapi.Identity{"alice-token-000000": {Tenant: "tenant-a", Principal: "alice"}}}, RequestIDs: &requestIDs{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(http.MethodGet, "/v1/sessions/sess_0000000000000001/artifacts", nil)
+	request.Header.Set("Authorization", "Bearer alice-token-000000")
+	request.Header.Set("X-Request-ID", "req_0000000000000001")
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"artifacts":[]`) || strings.Contains(response.Body.String(), `"artifacts":null`) {
+		t.Fatalf("empty artifact page must satisfy the required array schema: status=%d body=%s", response.Code, response.Body.String())
 	}
 }
 
