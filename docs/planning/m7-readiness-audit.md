@@ -30,10 +30,18 @@ and a restarted API role plus reconnected web client. The fixture is
 deliberately broker-seeded: it is public-client evidence, not model-to-tool
 composition or sandbox-execution evidence.
 
+The model worker now accepts a bounded normalized Tool request only through
+its private broker dependency. It stages the immutable descriptor, atomically
+records the tool intent and pending approval, and moves the active Turn into
+the non-terminal `waiting_for_approval` state. A successful owner approval is
+the only decision that resumes the Turn; cancellation accepts the paused state.
+The public Approval projection carries the owner requester and immutable policy
+revision digest evaluated at admission.
+
 ## Remaining code-owned work
 
-- connect the broker to the durable model/worker process with a canonical Tool
-  request parser and no adapter bypass;
+- add the canonical provider Tool-request parser/JSON-schema validation ahead
+  of the now-composed model-worker broker handoff;
 - record explicit denied/policy-invalidated/cancelled authorization facts and
   preserve queued Turn semantics while an Approval is pending;
 - compose the Tool worker role, bounded output/artifact event path, restart

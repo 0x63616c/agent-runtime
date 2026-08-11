@@ -371,7 +371,7 @@ func TestStateRuntimeInspectsAndDecidesOwnerApprovalIdempotently(t *testing.T) {
 	}
 	approvalID, _ := agentruntime.ParseApprovalID("appr_1234567890ABCDEF")
 	pending, err := runtime.InspectApproval(ctx, alice, approvalID)
-	if err != nil || pending.State != agentruntime.ApprovalPending || pending.SessionID != session.ID || pending.TurnID != accepted.Turn.ID {
+	if err != nil || pending.State != agentruntime.ApprovalPending || pending.SessionID != session.ID || pending.TurnID != accepted.Turn.ID || pending.Requester != "alice" || pending.PolicyRevision != digest {
 		t.Fatalf("inspect pending Approval = %#v, %v", pending, err)
 	}
 	if _, err := runtime.InspectApproval(ctx, bob, approvalID); !hasFailure(err, agentruntime.FailureNotFound) {

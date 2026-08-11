@@ -10,6 +10,7 @@ import (
 	"github.com/0x63616c/agent-runtime/internal/clock"
 	"github.com/0x63616c/agent-runtime/internal/runtimecontent"
 	"github.com/0x63616c/agent-runtime/internal/runtimestate"
+	"github.com/0x63616c/agent-runtime/internal/runtimetool"
 	agentruntime "github.com/0x63616c/agent-runtime/sdk/go"
 )
 
@@ -32,10 +33,27 @@ type Request struct {
 // as immutable runtime content before its state outcome is committed. Failed
 // and uncertain responses must contain a caller-safe runtime Failure.
 type Response struct {
-	Output    []byte
+	Output []byte
+	// Tool is one normalized model request awaiting the private broker. It has
+	// no grant or sandbox client; the worker stages its descriptor then hands
+	// only the sealed reference to Broker.
+	Tool      *ToolRequest
 	Failure   *agentruntime.Failure
 	Uncertain bool
 	Usage     *runtimestate.ModelUsage
+}
+
+// ToolRequest is the bounded normalized model-to-tool handoff. The provider
+// adapter cannot use it to execute an action.
+type ToolRequest struct {
+	ToolCallID, ApprovalID, PolicyName string
+	PolicyRevision                     uint64
+	ToolName                           string
+	ActionDigest, CapabilityDigest     string
+	Action                             agentruntime.ApprovalAction
+	MaximumUses                        uint32
+	ExpiresAt                          time.Time
+	Descriptor                         []byte
 }
 
 // Adapter is the model-provider seam. Invoke is allowed exactly once for a
@@ -56,6 +74,7 @@ type WorkerConfig struct {
 	Clock    clock.Clock
 	Content  *runtimecontent.Store
 	Adapter  Adapter
+	Broker   *runtimetool.Broker
 	Claimer  string
 }
 
@@ -68,6 +87,7 @@ type Worker struct {
 	clock    clock.Clock
 	content  *runtimecontent.Store
 	adapter  Adapter
+	broker   *runtimetool.Broker
 	claimer  string
 }
 
@@ -76,7 +96,7 @@ func NewWorker(config WorkerConfig) (*Worker, error) {
 	if config.Store == nil || config.Tenants == nil || config.Compiler == nil || config.Planner == nil || config.Clock == nil || config.Content == nil || config.Adapter == nil || config.Claimer == "" {
 		return nil, errors.New("create runtime model worker: complete state, content, and adapter authority is required")
 	}
-	return &Worker{store: config.Store, tenants: config.Tenants, compiler: config.Compiler, planner: config.Planner, clock: config.Clock, content: config.Content, adapter: config.Adapter, claimer: config.Claimer}, nil
+	return &Worker{store: config.Store, tenants: config.Tenants, compiler: config.Compiler, planner: config.Planner, clock: config.Clock, content: config.Content, adapter: config.Adapter, broker: config.Broker, claimer: config.Claimer}, nil
 }
 
 // ScanOnce processes visible invocation intents. A recovered claimed record is
@@ -155,6 +175,17 @@ func (worker *Worker) process(ctx context.Context, record runtimestate.OutboxRec
 	}
 	if err != nil {
 		response = Response{Failure: &agentruntime.Failure{Code: agentruntime.FailureUnavailable, Message: "model invocation outcome is uncertain"}, Uncertain: true}
+	}
+	if response.Tool != nil {
+		if worker.broker == nil {
+			return errors.New("admit model tool request: broker is unavailable")
+		}
+		handoff, stageErr := worker.content.StageToolActionDescriptor(ctx, record.Tenant, response.Tool.Descriptor)
+		if stageErr != nil {
+			return stageErr
+		}
+		_, admitErr := worker.broker.Admit(ctx, runtimetool.AdmissionRequest{Tenant: record.Tenant, Principal: record.Principal, SessionID: record.SessionID, TurnID: record.TurnID, ToolCallID: response.Tool.ToolCallID, ApprovalID: agentruntime.ApprovalID(response.Tool.ApprovalID), PolicyName: response.Tool.PolicyName, PolicyRevision: response.Tool.PolicyRevision, ToolName: response.Tool.ToolName, ActionDigest: response.Tool.ActionDigest, CapabilityDigest: response.Tool.CapabilityDigest, Action: response.Tool.Action, MaximumUses: response.Tool.MaximumUses, ExpiresAt: response.Tool.ExpiresAt, Descriptor: handoff, IdempotencyKey: fmt.Sprintf("model-tool-%s-%d", record.OperationID, invocation.Fence)})
+		return admitErr
 	}
 	return worker.finalize(ctx, record, invocation, session, turn, response)
 }

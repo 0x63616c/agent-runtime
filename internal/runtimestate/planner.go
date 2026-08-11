@@ -585,7 +585,8 @@ type compiledToolApproval struct {
 // the planner confirms only durable ownership and exact correlation.
 func (planner *RuntimeStatePlanner) admitToolApproval(state *RuntimeState, binding ReceiptBinding, compiled compiledToolApproval, now time.Time) (PlanResult, EffectSet, error) {
 	c := compiled.command
-	if !c.ExpiresAt.After(now) || findTurn(state, binding.Scope, c.SessionID, c.TurnID) < 0 {
+	turnIndex := findTurn(state, binding.Scope, c.SessionID, c.TurnID)
+	if !c.ExpiresAt.After(now) || turnIndex < 0 || state.Turns[turnIndex].State != agentruntime.TurnRunning {
 		return PlanResult{}, EffectSet{}, ErrConflict
 	}
 	for _, intent := range state.ToolIntents {
@@ -598,6 +599,10 @@ func (planner *RuntimeStatePlanner) admitToolApproval(state *RuntimeState, bindi
 			return PlanResult{}, EffectSet{}, ErrConflict
 		}
 	}
+	// The active turn is explicitly paused before the public approval becomes
+	// visible. A pending approval is never represented as a terminal Turn.
+	state.Turns[turnIndex].State = agentruntime.TurnWaitingForApproval
+	state.Turns[turnIndex].Version++
 	state.ToolIntents = append(state.ToolIntents, ToolIntentRecord{Tenant: binding.Scope.Tenant, Principal: binding.Scope.Principal, SessionID: c.SessionID, TurnID: c.TurnID, ToolCallID: c.ToolCallID, ToolName: c.ToolName, ActionDigest: c.ActionDigest, ActionDescriptor: compiled.descriptor, PolicyRevisionDigest: c.PolicyRevisionDigest, CreatedAt: now, RetainUntil: planner.retain(now, DataClassAuthorization)})
 	state.Approvals = append(state.Approvals, ApprovalRecord{Tenant: binding.Scope.Tenant, Principal: binding.Scope.Principal, ApprovalID: c.ApprovalID, SessionID: c.SessionID, TurnID: c.TurnID, ToolCallID: c.ToolCallID, ActionDigest: c.ActionDigest, PolicyRevisionDigest: c.PolicyRevisionDigest, State: "pending", CapabilityDigest: c.CapabilityDigest, ActionVerb: c.ActionVerb, ActionTarget: c.ActionTarget, MaximumUses: c.MaximumUses, ExpiresAt: c.ExpiresAt, CreatedAt: now, RetainUntil: planner.retain(now, DataClassAuthorization)})
 	effects, err := planner.auditOnly(state, binding, "tool.approval_requested", c.SessionID, c.TurnID, now)
@@ -616,12 +621,18 @@ func (planner *RuntimeStatePlanner) requestApproval(state *RuntimeState, binding
 	if !found {
 		return PlanResult{}, EffectSet{}, ErrNotFoundOrDenied
 	}
+	turnIndex := findTurn(state, binding.Scope, c.SessionID, c.TurnID)
+	if turnIndex < 0 || state.Turns[turnIndex].State != agentruntime.TurnRunning {
+		return PlanResult{}, EffectSet{}, ErrConflict
+	}
 	for _, a := range state.Approvals {
 		if a.ApprovalID == c.ApprovalID {
 			return PlanResult{}, EffectSet{}, ErrConflict
 		}
 	}
 	r := ApprovalRecord{Tenant: binding.Scope.Tenant, Principal: binding.Scope.Principal, ApprovalID: c.ApprovalID, SessionID: c.SessionID, TurnID: c.TurnID, ToolCallID: c.ToolCallID, ActionDigest: c.ActionDigest, PolicyRevisionDigest: c.PolicyRevisionDigest, State: "pending", CapabilityDigest: c.CapabilityDigest, MaximumUses: c.MaximumUses, ExpiresAt: c.ExpiresAt, CreatedAt: now, RetainUntil: planner.retain(now, DataClassAuthorization)}
+	state.Turns[turnIndex].State = agentruntime.TurnWaitingForApproval
+	state.Turns[turnIndex].Version++
 	state.Approvals = append(state.Approvals, r)
 	e, err := planner.auditOnly(state, binding, "approval.requested", c.SessionID, c.TurnID, now)
 	return PlanResult{}, e, err
@@ -662,6 +673,15 @@ func (planner *RuntimeStatePlanner) decideApproval(state *RuntimeState, binding 
 				CreatedAt:            now,
 				RetainUntil:          a.RetainUntil,
 			})
+			// The approved capability is the only transition that resumes the
+			// paused turn. Execution still requires the separate grant-consume
+			// and operation-intent transitions.
+			turnIndex := findTurn(state, binding.Scope, a.SessionID, a.TurnID)
+			if turnIndex < 0 || state.Turns[turnIndex].State != agentruntime.TurnWaitingForApproval {
+				return PlanResult{}, EffectSet{}, ErrConflict
+			}
+			state.Turns[turnIndex].State = agentruntime.TurnRunning
+			state.Turns[turnIndex].Version++
 		}
 		e, err := planner.approvalEffects(state, binding, a, now)
 		return PlanResult{}, e, err
@@ -882,7 +902,7 @@ func (planner *RuntimeStatePlanner) cancel(state *RuntimeState, binding ReceiptB
 		return PlanResult{}, EffectSet{}, ErrNotFoundOrDenied
 	}
 	session, turn := state.Sessions[sessionIndex], state.Turns[turnIndex]
-	if turn.State != agentruntime.TurnRunning && turn.State != agentruntime.TurnQueued {
+	if turn.State != agentruntime.TurnRunning && turn.State != agentruntime.TurnWaitingForApproval && turn.State != agentruntime.TurnQueued {
 		return PlanResult{}, EffectSet{}, ErrConflict
 	}
 	priorState := turn.State
@@ -892,7 +912,7 @@ func (planner *RuntimeStatePlanner) cancel(state *RuntimeState, binding ReceiptB
 	session.UpdatedAt = now
 	kinds := []agentruntime.EventKind{agentruntime.EventTurnCancelled}
 	promoted := (*TurnRecord)(nil)
-	if priorState == agentruntime.TurnRunning {
+	if priorState == agentruntime.TurnRunning || priorState == agentruntime.TurnWaitingForApproval {
 		promoted = planner.promote(state, session.SessionID, now)
 	}
 	if promoted != nil {
@@ -1345,7 +1365,7 @@ func findReceipt(state RuntimeState, binding ReceiptBinding) (MutationReceipt, b
 }
 func hasPending(state *RuntimeState, sessionID agentruntime.SessionID) bool {
 	for _, turn := range state.Turns {
-		if turn.SessionID == sessionID && (turn.State == agentruntime.TurnQueued || turn.State == agentruntime.TurnRunning) {
+		if turn.SessionID == sessionID && (turn.State == agentruntime.TurnQueued || turn.State == agentruntime.TurnRunning || turn.State == agentruntime.TurnWaitingForApproval) {
 			return true
 		}
 	}

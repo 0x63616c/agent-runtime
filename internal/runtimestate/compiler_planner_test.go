@@ -869,6 +869,9 @@ func TestPlannerPersistsToolIntentBeforeApprovalDecision(t *testing.T) {
 	if err != nil || len(plan.State().Approvals) != 1 {
 		t.Fatalf("approval=%v state=%#v", err, plan.State().Approvals)
 	}
+	if plan.State().Turns[0].State != agentruntime.TurnWaitingForApproval {
+		t.Fatalf("pending approval turn state = %q, want waiting_for_approval", plan.State().Turns[0].State)
+	}
 	decision, err := compiler.CompileDecideApproval(runtimestate.DecideApprovalCommand{Scope: ownerScope(tenant, principal), IdempotencyKey: "decision", ApprovalID: "appr_1234567890ABCDEF", Decision: "approved"})
 	if err != nil {
 		t.Fatal(err)
@@ -879,6 +882,9 @@ func TestPlannerPersistsToolIntentBeforeApprovalDecision(t *testing.T) {
 	}
 	if len(plan.State().Grants) != 1 {
 		t.Fatalf("approved decision grants = %#v; want one bounded capability grant", plan.State().Grants)
+	}
+	if plan.State().Turns[0].State != agentruntime.TurnRunning {
+		t.Fatalf("approved approval turn state = %q, want running", plan.State().Turns[0].State)
 	}
 	grant := plan.State().Grants[0]
 	if grant.ToolCallID != "tcall_1234567890ABCDEF" || grant.CapabilityDigest != digest || grant.MaximumUses != 1 || grant.Uses != 0 || !grant.ExpiresAt.Equal(now.Add(time.Hour)) || grant.PolicyRevisionDigest != digest {
