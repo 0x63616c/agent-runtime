@@ -16,7 +16,11 @@ import (
 )
 
 func TestGuestSecretSinkDeliversOnlyASealedFDThenRequiresTreeReapProof(t *testing.T) {
-	sink := newGuestSecretSink()
+	area := &recordingNonSnapshotSecretArea{}
+	sink, err := newGuestSecretSink(area)
+	if err != nil {
+		t.Fatal(err)
+	}
 	request := guestSecretRequest()
 	secret := []byte("transient-only")
 	if err := sink.Deliver(context.Background(), request, secret); err != nil {
@@ -71,10 +75,16 @@ func TestGuestSecretSinkDeliversOnlyASealedFDThenRequiresTreeReapProof(t *testin
 	if err := sink.RevokeAfterTreeReap(context.Background(), request); err != nil {
 		t.Fatalf("RevokeAfterTreeReap() error = %v", err)
 	}
+	if area.begin != request || area.end != request {
+		t.Fatalf("non-snapshot area lifecycle = %#v %#v, want exact request", area.begin, area.end)
+	}
 }
 
 func TestGuestSecretSinkRefusesAProcessWithoutTheFixedAnonymousDescriptor(t *testing.T) {
-	sink := newGuestSecretSink()
+	sink, err := newGuestSecretSink(&recordingNonSnapshotSecretArea{})
+	if err != nil {
+		t.Fatal(err)
+	}
 	request := guestSecretRequest()
 	if err := sink.Deliver(context.Background(), request, []byte("secret")); err != nil {
 		t.Fatal(err)
@@ -92,10 +102,44 @@ func TestGuestSecretSinkRefusesAProcessWithoutTheFixedAnonymousDescriptor(t *tes
 	}
 }
 
+func TestGuestSecretSinkFailsClosedWithoutAndBeforeNonSnapshotSecretArea(t *testing.T) {
+	if sink, err := newGuestSecretSink(nil); err == nil || sink != nil {
+		t.Fatalf("newGuestSecretSink(nil) = %#v, %v", sink, err)
+	}
+	area := &recordingNonSnapshotSecretArea{beginErr: context.Canceled}
+	sink, err := newGuestSecretSink(area)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := sink.Deliver(context.Background(), guestSecretRequest(), []byte("secret")); err == nil {
+		t.Fatal("Deliver() accepted a secret without non-snapshot area admission")
+	}
+	if len(sink.active) != 0 {
+		t.Fatalf("active deliveries = %d, want no memfd delivery", len(sink.active))
+	}
+}
+
 type guestTreeReapVerifierFunc func(context.Context, int, int) error
 
 func (verifier guestTreeReapVerifierFunc) VerifyTreeReaped(ctx context.Context, pid, pidfd int) error {
 	return verifier(ctx, pid, pidfd)
+}
+
+type recordingNonSnapshotSecretArea struct {
+	begin    sandboxauthority.SecretRequest
+	end      sandboxauthority.SecretRequest
+	beginErr error
+	endErr   error
+}
+
+func (area *recordingNonSnapshotSecretArea) BeginNonSnapshotSecret(_ context.Context, request sandboxauthority.SecretRequest) error {
+	area.begin = request
+	return area.beginErr
+}
+
+func (area *recordingNonSnapshotSecretArea) EndNonSnapshotSecret(_ context.Context, request sandboxauthority.SecretRequest) error {
+	area.end = request
+	return area.endErr
 }
 
 func guestSecretRequest() sandboxauthority.SecretRequest {

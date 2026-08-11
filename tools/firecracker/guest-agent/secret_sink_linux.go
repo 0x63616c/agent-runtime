@@ -4,6 +4,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -25,6 +26,7 @@ const guestSecretChildDescriptor = 3
 // prove the required complete-tree reaping and containment properties.
 type guestSecretSink struct {
 	mu     sync.Mutex
+	area   guestNoSnapshotSecretArea
 	active map[string]*guestSecretDelivery
 }
 
@@ -35,6 +37,7 @@ type guestSecretDelivery struct {
 	pidfd   int
 	bound   bool
 	reaped  bool
+	revoked bool
 }
 
 // guestTreeReapVerifier is the future cgroup-aware reaper boundary. A pidfd
@@ -44,18 +47,21 @@ type guestTreeReapVerifier interface {
 	VerifyTreeReaped(context.Context, int, int) error
 }
 
-func newGuestSecretSink() *guestSecretSink {
-	return &guestSecretSink{active: make(map[string]*guestSecretDelivery)}
+func newGuestSecretSink(area guestNoSnapshotSecretArea) (*guestSecretSink, error) {
+	if area == nil {
+		return nil, fmt.Errorf("create guest secret sink: non-snapshot secret area is required")
+	}
+	return &guestSecretSink{area: area, active: make(map[string]*guestSecretDelivery)}, nil
 }
 
 // Deliver writes the supplied transient bytes once to a sealed anonymous
 // memfd. It retains no Go copy and makes the descriptor unavailable until a
 // separately controlled command launch requests a read-only duplicate.
-func (sink *guestSecretSink) Deliver(ctx context.Context, request sandboxauthority.SecretRequest, value []byte) error {
+func (sink *guestSecretSink) Deliver(ctx context.Context, request sandboxauthority.SecretRequest, value []byte) (err error) {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if sink == nil || !validGuestSecretRequest(request) || len(value) == 0 || len(value) > 64<<10 {
+	if sink == nil || sink.area == nil || !validGuestSecretRequest(request) || len(value) == 0 || len(value) > 64<<10 {
 		return fmt.Errorf("deliver guest secret: secret authority denied")
 	}
 	sink.mu.Lock()
@@ -64,6 +70,15 @@ func (sink *guestSecretSink) Deliver(ctx context.Context, request sandboxauthori
 		return fmt.Errorf("deliver guest secret: duplicate process delivery")
 	}
 	sink.mu.Unlock()
+	if err := sink.area.BeginNonSnapshotSecret(ctx, request); err != nil {
+		return fmt.Errorf("deliver guest secret: non-snapshot secret area unavailable: %w", err)
+	}
+	areaActive := true
+	defer func() {
+		if areaActive {
+			err = errors.Join(err, sink.area.EndNonSnapshotSecret(context.Background(), request))
+		}
+	}()
 
 	fd, err := unix.MemfdCreate("agent-runtime-secret", unix.MFD_CLOEXEC|unix.MFD_ALLOW_SEALING)
 	if err != nil {
@@ -90,6 +105,7 @@ func (sink *guestSecretSink) Deliver(ctx context.Context, request sandboxauthori
 		return fmt.Errorf("deliver guest secret: duplicate process delivery")
 	}
 	sink.active[request.ProcessID] = &guestSecretDelivery{request: request, memfd: memfd, pidfd: -1}
+	areaActive = false
 	return nil
 }
 
@@ -102,7 +118,7 @@ func (sink *guestSecretSink) ChildSecretFile(request sandboxauthority.SecretRequ
 	sink.mu.Lock()
 	defer sink.mu.Unlock()
 	delivery, ok := sink.active[request.ProcessID]
-	if !ok || delivery.request != request || delivery.bound || delivery.reaped {
+	if !ok || delivery.request != request || delivery.bound || delivery.reaped || delivery.revoked {
 		return nil, fmt.Errorf("duplicate guest secret fd: secret lifecycle conflict")
 	}
 	path := "/proc/self/fd/" + strconv.Itoa(int(delivery.memfd.Fd()))
@@ -142,7 +158,7 @@ func (sink *guestSecretSink) BindRunningProcess(ctx context.Context, request san
 	}
 	sink.mu.Lock()
 	delivery, ok := sink.active[request.ProcessID]
-	if !ok || delivery.request != request || delivery.bound || delivery.reaped {
+	if !ok || delivery.request != request || delivery.bound || delivery.reaped || delivery.revoked {
 		sink.mu.Unlock()
 		return fmt.Errorf("bind guest secret process: secret lifecycle conflict")
 	}
@@ -216,7 +232,9 @@ func verifyGuestProcessLeaderExited(pidfd int) error {
 }
 
 // RevokeAfterTreeReap closes the sealed memfd and pidfd only after the
-// cgroup-aware verifier marked the complete process tree reaped.
+// cgroup-aware verifier marked the complete process tree reaped. The
+// non-snapshot secret area is released only after its secret descriptor is
+// gone, so a failed lifecycle release never creates a snapshot window.
 func (sink *guestSecretSink) RevokeAfterTreeReap(ctx context.Context, request sandboxauthority.SecretRequest) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -230,14 +248,25 @@ func (sink *guestSecretSink) RevokeAfterTreeReap(ctx context.Context, request sa
 		sink.mu.Unlock()
 		return fmt.Errorf("revoke guest secret: complete tree reap is unproven")
 	}
-	delete(sink.active, request.ProcessID)
+	closeDescriptors := !delivery.revoked
+	delivery.revoked = true
 	sink.mu.Unlock()
-	if delivery.pidfd >= 0 {
-		_ = unix.Close(delivery.pidfd)
+	if closeDescriptors {
+		if delivery.pidfd >= 0 {
+			_ = unix.Close(delivery.pidfd)
+		}
+		if err := delivery.memfd.Close(); err != nil {
+			return fmt.Errorf("revoke guest secret memfd: %w", err)
+		}
 	}
-	if err := delivery.memfd.Close(); err != nil {
-		return fmt.Errorf("revoke guest secret memfd: %w", err)
+	if err := sink.area.EndNonSnapshotSecret(ctx, request); err != nil {
+		return fmt.Errorf("revoke guest secret: release non-snapshot secret area: %w", err)
 	}
+	sink.mu.Lock()
+	if sink.active[request.ProcessID] == delivery {
+		delete(sink.active, request.ProcessID)
+	}
+	sink.mu.Unlock()
 	return nil
 }
 
@@ -253,15 +282,23 @@ func (sink *guestSecretSink) AbortBeforeStart(ctx context.Context, request sandb
 	}
 	sink.mu.Lock()
 	delivery, ok := sink.active[request.ProcessID]
-	if !ok || delivery.request != request || delivery.bound || delivery.reaped {
+	if !ok || delivery.request != request || delivery.bound || delivery.reaped || delivery.revoked {
 		sink.mu.Unlock()
 		return fmt.Errorf("abort guest secret: recipient process state is not prestart")
 	}
-	delete(sink.active, request.ProcessID)
+	delivery.revoked = true
 	sink.mu.Unlock()
 	if err := delivery.memfd.Close(); err != nil {
 		return fmt.Errorf("abort guest secret memfd: %w", err)
 	}
+	if err := sink.area.EndNonSnapshotSecret(ctx, request); err != nil {
+		return fmt.Errorf("abort guest secret: release non-snapshot secret area: %w", err)
+	}
+	sink.mu.Lock()
+	if sink.active[request.ProcessID] == delivery {
+		delete(sink.active, request.ProcessID)
+	}
+	sink.mu.Unlock()
 	return nil
 }
 
