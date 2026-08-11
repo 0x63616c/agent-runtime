@@ -171,6 +171,7 @@ func TestFirecrackerBootProbeV2MultiProcessRoute(t *testing.T) {
 	identities := writeIdentities(t, directory)
 	controlPublic, controlPrivate, _ := ed25519.GenerateKey(rand.Reader)
 	hostPublic1, hostPrivate1, _ := ed25519.GenerateKey(rand.Reader)
+	observationPublic1, _, _ := ed25519.GenerateKey(rand.Reader)
 	const authorization = "boot-probe-integration-authorization"
 	const assertionKey = "5454545454545454545454545454545454545454545454545454545454545454"
 	controlSigning := base64.RawStdEncoding.EncodeToString(controlPrivate)
@@ -186,7 +187,8 @@ func TestFirecrackerBootProbeV2MultiProcessRoute(t *testing.T) {
 		t.Fatal(err)
 	}
 	now := time.Now().UTC()
-	host1 := sandboxcontrol.HostEnrollment{HostID: "host_01", Tenant: "tenant_01", Pool: "reference", Generation: 1, ProtocolVersion: sandboxhostprotocol.Version, CertificateDigest: certificateDigest(identities.host1Certificate), SigningPublicKey: hostPublic1, CapabilityDigest: v2Digest('a'), Status: sandboxcontrol.HostActive, ExpiresAt: now.Add(time.Hour)}
+	profile := sandboxcontrol.BootProbeProfile{VMID: "sandbox-v2", FixtureVersion: "fixture-v2", PlanDigest: sandbox.Digest(v2Digest('d')), FixtureDigest: sandbox.Digest(v2Digest('e')), AuthorityDigest: sandbox.Digest(v2Digest('f'))}
+	host1 := sandboxcontrol.HostEnrollment{HostID: "host_01", Tenant: "tenant_01", Pool: "reference", Generation: 1, ProtocolVersion: sandboxhostprotocol.Version, CertificateDigest: certificateDigest(identities.host1Certificate), SigningPublicKey: hostPublic1, ObservationPublicKey: observationPublic1, BootProbeProfile: profile, CapabilityDigest: v2Digest('a'), Status: sandboxcontrol.HostActive, ExpiresAt: now.Add(time.Hour)}
 	if err := ledger.ProvisionHost(ctx, host1, sandboxcontrol.AttestationInput{Profile: sandboxcontrol.AttestationProfileLocalMetadata}, nil); err != nil {
 		t.Fatal(err)
 	}

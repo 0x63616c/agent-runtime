@@ -16,10 +16,10 @@ trap cleanup EXIT
 umask 077
 printf 'AR_SANDBOXCONTROL_POSTGRES_PASSWORD=%s\n' "$(openssl rand -hex 24)" > "$environment_file"
 docker compose --project-name "$project_name" --env-file "$environment_file" --file "$compose_file" up --detach --wait
-for migration_file in "$migration_root"/*.up.sql; do
+while IFS= read -r migration_file; do
   docker compose --project-name "$project_name" --env-file "$environment_file" --file "$compose_file" exec --no-TTY postgres \
     psql -v ON_ERROR_STOP=1 -U sandbox_control -d agent_runtime < "$migration_file"
-done
+done < <(find "$migration_root" -maxdepth 1 -type f -name 'v*.up.sql' -print | sort -V)
 port=$(docker compose --project-name "$project_name" --env-file "$environment_file" --file "$compose_file" port postgres 5432 | sed 's/.*://')
 password=$(awk -F= '/^AR_SANDBOXCONTROL_POSTGRES_PASSWORD=/{print $2}' "$environment_file")
 export AR_SANDBOXCONTROL_POSTGRES_DSN="postgres://sandbox_control:${password}@127.0.0.1:${port}/agent_runtime?sslmode=disable"
