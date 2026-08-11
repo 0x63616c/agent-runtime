@@ -42,3 +42,13 @@ the string-backed `TurnState` type and may continue ignoring additional
 response fields; clients that validate response JSON must accept documented
 additive fields and enum values. No existing route, request field, response
 field, ID grammar, or enum member is removed or redefined.
+
+`approval.expired` and `approval.cancelled` are additive v1 Product-event
+vocabulary. `approval.resolved` continues to cover explicit approval and
+denial; the new safe events distinguish automatic expiry from owner withdrawal
+of a pending Approval. They expose only the existing ordered event envelope,
+never an action descriptor, capability value, credential, grant ID, or backend
+handle. Existing SDK callers retain the string-backed `EventKind` type and may
+ignore unrecognized event kinds; strict event consumers must accept documented
+additive enum values. No existing route, request field, response field, ID
+grammar, or enum member is removed or redefined.

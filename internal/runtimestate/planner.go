@@ -702,7 +702,11 @@ func (planner *RuntimeStatePlanner) approvalEffects(state *RuntimeState, binding
 	if sessionIndex < 0 || turnIndex < 0 {
 		return EffectSet{}, ErrNotFoundOrDenied
 	}
-	effects, err := planner.effects(state, binding, state.Sessions[sessionIndex], state.Turns[turnIndex], InvocationRecord{}, []agentruntime.EventKind{agentruntime.EventApprovalResolved}, now)
+	eventKind := agentruntime.EventApprovalResolved
+	if approval.State == string(agentruntime.ApprovalExpired) {
+		eventKind = agentruntime.EventApprovalExpired
+	}
+	effects, err := planner.effects(state, binding, state.Sessions[sessionIndex], state.Turns[turnIndex], InvocationRecord{}, []agentruntime.EventKind{eventKind}, now)
 	if err != nil || len(effects.Audit) == 0 || len(state.Audit) == 0 {
 		return effects, err
 	}
@@ -1062,11 +1066,11 @@ func (planner *RuntimeStatePlanner) cancel(state *RuntimeState, binding ReceiptB
 		return PlanResult{}, EffectSet{}, err
 	}
 	for _, approval := range cancelledApprovals {
-		approvalEffects, auditErr := planner.auditOnly(state, binding, "approval.cancelled", command.SessionID, command.TurnID, now)
+		approvalEffects, auditErr := planner.cancelledApprovalEffects(state, binding, session, turn, approval, now)
 		if auditErr != nil {
 			return PlanResult{}, EffectSet{}, auditErr
 		}
-		decorateToolAuditFacts(state, &approvalEffects, auditContextForApproval(approval))
+		effects.Events = append(effects.Events, approvalEffects.Events...)
 		effects.Audit = append(effects.Audit, approvalEffects.Audit...)
 		effects.Outbox = append(effects.Outbox, approvalEffects.Outbox...)
 	}
@@ -1080,6 +1084,41 @@ func (planner *RuntimeStatePlanner) cancel(state *RuntimeState, binding ReceiptB
 		effects.Outbox = append(effects.Outbox, revocationEffects.Outbox...)
 	}
 	return PlanResult{Session: session, Turn: turn, Promoted: promoted}, effects, nil
+}
+
+// cancelledApprovalEffects publishes the cancellation as a bounded product
+// event and an independently routed audit fact. Both effects are accumulated
+// in the caller's one transition plan, so a stored cancellation cannot expose
+// one durable stream without the other.
+func (planner *RuntimeStatePlanner) cancelledApprovalEffects(state *RuntimeState, binding ReceiptBinding, session SessionRecord, turn TurnRecord, approval ApprovalRecord, now time.Time) (EffectSet, error) {
+	event, err := planner.event(state, session, turn, InvocationRecord{}, binding, agentruntime.EventApprovalCancelled, now, planner.retain(now, DataClassEvent))
+	if err != nil {
+		return EffectSet{}, err
+	}
+	state.Events = append(state.Events, event)
+	eventOutbox, err := planner.outbox(session, turn, InvocationRecord{}, event.EventID, event.Kind, event.Sequence, now, planner.retain(now, DataClassOutbox))
+	if err != nil {
+		return EffectSet{}, err
+	}
+	state.Outbox = append(state.Outbox, eventOutbox)
+	effects := EffectSet{Events: []ProductEventRecord{event}, Outbox: []OutboxRecord{eventOutbox}}
+	eventOutboxIndex := len(state.Outbox) - 1
+	auditEffects, err := planner.auditOnly(state, binding, "approval.cancelled", approval.SessionID, approval.TurnID, now)
+	if err != nil || len(auditEffects.Audit) == 0 {
+		if err == nil {
+			err = ErrIntegrity
+		}
+		return EffectSet{}, err
+	}
+	effects.Outbox[0].AuditFactID = auditEffects.Audit[0].AuditFactID
+	state.Outbox[eventOutboxIndex].AuditFactID = auditEffects.Audit[0].AuditFactID
+	decorateToolAuditFacts(state, &auditEffects, auditContextForApproval(approval))
+	// Decoration updates the persisted product route by its audit-fact link;
+	// reflect that fully correlated record in the returned effect set too.
+	effects.Outbox[0] = state.Outbox[eventOutboxIndex]
+	effects.Audit = append(effects.Audit, auditEffects.Audit...)
+	effects.Outbox = append(effects.Outbox, auditEffects.Outbox...)
+	return effects, nil
 }
 
 func (planner *RuntimeStatePlanner) close(state *RuntimeState, binding ReceiptBinding, command CloseSessionCommand, now time.Time) (PlanResult, EffectSet, error) {

@@ -486,7 +486,8 @@ func TestPlannerPersistsToolIntentBeforeApprovalDecision(t *testing.T) {
 	now := time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC)
 	content, _, tenant, principal := testRuntimeContent(t)
 	compiler, _ := runtimestate.NewCompiler(content)
-	planner, _ := runtimestate.NewRuntimeStatePlanner(fixedPlannerClock{now: now}, &uniquePlannerIDs{})
+	ids := &uniquePlannerIDs{}
+	planner, _ := runtimestate.NewRuntimeStatePlanner(fixedPlannerClock{now: now}, ids)
 	session := validSessionID(t)
 	turn := agentruntime.TurnID("turn_1234567890ABCDEF")
 	state := runtimestate.RuntimeState{Sessions: []runtimestate.SessionRecord{{Tenant: tenant, Principal: principal, SessionID: session, State: agentruntime.SessionOpen, CreatedAt: now, UpdatedAt: now}}, Turns: []runtimestate.TurnRecord{{Tenant: tenant, Principal: principal, SessionID: session, TurnID: turn, State: agentruntime.TurnRunning}}}
@@ -511,6 +512,7 @@ func TestPlannerPersistsToolIntentBeforeApprovalDecision(t *testing.T) {
 	if err != nil || len(plan.State().Approvals) != 1 {
 		t.Fatalf("approval=%v state=%#v", err, plan.State().Approvals)
 	}
+	pending := plan.State()
 	if plan.State().Turns[0].State != agentruntime.TurnWaitingForApproval {
 		t.Fatalf("pending approval turn state = %q, want waiting_for_approval", plan.State().Turns[0].State)
 	}
@@ -527,6 +529,28 @@ func TestPlannerPersistsToolIntentBeforeApprovalDecision(t *testing.T) {
 	}
 	if plan.State().Turns[0].State != agentruntime.TurnRunning {
 		t.Fatalf("approved approval turn state = %q, want running", plan.State().Turns[0].State)
+	}
+	// Expiry uses its own public product-event vocabulary, while retaining the
+	// same safe audit and outbox correlation as every other approval terminal
+	// transition. The decision request remains owner-scoped; the planner turns
+	// it into expiry at the sealed clock boundary.
+	expiredPlanner, err := runtimestate.NewRuntimeStatePlanner(fixedPlannerClock{now: now.Add(2 * time.Hour)}, ids)
+	if err != nil {
+		t.Fatal(err)
+	}
+	expired, err := expiredPlanner.Plan(context.Background(), pending, decision)
+	if err != nil || expired.State().Approvals[0].State != "expired" || len(expired.Effects().Events) != 1 || expired.Effects().Events[0].Kind != agentruntime.EventApprovalExpired || !plannerEffectsCorrelateApprovalTerminal(expired.Effects(), "approval.expired") {
+		t.Fatalf("expired decision = err=%v effects=%#v", err, expired.Effects())
+	}
+	// Cancelling a still-pending approval likewise emits a distinct bounded
+	// product event and an independent audit route in the same atomic plan.
+	cancelPending, err := compiler.CompileCancelTurn(runtimestate.CancelTurnCommand{Scope: ownerScope(tenant, principal), IdempotencyKey: "cancel-pending-tool", SessionID: session, TurnID: turn})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cancelledPending, err := planner.Plan(context.Background(), pending, cancelPending)
+	if err != nil || cancelledPending.State().Approvals[0].State != string(agentruntime.ApprovalCancelled) || !plannerEffectsContainEvent(cancelledPending.Effects(), agentruntime.EventApprovalCancelled) || !plannerEffectsCorrelateApprovalTerminal(cancelledPending.Effects(), "approval.cancelled") {
+		t.Fatalf("cancel pending approval = err=%v state=%#v effects=%#v", err, cancelledPending.State().Approvals, cancelledPending.Effects())
 	}
 	grant := plan.State().Grants[0]
 	if grant.ToolCallID != "tcall_1234567890ABCDEF" || grant.CapabilityDigest != digest || grant.MaximumUses != 1 || grant.Uses != 0 || !grant.ExpiresAt.Equal(now.Add(time.Hour)) || grant.PolicyRevisionDigest != digest {
@@ -757,6 +781,38 @@ func hasLifecyclePhases(effects runtimestate.EffectSet, command string, phases .
 		}
 	}
 	return true
+}
+
+func plannerEffectsContainEvent(effects runtimestate.EffectSet, kind agentruntime.EventKind) bool {
+	for _, event := range effects.Events {
+		if event.Kind == kind {
+			return true
+		}
+	}
+	return false
+}
+
+func plannerEffectsCorrelateApprovalTerminal(effects runtimestate.EffectSet, auditKind string) bool {
+	var fact runtimestate.AuditFactRecord
+	for _, candidate := range effects.Audit {
+		if candidate.Kind == auditKind {
+			fact = candidate
+			break
+		}
+	}
+	if fact.AuditFactID == "" || fact.ToolCallID == "" || fact.PolicyRevisionDigest == "" || fact.CapabilityScopeDigest == "" || fact.OperationID == "" {
+		return false
+	}
+	productRoute := false
+	for _, route := range effects.Outbox {
+		if route.AuditFactID != fact.AuditFactID || route.OperationID != fact.OperationID {
+			continue
+		}
+		if route.EventID != "" {
+			productRoute = true
+		}
+	}
+	return productRoute
 }
 
 type fixedPlannerClock struct{ now time.Time }
