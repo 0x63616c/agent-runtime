@@ -14,6 +14,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"strings"
 	"testing"
@@ -114,7 +115,13 @@ func TestDurableWorkspaceAgentBinariesUseOnlyThePublicAPI(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	seed := func(suffix string, expiry time.Time) agentruntime.ApprovalID {
+	type seededApproval struct {
+		approvalID agentruntime.ApprovalID
+		sessionID  agentruntime.SessionID
+		turnID     agentruntime.TurnID
+		toolCallID string
+	}
+	seed := func(suffix string, expiry time.Time) seededApproval {
 		session, e := alice.CreateSession(ctx, agentruntime.CreateSessionRequest{IdempotencyKey: "workspace-e2e-session-" + suffix, AgentRevision: agent.RevisionID})
 		if e != nil {
 			t.Fatal(e)
@@ -135,25 +142,26 @@ func TestDurableWorkspaceAgentBinariesUseOnlyThePublicAPI(t *testing.T) {
 		if e != nil {
 			t.Fatal(e)
 		}
-		return id
+		return seededApproval{approvalID: id, sessionID: session.ID, turnID: accepted.Turn.ID, toolCallID: "tcall_" + suffix + "00000000"}
 	}
-	approveID := seed("APPROVEA", source.Now().Add(time.Hour))
-	denyID := seed("DENYBBBB", source.Now().Add(time.Hour))
-	cancelID := seed("CANCELCC", source.Now().Add(time.Hour))
+	approve := seed("APPROVEA", source.Now().Add(time.Hour))
+	deny := seed("DENYBBBB", source.Now().Add(time.Hour))
+	cancel := seed("CANCELCC", source.Now().Add(time.Hour))
+	pending := seed("PENDINGE", source.Now().Add(time.Hour))
 
 	// The owner web binary presents the public safe action summary and the
 	// unavailable sandbox status, then approves one request over HTTP.
 	webURL, stopWeb := startWorkspaceBinary(t, "web", baseURL, secrets["ALICE_TOKEN"])
-	defer stopWeb()
+	defer func() { stopWeb() }()
 	body := getWorkspacePage(t, webURL)
 	if !strings.Contains(body, "write workspace-service") || !strings.Contains(body, "Workspace sandbox execution is unavailable") {
 		t.Fatalf("web workspace page omitted safe state: %q", body)
 	}
-	postWorkspaceForm(t, webURL+"/approvals/"+approveID.String()+"/approve", "web-approve")
+	postWorkspaceForm(t, webURL+"/approvals/"+approve.approvalID.String()+"/approve", "web-approve")
 	// A browser replay of the exact public idempotency key stays a successful
 	// redirect and cannot create a second approval effect.
-	postWorkspaceForm(t, webURL+"/approvals/"+approveID.String()+"/approve", "web-approve")
-	if approval, e := alice.InspectApproval(ctx, approveID); e != nil || approval.State != agentruntime.ApprovalApproved {
+	postWorkspaceForm(t, webURL+"/approvals/"+approve.approvalID.String()+"/approve", "web-approve")
+	if approval, e := alice.InspectApproval(ctx, approve.approvalID); e != nil || approval.State != agentruntime.ApprovalApproved {
 		t.Fatalf("web approve = %#v, %v", approval, e)
 	}
 
@@ -161,18 +169,18 @@ func TestDurableWorkspaceAgentBinariesUseOnlyThePublicAPI(t *testing.T) {
 	// Alice's inbox. Alice's terminal then denies a separate request through the
 	// same public HTTP/SDK contract.
 	terminal := runWorkspaceTerminal(t, baseURL, secrets["BOB_TOKEN"], "list\nquit\n")
-	if strings.Contains(terminal, approveID.String()) || !strings.Contains(terminal, "Workspace sandbox execution is unavailable") {
+	if strings.Contains(terminal, approve.approvalID.String()) || !strings.Contains(terminal, "Workspace sandbox execution is unavailable") {
 		t.Fatalf("cross-principal terminal leaked owner approval: %q", terminal)
 	}
-	terminal = runWorkspaceTerminal(t, baseURL, secrets["ALICE_TOKEN"], "deny "+denyID.String()+" terminal-deny\nquit\n")
+	terminal = runWorkspaceTerminal(t, baseURL, secrets["ALICE_TOKEN"], "deny "+deny.approvalID.String()+" terminal-deny\nquit\n")
 	if !strings.Contains(terminal, string(agentruntime.ApprovalDenied)) {
 		t.Fatalf("owner terminal did not render denied Approval: %q", terminal)
 	}
-	postWorkspaceForm(t, webURL+"/approvals/"+cancelID.String()+"/cancel", "web-cancel")
-	if approval, e := alice.InspectApproval(ctx, denyID); e != nil || approval.State != agentruntime.ApprovalDenied {
+	postWorkspaceForm(t, webURL+"/approvals/"+cancel.approvalID.String()+"/cancel", "web-cancel")
+	if approval, e := alice.InspectApproval(ctx, deny.approvalID); e != nil || approval.State != agentruntime.ApprovalDenied {
 		t.Fatalf("web deny = %#v, %v", approval, e)
 	}
-	if approval, e := alice.InspectApproval(ctx, cancelID); e != nil || approval.State != agentruntime.ApprovalCancelled {
+	if approval, e := alice.InspectApproval(ctx, cancel.approvalID); e != nil || approval.State != agentruntime.ApprovalCancelled {
 		t.Fatalf("cancel invalidates pending approval = %#v, %v", approval, e)
 	}
 
@@ -180,7 +188,7 @@ func TestDurableWorkspaceAgentBinariesUseOnlyThePublicAPI(t *testing.T) {
 	// expires a pending request.  The broker sees its fixed fake-clock expiry
 	// in the future; the public API role owns wall-clock expiry enforcement.
 	expiresAt := time.Now().UTC().Add(50 * time.Millisecond)
-	expireID := seed("EXPIREDD", expiresAt)
+	expire := seed("EXPIREDD", expiresAt)
 	expiryWait, stopExpiryWait := context.WithDeadline(ctx, expiresAt.Add(100*time.Millisecond))
 	<-expiryWait.Done()
 	waitErr := expiryWait.Err()
@@ -188,9 +196,20 @@ func TestDurableWorkspaceAgentBinariesUseOnlyThePublicAPI(t *testing.T) {
 	if !errors.Is(waitErr, context.DeadlineExceeded) {
 		t.Fatalf("await Workspace Approval expiry deadline: %v", waitErr)
 	}
-	postWorkspaceFormFailure(t, webURL+"/approvals/"+expireID.String()+"/approve", "web-expired")
-	if approval, e := alice.InspectApproval(ctx, expireID); e != nil || approval.State != agentruntime.ApprovalExpired {
+	postWorkspaceFormFailure(t, webURL+"/approvals/"+expire.approvalID.String()+"/approve", "web-expired")
+	if approval, e := alice.InspectApproval(ctx, expire.approvalID); e != nil || approval.State != agentruntime.ApprovalExpired {
 		t.Fatalf("web expiry = %#v, %v", approval, e)
+	}
+	// A still-pending request must remain visibly non-terminal through an
+	// actual API process restart. The client sees only the S1 HTTP/SDK
+	// projection; the private Broker was used solely to seed the producer-owned
+	// input because this harness does not compose the model-to-tool producer.
+	pendingBeforeRestart, err := alice.InspectApproval(ctx, pending.approvalID)
+	if err != nil || pendingBeforeRestart.State != agentruntime.ApprovalPending || pendingBeforeRestart.SessionID != pending.sessionID || pendingBeforeRestart.TurnID != pending.turnID || pendingBeforeRestart.ToolCallID != pending.toolCallID || pendingBeforeRestart.Action == nil || *pendingBeforeRestart.Action != (agentruntime.ApprovalAction{Verb: "write", Target: "workspace-service"}) || pendingBeforeRestart.Scope == nil || pendingBeforeRestart.Scope.MaximumUses != 1 || pendingBeforeRestart.PolicyRevision == "" || pendingBeforeRestart.Requester != "alice" || pendingBeforeRestart.DecidedAt != nil {
+		t.Fatalf("public pending Approval before API restart = %#v, %v", pendingBeforeRestart, err)
+	}
+	if pendingTurn, e := alice.InspectTurn(ctx, pending.sessionID, pending.turnID); e != nil || pendingTurn.State != agentruntime.TurnWaitingForApproval || pendingTurn.CompletedAt != nil {
+		t.Fatalf("public pending Turn before API restart = %#v, %v", pendingTurn, e)
 	}
 	stop()
 	baseURL, stop = startDurableRuntimeProcess(t, config, secrets)
@@ -200,8 +219,23 @@ func TestDurableWorkspaceAgentBinariesUseOnlyThePublicAPI(t *testing.T) {
 	// intentionally ephemeral in the disposable harness).
 	stopWeb()
 	webURL, stopWeb = startWorkspaceBinary(t, "web", baseURL, secrets["ALICE_TOKEN"])
-	if !strings.Contains(getWorkspacePage(t, webURL), approveID.String()) {
+	if !strings.Contains(getWorkspacePage(t, webURL), approve.approvalID.String()) {
 		t.Fatal("reconnected web binary did not read retained approval inbox")
+	}
+	alice = durableProcessClient(t, baseURL, secrets["ALICE_TOKEN"], ids)
+	pendingAfterRestart, err := alice.InspectApproval(ctx, pending.approvalID)
+	if err != nil || pendingAfterRestart.State != agentruntime.ApprovalPending || pendingAfterRestart.ID != pendingBeforeRestart.ID || pendingAfterRestart.SessionID != pendingBeforeRestart.SessionID || pendingAfterRestart.TurnID != pendingBeforeRestart.TurnID || pendingAfterRestart.ToolCallID != pendingBeforeRestart.ToolCallID || pendingAfterRestart.Action == nil || pendingBeforeRestart.Action == nil || *pendingAfterRestart.Action != *pendingBeforeRestart.Action || pendingAfterRestart.Scope == nil || pendingBeforeRestart.Scope == nil || *pendingAfterRestart.Scope != *pendingBeforeRestart.Scope || !pendingAfterRestart.ExpiresAt.Equal(pendingBeforeRestart.ExpiresAt) || pendingAfterRestart.DecidedAt != nil {
+		t.Fatalf("public pending Approval after API restart = %#v, %v; want retained %#v", pendingAfterRestart, err, pendingBeforeRestart)
+	}
+	if pendingTurn, e := alice.InspectTurn(ctx, pending.sessionID, pending.turnID); e != nil || pendingTurn.State != agentruntime.TurnWaitingForApproval || pendingTurn.CompletedAt != nil {
+		t.Fatalf("public pending Turn after API restart = %#v, %v", pendingTurn, e)
+	}
+	decision, err := alice.DecideApproval(ctx, agentruntime.DecideApprovalRequest{ApprovalID: pending.approvalID, Decision: agentruntime.ApprovalApproved, IdempotencyKey: "pending-after-restart-approve"})
+	if err != nil || decision.State != agentruntime.ApprovalApproved || decision.DecidedAt == nil {
+		t.Fatalf("public pending Approval decision after API restart = %#v, %v", decision, err)
+	}
+	if replay, e := alice.DecideApproval(ctx, agentruntime.DecideApprovalRequest{ApprovalID: pending.approvalID, Decision: agentruntime.ApprovalApproved, IdempotencyKey: "pending-after-restart-approve"}); e != nil || !reflect.DeepEqual(replay, decision) {
+		t.Fatalf("public pending Approval replay after API restart = %#v, %v; want %#v", replay, e, decision)
 	}
 	bob = durableProcessClient(t, baseURL, secrets["BOB_TOKEN"], ids)
 	if page, e := bob.ListApprovals(ctx); e != nil || len(page.Approvals) != 0 {

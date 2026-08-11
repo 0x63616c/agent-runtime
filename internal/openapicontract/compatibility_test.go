@@ -53,6 +53,21 @@ func TestV1CompatibilityBaselineRetainsEveryPreexistingPublicRoute(t *testing.T)
 	}
 }
 
+func TestApprovalContractCarriesItsToolLinkAndWaitingTurnPhase(t *testing.T) {
+	contract := readJSON(t, filepath.Join("..", "..", "api", "openapi", "openapi.yaml"))
+	schemas := object(t, object(t, contract, "components"), "schemas")
+
+	approval := object(t, schemas, "Approval")
+	if !contains(array(t, approval, "required"), "tool_call_id") {
+		t.Fatal("Approval contract must retain required tool_call_id linkage")
+	}
+	turn := object(t, schemas, "Turn")
+	states := array(t, object(t, turn, "properties")["state"].(map[string]any), "enum")
+	if !contains(states, "waiting_for_approval") {
+		t.Fatal("Turn contract must retain waiting_for_approval as a public non-terminal phase")
+	}
+}
+
 func readJSON(t *testing.T, path string) map[string]any {
 	t.Helper()
 	contents, err := os.ReadFile(path)

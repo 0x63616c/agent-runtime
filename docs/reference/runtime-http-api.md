@@ -16,9 +16,11 @@ credential material. Agent catalog operations require a tenant administrator. Se
 owned by the authenticated tenant and principal; absent and unauthorized
 resources return the same safe `not_found` classification.
 
-`GET /v1/sessions/{session_id}/turns/{turn_id}/tools` returns at most 64
+`GET /v1/sessions/{session_id}/turns/{turn_id}` can report the non-terminal,
+cancellable `waiting_for_approval` phase. `GET /v1/sessions/{session_id}/turns/{turn_id}/tools` returns at most 64
 owner-scoped Tool-call projections. A projection distinguishes model intent
-from execution, reports only Approval state, bounded grant use counters and
+from execution, reports Approval state with its opaque Tool-call linkage,
+bounded grant use counters and
 expiry, and a safe terminal failure. It never exposes a descriptor, capability
 or policy digest, grant identity, raw result, backend handle, or credential.
 

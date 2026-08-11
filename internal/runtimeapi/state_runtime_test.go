@@ -1011,8 +1011,11 @@ func TestStateRuntimeHTTPAndSDKInspectOwnerScopedToolLifecycle(t *testing.T) {
 	defer server.Close()
 	aliceClient := newStateRuntimeHTTPClient(t, server.URL, "alice-token-000000")
 	pending, err := aliceClient.InspectToolCalls(ctx, session.ID, accepted.Turn.ID)
-	if err != nil || len(pending.Calls) != 1 || pending.Calls[0].Name != "write" || pending.Calls[0].State != agentruntime.ToolCallAwaitingApproval || pending.Calls[0].Approval == nil || pending.Calls[0].Approval.State != agentruntime.ApprovalPending || pending.Calls[0].Grant != nil || pending.Calls[0].Execution != nil {
+	if err != nil || len(pending.Calls) != 1 || pending.Calls[0].Name != "write" || pending.Calls[0].State != agentruntime.ToolCallAwaitingApproval || pending.Calls[0].Approval == nil || pending.Calls[0].Approval.State != agentruntime.ApprovalPending || pending.Calls[0].Approval.ToolCallID != "tcall_1234567890ABCDEF" || pending.Calls[0].Grant != nil || pending.Calls[0].Execution != nil {
 		t.Fatalf("SDK inspect pending Tool call = %#v, %v", pending, err)
+	}
+	if pendingTurn, err := aliceClient.InspectTurn(ctx, session.ID, accepted.Turn.ID); err != nil || pendingTurn.State != agentruntime.TurnWaitingForApproval || pendingTurn.CompletedAt != nil {
+		t.Fatalf("SDK inspect pending approval Turn = %#v, %v", pendingTurn, err)
 	}
 	approvalID, _ := agentruntime.ParseApprovalID("appr_1234567890ABCDEF")
 	if _, err := aliceClient.DecideApproval(ctx, agentruntime.DecideApprovalRequest{ApprovalID: approvalID, Decision: agentruntime.ApprovalApproved, IdempotencyKey: "tool-inspection-decision"}); err != nil {
