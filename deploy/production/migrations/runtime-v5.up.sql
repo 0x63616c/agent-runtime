@@ -94,6 +94,31 @@ CREATE POLICY tenant_retention_job_isolation ON runtime.tenant_retention_jobs
   WITH CHECK (tenant_id = current_setting('runtime.tenant_id', true));
 GRANT SELECT, INSERT, UPDATE, DELETE ON runtime.tenant_retention_jobs TO runtime_state_app;
 
+-- External immutable-object deletion is a cross-store boundary. Metadata
+-- compaction/erasure commits one exact, tenant-bound deletion intent first;
+-- only a later acknowledgement removes this record. It intentionally has no
+-- tenant foreign key because tenant metadata may be erased before an external
+-- deletion can be observed and reconciled.
+CREATE TABLE runtime.pending_content_deletions (
+  tenant_id TEXT NOT NULL,
+  digest TEXT NOT NULL CHECK (digest ~ '^sha256:[0-9a-f]{64}$'),
+  media_type TEXT NOT NULL CHECK (octet_length(media_type) BETWEEN 1 AND 256),
+  size_bytes BIGINT NOT NULL CHECK (size_bytes >= 0),
+  authorization_id TEXT NOT NULL CHECK (octet_length(authorization_id) BETWEEN 16 AND 128),
+  requested_at TIMESTAMPTZ NOT NULL,
+  PRIMARY KEY (tenant_id, digest, media_type)
+) PARTITION BY HASH (tenant_id);
+CREATE TABLE runtime.pending_content_deletions_p0 PARTITION OF runtime.pending_content_deletions FOR VALUES WITH (MODULUS 4, REMAINDER 0);
+CREATE TABLE runtime.pending_content_deletions_p1 PARTITION OF runtime.pending_content_deletions FOR VALUES WITH (MODULUS 4, REMAINDER 1);
+CREATE TABLE runtime.pending_content_deletions_p2 PARTITION OF runtime.pending_content_deletions FOR VALUES WITH (MODULUS 4, REMAINDER 2);
+CREATE TABLE runtime.pending_content_deletions_p3 PARTITION OF runtime.pending_content_deletions FOR VALUES WITH (MODULUS 4, REMAINDER 3);
+ALTER TABLE runtime.pending_content_deletions ENABLE ROW LEVEL SECURITY;
+ALTER TABLE runtime.pending_content_deletions FORCE ROW LEVEL SECURITY;
+CREATE POLICY pending_content_deletion_isolation ON runtime.pending_content_deletions
+  USING (current_user = 'runtime_state_operator' OR tenant_id = current_setting('runtime.tenant_id', true))
+  WITH CHECK (tenant_id = current_setting('runtime.tenant_id', true));
+GRANT SELECT, INSERT, DELETE ON runtime.pending_content_deletions TO runtime_state_app;
+
 INSERT INTO runtime.schema_migrations (migration_version, schema_fingerprint, applied_at)
   VALUES (5, 'runtime-v5/tenant-partitions-rls-v1', now())
   ON CONFLICT (migration_version) DO NOTHING;

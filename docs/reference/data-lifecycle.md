@@ -26,16 +26,18 @@ horizon atomically with the transition. The class-selection test proves that
 event, audit, outbox, and receipt horizons diverge from the Agent/Session/Input
 records they accompany. The PostgreSQL lifecycle authority also executes an
 operator-authorized physical collection for expired, unpinned Agent/Input,
-Artifact, and Conversation metadata: it holds a tenant advisory lock, removes
-only exact objects absent from the surviving metadata set, and leaves metadata
-intact if content deletion fails. The disposable PostgreSQL/MinIO harness
-proves both its non-enumerating authorization refusal and successful exact
-collection. The same real PostgreSQL/MinIO test proves that the isolated
-operator capability deletes an expired unreferenced Artifact object only after
-the state authority accepts the exact tenant/action request; a denial leaves
-both the object and metadata intact, while the Session and Input remain.
-Other physical collectors remain separately operator-owned and must leave an
-explicit reconciliation outcome rather than guessing.
+Artifact, and Conversation metadata: it holds a tenant advisory lock, commits
+metadata removal plus an exact tenant-bound deletion intent before attempting
+external object deletion, and retains that intent if deletion or its
+acknowledgement is uncertain. A later authorized lifecycle retry reconciles the
+same exact reference; it never list-deletes a bucket. The disposable
+PostgreSQL/MinIO harness proves both its non-enumerating authorization refusal
+and successful exact collection. The same real PostgreSQL/MinIO test proves
+that the isolated operator capability deletes an expired unreferenced Artifact
+object only after the state authority accepts the exact tenant/action request;
+a denial leaves both the object and metadata intact, while the Session and
+Input remain. Other physical collectors remain separately operator-owned and
+must leave an explicit reconciliation outcome rather than guessing.
 
 The durable PostgreSQL state authority is physically hash-partitioned by its
 canonical tenant key. Runtime v5 migrates `runtime_state_snapshots` and

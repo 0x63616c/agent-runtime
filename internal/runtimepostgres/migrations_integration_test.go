@@ -547,7 +547,7 @@ func resetRuntimeV2(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
 		DROP TABLE IF EXISTS runtime.runtime_state_snapshots, runtime.outbox_leases, runtime.mutation_receipts,
 			runtime.invocations, runtime.runtime_outbox, runtime.audit_records, runtime.session_events,
 			runtime.turns, runtime.inputs, runtime.sessions, runtime.agent_revisions,
-			runtime.tenant_retention_jobs,
+			runtime.tenant_retention_jobs, runtime.pending_content_deletions,
 			runtime.tenants, runtime.schema_migrations CASCADE`); err != nil {
 		t.Fatalf("reset runtime v2 tables: %v", err)
 	}

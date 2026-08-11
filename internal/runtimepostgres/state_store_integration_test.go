@@ -191,6 +191,89 @@ func TestPostgresTenantErasureDeletesOnlyAuthorizedStateReferencedContent(t *tes
 	}
 }
 
+func TestPostgresTenantErasureReconcilesDeletionIntentAfterAmbiguousExternalDelete(t *testing.T) {
+	ctx := context.Background()
+	pool := openRuntimePool(t)
+	resetRuntimeV2(t, ctx, pool)
+	applyRuntimeMigrations(t, ctx, pool)
+	tenant, err := runtimecontent.ParseTenantID("erasure-reconcile-tenant")
+	if err != nil {
+		t.Fatalf("parse tenant: %v", err)
+	}
+	objects := &deleteAfterFaultObjects{stateStoreObjects: stateStoreObjects{values: map[string][]byte{}}, failAfterDelete: true}
+	content, err := runtimecontent.New("erasure-reconcile-content", objects)
+	if err != nil {
+		t.Fatalf("new content store: %v", err)
+	}
+	handoff, err := content.StageAgentSpecificationBody(ctx, tenant, runtimecontent.AgentSpecificationBody{Name: "erasable", ModelProfile: "balanced", Instructions: "reconcile tenant deletion intent"})
+	if err != nil {
+		t.Fatalf("stage Agent specification: %v", err)
+	}
+	compiler, err := runtimestate.NewCompiler(content)
+	if err != nil {
+		t.Fatalf("new compiler: %v", err)
+	}
+	clock := stateStoreClock{now: time.Date(2026, 8, 10, 17, 30, 0, 0, time.UTC)}
+	planner, err := runtimestate.NewRuntimeStatePlanner(clock, &stateStoreIDs{})
+	if err != nil {
+		t.Fatalf("new planner: %v", err)
+	}
+	mutation, err := compiler.CompileRegisterAgentRevision(runtimestate.RegisterAgentRevisionCommand{Scope: runtimestate.MutationScope{Tenant: tenant, Authority: runtimestate.AuthorityTenantAdministrator}, IdempotencyKey: "register-erasure-reconcile", Specification: handoff})
+	if err != nil {
+		t.Fatalf("compile registration: %v", err)
+	}
+	plan, err := planner.Plan(ctx, runtimestate.RuntimeState{}, mutation)
+	if err != nil {
+		t.Fatalf("plan registration: %v", err)
+	}
+	store, err := runtimepostgres.NewRuntimeStateStore(pool, clock)
+	if err != nil {
+		t.Fatalf("new PostgreSQL store: %v", err)
+	}
+	if err := store.PersistTransitionPlan(ctx, plan); err != nil {
+		t.Fatalf("persist registration: %v", err)
+	}
+	reference := plan.Result().Revision.Specification
+	controller, err := runtimecontent.NewTenantErasureController(content, erasureAuthorizer{allowed: true}, objects)
+	if err != nil {
+		t.Fatalf("new erasure controller: %v", err)
+	}
+	request := runtimepostgres.LifecycleRequest{Action: runtimepostgres.LifecycleEraseTenant, Tenant: tenant, AuthorizationID: "operator-erasure-reconcile-0001"}
+	if _, err := store.EraseTenantAndContent(ctx, lifecycleAuthorizer{allowed: true}, request, controller); !errors.Is(err, runtimecontent.ErrUnavailable) {
+		t.Fatalf("erase ambiguous deletion error = %v, want ErrUnavailable", err)
+	}
+	state, err := store.LoadRuntimeState(ctx, mutation.ReceiptBinding().Scope)
+	if err != nil {
+		t.Fatalf("load erased state: %v", err)
+	}
+	if len(state.Revisions) != 0 {
+		t.Fatalf("state still references externally deleted content: %#v", state.Revisions)
+	}
+	var tenants, pending int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM runtime.tenants WHERE tenant_id = $1`, string(tenant)).Scan(&tenants); err != nil {
+		t.Fatalf("count erased tenants: %v", err)
+	}
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM runtime.pending_content_deletions WHERE tenant_id = $1`, string(tenant)).Scan(&pending); err != nil {
+		t.Fatalf("count durable pending deletions: %v", err)
+	}
+	if tenants != 0 || pending != 1 {
+		t.Fatalf("after ambiguous erase tenants=%d pending=%d, want tenants=0 pending=1", tenants, pending)
+	}
+	receipt, err := store.EraseTenantAndContent(ctx, lifecycleAuthorizer{allowed: true}, request, controller)
+	if err != nil {
+		t.Fatalf("reconcile erased tenant content: %v", err)
+	}
+	if len(receipt.Content.Deleted) != 1 || receipt.Content.Deleted[0] != reference {
+		t.Fatalf("tenant erasure reconciliation receipt = %#v", receipt)
+	}
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM runtime.pending_content_deletions WHERE tenant_id = $1`, string(tenant)).Scan(&pending); err != nil {
+		t.Fatalf("count acknowledged pending deletions: %v", err)
+	}
+	if pending != 0 {
+		t.Fatalf("pending deletion records = %d, want 0 after acknowledgement", pending)
+	}
+}
+
 func TestPostgresRetentionCollectionDeletesOnlyExpiredUnpinnedContent(t *testing.T) {
 	ctx := context.Background()
 	pool := openRuntimePool(t)
@@ -262,6 +345,90 @@ func TestPostgresRetentionCollectionDeletesOnlyExpiredUnpinnedContent(t *testing
 	}
 	if len(state.Revisions) != 0 {
 		t.Fatalf("retained revisions = %#v, want expired metadata removed", state.Revisions)
+	}
+}
+
+func TestPostgresRetentionCollectionReconcilesDeletionIntentAfterAmbiguousExternalDelete(t *testing.T) {
+	ctx := context.Background()
+	pool := openRuntimePool(t)
+	resetRuntimeV2(t, ctx, pool)
+	applyRuntimeMigrations(t, ctx, pool)
+	now := time.Date(2026, 8, 10, 18, 30, 0, 0, time.UTC)
+	tenant, err := runtimecontent.ParseTenantID("retention-reconcile-tenant")
+	if err != nil {
+		t.Fatal(err)
+	}
+	objects := &deleteAfterFaultObjects{stateStoreObjects: stateStoreObjects{values: map[string][]byte{}}, failAfterDelete: true}
+	content, err := runtimecontent.New("retention-reconcile-content", objects)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err := content.StageAgentSpecificationBody(ctx, tenant, runtimecontent.AgentSpecificationBody{Name: "expired", ModelProfile: "balanced", Instructions: "reconcile exact deletion intent"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	compiler, err := runtimestate.NewCompiler(content)
+	if err != nil {
+		t.Fatal(err)
+	}
+	planner, err := runtimestate.NewRuntimeStatePlanner(stateStoreClock{now: now}, &stateStoreIDs{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mutation, err := compiler.CompileRegisterAgentRevision(runtimestate.RegisterAgentRevisionCommand{Scope: runtimestate.MutationScope{Tenant: tenant, Authority: runtimestate.AuthorityTenantAdministrator}, IdempotencyKey: "register-retention-reconcile", Specification: body})
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan, err := planner.Plan(ctx, runtimestate.RuntimeState{}, mutation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := runtimepostgres.NewRuntimeStateStore(pool, stateStoreClock{now: now})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.PersistTransitionPlan(ctx, plan); err != nil {
+		t.Fatal(err)
+	}
+	reference := plan.Result().Revision.Specification
+	objectKey := "retention-reconcile-tenant/retention-reconcile-content/v1/sha256/" + reference.Digest[len("sha256:"):]
+	controller, err := runtimecontent.NewTenantErasureController(content, erasureAuthorizer{allowed: true}, objects)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := runtimepostgres.LifecycleRequest{Action: runtimepostgres.LifecycleCollectExpired, Tenant: tenant, AuthorizationID: "operator-retention-reconcile-0001", EvaluatedAt: now.Add(24*time.Hour + time.Nanosecond)}
+	if _, err := store.CollectExpiredAndContent(ctx, lifecycleAuthorizer{allowed: true}, request, controller); !errors.Is(err, runtimecontent.ErrUnavailable) {
+		t.Fatalf("collect ambiguous deletion error = %v, want ErrUnavailable", err)
+	}
+	if _, found := objects.values[objectKey]; found {
+		t.Fatal("ambiguous deleter did not remove its exact object")
+	}
+	state, err := store.LoadRuntimeState(ctx, mutation.ReceiptBinding().Scope)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(state.Revisions) != 0 {
+		t.Fatalf("state still references externally deleted content: %#v", state.Revisions)
+	}
+	var pending int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM runtime.pending_content_deletions WHERE tenant_id = $1`, string(tenant)).Scan(&pending); err != nil {
+		t.Fatalf("count durable pending deletions: %v", err)
+	}
+	if pending != 1 {
+		t.Fatalf("pending deletion records = %d, want 1", pending)
+	}
+	receipt, err := store.CollectExpiredAndContent(ctx, lifecycleAuthorizer{allowed: true}, request, controller)
+	if err != nil {
+		t.Fatalf("reconcile pending deletion: %v", err)
+	}
+	if receipt.RemovedMetadata != 0 || len(receipt.Content.Deleted) != 1 || receipt.Content.Deleted[0] != reference {
+		t.Fatalf("reconciliation receipt = %#v", receipt)
+	}
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM runtime.pending_content_deletions WHERE tenant_id = $1`, string(tenant)).Scan(&pending); err != nil {
+		t.Fatalf("count acknowledged pending deletions: %v", err)
+	}
+	if pending != 0 {
+		t.Fatalf("pending deletion records = %d, want 0 after acknowledgement", pending)
 	}
 }
 
@@ -447,6 +614,22 @@ func (objects *stateStoreObjects) Get(_ context.Context, key string, _ int) ([]b
 
 func (objects *stateStoreObjects) DeleteExact(_ context.Context, key string) error {
 	delete(objects.values, key)
+	return nil
+}
+
+type deleteAfterFaultObjects struct {
+	stateStoreObjects
+	failAfterDelete bool
+}
+
+func (objects *deleteAfterFaultObjects) DeleteExact(ctx context.Context, key string) error {
+	if err := objects.stateStoreObjects.DeleteExact(ctx, key); err != nil {
+		return err
+	}
+	if objects.failAfterDelete {
+		objects.failAfterDelete = false
+		return errors.New("lost deletion acknowledgement")
+	}
 	return nil
 }
 

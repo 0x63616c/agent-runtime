@@ -9,6 +9,7 @@ import (
 	"github.com/0x63616c/agent-runtime/internal/runtimecontent"
 	"github.com/0x63616c/agent-runtime/internal/runtimestate"
 	agentruntime "github.com/0x63616c/agent-runtime/sdk/go"
+	"github.com/jackc/pgx/v5"
 )
 
 // LifecycleAction is one operator-only state lifecycle operation.
@@ -50,11 +51,10 @@ type RetentionCollectionReceipt struct {
 	CollectionAt    time.Time
 }
 
-// CollectExpiredAndContent physically removes retention-expired immutable
-// content metadata and only those exact objects which are no longer referenced
-// by surviving metadata. It holds the tenant advisory lock throughout the
-// content/metadata boundary: a content failure leaves metadata intact for a
-// retry, and no bucket listing is used as deletion authority.
+// CollectExpiredAndContent durably removes retention-expired immutable content
+// metadata and records exact object-deletion intent before external deletion.
+// A lost external acknowledgement leaves the intent available for an explicit
+// retry; no bucket listing is used as deletion authority.
 func (store *RuntimeStateStore) CollectExpiredAndContent(ctx context.Context, authorizer LifecycleAuthorizer, request LifecycleRequest, content *runtimecontent.TenantErasureController) (RetentionCollectionReceipt, error) {
 	if err := ctx.Err(); err != nil {
 		return RetentionCollectionReceipt{}, err
@@ -86,9 +86,7 @@ func (store *RuntimeStateStore) CollectExpiredAndContent(ctx context.Context, au
 		remaining := referenceSet(stateReferences(compacted))
 		toDelete := unreferenced(candidates, remaining)
 		if len(toDelete) > 0 {
-			receipt, err := content.Erase(ctx, runtimecontent.ErasureRequest{Tenant: request.Tenant, AuthorizationID: request.AuthorizationID, References: toDelete})
-			result.Content = receipt
-			if err != nil {
+			if err := store.recordPendingContentDeletions(ctx, tx, request.Tenant, request.AuthorizationID, toDelete); err != nil {
 				return result, err
 			}
 		}
@@ -108,6 +106,11 @@ func (store *RuntimeStateStore) CollectExpiredAndContent(ctx context.Context, au
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return result, runtimestate.ErrUnavailable
+	}
+	receipt, err := store.reconcilePendingContentDeletions(ctx, request.Tenant, content)
+	result.Content = receipt
+	if err != nil {
+		return result, err
 	}
 	return result, nil
 }
@@ -204,9 +207,10 @@ func unreferenced(candidates []runtimecontent.Reference, remaining map[string]st
 	return result
 }
 
-// EraseTenantAndContent removes exact state-referenced immutable content, then
-// removes the PostgreSQL metadata in the same tenant-locked transaction. A
-// content failure leaves metadata intact so the explicit request can be retried.
+// EraseTenantAndContent removes PostgreSQL metadata and records exact immutable
+// content-deletion intent in one tenant-locked transaction. It then reconciles
+// those intent records with the external content authority; a failed or unknown
+// deletion acknowledgement remains durable for the same explicit retry.
 func (store *RuntimeStateStore) EraseTenantAndContent(ctx context.Context, authorizer LifecycleAuthorizer, request LifecycleRequest, content *runtimecontent.TenantErasureController) (CoordinatedErasureReceipt, error) {
 	if err := ctx.Err(); err != nil {
 		return CoordinatedErasureReceipt{}, err
@@ -235,9 +239,7 @@ func (store *RuntimeStateStore) EraseTenantAndContent(ctx context.Context, autho
 	references := stateReferences(state)
 	result := CoordinatedErasureReceipt{Tenant: request.Tenant}
 	if len(references) > 0 {
-		receipt, err := content.Erase(ctx, runtimecontent.ErasureRequest{Tenant: request.Tenant, AuthorizationID: request.AuthorizationID, References: references})
-		result.Content = receipt
-		if err != nil {
+		if err := store.recordPendingContentDeletions(ctx, tx, request.Tenant, request.AuthorizationID, references); err != nil {
 			return result, err
 		}
 	}
@@ -251,8 +253,102 @@ func (store *RuntimeStateStore) EraseTenantAndContent(ctx context.Context, autho
 	if err != nil {
 		return result, runtimestate.ErrUnavailable
 	}
-	if deleted.RowsAffected() != 1 {
-		return result, runtimestate.ErrNotFoundOrDenied
+	if deleted.RowsAffected() != 1 && len(references) == 0 {
+		pending, err := store.pendingContentDeletions(ctx, tx, request.Tenant)
+		if err != nil {
+			return result, err
+		}
+		if len(pending) == 0 {
+			return result, runtimestate.ErrNotFoundOrDenied
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return result, runtimestate.ErrUnavailable
+	}
+	receipt, err := store.reconcilePendingContentDeletions(ctx, request.Tenant, content)
+	result.Content = receipt
+	if err != nil {
+		return result, err
+	}
+	return result, nil
+}
+
+type pendingContentDeletion struct {
+	Reference       runtimecontent.Reference
+	AuthorizationID string
+}
+
+type stateRows interface {
+	Query(context.Context, string, ...any) (pgx.Rows, error)
+}
+
+func (store *RuntimeStateStore) recordPendingContentDeletions(ctx context.Context, tx pgx.Tx, tenant runtimecontent.TenantID, authorizationID string, references []runtimecontent.Reference) error {
+	for _, reference := range references {
+		if _, err := tx.Exec(ctx, `INSERT INTO runtime.pending_content_deletions
+			(tenant_id, digest, media_type, size_bytes, authorization_id, requested_at)
+			VALUES ($1, $2, $3, $4, $5, now())
+			ON CONFLICT (tenant_id, digest, media_type) DO NOTHING`, string(tenant), reference.Digest, reference.MediaType, reference.SizeBytes, authorizationID); err != nil {
+			return runtimestate.ErrUnavailable
+		}
+	}
+	return nil
+}
+
+func (store *RuntimeStateStore) pendingContentDeletions(ctx context.Context, query stateRows, tenant runtimecontent.TenantID) ([]pendingContentDeletion, error) {
+	rows, err := query.Query(ctx, `SELECT digest, media_type, size_bytes, authorization_id
+		FROM runtime.pending_content_deletions
+		WHERE tenant_id = $1
+		ORDER BY authorization_id, digest, media_type`, string(tenant))
+	if err != nil {
+		return nil, runtimestate.ErrUnavailable
+	}
+	defer rows.Close()
+	result := []pendingContentDeletion{}
+	for rows.Next() {
+		var deletion pendingContentDeletion
+		if err := rows.Scan(&deletion.Reference.Digest, &deletion.Reference.MediaType, &deletion.Reference.SizeBytes, &deletion.AuthorizationID); err != nil {
+			return nil, runtimestate.ErrUnavailable
+		}
+		result = append(result, deletion)
+	}
+	if rows.Err() != nil {
+		return nil, runtimestate.ErrUnavailable
+	}
+	return result, nil
+}
+
+func (store *RuntimeStateStore) reconcilePendingContentDeletions(ctx context.Context, tenant runtimecontent.TenantID, content *runtimecontent.TenantErasureController) (runtimecontent.ErasureReceipt, error) {
+	tx, err := store.pool.Begin(ctx)
+	if err != nil {
+		return runtimecontent.ErasureReceipt{}, runtimestate.ErrUnavailable
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if err := bindTenant(ctx, tx, tenant); err != nil {
+		return runtimecontent.ErasureReceipt{}, runtimestate.ErrUnavailable
+	}
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, string(tenant)); err != nil {
+		return runtimecontent.ErasureReceipt{}, runtimestate.ErrUnavailable
+	}
+	pending, err := store.pendingContentDeletions(ctx, tx, tenant)
+	if err != nil {
+		return runtimecontent.ErasureReceipt{}, err
+	}
+	result := runtimecontent.ErasureReceipt{Tenant: tenant, Deleted: make([]runtimecontent.Reference, 0, len(pending))}
+	for _, deletion := range pending {
+		receipt, err := content.Erase(ctx, runtimecontent.ErasureRequest{Tenant: tenant, AuthorizationID: deletion.AuthorizationID, References: []runtimecontent.Reference{deletion.Reference}})
+		result.Deleted = append(result.Deleted, receipt.Deleted...)
+		if receipt.Failed != nil {
+			failed := *receipt.Failed
+			result.Failed = &failed
+		}
+		if err != nil {
+			return result, err
+		}
+	}
+	if len(pending) > 0 {
+		if _, err := tx.Exec(ctx, `DELETE FROM runtime.pending_content_deletions WHERE tenant_id = $1`, string(tenant)); err != nil {
+			return result, runtimestate.ErrUnavailable
+		}
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return result, runtimestate.ErrUnavailable
