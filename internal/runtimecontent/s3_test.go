@@ -42,6 +42,12 @@ func TestS3ObjectsConditionallyCreatesAndBoundsReads(t *testing.T) {
 	if got, err := io.ReadAll(stream); err != nil || string(got) != "value" || client.opens != 1 {
 		t.Fatalf("open value = %q, %v opens=%d", got, err, client.opens)
 	}
+	if err := objects.DeleteExact(context.Background(), "tenant/sha256:abc"); err != nil {
+		t.Fatalf("delete exact immutable object: %v", err)
+	}
+	if _, err := objects.Get(context.Background(), "tenant/sha256:abc", 5); err == nil {
+		t.Fatal("get deleted immutable object error = nil")
+	}
 }
 
 type recordingS3Client struct {
@@ -82,4 +88,9 @@ func (client *recordingS3Client) Open(_ context.Context, bucket, key string, max
 	}
 	client.opens++
 	return io.NopCloser(bytes.NewReader(value)), nil
+}
+
+func (client *recordingS3Client) DeleteExact(_ context.Context, bucket, key string) error {
+	delete(client.values, bucket+"/"+key)
+	return nil
 }

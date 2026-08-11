@@ -77,6 +77,10 @@ func (client minioImmutableClient) Open(ctx context.Context, bucket, key string,
 	return object, nil
 }
 
+func (client minioImmutableClient) DeleteExact(ctx context.Context, bucket, key string) error {
+	return client.client.RemoveObject(ctx, bucket, key, minio.RemoveObjectOptions{})
+}
+
 func minioPrecondition(err error) bool {
 	response := minio.ToErrorResponse(err)
 	return response.Code == "PreconditionFailed" || response.StatusCode == 412

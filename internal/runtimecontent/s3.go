@@ -19,6 +19,13 @@ type s3ImmutableStreamer interface {
 	Open(context.Context, string, string, int) (io.ReadCloser, error)
 }
 
+// s3ImmutableDeleter is deliberately separate from the request-path object
+// client. Only the operator-owned lifecycle controller may obtain this
+// capability through S3ImmutableObjects.
+type s3ImmutableDeleter interface {
+	DeleteExact(context.Context, string, string) error
+}
+
 // S3ImmutableObjects adapts one declared bucket to runtimecontent's immutable
 // object boundary. Its keys remain runtimecontent-owned and tenant-scoped.
 type S3ImmutableObjects struct {
@@ -27,6 +34,7 @@ type S3ImmutableObjects struct {
 }
 
 var _ ImmutableObjectStore = (*S3ImmutableObjects)(nil)
+var _ ImmutableObjectDeleter = (*S3ImmutableObjects)(nil)
 
 // NewS3ImmutableObjects creates one bounded immutable runtime-content bucket adapter.
 func NewS3ImmutableObjects(client S3ImmutableClient, bucket string) (*S3ImmutableObjects, error) {
@@ -90,6 +98,26 @@ func (objects *S3ImmutableObjects) Open(ctx context.Context, key string, maxByte
 		return nil, ErrUnavailable
 	}
 	return stream, nil
+}
+
+// DeleteExact removes one private immutable key through the explicit
+// operator-only lifecycle capability. Ordinary request paths receive only the
+// ImmutableObjectStore surface and cannot call it.
+func (objects *S3ImmutableObjects) DeleteExact(ctx context.Context, key string) error {
+	if err := ctx.Err(); err != nil {
+		return errors.Wrap(err, "delete immutable runtime content")
+	}
+	if objects == nil || objects.client == nil || !validObjectKey(key) {
+		return ErrIntegrity
+	}
+	client, ok := objects.client.(s3ImmutableDeleter)
+	if !ok {
+		return ErrUnavailable
+	}
+	if err := client.DeleteExact(ctx, objects.bucket, key); err != nil {
+		return errors.Wrap(ErrUnavailable, "delete immutable runtime content")
+	}
+	return nil
 }
 
 func validObjectKey(key string) bool {

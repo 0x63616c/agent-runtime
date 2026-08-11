@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"regexp"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -159,5 +160,16 @@ var _ = Describe("public documentation foundation", func() {
 		)))
 		Expect(page).To(ContainSubstring("# HTTP operation index"))
 		Expect(page).To(ContainSubstring("`createSession`"))
+	})
+
+	It("keeps the retention lifecycle inventory complete for every runtime-state class", func() {
+		inventory := read("docs/reference/data-lifecycle.md")
+		matches := regexp.MustCompile(`DataClass[A-Za-z]+\s+DataClass\s+=\s+"([^"]+)"`).FindAllStringSubmatch(read("internal/runtimestate/planner.go"), -1)
+		Expect(matches).NotTo(BeEmpty())
+		for _, match := range matches {
+			Expect(inventory).To(ContainSubstring("`"+match[1]+"`"), match[1])
+		}
+		Expect(inventory).To(ContainSubstring("real PostgreSQL/MinIO test"))
+		Expect(inventory).To(ContainSubstring("operator capability"))
 	})
 })

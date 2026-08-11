@@ -48,10 +48,15 @@ func TestRuntimeContentMinIOImmutableRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open immutable stream: %v", err)
 	}
-	defer stream.Close()
 	value, err := io.ReadAll(stream)
-	if err != nil || string(value) != "immutable" {
+	if closeErr := stream.Close(); err != nil || closeErr != nil || string(value) != "immutable" {
 		t.Fatalf("read immutable stream = %q, %v", value, err)
+	}
+	if err := objects.DeleteExact(context.Background(), key); err != nil {
+		t.Fatalf("delete exact immutable object: %v", err)
+	}
+	if _, err := objects.Get(context.Background(), key, len("immutable")); err == nil {
+		t.Fatal("read deleted immutable object error = nil")
 	}
 }
 
