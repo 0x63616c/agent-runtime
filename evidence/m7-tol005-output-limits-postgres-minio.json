@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "observed_at_utc": "2026-08-11T22:13:56Z",
+  "proof_level": "integration",
+  "revision": "4945dfc23991f2a35261567b08fdcb598bcf0314",
+  "scope": "S5 tool-output normalization on exclusive disposable PostgreSQL and MinIO using a declared fixture adapter. This is not a protected sandbox, Firecracker, Linux/KVM, or EX-002 proof.",
+  "commands": [
+    "AR_RUNTIME_API_POSTGRES_DSN=<redacted> AR_RUNTIME_API_MINIO_ENDPOINT=<redacted> AR_RUNTIME_API_MINIO_ACCESS_KEY=<redacted> AR_RUNTIME_API_MINIO_SECRET_KEY=<redacted> AR_RUNTIME_API_MINIO_BUCKET=<redacted> go test -race -tags=integration ./internal/runtimetool -run '^TestDurableBrokeredToolLifecyclePersistsApprovalAndFinalization$' -count=1",
+    "just check"
+  ],
+  "result": "passed",
+  "observations": {
+    "bounded_artifact": "A successful normalized result is retained as a bounded MinIO-backed Artifact and the owner-authorized runtime projection references the same redacted result rather than a raw output body.",
+    "redaction": "Credential-shaped fixture output is absent from public result/event, durable audit/outbox assertions, and the retained Artifact body; the safe replacement is present instead.",
+    "oversize_refusal": "An output above the configured limit produces a safe terminal failure with no Artifact-count increase, no extra object-store artifact, no raw oversized value in public result/event, and no replacement adapter dispatch."
+  },
+  "redaction": "No DSNs, object-store credentials, artifact bodies, raw outputs, raw operation IDs, descriptors, inputs, or backend endpoints are retained."
+}

@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "observed_at_utc": "2026-08-11T22:13:56Z",
+  "proof_level": "integration",
+  "revision": "4945dfc23991f2a35261567b08fdcb598bcf0314",
+  "scope": "S5 Tool broker lifecycle on an exclusive disposable PostgreSQL and MinIO fixture with an injected clock and declared adapter seam. It is not a Workspace service, protected sandbox, Firecracker, Linux/KVM, or EX-002 proof.",
+  "commands": [
+    "AR_RUNTIME_API_POSTGRES_DSN=<redacted> AR_RUNTIME_API_MINIO_ENDPOINT=<redacted> AR_RUNTIME_API_MINIO_ACCESS_KEY=<redacted> AR_RUNTIME_API_MINIO_SECRET_KEY=<redacted> AR_RUNTIME_API_MINIO_BUCKET=<redacted> go test -race -tags=integration ./internal/runtimetool -run '^TestDurableBrokeredToolLifecyclePersistsApprovalAndFinalization$' -count=1",
+    "just check"
+  ],
+  "result": "passed",
+  "observations": {
+    "least_privilege": "An owner approval creates a one-use grant and the worker performs exactly one authorized adapter execution before the grant is exhausted.",
+    "terminal_refusal": "Injected-clock expiry, owner cancellation, policy denial, revocation, unavailable policy, and max-use exhaustion retain terminal durable state and do not dispatch an adapter operation.",
+    "restart": "A fresh PostgreSQL pool and reconstructed public runtime preserve the terminal grant and approval state; a late approval replay is rejected without issuing a second grant or dispatch."
+  },
+  "redaction": "No DSNs, object-store credentials, raw grants, operation IDs, descriptors, inputs, artifact bodies, or backend endpoints are retained."
+}
