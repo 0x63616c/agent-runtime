@@ -639,6 +639,10 @@ type recordingAdapter struct {
 	last                 runtimetool.Request
 }
 
+func (adapter *recordingAdapter) ExternalEffectContract() runtimetool.ExternalEffectContract {
+	return runtimetool.ExternalEffectContract{IdempotencyKey: "operation_id", Reconciles: true}
+}
+
 func (adapter *recordingAdapter) Execute(_ context.Context, request runtimetool.Request) (runtimetool.Response, error) {
 	adapter.executes++
 	adapter.last = request
