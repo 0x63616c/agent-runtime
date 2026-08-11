@@ -16,6 +16,11 @@ the declared route, method, operation ID, and successful response statuses
 directly from that contract. It is an index, not a claim that the standalone
 development role provides production durability.
 
+The [v1 compatibility policy](https://github.com/0x63616c/agent-runtime/blob/main/docs/reference/api-compatibility.md)
+defines which route and vocabulary changes are additive versus breaking. A
+checked-in baseline test protects the current Agent, Policy, Tool, Event, and
+Failure vocabulary.
+
 The API creates and reads immutable Agent and Policy revisions, creates and inspects
 Sessions, idempotently submits Input, observes Turns and cursor-addressed
 Product events, explicitly cancels a Turn, and drain-closes a Session. Agent
