@@ -4,34 +4,22 @@
   "private": true,
   "packageManager": "npm@11.17.0",
   "scripts": {
-    "start": "docusaurus start",
-    "build": "docusaurus build",
-    "serve": "docusaurus serve",
-    "clear": "docusaurus clear",
-    "typecheck": "tsc --noEmit"
+    "start": "astro dev",
+    "build": "astro build",
+    "preview": "astro preview",
+    "typecheck": "astro check",
+    "check:routes": "node ./scripts/check-routes.mjs"
   },
   "dependencies": {
-    "@docusaurus/core": "3.10.2",
-    "@docusaurus/faster": "3.10.2",
-    "@docusaurus/preset-classic": "3.10.2",
-    "@mdx-js/react": "3.1.1",
-    "clsx": "2.1.1",
-    "prism-react-renderer": "2.4.1",
-    "react": "19.2.8",
-    "react-dom": "19.2.8"
+    "@astrojs/starlight": "0.41.7",
+    "astro": "7.2.0"
   },
   "devDependencies": {
-    "@docusaurus/module-type-aliases": "3.10.2",
-    "@docusaurus/tsconfig": "3.10.2",
-    "@docusaurus/types": "3.10.2",
-    "@types/react": "19.2.18",
+    "@astrojs/check": "0.9.10",
     "typescript": "6.0.2"
   },
   "engines": {
     "node": "24.19.0",
     "npm": "11.17.0"
-  },
-  "overrides": {
-    "serialize-javascript": "7.0.7"
   }
 }

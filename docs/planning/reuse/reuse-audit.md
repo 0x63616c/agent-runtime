@@ -127,9 +127,9 @@ skills/
     └── scripts/refresh-docs/              deterministic runner
 ```
 
-Its source of truth is current code plus passing contracts, OpenAPI generation, the SDK's public Go doc surface, Docusaurus configuration, and executable examples. Curated conceptual/security/runbook sections are marked and never silently overwritten. The runner must atomically regenerate only named outputs, refuse overwriting conflicting edits, support `--check`, then run `just docs-check` and print the exact docs/skills diff. CI runs its check mode and fails on stale generated reference, code sample, route, config key, or OpenAPI client documentation.
+Its source of truth is current code plus passing contracts, OpenAPI generation, the SDK's public Go doc surface, Astro Starlight configuration, and executable examples. Curated conceptual/security/runbook sections are marked and never silently overwritten. The runner must atomically regenerate only named outputs, refuse overwriting conflicting edits, support `--check`, then run `just docs-check` and print the exact docs/skills diff. CI runs its check mode and fails on stale generated reference, code sample, route, config key, or OpenAPI client documentation.
 
-Unlike dimensions, it must additionally validate public API reference, every public configuration key, all three runnable examples, markdown links, Docusaurus build/search metadata, and every fenced command/snippet that claims to run. It must never advertise planned routes as implemented.
+Unlike dimensions, it must additionally validate public API reference, every public configuration key, all three runnable examples, markdown links, Astro Starlight build/search metadata, and every fenced command/snippet that claims to run. It must never advertise planned routes as implemented.
 
 ## Public MIT and provenance controls
 
@@ -149,7 +149,7 @@ This audit identifies reusable foundations; it does not claim the following exis
 - sandbox API, real Linux execution backend, Firecracker/KVM strategy, artifact transfer, capability enforcement, and recovery tests;
 - runtime kernel, sessions/turns/events/approval domain, HTTP API/OpenAPI, Go SDK, authorization, and Temporal workflows;
 - local Tilt topology, MinIO/S3, Postgres, Temporal, codec, observability, and one-command verification;
-- Docusaurus site and tested documentation-refresh skill;
+- Astro Starlight site and tested documentation-refresh skill;
 - all three working examples and their end-to-end tests;
 - an approval workflow that persists the request, streams the pending state, accepts/rejects an idempotent response, survives restart, and is demonstrated in an example.
 

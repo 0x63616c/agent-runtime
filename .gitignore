@@ -1,4 +1,4 @@
-website/.docusaurus/
-website/build/
+website/.astro/
+website/dist/
 website/node_modules/
 .runtime/

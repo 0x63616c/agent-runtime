@@ -20,7 +20,7 @@ health-only trust-scoped role images—API, orchestration, model, tool, blob,
 codec, sandbox control, and sandbox host—with per-role identities and exact
 credential references. It proves isolated infrastructure, image builds,
 readiness, reset, and teardown; it is not yet the public Agent Runtime. See the
-[local Stack guide](website/docs/build-and-run/local-stack.mdx) for the exact
+[local Stack guide](website/src/content/docs/docs/build-and-run/local-stack.mdx) for the exact
 boundary.
 
 ## Verification

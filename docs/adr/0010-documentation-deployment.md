@@ -1,10 +1,10 @@
 ---
-status: accepted
+status: superseded
 ---
 
-# Documentation generation and deployment
+# Superseded documentation generation and deployment
 
-Documentation has curated conceptual sections and explicitly owned generated
+This historical decision established curated conceptual sections and explicitly owned generated
 reference outputs. A repository-local refresh skill regenerates only declared
 outputs atomically, supports check mode, and refuses stale or conflicting
 content. GitHub Pages deployment uses a separate least-privilege workflow;
@@ -17,7 +17,14 @@ the direct-main gate.
 - Deploy from a developer workstation or grant the main CI workflow Pages
   write authority.
 
-## Consequences
+## Supersession
+
+ADR-0014 supersedes this document's Docusaurus-era platform and publication
+details. The refresh ownership, atomicity, GitHub Pages artifact model, and
+least-privilege constraints remain binding through ADR-0014 and the current
+documentation stack contract.
+
+## Historical consequences
 
 Generated ownership and docs-version mapping are explicit. Main changes run
 docs checks; deployment consumes a checked build artifact and uses protected

@@ -22,20 +22,20 @@ var _ = Describe("refreshing public documentation", func() {
 	BeforeEach(func() {
 		files = &memoryFiles{content: map[string][]byte{
 			"README.md":                          []byte("# Agent Runtime\n"),
-			"website/docusaurus.config.ts":       []byte("baseUrl: '/agent-runtime/'\n"),
-			"website/docs/security/overview.mdx": []byte("operator-owned prose\n"),
+			"website/astro.config.mjs":       []byte("base: '/agent-runtime'\n"),
+			"website/src/content/docs/docs/security/overview.mdx": []byte("operator-owned prose\n"),
 		}}
 		changes = &fakeChanges{}
 		manifest = docsrefresh.Manifest{
 			SchemaVersion:   1,
 			RendererVersion: "source-inventory/v1",
 			Generated: []docsrefresh.Artifact{{
-				Output:       "website/docs/reference/generated/source-inventory.mdx",
-				Inputs:       []string{"website/docusaurus.config.ts", "README.md"},
+				Output:       "website/src/content/docs/docs/reference/generated/source-inventory.mdx",
+				Inputs:       []string{"website/astro.config.mjs", "README.md"},
 				Kind:         "source-inventory",
 				PublicStatus: "foundation",
 			}},
-			Curated: []string{"website/docs/security/overview.mdx"},
+			Curated: []string{"website/src/content/docs/docs/security/overview.mdx"},
 		}
 	})
 
@@ -43,16 +43,16 @@ var _ = Describe("refreshing public documentation", func() {
 		result, err := docsrefresh.Refresh(context.Background(), ".", manifest, files, changes, docsrefresh.Options{Check: true})
 
 		Expect(err).To(MatchError(docsrefresh.ErrStale))
-		Expect(result.Stale).To(Equal([]string{"website/docs/reference/generated/source-inventory.mdx"}))
+		Expect(result.Stale).To(Equal([]string{"website/src/content/docs/docs/reference/generated/source-inventory.mdx"}))
 		Expect(files.atomicWrites).To(BeEmpty())
-		Expect(files.content).NotTo(HaveKey("website/docs/reference/generated/source-inventory.mdx"))
+		Expect(files.content).NotTo(HaveKey("website/src/content/docs/docs/reference/generated/source-inventory.mdx"))
 	})
 
 	It("writes changed allow-listed output atomically and is byte-identical on repeat", func() {
 		first, err := docsrefresh.Refresh(context.Background(), ".", manifest, files, changes, docsrefresh.Options{})
 		Expect(err).NotTo(HaveOccurred())
-		Expect(first.Changed).To(Equal([]string{"website/docs/reference/generated/source-inventory.mdx"}))
-		Expect(files.atomicWrites).To(Equal([]string{"website/docs/reference/generated/source-inventory.mdx"}))
+		Expect(first.Changed).To(Equal([]string{"website/src/content/docs/docs/reference/generated/source-inventory.mdx"}))
+		Expect(files.atomicWrites).To(Equal([]string{"website/src/content/docs/docs/reference/generated/source-inventory.mdx"}))
 
 		second, err := docsrefresh.Refresh(context.Background(), ".", manifest, files, changes, docsrefresh.Options{})
 		Expect(err).NotTo(HaveOccurred())
@@ -62,7 +62,7 @@ var _ = Describe("refreshing public documentation", func() {
 
 	It("renders a sorted HTTP operation index from the declared OpenAPI contract", func() {
 		manifest.Generated[0] = docsrefresh.Artifact{
-			Output:       "website/docs/reference/generated/http-operations.mdx",
+			Output:       "website/src/content/docs/docs/reference/generated/http-operations.mdx",
 			Inputs:       []string{"api/openapi/openapi.yaml"},
 			Kind:         "openapi-operation-index",
 			PublicStatus: "current public contract; runtime transport remains development evidence",
@@ -72,7 +72,7 @@ var _ = Describe("refreshing public documentation", func() {
 		result, err := docsrefresh.Refresh(context.Background(), ".", manifest, files, changes, docsrefresh.Options{})
 
 		Expect(err).NotTo(HaveOccurred())
-		Expect(result.Changed).To(Equal([]string{"website/docs/reference/generated/http-operations.mdx"}))
+		Expect(result.Changed).To(Equal([]string{"website/src/content/docs/docs/reference/generated/http-operations.mdx"}))
 		output := string(files.content[manifest.Generated[0].Output])
 		Expect(output).To(ContainSubstring("# HTTP operation index"))
 		Expect(output).To(ContainSubstring("`3.1.0`"))
@@ -84,7 +84,7 @@ var _ = Describe("refreshing public documentation", func() {
 
 	It("renders a documented public Go SDK symbol index from declared source files", func() {
 		manifest.Generated[0] = docsrefresh.Artifact{
-			Output: "website/docs/reference/generated/go-sdk-symbols.mdx",
+			Output: "website/src/content/docs/docs/reference/generated/go-sdk-symbols.mdx",
 			Inputs: []string{
 				"sdk/go/client.go",
 				"sdk/go/doc.go",
@@ -100,7 +100,7 @@ var _ = Describe("refreshing public documentation", func() {
 		result, err := docsrefresh.Refresh(context.Background(), ".", manifest, files, changes, docsrefresh.Options{})
 
 		Expect(err).NotTo(HaveOccurred())
-		Expect(result.Changed).To(Equal([]string{"website/docs/reference/generated/go-sdk-symbols.mdx"}))
+		Expect(result.Changed).To(Equal([]string{"website/src/content/docs/docs/reference/generated/go-sdk-symbols.mdx"}))
 		output := string(files.content[manifest.Generated[0].Output])
 		Expect(output).To(ContainSubstring("# Go SDK symbol index"))
 		Expect(output).To(ContainSubstring("`github.com/0x63616c/agent-runtime/sdk/go`"))
@@ -114,7 +114,7 @@ var _ = Describe("refreshing public documentation", func() {
 
 	It("rejects an undocumented public Go SDK symbol without writing", func() {
 		manifest.Generated[0] = docsrefresh.Artifact{
-			Output:       "website/docs/reference/generated/go-sdk-symbols.mdx",
+			Output:       "website/src/content/docs/docs/reference/generated/go-sdk-symbols.mdx",
 			Inputs:       []string{"sdk/go/doc.go", "sdk/go/types.go"},
 			Kind:         "go-sdk-symbol-index",
 			PublicStatus: "current public Go SDK contract",
@@ -130,7 +130,7 @@ var _ = Describe("refreshing public documentation", func() {
 
 	It("rejects a Go SDK source manifest that omits a discovered package file", func() {
 		manifest.Generated[0] = docsrefresh.Artifact{
-			Output:       "website/docs/reference/generated/go-sdk-symbols.mdx",
+			Output:       "website/src/content/docs/docs/reference/generated/go-sdk-symbols.mdx",
 			Inputs:       []string{"sdk/go/doc.go", "sdk/go/types.go"},
 			Kind:         "go-sdk-symbol-index",
 			PublicStatus: "current public Go SDK contract",
@@ -143,7 +143,7 @@ var _ = Describe("refreshing public documentation", func() {
 
 	It("refuses an OpenAPI operation without a successful response before writing", func() {
 		manifest.Generated[0] = docsrefresh.Artifact{
-			Output:       "website/docs/reference/generated/http-operations.mdx",
+			Output:       "website/src/content/docs/docs/reference/generated/http-operations.mdx",
 			Inputs:       []string{"api/openapi/openapi.yaml"},
 			Kind:         "openapi-operation-index",
 			PublicStatus: "current public contract; runtime transport remains development evidence",
@@ -158,7 +158,7 @@ var _ = Describe("refreshing public documentation", func() {
 
 	It("refuses an incomplete or unsafe OpenAPI document before writing an index", func() {
 		manifest.Generated[0] = docsrefresh.Artifact{
-			Output:       "website/docs/reference/generated/http-operations.mdx",
+			Output:       "website/src/content/docs/docs/reference/generated/http-operations.mdx",
 			Inputs:       []string{"api/openapi/openapi.yaml"},
 			Kind:         "openapi-operation-index",
 			PublicStatus: "current public contract; runtime transport remains development evidence",
@@ -269,9 +269,9 @@ var _ = Describe("refreshing public documentation", func() {
 
 	It("detects declared route, configuration, example, and reference drift", func() {
 		manifest.Generated[0].Inputs = []string{
-			"website/docusaurus.config.ts",
-			"website/docs/examples/index.mdx",
-			"website/docs/reference/overview.mdx",
+			"website/astro.config.mjs",
+			"website/src/content/docs/docs/examples/index.mdx",
+			"website/src/content/docs/docs/reference/overview.mdx",
 			"deploy/catalog.yaml",
 		}
 		for _, path := range manifest.Generated[0].Inputs {
@@ -298,7 +298,7 @@ var _ = Describe("refreshing public documentation", func() {
 	})
 
 	It("rejects a stale curated manifest entry without writing", func() {
-		manifest.Curated = append(manifest.Curated, "website/docs/security/missing.mdx")
+		manifest.Curated = append(manifest.Curated, "website/src/content/docs/docs/security/missing.mdx")
 		_, err := docsrefresh.Refresh(context.Background(), ".", manifest, files, changes, docsrefresh.Options{})
 		Expect(err).To(MatchError(ContainSubstring("read curated documentation")))
 		Expect(files.atomicWrites).To(BeEmpty())
@@ -383,8 +383,8 @@ var _ = Describe("refreshing public documentation", func() {
 		root := GinkgoT().TempDir()
 		for path, content := range map[string]string{
 			"README.md":                          "initial\n",
-			"website/docusaurus.config.ts":       "config\n",
-			"website/docs/security/overview.mdx": "curated\n",
+			"website/astro.config.mjs":       "config\n",
+			"website/src/content/docs/docs/security/overview.mdx": "curated\n",
 		} {
 			absolute := filepath.Join(root, filepath.FromSlash(path))
 			Expect(os.MkdirAll(filepath.Dir(absolute), 0o755)).To(Succeed())

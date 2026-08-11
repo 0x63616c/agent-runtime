@@ -16,7 +16,8 @@ implementation authority unless an accepted ADR explicitly promotes them.
 | [0007](0007-milestone-status-and-ntfy-reporting.md) | Milestone status and ntfy reporting |
 | [0008](0008-approval-persistence.md) | Approval persistence and authority |
 | [0009](0009-payload-compatibility.md) | Temporal payload compatibility |
-| [0010](0010-documentation-deployment.md) | Documentation generation and deployment |
+| [0010](0010-documentation-deployment.md) | Superseded documentation generation and deployment |
 | [0011](0011-runtime-state-authority-and-content-boundary.md) | Runtime state authority and immutable content boundary |
 | [0012](0012-private-firecracker-boot-probe-v2.md) | Private Firecracker boot-probe v2 protocol |
-| [0013](0013-temporary-documentation-audit-exception.md) | Temporary documentation production-dependency audit exception |
+| [0013](0013-temporary-documentation-audit-exception.md) | Retired documentation production-dependency audit exception |
+| [0014](0014-astro-starlight-documentation-platform.md) | Astro Starlight documentation platform |

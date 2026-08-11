@@ -8,31 +8,27 @@ description: Reproducible deployment, search, accessibility, and rollback policy
 ## Version and toolchain
 
 The site uses one current version until the first compatible public release.
-Node 24, npm's committed lockfile, and Docusaurus 3.10.2 are exact repository
+Node 24, npm's committed lockfile, Astro, and Starlight are exact repository
 inputs. Repeatable jobs use `npm ci`; dependency upgrades are reviewed changes.
 
-## Current dependency audit exception
+## Dependency audit
 
-The site has one visible, time-bounded exception for two high-severity
-`image-size` advisories inherited through Docusaurus. The production audit
-still runs on every check and accepts no other high or critical finding. See
-the [documentation dependency audit exception](../security/dependency-audit-exception.mdx)
-for its issue, expiry, scope, and removal criteria. This is a conditional
-release result, not a clean security audit.
+The production dependency audit is clean. `just docs-check` runs
+`npm audit --omit=dev --audit-level=high` directly, so any new high or critical
+production advisory fails the documentation gate. The retired Docusaurus
+exception is retained only as historical context in ADR-0013; it does not
+alter the current gate.
 
 ## Search privacy and cost
 
-Search is deliberately disabled while the public site awaits crawler review.
-The site is deployed on GitHub Pages; the project may now apply for Algolia DocSearch.
-Its hosted
-crawler sends public page content to Algolia and visitor queries to that
-service, so the privacy boundary and free public-program eligibility must be
-reviewed before repository configuration is enabled. Navigation does not
-depend on the crawler, and pre-crawl state is never described as working search.
+Starlight builds a local Pagefind full-text index into the static Pages artifact.
+It needs no third-party crawler, hosted search credential, or visitor-query
+service. If a future hosted search provider is proposed, its data flow and
+privacy consequences require a separate decision.
 
 ## Accessibility
 
-The authoring baseline uses semantic headings, keyboard-operable Docusaurus
+The authoring baseline uses semantic headings, keyboard-operable Starlight
 navigation, visible focus behavior, responsive layouts, contrast-aware themes,
 and reduced layout complexity. #34 owns full browser accessibility smoke proof
 before publication; the production build alone is not that proof.

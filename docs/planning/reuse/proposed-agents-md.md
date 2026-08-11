@@ -98,7 +98,7 @@ Do not claim a live proof that has not run. State the exact proof level: unit, w
 ## Public surface and documentation
 
 - The public Go SDK depends only on the public HTTP/event contract. It must not import runtime internals or implementation dependencies.
-- Public API changes require OpenAPI generation, SDK documentation, Docusaurus docs, runnable examples, changelog/release notes as applicable, and an explicit compatibility decision.
+- Public API changes require OpenAPI generation, SDK documentation, Astro Starlight docs, runnable examples, changelog/release notes as applicable, and an explicit compatibility decision.
 - Run `refresh-agent-runtime-docs` whenever public capabilities, routes, configuration, examples, installation steps, commands, security/operator guidance, or debugging paths change.
 - The refresh skill uses current source and passing executable contracts as truth. It regenerates only declared output atomically, protects curated sections, supports check mode, validates docs and examples, and presents the exact diff. Never advertise planned behaviour as implemented.
 

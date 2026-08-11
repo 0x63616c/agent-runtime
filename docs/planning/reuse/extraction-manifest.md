@@ -36,7 +36,7 @@ The following may inform design but must not be extracted into the runtime imple
 | `internal/clients/github/**`, `internal/githubpolicy/**`, `internal/webhook/**`, `cmd/relay`, `cmd/verify-github-policy` | Out of scope for a generic runtime and hazardous as accidental scope growth. |
 | `internal/clients/k8s/**`, `cmd/run-worker`, `cmd/tool-worker`, `internal/runworkercapability/**`, `images/run-worker/**` | The new sandbox must have a purpose-built contract and backend lifecycle; Factory's pod model and GitHub credentials are not a substitute. |
 | `internal/store/**`, `internal/database/**`, `sqlc.yaml`, migration history | Ticket/Run/Attempt schema and Factory audit model are not the runtime schema. Learn from its typed store/fake/contract approach instead. |
-| `web/**`, `cmd/api`, `internal/api/**` | Factory console and Ticket API are not examples or runtime public contract. Build the new API/OpenAPI and Docusaurus documentation from the new domain. |
+| `web/**`, `cmd/api`, `internal/api/**` | Factory console and Ticket API are not examples or runtime public contract. Build the new API/OpenAPI and Astro Starlight documentation from the new domain. |
 | `_archived/**` | Explicitly historical and excluded by Software Factory's own active instructions. Never copy from it. |
 
 ## Adoption sequence and completion record
@@ -49,7 +49,7 @@ Copy in this order so dependencies and proof move together:
 4. New runtime kernel/storage types, then EX-008 patterns.
 5. New sandbox contract/backend and tools; these are new work, not extraction.
 6. Provider-neutral model seam, then EX-009/EX-010 only if current external verification permits the experimental adapter.
-7. EX-013 documentation skills, Docusaurus integration, and generated public documentation checks.
+7. EX-013 documentation skills, Astro Starlight integration, and generated public documentation checks.
 
 For every extraction, append a completion row here with:
 

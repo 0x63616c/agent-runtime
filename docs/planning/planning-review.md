@@ -205,7 +205,7 @@ declaratively referenced; no runtime workflow sends user-controlled URLs.
 
 | Milestone | Required correction |
 | --- | --- |
-| M0 contract/governance | Close P0 ADRs: declarative infrastructure/ownership; PostgreSQL/event/outbox; subscription support; sandbox host protocol; Go module/release strategy. Establish Docusaurus skeleton, docs skill, docs checks, renderer/policy checks, evidence schema, notification/status mechanism. Docs build from M0, not only M10. |
+| M0 contract/governance | Close P0 ADRs: declarative infrastructure/ownership; PostgreSQL/event/outbox; subscription support; sandbox host protocol; Go module/release strategy. Establish Astro Starlight skeleton, docs skill, docs checks, renderer/policy checks, evidence schema, notification/status mechanism. Docs build from M0, not only M10. |
 | M1 Tilt + hello runtime | Apply only M0-rendered desired state. Prove two-stack isolation, including distinct runtime and Temporal database/schema, blobs, queues, Secret refs, labels, ports, and telemetry. No bootstrap binary creates missing infrastructure. |
 | M2 codec/blob | Declare MinIO/S3-compatible resources and codec-UI policy. Prove local worker/UI codec parity; the remote codec service is never a runtime decode dependency. |
 | M3 durable sandbox control | Use the PostgreSQL control ledger and host fencing protocol. It cannot be a process-local fake with persistence added later. |
@@ -239,7 +239,7 @@ checks plus refusal when ownership is not proven.
 
 ### P1-3 — docs publication needs an operational design
 
-Docusaurus/Pages needs a reproducible Node/package-manager lock, a site root
+Astro Starlight/Pages needs a reproducible Node/package-manager lock, a site root
 that does not collide with `docs/planning`, base URL/domain, versioning,
 search implementation and privacy/cost model, accessibility gates,
 permissions, and rollback. Pages alone does not provide a search backend.

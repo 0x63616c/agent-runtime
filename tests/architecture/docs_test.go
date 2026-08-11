@@ -10,7 +10,7 @@ import (
 )
 
 var _ = Describe("public documentation foundation", func() {
-	It("locks the current Docusaurus and Node toolchain in the public site root", func() {
+	It("locks the Astro Starlight and Node toolchain in the public site root", func() {
 		var packageJSON struct {
 			PackageManager  string            `json:"packageManager"`
 			Engines         map[string]string `json:"engines"`
@@ -23,37 +23,33 @@ var _ = Describe("public documentation foundation", func() {
 		Expect(packageJSON.Engines["node"]).To(Equal("24.19.0"))
 		Expect(packageJSON.Engines["npm"]).To(Equal("11.17.0"))
 		Expect(packageJSON.PackageManager).To(Equal("npm@11.17.0"))
-		Expect(packageJSON.Dependencies["@docusaurus/core"]).To(Equal("3.10.2"))
-		Expect(packageJSON.Dependencies["@docusaurus/faster"]).To(Equal("3.10.2"))
-		Expect(packageJSON.Dependencies["@docusaurus/preset-classic"]).To(Equal("3.10.2"))
-		for dependency, version := range packageJSON.Dependencies {
-			if len(dependency) >= len("@docusaurus/") && dependency[:len("@docusaurus/")] == "@docusaurus/" {
-				Expect(version).To(Equal("3.10.2"), dependency)
-			}
-		}
-		for dependency, version := range packageJSON.DevDependencies {
-			if len(dependency) >= len("@docusaurus/") && dependency[:len("@docusaurus/")] == "@docusaurus/" {
-				Expect(version).To(Equal("3.10.2"), dependency)
-			}
-		}
+		Expect(packageJSON.Dependencies["astro"]).To(Equal("7.2.0"))
+		Expect(packageJSON.Dependencies["@astrojs/starlight"]).To(Equal("0.41.7"))
+		Expect(packageJSON.DevDependencies["@astrojs/check"]).To(Equal("0.9.10"))
+		Expect(packageJSON.Dependencies).NotTo(HaveKey("@docusaurus/core"))
 		Expect(read(".nvmrc")).To(Equal("24.19.0\n"))
 		Expect(read("website/package-lock.json")).NotTo(BeEmpty())
 	})
 
-	It("declares strict project-site routing and a truthful pre-crawl search state", func() {
-		config := read("website/docusaurus.config.ts")
+	It("declares project-site routing, Starlight navigation, Pagefind search, and legacy redirects", func() {
+		config := read("website/astro.config.mjs")
 		for _, required := range []string{
-			"url: 'https://0x63616c.github.io'",
-			"baseUrl: '/agent-runtime/'",
-			"onBrokenLinks: 'throw'",
-			"onBrokenAnchors: 'throw'",
-			"search: false",
+			"site: 'https://0x63616c.github.io'",
+			"base: '/agent-runtime'",
+			"trailingSlash: 'never'",
+			"starlight({",
+			"docs/start-here",
+			"docs/reference/sandbox-host-control",
+			"'/start-here': '/docs/start-here'",
 		} {
 			Expect(config).To(ContainSubstring(required))
 		}
-		startHere := read("website/docs/start-here/index.mdx")
+		startHere := read("website/src/content/docs/docs/start-here/index.mdx")
 		Expect(startHere).To(ContainSubstring(":::caution[Implementation status]"))
 		Expect(startHere).NotTo(ContainSubstring(":::caution Implementation status"))
+		routes := read("website/route-manifest.json")
+		Expect(routes).To(ContainSubstring("/docs/start-here"))
+		Expect(routes).To(ContainSubstring("/start-here"))
 	})
 
 	It("declares least-privilege Pages deployment independently of main CI", func() {
@@ -66,6 +62,7 @@ var _ = Describe("public documentation foundation", func() {
 			"actions/configure-pages@",
 			"actions/upload-pages-artifact@",
 			"actions/deploy-pages@",
+			"path: website/dist",
 			"actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0",
 			"go-version-file: go.mod",
 		} {
@@ -75,22 +72,23 @@ var _ = Describe("public documentation foundation", func() {
 		Expect(read(".github/workflows/ci.yml")).NotTo(ContainSubstring("pages: write"))
 	})
 
-	It("documents versioning, search privacy and cost, accessibility, permissions, and rollback", func() {
-		operations := read("website/docs/help/publication-operations.mdx")
+	It("documents versioning, local search, accessibility, permissions, rollback, and the clean audit policy", func() {
+		operations := read("website/src/content/docs/docs/help/publication-operations.mdx")
 		for _, required := range []string{
 			"one current version",
-			"Algolia DocSearch",
-			"crawler",
+			"Pagefind",
+			"third-party crawler",
 			"privacy",
 			"accessibility",
 			"least-privilege",
 			"rollback",
+			"npm audit --omit=dev --audit-level=high",
 		} {
 			Expect(operations).To(ContainSubstring(required))
 		}
 	})
 
-	It("keeps the documented skill path and real commands aligned", func() {
+	It("keeps the documented skill path, source manifest, and real commands aligned", func() {
 		agents := read("AGENTS.md")
 		skill := read("skills/refresh-agent-runtime-docs/SKILL.md")
 		justfile := read("Justfile")
@@ -100,13 +98,14 @@ var _ = Describe("public documentation foundation", func() {
 		Expect(justfile).To(MatchRegexp(`(?m)^docs-generate:`))
 		Expect(justfile).To(MatchRegexp(`(?m)^docs-check:`))
 		Expect(justfile).To(MatchRegexp(`(?m)^docs:`))
+		Expect(justfile).To(ContainSubstring("npm --prefix website run check:routes"))
 	})
 
-	It("publishes the private host-control boundary through the reference navigation and refresh inventory", func() {
-		sidebar := read("website/sidebars.ts")
+	It("publishes the private host-control boundary through Starlight navigation and refresh inventory", func() {
+		config := read("website/astro.config.mjs")
 		manifestContents := read("skills/refresh-agent-runtime-docs/source-manifest.json")
-		page := read("website/docs/reference/sandbox-host-control.mdx")
-		inventory := read("website/docs/reference/generated/source-inventory.mdx")
+		page := read("website/src/content/docs/docs/reference/sandbox-host-control.mdx")
+		inventory := read("website/src/content/docs/docs/reference/generated/source-inventory.mdx")
 		var manifest struct {
 			Generated []struct {
 				Output string   `json:"output"`
@@ -117,21 +116,21 @@ var _ = Describe("public documentation foundation", func() {
 		Expect(json.Unmarshal([]byte(manifestContents), &manifest)).To(Succeed())
 		var inventoryInputs []string
 		for _, artifact := range manifest.Generated {
-			if artifact.Output == "website/docs/reference/generated/source-inventory.mdx" {
+			if artifact.Output == "website/src/content/docs/docs/reference/generated/source-inventory.mdx" {
 				inventoryInputs = artifact.Inputs
 			}
 		}
 
-		Expect(sidebar).To(ContainSubstring("'reference/sandbox-host-control'"))
-		Expect(inventoryInputs).To(ContainElement("website/docs/reference/sandbox-host-control.mdx"))
-		Expect(inventory).To(ContainSubstring("`website/docs/reference/sandbox-host-control.mdx`"))
+		Expect(config).To(ContainSubstring("docs/reference/sandbox-host-control"))
+		Expect(inventoryInputs).To(ContainElement("website/src/content/docs/docs/reference/sandbox-host-control.mdx"))
+		Expect(inventory).To(ContainSubstring("`website/src/content/docs/docs/reference/sandbox-host-control.mdx`"))
 		Expect(page).To(ContainSubstring("host topology out of its public Go and HTTP contracts"))
 	})
 
 	It("publishes generated OpenAPI operations from the declared contract", func() {
-		sidebar := read("website/sidebars.ts")
+		config := read("website/astro.config.mjs")
 		manifestContents := read("skills/refresh-agent-runtime-docs/source-manifest.json")
-		page := read("website/docs/reference/generated/http-operations.mdx")
+		page := read("website/src/content/docs/docs/reference/generated/http-operations.mdx")
 		var manifest struct {
 			Generated []struct {
 				Output string   `json:"output"`
@@ -141,9 +140,9 @@ var _ = Describe("public documentation foundation", func() {
 		}
 
 		Expect(json.Unmarshal([]byte(manifestContents), &manifest)).To(Succeed())
-		Expect(sidebar).To(ContainSubstring("'reference/generated/http-operations'"))
+		Expect(config).To(ContainSubstring("docs/reference/generated/http-operations"))
 		Expect(manifest.Generated).To(ContainElement(And(
-			HaveField("Output", "website/docs/reference/generated/http-operations.mdx"),
+			HaveField("Output", "website/src/content/docs/docs/reference/generated/http-operations.mdx"),
 			HaveField("Inputs", []string{"api/openapi/openapi.yaml"}),
 			HaveField("Kind", "openapi-operation-index"),
 		)))

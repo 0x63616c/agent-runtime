@@ -1,0 +1,28 @@
+{
+  "schemaVersion": 1,
+  "routes": [
+    {"route": "/", "output": "index.html", "contains": "Build agents that can survive the real world."},
+    {"route": "/docs/start-here", "output": "docs/start-here/index.html", "contains": "Start here"},
+    {"route": "/docs/build-and-run/local-foundation", "output": "docs/build-and-run/local-foundation/index.html", "contains": "Local foundation"},
+    {"route": "/docs/build-and-run/local-stack", "output": "docs/build-and-run/local-stack/index.html", "contains": "Isolated local Stack"},
+    {"route": "/docs/concepts/runtime-language", "output": "docs/concepts/runtime-language/index.html", "contains": "Runtime language"},
+    {"route": "/docs/examples", "output": "docs/examples/index.html", "contains": "Examples"},
+    {"route": "/docs/help/publication-operations", "output": "docs/help/publication-operations/index.html", "contains": "Publication operations"},
+    {"route": "/docs/reference/overview", "output": "docs/reference/overview/index.html", "contains": "Reference status"},
+    {"route": "/docs/reference/runtime-go-contract", "output": "docs/reference/runtime-go-contract/index.html", "contains": "Runtime Go contract"},
+    {"route": "/docs/reference/runtime-http-api", "output": "docs/reference/runtime-http-api/index.html", "contains": "Runtime HTTP API"},
+    {"route": "/docs/reference/postgresql-data-authority", "output": "docs/reference/postgresql-data-authority/index.html", "contains": "PostgreSQL data-authority foundation"},
+    {"route": "/docs/reference/temporal-payloads", "output": "docs/reference/temporal-payloads/index.html", "contains": "Temporal payloads and blobs"},
+    {"route": "/docs/reference/sandbox-control-ledger", "output": "docs/reference/sandbox-control-ledger/index.html", "contains": "Sandbox-control ledger"},
+    {"route": "/docs/reference/sandbox-host-control", "output": "docs/reference/sandbox-host-control/index.html", "contains": "Sandbox host control"},
+    {"route": "/docs/reference/generated/http-operations", "output": "docs/reference/generated/http-operations/index.html", "contains": "HTTP operation index"},
+    {"route": "/docs/reference/generated/go-sdk-symbols", "output": "docs/reference/generated/go-sdk-symbols/index.html", "contains": "Go SDK symbol index"},
+    {"route": "/docs/reference/generated/source-inventory", "output": "docs/reference/generated/source-inventory/index.html", "contains": "Source inventory"},
+    {"route": "/docs/security/verified-boundaries", "output": "docs/security/verified-boundaries/index.html", "contains": "Verified boundaries"},
+    {"route": "/start-here", "output": "start-here/index.html", "contains": "Redirecting to: /docs/start-here"},
+    {"route": "/reference/overview", "output": "reference/overview/index.html", "contains": "Redirecting to: /docs/reference/overview"},
+    {"route": "/reference/postgresql-data-authority", "output": "reference/postgresql-data-authority/index.html", "contains": "Redirecting to: /docs/reference/postgresql-data-authority"},
+    {"route": "/reference/runtime-go-contract", "output": "reference/runtime-go-contract/index.html", "contains": "Redirecting to: /docs/reference/runtime-go-contract"},
+    {"route": "/reference/temporal-payloads", "output": "reference/temporal-payloads/index.html", "contains": "Redirecting to: /docs/reference/temporal-payloads"}
+  ]
+}

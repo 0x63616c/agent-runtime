@@ -8,17 +8,17 @@ for DOC-005/DOC-008, with #34 retaining publication revalidation ownership.
 
 ## Decision
 
-Create a TypeScript Docusaurus **3.10.2** classic site in `website/`; deploy its `website/build/` with GitHub Pages' native artifact workflow; use npm with a committed lockfile; and run Node **24 LTS**. Pin Docusaurus and every `@docusaurus/*` package to one exact version. Use `npm install` only for intentional dependency updates and use `npm ci` in all repeatable commands and CI jobs.
+Create a TypeScript Astro **7.2.0** + Starlight **0.41.7** site in `website/`; deploy its `website/dist/` with GitHub Pages' native artifact workflow; use npm with a committed lockfile; and run Node **24 LTS**. Pin Astro and Starlight to exact compatible versions. Use `npm install` only for intentional dependency updates and use `npm ci` in all repeatable commands and CI jobs.
 
 `docs/` remains private planning/engineering material. `website/` is the public-site source root, preventing unfinished design from being published. Generated reference comes from passing source contracts, typed config, and declarative deployment assets. Curated concepts, tutorials, security limits, and runbooks are human-owned and evidence-mapped.
 
 | Decision | Official source | Consequence |
 |---|---|---|
-| Docusaurus 3.10.2, Node floor, classic/TypeScript, package-version matching | [Docusaurus installation](https://docusaurus.io/docs/installation) specifies Node >=20, its 3.10.2 examples, classic/TypeScript scaffolds, and matching `@docusaurus/*` versions. | Start at 3.10.2/classic TypeScript and reject Node <20. |
+| Astro 7.2.0, Starlight 0.41.7, Node 24, TypeScript | [Starlight getting started](https://starlight.astro.build/getting-started/) specifies the Astro/Starlight project model and `src/content/docs/` source convention. | Use the exact compatible Astro/Starlight pair and reject Node <24. |
 | Node 24 and lockfile install | [Node releases](https://nodejs.org/en/about/previous-releases) lists Node 24 as LTS; [GitHub Node CI](https://docs.github.com/en/enterprise-cloud@latest/actions/tutorials/build-and-test-code/nodejs) describes `npm ci` as lockfile-preserving. | Record Node 24 in .nvmrc, package engines, and CI. Keep one package-lock.json. |
 | Pages deployment | [GitHub Pages custom workflows](https://docs.github.com/en/pages/getting-started-with-github-pages/using-custom-workflows-with-github-pages) specifies configure-pages, upload-pages-artifact, deploy-pages, permissions, and deployment environment. | Upload the build output; do not write a gh-pages branch. |
-| Links | [Docusaurus configuration](https://docusaurus.io/docs/api/docusaurus-config) documents production broken-link detection; [Markdown links](https://docusaurus.io/docs/markdown-features/links) recommends relative Markdown-file links within a plugin. | Set links, anchors, Markdown links/images, and duplicate routes to throw; use relative .md/.mdx links. |
-| Search | [Docusaurus search](https://docusaurus.io/docs/next/search) calls Algolia DocSearch first-class; [DocSearch](https://docsearch.algolia.com/docs/what-is-docsearch/) explains hosted crawling and the free public programme. | Enrol the public Pages site in DocSearch after deployment. |
+| Links and legacy routes | [Astro routing](https://docs.astro.build/en/guides/routing/) documents static configured redirects. | Keep current `/docs/...` URLs, explicitly redirect historic absolute routes, and assert all rendered route files through the checked route manifest. |
+| Search | [Starlight site search](https://starlight.astro.build/guides/site-search/) documents its default static Pagefind index. | Build local static search into the Pages artifact with no crawler or third-party query service. |
 | Go reference | [Go doc comments](https://go.dev/doc/comment) identifies doc comments as input to go doc, pkg.go.dev, and local pkgsite. | Go doc comments are canonical SDK-reference input. |
 | HTTP reference | [OpenAPI Specification](https://spec.openapis.org/oas/) is the primary OpenAPI source. | The validated checked-in OpenAPI document is canonical HTTP-reference input. |
 
@@ -35,13 +35,13 @@ Use one `current` documentation version until the first compatible public releas
     Examples                   Durable Chat, Workspace Agent, Research Dossier
     Help                       troubleshooting, FAQ, support, changelog
 
-`website/docs/reference/generated/` contains generator-owned pages only. Curated reference introductions describe semantics and compatibility, but never duplicate endpoint, field, or error definitions.
+`website/src/content/docs/docs/reference/generated/` contains generator-owned pages only. Curated reference introductions describe semantics and compatibility, but never duplicate endpoint, field, or error definitions.
 
 ## Reference integration choices
 
 | Need | Options assessed | Decision |
 |---|---|---|
-| OpenAPI pages | Community Docusaurus OpenAPI plugin; separate hosted interactive UI; repository renderer from a validated spec. | Choose a small repository renderer. Docusaurus' official plugin list has no OpenAPI renderer, so this avoids an unendorsed plugin becoming a public-schema/version dependency. Emit operations, parameters, requests, responses, errors, schemas, and downloadable openapi.yaml. |
+| OpenAPI pages | Starlight plugin; separate hosted interactive UI; repository renderer from a validated spec. | Choose a small repository renderer so schema rendering stays an explicitly owned repository contract. Emit operations, parameters, requests, responses, errors, schemas, and downloadable openapi.yaml. |
 | Go SDK pages | Only link pkg.go.dev; run pkgsite; static generation from public Go docs. | Publish released modules on pkg.go.dev and generate package/symbol/index pages with go list, go/doc, and go doc -all. Pkgsite is a local developer convenience, never production infrastructure. |
 | Examples | Hand-copied snippets; generated clients; executable public-contract examples. | The three apps in examples/ are the single runnable source. Pages link named fixtures instead of copying their implementation. |
 
@@ -115,13 +115,14 @@ Deployment documentation presents only canonical declarative paths: `just dev`, 
 ## Proposed repository tree
 
     website/
-    ├── package.json                         # npm only; exact Docusaurus versions
+    ├── package.json                         # npm only; exact Astro/Starlight versions
     ├── package-lock.json
-    ├── docusaurus.config.ts                 # strict links; Pages URL/base URL
-    ├── sidebars.ts
-    ├── src/{css,pages,components}/
+    ├── astro.config.mjs                     # sidebar, redirects, Pages URL/base path
+    ├── route-manifest.json                  # current and legacy rendered-route evidence
+    ├── scripts/check-routes.mjs
+    ├── src/{content,styles,pages}/
     ├── static/reference/openapi.yaml         # generated exact HTTP contract
-    ├── docs/
+    ├── src/content/docs/docs/
     │   ├── {start-here,concepts,build-and-run,security,extensions,examples,help}/
     │   └── reference/
     │       ├── overview.mdx                  # curated
@@ -181,9 +182,8 @@ No success marker is written. The byte comparison and exact final diff are the e
 
 ## Links, snippets, commands, and CI
 
-Docusaurus production build is the implemented deterministic internal
-link/route gate. Strict broken-link and broken-anchor settings elevate those
-faults to errors. #34 adds the bounded external-link checker and requires each
+Astro Starlight production build plus the explicit route manifest is the
+implemented deterministic internal link/route gate. #34 adds the bounded external-link checker and requires each
 exception to name an owner, reason, and expiry; it cannot weaken internal build
 checking.
 
@@ -218,6 +218,7 @@ Implemented M0 documentation commands:
       npm --prefix website audit --omit=dev --audit-level=high
       npm --prefix website run typecheck
       npm --prefix website run build
+      npm --prefix website run check:routes
 
 ci.yml runs `just docs-check` on every default-branch push with exact Node 24
 and an npm cache keyed by `website/package-lock.json`. This direct-main build
@@ -225,7 +226,7 @@ does not add a pull-request-only gate. GitHub documents setup-node caching for
 npm/Yarn/pnpm and warns against cached secrets; cache dependencies only.
 
 docs-pages.yml has build/deploy jobs. Default-branch/manual runs build and
-upload `website/build` using upload-pages-artifact. GitHub Pages is enabled with
+upload `website/dist` using upload-pages-artifact. GitHub Pages is enabled with
 GitHub Actions as its source, and the M0 deployment at the declared project URL
 was verified over HTTPS. Deploy needs that build and only has contents: read,
 pages: write, id-token: write, targets protected github-pages, then calls
@@ -233,7 +234,7 @@ deploy-pages. #34 still owns final-release accessibility, navigation, search,
 versioning, and rollback evidence rather than treating early publication as the
 M10 documentation gate.
 
-Set `url: https://0x63616c.github.io` and `baseUrl: /agent-runtime/` so CI tests the project-site prefix. A custom domain is a separate reviewed change. Enable DocSearch after public crawl with client config in repository variables; build validates config metadata and release check validates deployed search.
+Set `site: https://0x63616c.github.io` and `base: /agent-runtime` so CI tests the project-site prefix. A custom domain is a separate reviewed change. Pagefind search is built into the static artifact; a future hosted search service requires a separate privacy decision.
 
 ## Acceptance tests
 
@@ -255,9 +256,9 @@ Set `url: https://0x63616c.github.io` and `baseUrl: /agent-runtime/` so CI tests
 
 | Risk | Control |
 |---|---|
-| Docusaurus/Node drift | Exact pins; updates run full docs/reference/snippet/a11y/Pages checks. |
+| Astro/Starlight/Node drift | Exact pins; updates run full docs/reference/snippet/a11y/Pages checks. |
 | Community OpenAPI plugin becomes contract | No plugin initially; use source-manifest-controlled renderer. |
-| DocSearch crawl delay | Navigation is independent; deployed search is release evidence, not inferred from config. |
+| Pagefind index drift | Navigation is independent; `just docs-check` rebuilds the static search index and route manifest. |
 | Hidden ownership/setup | Catalog coverage mandatory; docs checker rejects imperatively hidden paths. |
 | Generator overwrites prose | Separate generated paths; curated markers preserved and proposals never auto-applied. |
 | External link flakiness | Deterministic internal build first; bounded checker with expiring exceptions. |
@@ -267,9 +268,9 @@ Set `url: https://0x63616c.github.io` and `baseUrl: /agent-runtime/` so CI tests
 
 ## Implementation sequence
 
-1. Add Node/npm/Docusaurus skeleton, strict config, Pages build workflow, and commands only as real.
+1. Add Node/npm/Astro Starlight skeleton, strict config, Pages build workflow, and commands only as real.
 2. Define config field IDs and deploy/catalog.yaml with first deployment asset, including ntfy topic ownership/lifecycle; test consistency first.
 3. Add docsgen, manifest, fixtures, generated reference from real public source only.
 4. Implement refresh skill with check-only, containment, atomic-write, dirty-output, curated-proposal, exact-diff tests.
 5. Add coverage/claim/snippet/link/a11y checks and tutorials as runtime capabilities arrive.
-6. Publish Pages, enrol DocSearch, retain live ntfy test as evidence, verify deployed navigation/search, make DOC-001--008 release gates.
+6. Publish Pages, retain live ntfy test as evidence, verify deployed navigation/Pagefind search, make DOC-001--008 release gates.

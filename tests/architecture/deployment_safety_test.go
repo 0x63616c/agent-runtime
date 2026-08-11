@@ -304,7 +304,7 @@ var _ = Describe("M1 deployment safety boundaries", func() {
 	It("describes deterministic CI loopback-port selection truthfully", func() {
 		for _, document := range []string{
 			read("docs/operations/self-hosted-deployment.md"),
-			read("website/docs/build-and-run/local-stack.mdx"),
+			read("website/src/content/docs/docs/build-and-run/local-stack.mdx"),
 		} {
 			Expect(document).To(ContainSubstring("availability-checks"))
 			Expect(document).To(ContainSubstring("TOCTOU"))

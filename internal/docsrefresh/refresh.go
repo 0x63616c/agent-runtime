@@ -210,7 +210,7 @@ func validateManifest(manifest Manifest) error {
 		if err := validatePath(artifact.Output); err != nil {
 			return fmt.Errorf("output %q %w", artifact.Output, err)
 		}
-		if !strings.HasPrefix(filepath.ToSlash(artifact.Output), "website/docs/reference/generated/") {
+		if !strings.HasPrefix(filepath.ToSlash(artifact.Output), "website/src/content/docs/docs/reference/generated/") {
 			return fmt.Errorf("output %q is outside generated reference ownership", artifact.Output)
 		}
 		if _, exists := seenOutputs[artifact.Output]; exists {

@@ -40,12 +40,17 @@ var _ = Describe("binding governance", func() {
 		Expect(context).NotTo(ContainSubstring("github.com/"))
 	})
 
-	It("indexes accepted ADRs and marks external drafts as superseded", func() {
+	It("indexes accepted and superseded ADRs explicitly", func() {
 		index := read("docs/adr/README.md")
 		matches := regexp.MustCompile(`\]\((\d{4}[^)]+\.md)\)`).FindAllStringSubmatch(index, -1)
 		Expect(matches).NotTo(BeEmpty())
 		for _, match := range matches {
-			Expect(read(filepath.Join("docs/adr", match[1]))).To(ContainSubstring("status: accepted"))
+			decision := read(filepath.Join("docs/adr", match[1]))
+			if match[1] == "0010-documentation-deployment.md" || match[1] == "0013-temporary-documentation-audit-exception.md" {
+				Expect(decision).To(ContainSubstring("status: superseded"))
+				continue
+			}
+			Expect(decision).To(ContainSubstring("status: accepted"))
 		}
 		architecture := read("docs/architecture/system.md")
 		Expect(architecture).To(ContainSubstring("Status: accepted M0 architecture"))

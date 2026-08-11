@@ -186,7 +186,7 @@ deploy/dev/                   # namespaced Helm/Kustomize inputs and dev values
 deploy/production/            # separately reviewed production deployment inputs
 cmd/ internal/ pkg/           # Go API, worker, SDK, and shared contracts
 examples/                     # runnable examples used by docs and tests
-docs/                         # Docusaurus site, generated reference inputs, planning
+website/                      # Astro Starlight public site and generated reference output
 .github/workflows/            # ordinary CI plus the Linux-KVM proof workflow
 ```
 

@@ -43,8 +43,8 @@ does not make a production security claim until those requirements are proven.
   dedicated integration lane. A local adapter is never evidence of
   adversarial isolation.
 - Human approval is a first-release runtime capability, not later work.
-- The public documentation site uses Docusaurus, pinned to a current stable
-  release at implementation time, and is deployed through GitHub Pages.
+- The public documentation site uses Astro Starlight, pinned to a current
+  compatible release at implementation time, and is deployed through GitHub Pages.
 - Development lands as intentional commits directly on `main`; the user has
   explicitly declined PRs for this effort.
 
@@ -681,9 +681,9 @@ does not make a production security claim until those requirements are proven.
   redacted evidence, named browser/TUI harness ownership, and one shared public
   cursor-client behavior. An example never receives broad administrator
   credentials merely to simplify a tutorial.
-- **DOC-001** — Publish a modern Docusaurus documentation site through GitHub
+- **DOC-001** — Publish a modern Astro Starlight documentation site through GitHub
   Pages, with versioned/searchable navigation and an accessible responsive
-  design. Pin and periodically upgrade the current stable Docusaurus release.
+  design. Pin and periodically upgrade compatible Astro and Starlight releases.
 - **DOC-002** — The docs site includes overview/architecture, concepts,
   quickstart, Tilt/local stack, complete SDK/API reference, OpenAPI reference,
   operator deployment/configuration, Temporal/codec/blob operation, sandbox

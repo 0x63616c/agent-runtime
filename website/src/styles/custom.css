@@ -1,0 +1,17 @@
+:root {
+  --sl-color-accent-low: #e8e6ff;
+  --sl-color-accent: #5b4ff7;
+  --sl-color-accent-high: #332a9d;
+  --sl-font: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --sl-content-width: 54rem;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --sl-color-accent-low: #2c2673;
+    --sl-color-accent: #a49cff;
+    --sl-color-accent-high: #e8e6ff;
+  }
+}
+
+.sl-markdown-content h1:first-child { letter-spacing: -0.04em; }

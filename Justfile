@@ -32,7 +32,7 @@ firecracker-smoke report="evidence/firecracker-smoke.json":
 firecracker-integration report="evidence/firecracker-integration.json":
     just firecracker-smoke "{{report}}"
 
-# Installs the locked public-docs toolchain and starts the local Docusaurus site.
+# Installs the locked Astro Starlight toolchain and starts the local site.
 docs:
     npm --prefix website ci
     npm --prefix website run start
@@ -45,9 +45,10 @@ docs-generate:
 docs-check:
     go run ./skills/refresh-agent-runtime-docs/scripts/refresh-docs --root . --check
     npm --prefix website ci
-    go run ./cmd/check-docs-security-audit
+    npm --prefix website audit --omit=dev --audit-level=high
     npm --prefix website run typecheck
     npm --prefix website run build
+    npm --prefix website run check:routes
 
 # Starts one isolated declarative OrbStack environment. STACK is optional; an
 # omitted value derives a deterministic identity from this worktree.

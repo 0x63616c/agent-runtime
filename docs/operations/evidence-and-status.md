@@ -28,8 +28,8 @@ curated requirement ledger/evidence record, and links the GitHub run on the
 Issue. The ledger reference is durable; the temporary artifact is supporting
 verification, not the sole long-term record.
 
-Documentation release evidence currently carries the conditional result from
-[ADR-0013](../adr/0013-temporary-documentation-audit-exception.md). The
-production dependency audit is still executed and its exception is visible;
-it is not recorded as a clean audit. The linked issue and expiry must be
-checked before any release completion claim.
+Documentation release evidence records the ordinary clean Astro Starlight
+production audit from [ADR-0014](../adr/0014-astro-starlight-documentation-platform.md).
+`just docs-check` executes `npm audit --omit=dev --audit-level=high` directly;
+no exception or waiver applies. The retired ADR-0013 issue closes only with a
+retained clean-audit result and completed migration evidence.

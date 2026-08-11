@@ -174,8 +174,8 @@ not evidence claimed to exist today.
 | EX-005 | Per-example clean Tilt seed/demo/test/docs screenshots check. | Each tutorial/troubleshooting page. |
 | EX-006 | Cross-example presentation E2E covering required proof sequence. | Demo verification walkthrough. |
 | EX-007 | Example auth/bootstrap/tenant-cleanup/download-authorization/redacted-evidence/browser-TUI-harness/shared-cursor integration suite. | Example production-boundary guides. |
-| DOC-001 | Docusaurus build/search/navigation/accessibility and Pages deployment workflow check. | Public docs site. |
-| DOC-002 | Documentation coverage manifest/link check for every named section. | Docusaurus information architecture. |
+| DOC-001 | Astro Starlight build/Pagefind search/navigation/accessibility and Pages deployment workflow check. | Public docs site. |
+| DOC-002 | Documentation coverage manifest/link check for every named section. | Astro Starlight information architecture. |
 | DOC-003 | Generated OpenAPI/GoDoc reference build and drift check. | Reference pages. |
 | DOC-004 | Snippet harness, link checker, docs build/format/spell CI gate. | Docs contribution guide. |
 | DOC-005 | Docs skill fixture test validates changed API/config behavior is detected and checked. | `skills/refresh-agent-runtime-docs/SKILL.md`. |
