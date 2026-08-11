@@ -3,7 +3,7 @@
 package runtimeapi
 
 const (
-	openAPIContractSHA256          = "19a3fc341efb9ec1c452c3272991bcf0a1a7512e97b5298c1da0a307900d0733"
+	openAPIContractSHA256          = "b89cdbc2376ea1729aca4df996fa51bc22f7fd677c8af3d8bf9b56d239c1e212"
 	openAPIMethodCancelTurn        = "POST"
 	openAPIPathCancelTurn          = "/v1/sessions/{session_id}/turns/{turn_id}/cancel"
 	openAPIMethodCloseSession      = "POST"
