@@ -68,6 +68,17 @@ func TestEvidenceRoundTripIsStrictAndNeverOverwritesAnExistingArtifact(t *testin
 	if _, err := ReadEvidence(invalid); err == nil {
 		t.Fatal("unknown report field was accepted")
 	}
+	trailing := filepath.Join(t.TempDir(), "trailing.json")
+	encoded, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(trailing, append(encoded, []byte(`{}`)...), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ReadEvidence(trailing); err == nil {
+		t.Fatal("report with trailing JSON was accepted")
+	}
 }
 
 func TestRetentionEvidenceRequiresACompletedCollectionAndASeparateFutureSchedule(t *testing.T) {

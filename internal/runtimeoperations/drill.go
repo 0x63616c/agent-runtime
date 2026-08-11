@@ -292,6 +292,9 @@ func inspectAuditSink(ctx context.Context, config Config) (int, int, int64, erro
 	if err := decoder.Decode(&retention); err != nil || retention.SchemaVersion != "agent-runtime.audit-sink-retention/v1" || retention.RetentionSeconds < 1 {
 		return 0, 0, 0, errors.New("runtime operations drill: audit retention response is invalid")
 	}
+	if err := requireJSONEOF(decoder); err != nil {
+		return 0, 0, 0, errors.New("runtime operations drill: audit retention response is invalid")
+	}
 	return outage, recovery, retention.RetentionSeconds, nil
 }
 
@@ -392,8 +395,23 @@ func ReadEvidence(path string) (Evidence, error) {
 	if err := decoder.Decode(&evidence); err != nil {
 		return Evidence{}, err
 	}
+	if err := requireJSONEOF(decoder); err != nil {
+		return Evidence{}, fmt.Errorf("read operational evidence: trailing JSON: %w", err)
+	}
 	if err := evidence.Validate(); err != nil {
 		return Evidence{}, err
 	}
 	return evidence, nil
+}
+
+// requireJSONEOF rejects concatenated documents after a bounded JSON value.
+func requireJSONEOF(decoder *json.Decoder) error {
+	var trailing struct{}
+	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
+		if err == nil {
+			return errors.New("unexpected trailing JSON value")
+		}
+		return err
+	}
+	return nil
 }
