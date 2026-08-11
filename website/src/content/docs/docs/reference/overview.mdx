@@ -22,6 +22,15 @@ SSH-agent variables, advertises all security authority profiles as unavailable,
 and refuses secrets, mounts, volumes, and isolation requirements. It is never
 Firecracker, production, or hostile-tenant security evidence.
 
+The deterministic `FakeControlClient` pairs a manually advanced `FakeClock`
+with scripted durable control states, typed failures, process results, and
+explicit observation gaps. It never executes commands, opens network
+connections, or touches a filesystem. Both developer adapters expose
+`Client.Capabilities`: a structured versioned profile with a digest derived
+from every profile fact. A create or restore Operation binds that digest, and a
+reconnect under a changed profile fails closed. These are unit/orchestration
+contracts, not a claim of process-restart durability or Firecracker isolation.
+
 This is not yet a public HTTP/OpenAPI service, durable database implementation,
 or sandbox host backend. `NewClient` validates explicit client configuration
 but reports unavailable until a control transport is composed. The deterministic

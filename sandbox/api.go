@@ -84,6 +84,7 @@ func validateClientConfig(config ClientConfig) error {
 }
 
 type Client interface {
+	Capabilities(context.Context) (CapabilitySnapshot, error)
 	Submit(context.Context, OperationRequest) (OperationRef, error)
 	GetOperation(context.Context, OperationID) (Operation, error)
 	WaitOperation(context.Context, OperationID) (Operation, error)

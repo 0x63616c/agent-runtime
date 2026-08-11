@@ -133,9 +133,23 @@ func copyOperationResult(value *OperationResult) *OperationResult {
 func copyCapabilitySnapshot(value CapabilitySnapshot) CapabilitySnapshot {
 	copied := value
 	copied.Signals = append([]Signal(nil), value.Signals...)
-	copied.Isolation.LimitPrecision = append([]string(nil), value.Isolation.LimitPrecision...)
-	copied.Resources.LimitPrecision = append([]string(nil), value.Resources.LimitPrecision...)
-	copied.Output.LimitPrecision = append([]string(nil), value.Output.LimitPrecision...)
+	for _, descriptor := range []struct{ destination, source *CapabilityDescriptor }{
+		{&copied.ControlProtocol, &value.ControlProtocol},
+		{&copied.Isolation, &value.Isolation},
+		{&copied.Guest, &value.Guest},
+		{&copied.Resources, &value.Resources},
+		{&copied.Reconnect, &value.Reconnect},
+		{&copied.ImageAdmission, &value.ImageAdmission},
+		{&copied.Output, &value.Output},
+		{&copied.Transfer, &value.Transfer},
+		{&copied.Mounts, &value.Mounts},
+		{&copied.Volumes, &value.Volumes},
+		{&copied.Snapshots, &value.Snapshots},
+		{&copied.Egress, &value.Egress},
+		{&copied.Secrets, &value.Secrets},
+	} {
+		descriptor.destination.LimitPrecision = append([]string(nil), descriptor.source.LimitPrecision...)
+	}
 	return copied
 }
 

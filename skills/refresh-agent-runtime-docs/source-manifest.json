@@ -67,6 +67,7 @@
         "sandbox/api.go",
         "sandbox/api_example_test.go",
         "sandbox/control_v1.schema.json",
+        "sandbox/fake_control.go",
         "sandbox/local_unsafe.go",
         "sdk/go/client.go",
         "sdk/go/doc.go",

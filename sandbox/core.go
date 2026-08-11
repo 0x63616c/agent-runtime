@@ -195,13 +195,49 @@ func normalizedLimitPolicy(limits limitPolicy) limitPolicy {
 	if limits.maximumWatches == 0 {
 		limits.maximumWatches = 32
 	}
-	if limits.capabilities.Digest == "" {
-		limits.capabilities.Digest = canonicalDigestBytes([]byte("sandbox.capabilities/v1"))
-	}
-	if limits.capabilities.SchemaVersion == "" {
-		limits.capabilities.SchemaVersion = limits.capabilityVersion
-	}
+	limits.capabilities = normalizedCapabilitySnapshot(limits.capabilities, limits.capabilityVersion)
+	// The capability digest is derived from the entire structured profile. A
+	// supplied label is never authority: changing a data-plane, contract, or
+	// precision fact must change the Effective Spec binding.
+	limits.capabilities.Digest = canonicalCapabilitySnapshotDigest(limits.capabilities)
 	return limits
+}
+
+func normalizedCapabilitySnapshot(snapshot CapabilitySnapshot, contractVersion string) CapabilitySnapshot {
+	if snapshot.SchemaVersion == "" {
+		snapshot.SchemaVersion = contractVersion
+	}
+	for _, descriptor := range []*CapabilityDescriptor{
+		&snapshot.ControlProtocol,
+		&snapshot.Isolation,
+		&snapshot.Guest,
+		&snapshot.Resources,
+		&snapshot.Reconnect,
+		&snapshot.ImageAdmission,
+		&snapshot.Output,
+		&snapshot.Transfer,
+		&snapshot.Mounts,
+		&snapshot.Volumes,
+		&snapshot.Snapshots,
+		&snapshot.Egress,
+		&snapshot.Secrets,
+	} {
+		if descriptor.State == "" {
+			descriptor.State = CapabilityUnavailable
+		}
+		if descriptor.ContractVersion == "" {
+			descriptor.ContractVersion = contractVersion
+		}
+		if descriptor.ConformanceVersion == "" {
+			descriptor.ConformanceVersion = "not-certified"
+		}
+		if descriptor.DataPlane == "" {
+			descriptor.DataPlane = "none"
+		}
+		descriptor.LimitPrecision = append([]string(nil), descriptor.LimitPrecision...)
+	}
+	snapshot.Signals = append([]Signal(nil), snapshot.Signals...)
+	return snapshot
 }
 
 func (client *coreClient) principalLedgerLocked() *principalLedger {
@@ -282,11 +318,31 @@ func (client *coreClient) Submit(ctx context.Context, request OperationRequest) 
 	return ref, nil
 }
 
+// Capabilities returns the frozen, versioned profile that this control client
+// will bind to newly accepted create and restore operations.
+func (client *coreClient) Capabilities(ctx context.Context) (CapabilitySnapshot, error) {
+	if err := contextFailure(ctx); err != nil {
+		return CapabilitySnapshot{}, err
+	}
+	client.ledger.mu.RLock()
+	defer client.ledger.mu.RUnlock()
+	if client.closed {
+		return CapabilitySnapshot{}, closedClientFailure()
+	}
+	return copyCapabilitySnapshot(client.limits.capabilities), nil
+}
+
 func compatiblePersistedSpec(spec effectiveSpec, policy limitPolicy) bool {
 	if !withinLimits(spec.limits, policy.maximum) {
 		return false
 	}
 	if spec.canonicalizerVersion != policy.canonicalizerVersion {
+		return false
+	}
+	// A retry can only reconnect to the exact capability profile bound to its
+	// Effective Spec. Accepting it under a downgraded profile would turn a
+	// durable capability regression into a silent authority change.
+	if spec.capabilities.Digest != policy.capabilities.Digest {
 		return false
 	}
 	if spec.image.Digest != "" {
@@ -878,7 +934,19 @@ func validTaggedTarget(request OperationRequest) bool {
 }
 
 func validLimitPolicy(policy limitPolicy) bool {
-	return resourceFinite(policy.defaults) && resourceFinite(policy.maximum) && withinLimits(policy.defaults, policy.maximum)
+	return resourceFinite(policy.defaults) && resourceFinite(policy.maximum) && withinLimits(policy.defaults, policy.maximum) && validCapabilitySnapshot(policy.capabilities)
+}
+
+func validCapabilitySnapshot(snapshot CapabilitySnapshot) bool {
+	if snapshot.SchemaVersion == "" || !validDigest(snapshot.Digest) {
+		return false
+	}
+	for _, descriptor := range []CapabilityDescriptor{snapshot.ControlProtocol, snapshot.Isolation, snapshot.Guest, snapshot.Resources, snapshot.Reconnect, snapshot.ImageAdmission, snapshot.Output, snapshot.Transfer, snapshot.Mounts, snapshot.Volumes, snapshot.Snapshots, snapshot.Egress, snapshot.Secrets} {
+		if (descriptor.State != CapabilityUnavailable && descriptor.State != CapabilityDeclared && descriptor.State != CapabilityEnforced) || descriptor.ContractVersion == "" || descriptor.ConformanceVersion == "" || descriptor.DataPlane == "" {
+			return false
+		}
+	}
+	return snapshot.Digest == canonicalCapabilitySnapshotDigest(snapshot)
 }
 func resourceFinite(value ResourceLimits) bool {
 	return value.MilliCPU > 0 && value.MemoryBytes > 0 && value.RootDiskBytes > 0 && value.TmpfsBytes > 0 && value.PIDs > 0 && value.ProcessCount > 0 && value.OpenFiles > 0 && value.Inodes > 0 && value.Files > 0 && value.Lifetime > 0 && value.ProducedOutputBytes > 0 && value.RetainedOutputBytes > 0 && value.TransferBytes > 0 && value.NetworkConnections > 0 && value.VolumeBytes > 0 && value.SnapshotBytes > 0
@@ -1221,6 +1289,52 @@ func canonicalResources(builder *strings.Builder, value ResourceLimits) {
 	canonicalUint(builder, uint64(value.NetworkConnections))
 	canonicalUint(builder, value.VolumeBytes)
 	canonicalUint(builder, value.SnapshotBytes)
+}
+
+func canonicalCapabilitySnapshotDigest(snapshot CapabilitySnapshot) Digest {
+	var builder strings.Builder
+	canonicalField(&builder, "sandbox.capabilities/v1")
+	canonicalField(&builder, snapshot.SchemaVersion)
+	for _, descriptor := range []CapabilityDescriptor{
+		snapshot.ControlProtocol,
+		snapshot.Isolation,
+		snapshot.Guest,
+		snapshot.Resources,
+		snapshot.Reconnect,
+		snapshot.ImageAdmission,
+		snapshot.Output,
+		snapshot.Transfer,
+		snapshot.Mounts,
+		snapshot.Volumes,
+		snapshot.Snapshots,
+		snapshot.Egress,
+		snapshot.Secrets,
+	} {
+		canonicalCapabilityDescriptor(&builder, descriptor)
+	}
+	canonicalField(&builder, strconv.Itoa(len(snapshot.Signals)))
+	for _, signal := range snapshot.Signals {
+		canonicalField(&builder, string(signal))
+	}
+	canonicalField(&builder, snapshot.Trust.TrustBundleVersion)
+	canonicalField(&builder, snapshot.Trust.ControlSigningKeyID)
+	canonicalField(&builder, snapshot.Trust.ControlSigningAlgorithm)
+	canonicalUint(&builder, snapshot.Trust.RevocationEpoch)
+	canonicalInt(&builder, snapshot.Trust.NotBefore.UnixNano())
+	canonicalInt(&builder, snapshot.Trust.NotAfter.UnixNano())
+	canonicalInt(&builder, int64(snapshot.Trust.RotationGrace))
+	return canonicalDigestBytes([]byte(builder.String()))
+}
+
+func canonicalCapabilityDescriptor(builder *strings.Builder, descriptor CapabilityDescriptor) {
+	canonicalField(builder, string(descriptor.State))
+	canonicalField(builder, descriptor.ContractVersion)
+	canonicalField(builder, descriptor.ConformanceVersion)
+	canonicalField(builder, descriptor.DataPlane)
+	canonicalField(builder, strconv.Itoa(len(descriptor.LimitPrecision)))
+	for _, precision := range descriptor.LimitPrecision {
+		canonicalField(builder, precision)
+	}
 }
 func canonicalField(builder *strings.Builder, value string) {
 	builder.WriteString(strconv.Itoa(len(value)))
