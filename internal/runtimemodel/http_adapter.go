@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -11,6 +12,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 
 	"github.com/0x63616c/agent-runtime/internal/runtimestate"
 	agentruntime "github.com/0x63616c/agent-runtime/sdk/go"
@@ -19,6 +21,7 @@ import (
 const (
 	maxStreamLineBytes = 64 << 10
 	maxStreamOutput    = 2 << 20
+	maxToolDescriptor  = 48 << 10
 )
 
 // HTTPAdapterConfig configures the concrete, provider-neutral normalized-stream
@@ -119,6 +122,27 @@ type normalizedEvent struct {
 	Failure      *agentruntime.Failure `json:"failure,omitempty"`
 	InputTokens  *uint64               `json:"input_tokens,omitempty"`
 	OutputTokens *uint64               `json:"output_tokens,omitempty"`
+	Tool         json.RawMessage       `json:"tool,omitempty"`
+}
+
+// normalizedTool is the sole provider-wire Tool representation. Its descriptor
+// remains a private, bounded action commitment; public Approvals retain only
+// their fixed action summary and bounded capability projection.
+type normalizedTool struct {
+	ToolCallID     string           `json:"tool_call_id"`
+	ApprovalID     string           `json:"approval_id"`
+	PolicyName     string           `json:"policy_name"`
+	PolicyRevision uint64           `json:"policy_revision"`
+	ToolName       string           `json:"tool_name"`
+	Action         normalizedAction `json:"action"`
+	MaximumUses    uint32           `json:"maximum_uses"`
+	ExpiresAt      time.Time        `json:"expires_at"`
+	Descriptor     json.RawMessage  `json:"descriptor"`
+}
+
+type normalizedAction struct {
+	Verb   string `json:"verb"`
+	Target string `json:"target"`
 }
 
 func decodeNormalizedStream(body io.Reader) (Response, error) {
@@ -134,7 +158,7 @@ func decodeNormalizedStream(body io.Reader) (Response, error) {
 			return Response{}, errors.New("decode normalized model stream: event after terminal outcome")
 		}
 		var event normalizedEvent
-		if err := json.Unmarshal(reader.Bytes(), &event); err != nil {
+		if err := decodeStrictJSON(reader.Bytes(), &event); err != nil {
 			return Response{}, errors.New("decode normalized model stream: invalid event")
 		}
 		switch event.Type {
@@ -143,7 +167,7 @@ func decodeNormalizedStream(body io.Reader) (Response, error) {
 				return Response{}, errors.New("decode normalized model stream: invalid or oversized delta")
 			}
 			output.WriteString(event.Delta)
-		case "completed", "failed":
+		case "completed", "failed", "tool":
 			terminal = &event
 		default:
 			return Response{}, errors.New("decode normalized model stream: unknown event type")
@@ -161,18 +185,124 @@ func decodeNormalizedStream(body io.Reader) (Response, error) {
 	}
 	switch terminal.Type {
 	case "completed":
-		if terminal.Failure != nil || output.Len() == 0 {
+		if terminal.Failure != nil || len(terminal.Tool) != 0 || output.Len() == 0 {
 			return Response{}, errors.New("decode normalized model stream: completed outcome is invalid")
 		}
 		return Response{Output: output.Bytes(), Usage: usage}, nil
 	case "failed":
-		if terminal.Failure == nil || output.Len() != 0 || !safeFailure(terminal.Failure) {
+		if terminal.Failure == nil || len(terminal.Tool) != 0 || output.Len() != 0 || !safeFailure(terminal.Failure) {
 			return Response{}, errors.New("decode normalized model stream: failed outcome is invalid")
 		}
 		return Response{Failure: terminal.Failure.Clone(), Usage: usage}, nil
+	case "tool":
+		if terminal.Failure != nil || output.Len() != 0 || terminal.InputTokens != nil || terminal.OutputTokens != nil {
+			return Response{}, errors.New("decode normalized model stream: tool outcome is invalid")
+		}
+		tool, err := parseNormalizedTool(terminal.Tool)
+		if err != nil {
+			return Response{}, err
+		}
+		return Response{Tool: &tool}, nil
 	default:
 		return Response{}, errors.New("decode normalized model stream: terminal outcome is invalid")
 	}
+}
+
+func decodeStrictJSON(raw []byte, target any) error {
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(target); err != nil {
+		return err
+	}
+	if decoder.More() {
+		return errors.New("unexpected trailing JSON value")
+	}
+	return nil
+}
+
+func parseNormalizedTool(raw json.RawMessage) (ToolRequest, error) {
+	if len(raw) == 0 || len(raw) > maxToolDescriptor {
+		return ToolRequest{}, errors.New("decode normalized model stream: tool is missing or oversized")
+	}
+	var tool normalizedTool
+	if err := decodeStrictJSON(raw, &tool); err != nil {
+		return ToolRequest{}, errors.New("decode normalized model stream: invalid tool schema")
+	}
+	if _, err := agentruntime.ParseApprovalID(tool.ApprovalID); err != nil || !validToolIdentity(tool.ToolCallID) || !validToolIdentity(tool.PolicyName) || tool.PolicyRevision == 0 || !validToolIdentity(tool.ToolName) || !validAction(tool.Action) || tool.MaximumUses == 0 || tool.MaximumUses > 32 || tool.ExpiresAt.IsZero() || tool.ExpiresAt.Location() != time.UTC {
+		return ToolRequest{}, errors.New("decode normalized model stream: invalid tool fields")
+	}
+	descriptor, err := canonicalToolDescriptor(tool.Descriptor)
+	if err != nil {
+		return ToolRequest{}, err
+	}
+	actionDigest := digestToolBytes(descriptor)
+	capability, err := json.Marshal(struct {
+		PolicyName     string           `json:"policy_name"`
+		PolicyRevision uint64           `json:"policy_revision"`
+		ToolName       string           `json:"tool_name"`
+		Action         normalizedAction `json:"action"`
+		MaximumUses    uint32           `json:"maximum_uses"`
+		ExpiresAt      time.Time        `json:"expires_at"`
+	}{tool.PolicyName, tool.PolicyRevision, tool.ToolName, tool.Action, tool.MaximumUses, tool.ExpiresAt})
+	if err != nil {
+		return ToolRequest{}, errors.New("decode normalized model stream: canonicalize tool capability")
+	}
+	return ToolRequest{ToolCallID: tool.ToolCallID, ApprovalID: tool.ApprovalID, PolicyName: tool.PolicyName, PolicyRevision: tool.PolicyRevision, ToolName: tool.ToolName, ActionDigest: actionDigest, CapabilityDigest: digestToolBytes(capability), Action: agentruntime.ApprovalAction{Verb: tool.Action.Verb, Target: tool.Action.Target}, MaximumUses: tool.MaximumUses, ExpiresAt: tool.ExpiresAt, Descriptor: descriptor}, nil
+}
+
+func canonicalToolDescriptor(raw json.RawMessage) ([]byte, error) {
+	if len(raw) == 0 || len(raw) > maxToolDescriptor {
+		return nil, errors.New("decode normalized model stream: tool descriptor is missing or oversized")
+	}
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.UseNumber()
+	var value any
+	if err := decoder.Decode(&value); err != nil || decoder.More() {
+		return nil, errors.New("decode normalized model stream: tool descriptor must be one JSON value")
+	}
+	if _, ok := value.(map[string]any); !ok || containsCredentialField(value) {
+		return nil, errors.New("decode normalized model stream: tool descriptor is not safe")
+	}
+	canonical, err := json.Marshal(value)
+	if err != nil || len(canonical) == 0 || len(canonical) > maxToolDescriptor {
+		return nil, errors.New("decode normalized model stream: canonical tool descriptor is invalid")
+	}
+	return canonical, nil
+}
+
+func containsCredentialField(value any) bool {
+	switch typed := value.(type) {
+	case map[string]any:
+		for key, nested := range typed {
+			switch strings.ToLower(key) {
+			case "authorization", "cookie", "credential", "credentials", "password", "secret", "token":
+				return true
+			}
+			if containsCredentialField(nested) {
+				return true
+			}
+		}
+	case []any:
+		for _, nested := range typed {
+			if containsCredentialField(nested) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func validToolIdentity(value string) bool {
+	return len(value) > 0 && len(value) <= 128 && strings.TrimSpace(value) == value && !strings.ContainsAny(value, "\x00\r\n")
+}
+
+func validAction(action normalizedAction) bool {
+	return (action.Verb == "execute" || action.Verb == "restart" || action.Verb == "write" || action.Verb == "delete") && (action.Target == "workspace-service" || action.Target == "sandbox-process" || action.Target == "artifact" || action.Target == "network-request")
+}
+
+func digestToolBytes(value []byte) string {
+	sum := sha256.Sum256(value)
+	return fmt.Sprintf("sha256:%x", sum)
 }
 
 func safeFailure(failure *agentruntime.Failure) bool {

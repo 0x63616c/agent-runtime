@@ -702,8 +702,16 @@ func (planner *RuntimeStatePlanner) approvalEffects(state *RuntimeState, binding
 }
 
 func (planner *RuntimeStatePlanner) consumeCapabilityGrant(state *RuntimeState, binding ReceiptBinding, c ConsumeCapabilityGrantCommand, now time.Time) (PlanResult, EffectSet, error) {
-	if findTurn(state, binding.Scope, c.SessionID, c.TurnID) < 0 {
+	turnIndex := findTurn(state, binding.Scope, c.SessionID, c.TurnID)
+	// An approval may resume a Turn, but a grant never outlives that Turn's
+	// executable phase. This check is deliberately in the deterministic state
+	// transition rather than the worker so a cancellation/replay race cannot
+	// consume a capability after the owner has withdrawn the work.
+	if turnIndex < 0 {
 		return PlanResult{}, EffectSet{}, ErrNotFoundOrDenied
+	}
+	if state.Turns[turnIndex].State != agentruntime.TurnRunning {
+		return PlanResult{}, EffectSet{}, ErrConflict
 	}
 	for index := range state.Grants {
 		grant := state.Grants[index]
@@ -722,8 +730,16 @@ func (planner *RuntimeStatePlanner) consumeCapabilityGrant(state *RuntimeState, 
 }
 
 func (planner *RuntimeStatePlanner) beginToolExecution(state *RuntimeState, binding ReceiptBinding, c BeginToolExecutionCommand, now time.Time) (PlanResult, EffectSet, error) {
-	if findTurn(state, binding.Scope, c.SessionID, c.TurnID) < 0 {
+	turnIndex := findTurn(state, binding.Scope, c.SessionID, c.TurnID)
+	// Keep the second half of consume->intent fenced by the same durable Turn
+	// phase. A worker restart between the two transitions may resume safely,
+	// whereas cancellation, expiry, or a terminal result must never create a
+	// new external-effect intent.
+	if turnIndex < 0 {
 		return PlanResult{}, EffectSet{}, ErrNotFoundOrDenied
+	}
+	if state.Turns[turnIndex].State != agentruntime.TurnRunning {
+		return PlanResult{}, EffectSet{}, ErrConflict
 	}
 	for _, execution := range state.ToolExecutions {
 		if execution.OperationID == c.OperationID {
