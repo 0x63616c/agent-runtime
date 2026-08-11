@@ -311,19 +311,42 @@ const (
 	ApprovalExpired ApprovalState = "expired"
 )
 
+// ApprovalAction is the fixed, human-readable description of an elevated
+// operation. It deliberately contains no raw model arguments or credentials.
+type ApprovalAction struct {
+	Verb   string `json:"verb"`
+	Target string `json:"target"`
+}
+
+// ApprovalScope is the public bounded-use projection of a proposed capability.
+// Capability bytes and digests never cross this boundary.
+type ApprovalScope struct {
+	MaximumUses uint32 `json:"maximum_uses"`
+}
+
 // Approval is a caller-safe immutable projection of a pending or terminal human decision.
 type Approval struct {
-	ID        ApprovalID    `json:"id"`
-	SessionID SessionID     `json:"session_id"`
-	TurnID    TurnID        `json:"turn_id"`
-	State     ApprovalState `json:"state"`
-	ExpiresAt time.Time     `json:"expires_at"`
-	DecidedAt *time.Time    `json:"decided_at,omitempty"`
+	ID        ApprovalID      `json:"id"`
+	SessionID SessionID       `json:"session_id"`
+	TurnID    TurnID          `json:"turn_id"`
+	State     ApprovalState   `json:"state"`
+	Action    *ApprovalAction `json:"action,omitempty"`
+	Scope     *ApprovalScope  `json:"scope,omitempty"`
+	ExpiresAt time.Time       `json:"expires_at"`
+	DecidedAt *time.Time      `json:"decided_at,omitempty"`
 }
 
 // Clone returns an independent Approval snapshot.
 func (approval Approval) Clone() Approval {
 	clone := approval
+	if approval.Action != nil {
+		value := *approval.Action
+		clone.Action = &value
+	}
+	if approval.Scope != nil {
+		value := *approval.Scope
+		clone.Scope = &value
+	}
 	if approval.DecidedAt != nil {
 		value := *approval.DecidedAt
 		clone.DecidedAt = &value

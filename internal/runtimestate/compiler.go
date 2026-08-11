@@ -24,6 +24,7 @@ const (
 	CommandAdmitInput             CommandKind = "admit_input"
 	CommandRegisterArtifact       CommandKind = "register_artifact"
 	CommandAppendConversation     CommandKind = "append_conversation"
+	CommandAdmitToolApproval      CommandKind = "admit_tool_approval"
 	CommandRecordToolIntent       CommandKind = "record_tool_intent"
 	CommandRequestApproval        CommandKind = "request_approval"
 	CommandDecideApproval         CommandKind = "decide_approval"
@@ -178,6 +179,22 @@ func (compiler *Compiler) CompileRecordToolIntent(command RecordToolIntentComman
 		return CompiledMutation{}, errors.New("compile tool intent: invalid command")
 	}
 	return compiler.compile(CommandRecordToolIntent, command.Scope, command.IdempotencyKey, commitment.Reference, compiledToolIntent{command, commitment.Reference})
+}
+
+// CompileAdmitToolApproval atomically records a verified model Tool intent and
+// its policy-required pending Approval. It is intentionally worker-only: a
+// public caller cannot create a grant-shaped request or nominate a descriptor.
+func (compiler *Compiler) CompileAdmitToolApproval(command AdmitToolApprovalCommand) (CompiledMutation, error) {
+	command = command.Owned()
+	commitment, descriptorErr := compiler.content.ValidateToolActionDescriptorHandoff(command.Descriptor)
+	if _, parseErr := agentruntime.ParseApprovalID(command.ApprovalID); parseErr != nil || validateWorkerCommand(command.Scope, command.SessionID, command.TurnID, OperationID(command.ToolCallID)) != nil || descriptorErr != nil || commitment.Tenant != command.Scope.Tenant || !validOpaque(command.ToolName, 128) || !validDigest(command.ActionDigest) || !validDigest(command.PolicyRevisionDigest) || !validDigest(command.CapabilityDigest) || !validApprovalSummary(command.ActionVerb, command.ActionTarget) || command.MaximumUses == 0 || command.MaximumUses > 32 || command.ExpiresAt.IsZero() {
+		return CompiledMutation{}, errors.New("compile tool approval admission: invalid command")
+	}
+	return compiler.compile(CommandAdmitToolApproval, command.Scope, command.IdempotencyKey, commitment.Reference, compiledToolApproval{command: command, descriptor: commitment.Reference})
+}
+
+func validApprovalSummary(verb, target string) bool {
+	return (verb == "execute" || verb == "restart" || verb == "write" || verb == "delete") && (target == "workspace-service" || target == "sandbox-process" || target == "artifact" || target == "network-request")
 }
 func (compiler *Compiler) CompileRequestApproval(command RequestApprovalCommand) (CompiledMutation, error) {
 	command = command.Owned()

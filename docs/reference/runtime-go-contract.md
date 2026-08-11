@@ -23,6 +23,9 @@ The package currently defines:
   never public data;
 - bounded owner-scoped Tool-call inspection projections: model intent name and
   lifecycle, Approval, grant use counters/expiry, and safe execution failure;
+  an Approval admitted through the broker additionally exposes only its fixed
+  action verb/target and maximum-use bound, never raw arguments or capability
+  material;
   action descriptors, policy/capability digests, grant identities, backend
   handles, raw results, and credentials are never exposed;
 - ordered bounded Product events, opaque replay cursors, and explicit Gap

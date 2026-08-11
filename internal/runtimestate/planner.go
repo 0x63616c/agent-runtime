@@ -299,6 +299,8 @@ func (planner *RuntimeStatePlanner) Plan(ctx context.Context, prior RuntimeState
 		result, effects, err = planner.registerArtifact(&state, mutation.mutation.receipt, command, now)
 	case compiledConversation:
 		result, effects, err = planner.appendConversation(&state, mutation.mutation.receipt, command, now)
+	case compiledToolApproval:
+		result, effects, err = planner.admitToolApproval(&state, mutation.mutation.receipt, command, now)
 	case compiledToolIntent:
 		result, effects, err = planner.recordToolIntent(&state, mutation.mutation.receipt, command, now)
 	case RequestApprovalCommand:
@@ -567,6 +569,35 @@ func (planner *RuntimeStatePlanner) recordToolIntent(state *RuntimeState, bindin
 	state.ToolIntents = append(state.ToolIntents, r)
 	e, err := planner.auditOnly(state, binding, "tool.intent_recorded", c.SessionID, c.TurnID, now)
 	return PlanResult{}, e, err
+}
+
+type compiledToolApproval struct {
+	command    AdmitToolApprovalCommand
+	descriptor runtimecontent.Reference
+}
+
+// admitToolApproval prevents an intent-without-approval crash window. The
+// policy decision is already sealed by the worker before this state mutation;
+// the planner confirms only durable ownership and exact correlation.
+func (planner *RuntimeStatePlanner) admitToolApproval(state *RuntimeState, binding ReceiptBinding, compiled compiledToolApproval, now time.Time) (PlanResult, EffectSet, error) {
+	c := compiled.command
+	if !c.ExpiresAt.After(now) || findTurn(state, binding.Scope, c.SessionID, c.TurnID) < 0 {
+		return PlanResult{}, EffectSet{}, ErrConflict
+	}
+	for _, intent := range state.ToolIntents {
+		if intent.ToolCallID == c.ToolCallID && intent.SessionID == c.SessionID && intent.TurnID == c.TurnID {
+			return PlanResult{}, EffectSet{}, ErrConflict
+		}
+	}
+	for _, approval := range state.Approvals {
+		if approval.ApprovalID == c.ApprovalID {
+			return PlanResult{}, EffectSet{}, ErrConflict
+		}
+	}
+	state.ToolIntents = append(state.ToolIntents, ToolIntentRecord{Tenant: binding.Scope.Tenant, Principal: binding.Scope.Principal, SessionID: c.SessionID, TurnID: c.TurnID, ToolCallID: c.ToolCallID, ToolName: c.ToolName, ActionDigest: c.ActionDigest, ActionDescriptor: compiled.descriptor, PolicyRevisionDigest: c.PolicyRevisionDigest, CreatedAt: now, RetainUntil: planner.retain(now, DataClassAuthorization)})
+	state.Approvals = append(state.Approvals, ApprovalRecord{Tenant: binding.Scope.Tenant, Principal: binding.Scope.Principal, ApprovalID: c.ApprovalID, SessionID: c.SessionID, TurnID: c.TurnID, ToolCallID: c.ToolCallID, ActionDigest: c.ActionDigest, PolicyRevisionDigest: c.PolicyRevisionDigest, State: "pending", CapabilityDigest: c.CapabilityDigest, ActionVerb: c.ActionVerb, ActionTarget: c.ActionTarget, MaximumUses: c.MaximumUses, ExpiresAt: c.ExpiresAt, CreatedAt: now, RetainUntil: planner.retain(now, DataClassAuthorization)})
+	effects, err := planner.auditOnly(state, binding, "tool.approval_requested", c.SessionID, c.TurnID, now)
+	return PlanResult{}, effects, err
 }
 func (planner *RuntimeStatePlanner) requestApproval(state *RuntimeState, binding ReceiptBinding, c RequestApprovalCommand, now time.Time) (PlanResult, EffectSet, error) {
 	if !c.ExpiresAt.After(now) {

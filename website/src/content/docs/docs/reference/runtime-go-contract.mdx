@@ -21,6 +21,11 @@ serialized Turn states; stable safe Failure codes; ordered bounded Product
 events; opaque Cursors and explicit Gaps; and a narrow `RuntimeClient`
 interface with a concrete strict HTTP `Client`.
 
+An owner-visible Approval can contain a fixed action verb/target and
+maximum-use bound when the private broker has admitted an elevated operation.
+It never exposes raw model arguments, a capability digest, capability bytes,
+or a sandbox descriptor.
+
 The internal deterministic kernel currently proves these transitions:
 
 ```text
