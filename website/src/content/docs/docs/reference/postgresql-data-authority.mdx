@@ -66,21 +66,31 @@ runtime's `memory-unsafe` store. The composition test uses a real immutable
 object-store adapter, but it is not yet Artifact transfer/streaming evidence
 or a production blob
 authorization plane. The outbox is transactionally recorded only: publication,
-retry/reconciliation, and restart recovery have not been implemented or
-proven.
+retry/reconciliation, and restart recovery are not responsibilities of this
+first-admission adapter.
 
-The current schema is not yet an RLS or database-role authorization boundary. The
-future production adapter must add tenant RLS policy, role grants, and a
+Separate private M5 integration evidence exercises two recovery paths against
+disposable PostgreSQL, MinIO, and Temporal dependencies. The outbox publisher
+reclaims a lease when its acknowledgement is lost only after Temporal accepts
+the same route. The model-effect worker recreates its PostgreSQL composition
+after a lost claimed producer intent, reconciles the original operation rather
+than invoking it again, records an ordered `producer.gap` and `turn.failed`,
+and replays those Product events from the durable public cursor. Neither test
+adds a public provider streaming API, a provider-specific adapter, or a
+production blob authorization plane.
+
+The current schema is not yet an RLS or database-role authorization boundary.
+The future production adapter must add tenant RLS policy, role grants, and a
 least-privilege migration/runtime credential split before it uses these tables
 for public requests.
 
 :::caution Foundation, not completed runtime durability
 
 The currently runnable public API remains explicitly configured with
-`memory-unsafe` storage. The internal adapter does not by itself prove
-process-restart recovery, event replay/expiry, audit publication recovery,
-blob authorization, tenant erasure, backup/restore, or the private Temporal
-adapter. No M5 requirement is complete on the strength of this schema and
-first-admission slice.
+`memory-unsafe` storage. The internal adapter does not by itself prove public
+durable API composition, safe Artifact transfer/streaming, complete event
+expiry, audit publication recovery, production blob authorization, production
+tenant erasure/backup/PITR, or provider streaming. No M5 requirement is
+complete on the strength of this schema and first-admission slice.
 
 :::
