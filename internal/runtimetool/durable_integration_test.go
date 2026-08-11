@@ -246,6 +246,31 @@ func TestDurableBrokeredToolLifecyclePersistsApprovalAndFinalization(t *testing.
 	if err != nil || len(state.ToolExecutions) != 1 || adapter.executes != 1 || adapter.reconciles != 0 || !durableHasAuditKind(state.Audit, "capability_grant.expired") {
 		t.Fatalf("expired durable grant = executions=%#v calls=%d/%d audit=%#v err=%v", state.ToolExecutions, adapter.executes, adapter.reconciles, state.Audit, err)
 	}
+	lateSessionMutation, err := compiler.CompileCreateSession(runtimestate.CreateSessionCommand{Scope: ownerScope, IdempotencyKey: "durable-tool-late-session", RevisionID: registered.Result().Revision.RevisionID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	lateSession := apply(lateSessionMutation).Result().Session.SessionID
+	lateInput, err := content.StageInputEnvelope(ctx, tenant, []agentruntime.ContentPart{{Kind: agentruntime.ContentText, Text: "late approval must not run"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	lateMutation, err := compiler.CompileAdmitInput(runtimestate.AdmitInputCommand{Scope: ownerScope, IdempotencyKey: "durable-tool-late-input", SessionID: lateSession, Input: lateInput})
+	if err != nil {
+		t.Fatal(err)
+	}
+	lateTurn := apply(lateMutation).Result().Turn.TurnID
+	lateDescriptor, err := content.StageToolActionDescriptor(ctx, tenant, descriptorBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	late, err := broker.Admit(ctx, runtimetool.AdmissionRequest{Tenant: tenant, Principal: principal, SessionID: lateSession, TurnID: lateTurn, ToolCallID: "tcall_1234567890ABCDEH", ApprovalID: "appr_1234567890ABCDEH", PolicyName: "durable-tool-policy", PolicyRevision: 1, ToolName: "sandbox", ActionDigest: digest, CapabilityDigest: digest, Action: agentruntime.ApprovalAction{Verb: "write", Target: "workspace-service"}, MaximumUses: 1, ExpiresAt: source.Now().Add(time.Second), Descriptor: lateDescriptor, IdempotencyKey: "durable-tool-late-admission"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := source.Advance(time.Second); err != nil {
+		t.Fatal(err)
+	}
 	pool.Close()
 	pool, err = pgxpool.New(ctx, dsn)
 	if err != nil {
@@ -258,6 +283,16 @@ func TestDurableBrokeredToolLifecyclePersistsApprovalAndFinalization(t *testing.
 	restarted, err := runtimeapi.NewStateRuntime(runtimeapi.StateRuntimeConfig{Content: content, Compiler: compiler, Planner: planner, Store: store, ModelProfiles: []string{"balanced"}})
 	if err != nil {
 		t.Fatal(err)
+	}
+	// The reopened public runtime must preserve the expiry decision and refuse a
+	// late owner replay.  This is a safe terminal conflict, not a new grant or
+	// a second dispatch after reconnect.
+	if _, err := restarted.DecideApproval(ctx, runtimeapi.Identity{Tenant: string(tenant), Principal: string(principal)}, agentruntime.DecideApprovalRequest{ApprovalID: late.ApprovalID, Decision: agentruntime.ApprovalApproved, IdempotencyKey: "durable-tool-late-replay"}); err == nil {
+		t.Fatal("late durable approval decision succeeded after expiry")
+	}
+	expiredApproval, err := restarted.InspectApproval(ctx, runtimeapi.Identity{Tenant: string(tenant), Principal: string(principal)}, late.ApprovalID)
+	if err != nil || expiredApproval.State != agentruntime.ApprovalExpired {
+		t.Fatalf("restarted expired approval = %#v, %v", expiredApproval, err)
 	}
 	page, err := restarted.InspectToolCalls(ctx, runtimeapi.Identity{Tenant: string(tenant), Principal: string(principal)}, session, turn)
 	if err != nil || len(page.Calls) != 1 || page.Truncated || page.Calls[0].State != agentruntime.ToolCallSucceeded || page.Calls[0].Approval == nil || page.Calls[0].Approval.State != agentruntime.ApprovalApproved || page.Calls[0].Grant == nil || page.Calls[0].Grant.Uses != 1 || page.Calls[0].Execution == nil || page.Calls[0].Execution.Failure != nil {
