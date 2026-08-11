@@ -90,21 +90,22 @@ func WithRetentionPolicy(policy RetentionPolicy) PlannerOption {
 // RuntimeState is the complete bounded metadata prior state consumed by RuntimeStatePlanner.
 // It intentionally contains no raw Agent/Input bytes and is cloned at every boundary.
 type RuntimeState struct {
-	Revisions     []AgentRevisionRecord
-	Policies      []PolicyRevisionRecord
-	Sessions      []SessionRecord
-	Inputs        []InputRecord
-	Artifacts     []ArtifactRecord
-	Conversations []ConversationRecord
-	ToolIntents   []ToolIntentRecord
-	Grants        []CapabilityGrantRecord
-	Approvals     []ApprovalRecord
-	Turns         []TurnRecord
-	Invocations   []InvocationRecord
-	Receipts      []MutationReceipt
-	Events        []ProductEventRecord
-	Audit         []AuditFactRecord
-	Outbox        []OutboxRecord
+	Revisions      []AgentRevisionRecord
+	Policies       []PolicyRevisionRecord
+	Sessions       []SessionRecord
+	Inputs         []InputRecord
+	Artifacts      []ArtifactRecord
+	Conversations  []ConversationRecord
+	ToolIntents    []ToolIntentRecord
+	Grants         []CapabilityGrantRecord
+	ToolExecutions []ToolExecutionRecord
+	Approvals      []ApprovalRecord
+	Turns          []TurnRecord
+	Invocations    []InvocationRecord
+	Receipts       []MutationReceipt
+	Events         []ProductEventRecord
+	Audit          []AuditFactRecord
+	Outbox         []OutboxRecord
 }
 
 // Clone returns an independent prior-state snapshot.
@@ -121,6 +122,10 @@ func (state RuntimeState) Clone() RuntimeState {
 	clone.Conversations = append([]ConversationRecord(nil), state.Conversations...)
 	clone.ToolIntents = append([]ToolIntentRecord(nil), state.ToolIntents...)
 	clone.Grants = append([]CapabilityGrantRecord(nil), state.Grants...)
+	clone.ToolExecutions = make([]ToolExecutionRecord, len(state.ToolExecutions))
+	for index := range state.ToolExecutions {
+		clone.ToolExecutions[index] = state.ToolExecutions[index].Clone()
+	}
 	clone.Approvals = make([]ApprovalRecord, len(state.Approvals))
 	for i := range state.Approvals {
 		clone.Approvals[i] = state.Approvals[i].Clone()
@@ -302,6 +307,8 @@ func (planner *RuntimeStatePlanner) Plan(ctx context.Context, prior RuntimeState
 		result, effects, err = planner.decideApproval(&state, mutation.mutation.receipt, command, now)
 	case ConsumeCapabilityGrantCommand:
 		result, effects, err = planner.consumeCapabilityGrant(&state, mutation.mutation.receipt, command, now)
+	case BeginToolExecutionCommand:
+		result, effects, err = planner.beginToolExecution(&state, mutation.mutation.receipt, command, now)
 	case BeginInvocationAttemptCommand:
 		result, effects, err = planner.begin(&state, mutation.mutation.receipt, command, now)
 	case RecordInvocationOutcomeCommand:
@@ -660,6 +667,39 @@ func (planner *RuntimeStatePlanner) consumeCapabilityGrant(state *RuntimeState, 
 	return PlanResult{}, EffectSet{}, ErrNotFoundOrDenied
 }
 
+func (planner *RuntimeStatePlanner) beginToolExecution(state *RuntimeState, binding ReceiptBinding, c BeginToolExecutionCommand, now time.Time) (PlanResult, EffectSet, error) {
+	if findTurn(state, binding.Scope, c.SessionID, c.TurnID) < 0 {
+		return PlanResult{}, EffectSet{}, ErrNotFoundOrDenied
+	}
+	for _, execution := range state.ToolExecutions {
+		if execution.OperationID == c.OperationID {
+			return PlanResult{}, EffectSet{}, ErrConflict
+		}
+	}
+	for _, grant := range state.Grants {
+		if grant.GrantID != c.GrantID || grant.Tenant != binding.Scope.Tenant || grant.Principal != binding.Scope.Principal {
+			continue
+		}
+		if grant.ToolCallID != c.ToolCallID || grant.Uses == 0 || !now.Before(grant.ExpiresAt) {
+			return PlanResult{}, EffectSet{}, ErrConflict
+		}
+		record := ToolExecutionRecord{Tenant: binding.Scope.Tenant, Principal: binding.Scope.Principal, SessionID: c.SessionID, TurnID: c.TurnID, ToolCallID: c.ToolCallID, GrantID: c.GrantID, OperationID: c.OperationID, State: ToolExecutionIntent, CreatedAt: now, UpdatedAt: now, RetentionUntil: planner.retain(now, DataClassAuthorization)}
+		state.ToolExecutions = append(state.ToolExecutions, record)
+		effects, err := planner.auditOnly(state, binding, "tool.execution_intended", c.SessionID, c.TurnID, now)
+		if err != nil {
+			return PlanResult{}, effects, err
+		}
+		outbox, err := planner.toolExecutionOutbox(record, now, planner.retain(now, DataClassOutbox))
+		if err != nil {
+			return PlanResult{}, EffectSet{}, err
+		}
+		state.Outbox = append(state.Outbox, outbox)
+		effects.Outbox = append(effects.Outbox, outbox)
+		return PlanResult{}, effects, nil
+	}
+	return PlanResult{}, EffectSet{}, ErrNotFoundOrDenied
+}
+
 func (planner *RuntimeStatePlanner) begin(state *RuntimeState, binding ReceiptBinding, command BeginInvocationAttemptCommand, now time.Time) (PlanResult, EffectSet, error) {
 	sessionIndex := findSession(state, binding.Scope, command.SessionID)
 	turnIndex := findTurn(state, binding.Scope, command.SessionID, command.TurnID)
@@ -962,6 +1002,14 @@ func (planner *RuntimeStatePlanner) artifactOutbox(binding ReceiptBinding, artif
 	}
 	return OutboxRecord{Tenant: artifact.Tenant, Principal: artifact.Principal, OutboxID: id, Aggregate: "artifact", AggregateVersion: 1, Version: 1, OperationID: OperationID(binding.IdempotencyKey), SessionID: artifact.SessionID, TurnID: artifact.TurnID, State: OutboxPending, CommittedAt: now, RetentionUntil: until}, nil
 }
+
+func (planner *RuntimeStatePlanner) toolExecutionOutbox(execution ToolExecutionRecord, now, until time.Time) (OutboxRecord, error) {
+	id, err := planner.outboxID()
+	if err != nil {
+		return OutboxRecord{}, err
+	}
+	return OutboxRecord{Tenant: execution.Tenant, Principal: execution.Principal, OutboxID: id, Aggregate: "tool_execution", AggregateVersion: 1, Version: 1, OperationID: execution.OperationID, ToolCallID: execution.ToolCallID, SessionID: execution.SessionID, TurnID: execution.TurnID, State: OutboxPending, CommittedAt: now, RetentionUntil: until}, nil
+}
 func (planner *RuntimeStatePlanner) conversationOutbox(binding ReceiptBinding, conversation ConversationRecord, now, until time.Time) (OutboxRecord, error) {
 	id, err := planner.outboxID()
 	if err != nil {
@@ -1228,6 +1276,11 @@ func validateState(state RuntimeState) error {
 		}
 	}
 	for _, record := range state.Invocations {
+		if duplicate(operations, string(record.OperationID)) {
+			return ErrIntegrity
+		}
+	}
+	for _, record := range state.ToolExecutions {
 		if duplicate(operations, string(record.OperationID)) {
 			return ErrIntegrity
 		}

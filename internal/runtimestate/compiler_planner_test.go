@@ -546,6 +546,14 @@ func TestPlannerConsumesApprovedCapabilityOnlyWithinItsPolicyAndExpiry(t *testin
 	if err != nil || plan.State().Grants[0].Uses != 1 || len(plan.Effects().Audit) != 1 {
 		t.Fatalf("consume approved capability = %#v, %v", plan.State().Grants, err)
 	}
+	begin, err := compiler.CompileBeginToolExecution(runtimestate.BeginToolExecutionCommand{Scope: workerScope(tenant, principal), IdempotencyKey: "begin-tool", SessionID: session, TurnID: turn, ToolCallID: "tcall_1234567890ABCDEF", GrantID: "grant_1234567890ABCDE", OperationID: "tool-operation-1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	toolPlan, err := planner.Plan(context.Background(), plan.State(), begin)
+	if err != nil || len(toolPlan.State().ToolExecutions) != 1 || toolPlan.State().ToolExecutions[0].State != runtimestate.ToolExecutionIntent || len(toolPlan.Effects().Outbox) != 1 || toolPlan.Effects().Outbox[0].ToolCallID != "tcall_1234567890ABCDEF" {
+		t.Fatalf("tool execution intent = %#v / %#v, %v", toolPlan.State().ToolExecutions, toolPlan.Effects(), err)
+	}
 	if _, err := planner.Plan(context.Background(), plan.State(), consume); err != nil {
 		t.Fatalf("replay consume capability: %v", err)
 	}

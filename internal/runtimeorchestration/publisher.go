@@ -96,7 +96,7 @@ func (publisher *Publisher) publishTenant(ctx context.Context, tenant runtimecon
 			// Invocation intents are owned by the model worker. They retain a
 			// blank public event kind deliberately: Temporal must not consume or
 			// acknowledge an effect before that worker records its outcome.
-			if record.InvocationID != "" && record.EventKind == "" {
+			if (record.InvocationID != "" || record.ToolCallID != "") && record.EventKind == "" {
 				continue
 			}
 			if record.State == runtimestate.OutboxPublished || record.State == runtimestate.OutboxReconcile {

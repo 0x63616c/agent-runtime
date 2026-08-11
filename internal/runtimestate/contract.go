@@ -197,6 +197,48 @@ type CapabilityGrantRecord struct {
 
 func (record CapabilityGrantRecord) Clone() CapabilityGrantRecord { return record }
 
+// ToolExecutionState is the durable lifecycle of one externally visible tool
+// operation. It is deliberately distinct from model intent and Approval.
+type ToolExecutionState string
+
+const (
+	// ToolExecutionIntent means the capability-bound execution intent committed before dispatch.
+	ToolExecutionIntent ToolExecutionState = "intent"
+	// ToolExecutionSucceeded means the exact operation produced a safe result reference.
+	ToolExecutionSucceeded ToolExecutionState = "succeeded"
+	// ToolExecutionFailed means the exact operation produced a safe terminal failure.
+	ToolExecutionFailed ToolExecutionState = "failed"
+	// ToolExecutionUncertain means recovery could not prove the external operation outcome.
+	ToolExecutionUncertain ToolExecutionState = "uncertain"
+)
+
+// ToolExecutionRecord retains a capability-bound external operation without
+// persisting an executable command, credential, or adapter handle.
+type ToolExecutionRecord struct {
+	Tenant               runtimecontent.TenantID
+	Principal            runtimecontent.PrincipalID
+	SessionID            agentruntime.SessionID `json:",omitempty"`
+	TurnID               agentruntime.TurnID    `json:",omitempty"`
+	ToolCallID, GrantID  string
+	OperationID          OperationID
+	State                ToolExecutionState
+	Result               *runtimecontent.Reference
+	Failure              *agentruntime.Failure
+	CreatedAt, UpdatedAt time.Time
+	RetentionUntil       time.Time
+}
+
+// Clone returns an independent tool-execution snapshot.
+func (record ToolExecutionRecord) Clone() ToolExecutionRecord {
+	clone := record
+	clone.Failure = record.Failure.Clone()
+	if record.Result != nil {
+		value := *record.Result
+		clone.Result = &value
+	}
+	return clone
+}
+
 // ApprovalRecord is durable bounded approval metadata governed by a Session/Turn.
 type ApprovalRecord struct {
 	Tenant               runtimecontent.TenantID
@@ -392,6 +434,7 @@ type OutboxRecord struct {
 	EventKind         agentruntime.EventKind `json:",omitempty"`
 	EventSequence     uint64                 `json:",omitempty"`
 	OperationID       OperationID
+	ToolCallID        string
 	SessionID         agentruntime.SessionID `json:",omitempty"`
 	TurnID            agentruntime.TurnID    `json:",omitempty"`
 	InvocationID      InvocationID
@@ -584,6 +627,19 @@ type ConsumeCapabilityGrantCommand struct {
 
 // Owned returns a value-owned capability grant consumption command.
 func (command ConsumeCapabilityGrantCommand) Owned() ConsumeCapabilityGrantCommand { return command }
+
+// BeginToolExecutionCommand records one granted external tool operation before
+// an adapter receives its runtime-owned idempotency key.
+type BeginToolExecutionCommand struct {
+	Scope                               MutationScope
+	IdempotencyKey, ToolCallID, GrantID string
+	SessionID                           agentruntime.SessionID
+	TurnID                              agentruntime.TurnID
+	OperationID                         OperationID
+}
+
+// Owned returns a value-owned tool execution intent command.
+func (command BeginToolExecutionCommand) Owned() BeginToolExecutionCommand { return command }
 
 // Owned returns a value-owned command. ContentHandoff is opaque and immutable to callers.
 func (command AdmitInputCommand) Owned() AdmitInputCommand {

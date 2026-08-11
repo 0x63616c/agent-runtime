@@ -28,6 +28,7 @@ const (
 	CommandRequestApproval        CommandKind = "request_approval"
 	CommandDecideApproval         CommandKind = "decide_approval"
 	CommandConsumeCapabilityGrant CommandKind = "consume_capability_grant"
+	CommandBeginToolExecution     CommandKind = "begin_tool_execution"
 	CommandBeginInvocation        CommandKind = "begin_invocation_attempt"
 	CommandRecordOutcome          CommandKind = "record_invocation_outcome"
 	CommandSettleTurn             CommandKind = "settle_turn"
@@ -200,6 +201,15 @@ func (compiler *Compiler) CompileConsumeCapabilityGrant(command ConsumeCapabilit
 		return CompiledMutation{}, errors.New("compile consume capability grant: invalid command")
 	}
 	return compiler.compile(CommandConsumeCapabilityGrant, command.Scope, command.IdempotencyKey, command, command)
+}
+
+// CompileBeginToolExecution validates one capability-bound external operation intent.
+func (compiler *Compiler) CompileBeginToolExecution(command BeginToolExecutionCommand) (CompiledMutation, error) {
+	command = command.Owned()
+	if err := validateWorkerCommand(command.Scope, command.SessionID, command.TurnID, command.OperationID); err != nil || !validOpaque(command.GrantID, 128) || !validOpaque(command.ToolCallID, 128) {
+		return CompiledMutation{}, errors.New("compile tool execution intent: invalid command")
+	}
+	return compiler.compile(CommandBeginToolExecution, command.Scope, command.IdempotencyKey, command, command)
 }
 
 // CompileBeginInvocationAttempt validates a fenced runtime-worker intent command.
