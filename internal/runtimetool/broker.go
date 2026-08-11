@@ -88,6 +88,9 @@ func (broker *Broker) Admit(ctx context.Context, request AdmissionRequest) (Admi
 	}
 	policy, found := policyRevision(state, request.PolicyName, request.PolicyRevision)
 	if !found || !requiresApproval(policy, request.ToolName) || !request.ExpiresAt.After(broker.clock.Now()) {
+		if err := broker.recordDenial(ctx, state, scope, request, "denied"); err != nil {
+			return Admission{}, err
+		}
 		return Admission{}, ErrDenied
 	}
 	mutation, err := broker.compiler.CompileAdmitToolApproval(runtimestate.AdmitToolApprovalCommand{
@@ -108,6 +111,18 @@ func (broker *Broker) Admit(ctx context.Context, request AdmissionRequest) (Admi
 		return Admission{}, err
 	}
 	return Admission{ToolCallID: request.ToolCallID, ApprovalID: request.ApprovalID}, nil
+}
+
+func (broker *Broker) recordDenial(ctx context.Context, state runtimestate.RuntimeState, scope runtimestate.MutationScope, request AdmissionRequest, decision string) error {
+	mutation, err := broker.compiler.CompileDenyToolAdmission(runtimestate.DenyToolAdmissionCommand{Scope: scope, IdempotencyKey: "tool-" + decision + "-" + request.IdempotencyKey, SessionID: request.SessionID, TurnID: request.TurnID, ToolCallID: request.ToolCallID, Decision: decision})
+	if err != nil {
+		return err
+	}
+	plan, err := broker.planner.Plan(ctx, state, mutation)
+	if err != nil {
+		return err
+	}
+	return broker.store.PersistTransitionPlan(ctx, plan)
 }
 
 func policyRevision(state runtimestate.RuntimeState, name string, revision uint64) (runtimestate.PolicyRevisionRecord, bool) {
