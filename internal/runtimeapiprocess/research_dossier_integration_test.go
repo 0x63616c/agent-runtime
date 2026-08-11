@@ -201,18 +201,18 @@ func TestResearchDossierRecoversLongRunningToolResearchThroughThePublicContract(
 	for _, artifact := range restartedArtifacts.Artifacts {
 		terminalInput += "download " + artifact.ID.String() + "\n"
 	}
-	terminal := runResearchDossierTerminal(t, baseURL, secrets["RESEARCHER_TOKEN"], terminalInput+"quit\n")
+	terminal := runResearchDossierTerminal(t, ctx, baseURL, secrets["RESEARCHER_TOKEN"], terminalInput+"quit\n")
 	if !strings.Contains(terminal, restartedArtifacts.Artifacts[0].ID.String()) || !strings.Contains(terminal, "https://example.com/research/0000000000000001") || !strings.Contains(terminal, "https://example.com/research/0000000000000002") || !strings.Contains(terminal, "https://example.com/research/0000000000000003") {
 		t.Fatalf("terminal public dossier recovery = %q", terminal)
 	}
-	webURL, stopWeb := startResearchDossierWeb(t, baseURL, secrets["RESEARCHER_TOKEN"])
+	webURL, stopWeb := startResearchDossierWeb(t, ctx, baseURL, secrets["RESEARCHER_TOKEN"])
 	defer stopWeb()
 	artifactID := restartedArtifacts.Artifacts[len(restartedArtifacts.Artifacts)-1].ID
-	if body := getResearchDossierPage(t, webURL+"/sessions/"+session.ID.String()+"/artifacts"); !strings.Contains(body, artifactID.String()) {
+	if body := getResearchDossierPage(t, ctx, webURL+"/sessions/"+session.ID.String()+"/artifacts"); !strings.Contains(body, artifactID.String()) {
 		t.Fatalf("web public dossier artifact index = %q", body)
 	}
-	download := getResearchDossierDownload(t, webURL+"/artifacts/"+artifactID.String())
-	if !strings.Contains(download, "https://example.com/primary-evidence") {
+	download := getResearchDossierDownload(t, ctx, webURL+"/artifacts/"+artifactID.String())
+	if !strings.Contains(download, "https://example.com/research/0000000000000003") {
 		t.Fatalf("web public dossier download = %q", download)
 	}
 }
@@ -356,10 +356,10 @@ func assertM8TemporalSession(ctx context.Context, endpoint string, sessionID age
 	return err
 }
 
-func startResearchDossierWeb(t *testing.T, runtimeURL, token string) (string, func()) {
+func startResearchDossierWeb(t *testing.T, ctx context.Context, runtimeURL, token string) (string, func()) {
 	t.Helper()
 	binary := filepath.Join(t.TempDir(), "research-dossier")
-	command := exec.Command("go", "build", "-o", binary, "./examples/research-dossier/cmd/research-dossier")
+	command := exec.CommandContext(ctx, "go", "build", "-o", binary, "./examples/research-dossier/cmd/research-dossier")
 	command.Dir = repositoryRoot(t)
 	if output, err := command.CombinedOutput(); err != nil {
 		t.Fatalf("build Research Dossier binary: %v\n%s", err, output)
@@ -370,7 +370,7 @@ func startResearchDossierWeb(t *testing.T, runtimeURL, token string) (string, fu
 	}
 	address := listener.Addr().String()
 	_ = listener.Close()
-	process := exec.Command(binary, "--mode=web", "--runtime-url="+runtimeURL, "--listen="+address, "--token-env=RESEARCH_DOSSIER_E2E_TOKEN")
+	process := exec.CommandContext(ctx, binary, "--mode=web", "--runtime-url="+runtimeURL, "--listen="+address, "--token-env=RESEARCH_DOSSIER_E2E_TOKEN")
 	process.Env = append(os.Environ(), "RESEARCH_DOSSIER_E2E_TOKEN="+token)
 	var output bytes.Buffer
 	process.Stdout, process.Stderr = &output, &output
@@ -378,30 +378,36 @@ func startResearchDossierWeb(t *testing.T, runtimeURL, token string) (string, fu
 		t.Fatal(err)
 	}
 	baseURL := "http://" + address
-	deadline := time.Now().Add(10 * time.Second)
-	for time.Now().Before(deadline) {
-		response, err := http.Get(baseURL)
+	for {
+		request, requestErr := http.NewRequestWithContext(ctx, http.MethodGet, baseURL, nil)
+		if requestErr != nil {
+			t.Fatal(requestErr)
+		}
+		response, err := http.DefaultClient.Do(request)
 		if err == nil {
 			_ = response.Body.Close()
 			return baseURL, func() { _ = process.Process.Kill(); _ = process.Wait() }
 		}
-		runtime.Gosched()
+		select {
+		case <-ctx.Done():
+			_ = process.Process.Kill()
+			_ = process.Wait()
+			t.Fatalf("Research Dossier web startup context: %v", ctx.Err())
+		default:
+			runtime.Gosched()
+		}
 	}
-	_ = process.Process.Kill()
-	_ = process.Wait()
-	t.Fatalf("Research Dossier web did not start: %s", output.String())
-	return "", nil
 }
 
-func runResearchDossierTerminal(t *testing.T, runtimeURL, token, input string) string {
+func runResearchDossierTerminal(t *testing.T, ctx context.Context, runtimeURL, token, input string) string {
 	t.Helper()
 	binary := filepath.Join(t.TempDir(), "research-dossier")
-	command := exec.Command("go", "build", "-o", binary, "./examples/research-dossier/cmd/research-dossier")
+	command := exec.CommandContext(ctx, "go", "build", "-o", binary, "./examples/research-dossier/cmd/research-dossier")
 	command.Dir = repositoryRoot(t)
 	if output, err := command.CombinedOutput(); err != nil {
 		t.Fatalf("build Research Dossier binary: %v\n%s", err, output)
 	}
-	command = exec.Command(binary, "--mode=terminal", "--runtime-url="+runtimeURL, "--token-env=RESEARCH_DOSSIER_E2E_TOKEN")
+	command = exec.CommandContext(ctx, binary, "--mode=terminal", "--runtime-url="+runtimeURL, "--token-env=RESEARCH_DOSSIER_E2E_TOKEN")
 	command.Env = append(os.Environ(), "RESEARCH_DOSSIER_E2E_TOKEN="+token)
 	command.Stdin = strings.NewReader(input)
 	output, err := command.CombinedOutput()
@@ -411,9 +417,13 @@ func runResearchDossierTerminal(t *testing.T, runtimeURL, token, input string) s
 	return string(output)
 }
 
-func getResearchDossierPage(t *testing.T, endpoint string) string {
+func getResearchDossierPage(t *testing.T, ctx context.Context, endpoint string) string {
 	t.Helper()
-	response, err := http.Get(endpoint)
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response, err := http.DefaultClient.Do(request)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -425,9 +435,13 @@ func getResearchDossierPage(t *testing.T, endpoint string) string {
 	return string(body)
 }
 
-func getResearchDossierDownload(t *testing.T, endpoint string) string {
+func getResearchDossierDownload(t *testing.T, ctx context.Context, endpoint string) string {
 	t.Helper()
-	response, err := http.Get(endpoint)
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response, err := http.DefaultClient.Do(request)
 	if err != nil {
 		t.Fatal(err)
 	}

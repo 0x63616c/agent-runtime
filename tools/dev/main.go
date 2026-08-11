@@ -10,6 +10,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -948,7 +949,10 @@ func down(ctx context.Context, stack, root string, output io.Writer) error {
 	}
 	if err := verifyNamespace(ctx, state); err != nil {
 		if goneErr := verifyNamespaceGone(ctx, state); goneErr == nil {
-			return retireBootstrapCapability(root, state)
+			if err := retireBootstrapCapability(root, state); err != nil {
+				return err
+			}
+			return removeRetiredLocalStackState(root, state)
 		}
 		return err
 	}
@@ -964,7 +968,7 @@ func down(ctx context.Context, stack, root string, output io.Writer) error {
 	if err := retireBootstrapCapability(root, state); err != nil {
 		return err
 	}
-	return nil
+	return removeRetiredLocalStackState(root, state)
 }
 
 func statePath(root, stack string) string {
@@ -1065,7 +1069,7 @@ func verifyNamespaceGone(ctx context.Context, state localState) error {
 func retireBootstrapCapability(root string, state localState) error {
 	path := bootstrapCapabilityPath(root, state.Stack)
 	authority, err := stack.ReadBootstrapAuthority(path)
-	if os.IsNotExist(err) {
+	if errors.Is(err, os.ErrNotExist) {
 		return nil
 	}
 	if err != nil {
@@ -1076,6 +1080,26 @@ func retireBootstrapCapability(root string, state localState) error {
 	}
 	if err := stack.RemoveBootstrapAuthority(path, authority); err != nil {
 		return fmt.Errorf("retire local Stack bootstrap capability: %w", err)
+	}
+	return nil
+}
+
+// removeRetiredLocalStackState drops only the named Stack's private launch
+// material after namespace absence and capability retirement have succeeded.
+// The committed redacted evidence is the durable audit record; local tokens,
+// kubeconfig references, render state, and operator journal must not survive a
+// completed disposable Stack lifecycle.
+func removeRetiredLocalStackState(root string, state localState) error {
+	paths := []string{
+		statePath(root, state.Stack),
+		secretStatePath(root, state.Stack, "local"),
+		filepath.Join(root, ".runtime", "dev", state.Stack+".stack.json"),
+		operatorAuditPath(root, state.Stack),
+	}
+	for _, path := range paths {
+		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("remove retired local Stack state: %w", err)
+		}
 	}
 	return nil
 }
