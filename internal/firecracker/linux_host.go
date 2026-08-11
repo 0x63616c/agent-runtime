@@ -314,6 +314,28 @@ func (host *LinuxJailerHost) DispatchAuthenticatedSnapshotRestore(ctx context.Co
 	return authority.Execute(ctx, envelope, emit)
 }
 
+// DispatchAuthenticatedMount is the future profile-gated path from a verified
+// host envelope to the strict sharing daemon authority. It rejects all mounts
+// until the exact jailed daemon and protected no-escape proof are available.
+func (host *LinuxJailerHost) DispatchAuthenticatedMount(ctx context.Context, envelope sandboxhostprotocol.Envelope, authenticatedEnvelope []byte, authority *MountExecutionAuthority, emit MountReceiptEmitter) (MountReceipt, error) {
+	if err := contextError(ctx); err != nil {
+		return MountReceipt{}, err
+	}
+	if host == nil || authority == nil || emit == nil || len(authenticatedEnvelope) == 0 || envelope.OperationKind != GuestMountOperationKind || envelope.HostID == "" || envelope.AssignmentID == "" || envelope.FencingToken == 0 || envelope.CapabilityDigest == "" {
+		return MountReceipt{}, fmt.Errorf("%w: authenticated fenced mount command is required", ErrCapabilityUnavailable)
+	}
+	if err := sandboxhostprotocol.ValidateAuthenticatedEnvelopeWire(authenticatedEnvelope, envelope); err != nil {
+		return MountReceipt{}, fmt.Errorf("%w: exact authenticated mount envelope is required", ErrCapabilityUnavailable)
+	}
+	host.mu.Lock()
+	launched, cleaning, plan := host.launched, host.cleaning || host.cleaned, cloneLinuxJailerPlan(host.plan)
+	host.mu.Unlock()
+	if !launched || cleaning || !validCompiledPlan(plan) || envelope.SandboxID != plan.VMID() || sandbox.Digest(envelope.CapabilityDigest) != plan.Capabilities().Digest || firecrackerProfilesUnavailable(plan.Capabilities()) {
+		return MountReceipt{}, fmt.Errorf("%w: certified jailed sharing profile is unavailable", ErrCapabilityUnavailable)
+	}
+	return authority.Execute(ctx, envelope, emit)
+}
+
 // CancelDispatch forwards a lease-fenced cancellation only to the exact
 // running guest selected by the immutable compiled plan. It is intentionally
 // unavailable until a future certified guest profile composes a cancellation
