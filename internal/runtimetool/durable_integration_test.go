@@ -154,6 +154,32 @@ func TestDurableBrokeredToolLifecyclePersistsApprovalAndFinalization(t *testing.
 	if err != nil || decision.State != agentruntime.ApprovalApproved {
 		t.Fatalf("durable public approval = %#v, %v", decision, err)
 	}
+	// The worker-owned consumption transition persists its single allowed use
+	// before it can create an execution intent. A distinct retry cannot consume
+	// the same durable grant a second time, and therefore cannot create a
+	// second adapter operation.
+	// The opaque grant ID is owned by the durable planner, so load the exact
+	// approved record before issuing the worker-owned consumption transition.
+	state, err := store.LoadRuntimeState(ctx, workerScope)
+	if err != nil || len(state.Grants) != 1 {
+		t.Fatalf("load approved durable grant = %#v, %v", state.Grants, err)
+	}
+	firstUse, err := compiler.CompileConsumeCapabilityGrant(runtimestate.ConsumeCapabilityGrantCommand{Scope: workerScope, IdempotencyKey: "durable-tool-first-use", GrantID: state.Grants[0].GrantID, ToolCallID: admission.ToolCallID, PolicyRevisionDigest: state.Grants[0].PolicyRevisionDigest, SessionID: session, TurnID: turn})
+	if err != nil {
+		t.Fatal(err)
+	}
+	apply(firstUse)
+	secondUse, err := compiler.CompileConsumeCapabilityGrant(runtimestate.ConsumeCapabilityGrantCommand{Scope: workerScope, IdempotencyKey: "durable-tool-second-use", GrantID: state.Grants[0].GrantID, ToolCallID: admission.ToolCallID, PolicyRevisionDigest: state.Grants[0].PolicyRevisionDigest, SessionID: session, TurnID: turn})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = applyRejection(ctx, planner, store, secondUse); !errors.Is(err, runtimestate.ErrConflict) {
+		t.Fatalf("second durable grant use = %v, want conflict", err)
+	}
+	state, err = store.LoadRuntimeState(ctx, workerScope)
+	if err != nil || len(state.ToolExecutions) != 0 || len(state.Grants) != 1 || state.Grants[0].Uses != state.Grants[0].MaximumUses {
+		t.Fatalf("exhausted durable grant created execution before dispatch = grants=%#v executions=%#v err=%v", state.Grants, state.ToolExecutions, err)
+	}
 	adapter := newDurableToolAdapter()
 	worker, err := runtimetool.NewWorker(runtimetool.Config{Store: store, Tenants: store, Compiler: compiler, Planner: planner, Clock: source, Content: content, Adapter: adapter, Claimer: "durable-tool-worker"})
 	if err != nil {
@@ -167,7 +193,7 @@ func TestDurableBrokeredToolLifecyclePersistsApprovalAndFinalization(t *testing.
 	if err := worker.ScanOnce(ctx); err != nil {
 		t.Fatal(err)
 	}
-	state, err := store.LoadRuntimeState(ctx, workerScope)
+	state, err = store.LoadRuntimeState(ctx, workerScope)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -334,7 +360,7 @@ func TestDurableBrokeredToolLifecyclePersistsApprovalAndFinalization(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(state.ToolExecutions) != 1 || adapter.executes != 1 || adapter.reconciles != 0 || !durableGrantUnused(state.Grants, cancelled.ToolCallID) || !durableHasAuditKind(state.Audit, "cancel_turn.terminal") {
+	if len(state.ToolExecutions) != 1 || adapter.executes != 1 || adapter.reconciles != 0 || !durableGrantRevokedWithoutUse(state.Grants, cancelled.ToolCallID) || !durableHasAuditKind(state.Audit, "capability_grant.revoked") || !durableHasAuditKind(state.Audit, "cancel_turn.terminal") {
 		t.Fatalf("cancelled durable turn dispatched or lost terminal audit: executions=%#v calls=%d/%d grants=%#v audit=%#v", state.ToolExecutions, adapter.executes, adapter.reconciles, state.Grants, state.Audit)
 	}
 	lateSessionMutation, err := compiler.CompileCreateSession(runtimestate.CreateSessionCommand{Scope: ownerScope, IdempotencyKey: "durable-tool-late-session", RevisionID: registered.Result().Revision.RevisionID})
@@ -428,15 +454,6 @@ func durableGrantRevokedWithoutUse(grants []runtimestate.CapabilityGrantRecord, 
 	for _, grant := range grants {
 		if grant.ToolCallID == toolCallID {
 			return grant.RevokedAt != nil && grant.Uses == 0
-		}
-	}
-	return false
-}
-
-func durableGrantUnused(grants []runtimestate.CapabilityGrantRecord, toolCallID string) bool {
-	for _, grant := range grants {
-		if grant.ToolCallID == toolCallID {
-			return grant.RevokedAt == nil && grant.Uses == 0
 		}
 	}
 	return false

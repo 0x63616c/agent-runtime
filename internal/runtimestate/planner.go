@@ -1015,6 +1015,29 @@ func (planner *RuntimeStatePlanner) cancel(state *RuntimeState, binding ReceiptB
 			cancelledApprovals++
 		}
 	}
+	// A cancellation withdraws any still-unused authority for this Turn before
+	// the worker can commit an execution intent. A consumed grant has already
+	// crossed that boundary and must instead reconcile its exact operation.
+	toolCalls := map[string]struct{}{}
+	for _, intent := range state.ToolIntents {
+		if intent.SessionID == command.SessionID && intent.TurnID == command.TurnID && intent.Tenant == binding.Scope.Tenant && intent.Principal == binding.Scope.Principal {
+			toolCalls[intent.ToolCallID] = struct{}{}
+		}
+	}
+	revokedGrants := 0
+	for index := range state.Grants {
+		grant := state.Grants[index]
+		if grant.Tenant != binding.Scope.Tenant || grant.Principal != binding.Scope.Principal || grant.Uses != 0 || grant.RevokedAt != nil {
+			continue
+		}
+		if _, belongsToCancelledTurn := toolCalls[grant.ToolCallID]; !belongsToCancelledTurn {
+			continue
+		}
+		value := now
+		grant.RevokedAt = &value
+		state.Grants[index] = grant
+		revokedGrants++
+	}
 	session.Version++
 	session.UpdatedAt = now
 	kinds := []agentruntime.EventKind{agentruntime.EventTurnCancelled}
@@ -1040,6 +1063,14 @@ func (planner *RuntimeStatePlanner) cancel(state *RuntimeState, binding ReceiptB
 		}
 		effects.Audit = append(effects.Audit, approvalEffects.Audit...)
 		effects.Outbox = append(effects.Outbox, approvalEffects.Outbox...)
+	}
+	for range revokedGrants {
+		revocationEffects, auditErr := planner.auditOnly(state, binding, "capability_grant.revoked", command.SessionID, command.TurnID, now)
+		if auditErr != nil {
+			return PlanResult{}, EffectSet{}, auditErr
+		}
+		effects.Audit = append(effects.Audit, revocationEffects.Audit...)
+		effects.Outbox = append(effects.Outbox, revocationEffects.Outbox...)
 	}
 	return PlanResult{Session: session, Turn: turn, Promoted: promoted}, effects, nil
 }
