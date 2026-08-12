@@ -3,19 +3,6 @@ name: publish-production-image
 on:
   push:
     branches: [main]
-    paths:
-      - go.mod
-      - go.sum
-      - cmd/runtime/**
-      - cmd/egress-proxy/**
-      - cmd/agent-runtime-api/**
-      - internal/**
-      - sandbox/**
-      - sdk/**
-      - temporalpayload/**
-      - deploy/production/Dockerfile
-      - .dockerignore
-      - .github/workflows/publish-production-image.yml
 permissions:
   contents: read
   packages: write
