@@ -33,6 +33,14 @@ import (
 	"go.temporal.io/sdk/worker"
 )
 
+const (
+	publicLifecycleFixtureTenant    = "public-lifecycle"
+	publicLifecycleFixtureAgent     = "public-lifecycle-agent"
+	publicLifecycleFixtureTaskQueue = "public-lifecycle-dispatch-v1"
+	publicLifecycleFixtureClaimer   = "public-lifecycle-publisher"
+	publicLifecycleFixtureInput     = "queue durable work"
+)
+
 // TestPostgresOutboxReclaimsLiveTemporalRouteAfterAcknowledgementLoss proves
 // the TMP-010 cross-authority recovery boundary. It deliberately loses only
 // the PostgreSQL acknowledgement after Temporal accepted the exact durable
@@ -223,8 +231,8 @@ func TestPublicSDKInputStartsAndSignalsThePrivateSessionWorkflow(t *testing.T) {
 		t.Fatal(err)
 	}
 	handler, err := runtimeapi.NewHandler(runtimeapi.Config{Runtime: runtime, Authenticator: publicLifecycleAuthenticator{identities: map[string]runtimeapi.Identity{
-		"admin-token-000000": {Tenant: "public-sdk-temporal", Principal: "admin", Admin: true},
-		"owner-token-000000": {Tenant: "public-sdk-temporal", Principal: "owner"},
+		"admin-token-000000": {Tenant: publicLifecycleFixtureTenant, Principal: "admin", Admin: true},
+		"owner-token-000000": {Tenant: publicLifecycleFixtureTenant, Principal: "owner"},
 	}}, RequestIDs: &publicLifecycleRequestIDs{}})
 	if err != nil {
 		t.Fatal(err)
@@ -235,7 +243,7 @@ func TestPublicSDKInputStartsAndSignalsThePrivateSessionWorkflow(t *testing.T) {
 	httpClient := &http.Client{Transport: responses}
 	admin := newPublicLifecycleClient(t, apiServer.URL, "admin-token-000000", httpClient)
 	owner := newPublicLifecycleClient(t, apiServer.URL, "owner-token-000000", httpClient)
-	agent, err := admin.CreateAgent(ctx, agentruntime.CreateAgentRequest{IdempotencyKey: "public-sdk-agent", Name: "public-sdk-temporal", ModelProfile: "balanced", Instructions: "route through durable state"})
+	agent, err := admin.CreateAgent(ctx, agentruntime.CreateAgentRequest{IdempotencyKey: "public-sdk-agent", Name: publicLifecycleFixtureAgent, ModelProfile: "balanced", Instructions: "route through durable state"})
 	if err != nil {
 		t.Fatalf("create Agent through public SDK: %v", err)
 	}
@@ -243,7 +251,7 @@ func TestPublicSDKInputStartsAndSignalsThePrivateSessionWorkflow(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create Session through public SDK: %v", err)
 	}
-	request := agentruntime.SendInputRequest{SessionID: session.ID, IdempotencyKey: "public-sdk-input", Parts: []agentruntime.ContentPart{{Kind: agentruntime.ContentText, Text: "start and signal the private workflow"}}}
+	request := agentruntime.SendInputRequest{SessionID: session.ID, IdempotencyKey: "public-sdk-input", Parts: []agentruntime.ContentPart{{Kind: agentruntime.ContentText, Text: publicLifecycleFixtureInput}}}
 	accepted, err := owner.SendInput(ctx, request)
 	if err != nil {
 		t.Fatalf("send Input through public SDK: %v", err)
@@ -262,7 +270,7 @@ func TestPublicSDKInputStartsAndSignalsThePrivateSessionWorkflow(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	taskQueue := "public-sdk-temporal"
+	taskQueue := publicLifecycleFixtureTaskQueue
 	workerClient, err := factory.NewClient(ctx, client.Options{HostPort: server.FrontendHostPort()})
 	if err != nil {
 		t.Fatal(err)
@@ -293,11 +301,11 @@ func TestPublicSDKInputStartsAndSignalsThePrivateSessionWorkflow(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer publisherClient.Close()
-	tenant, err := runtimecontent.ParseTenantID("public-sdk-temporal")
+	tenant, err := runtimecontent.ParseTenantID(publicLifecycleFixtureTenant)
 	if err != nil {
 		t.Fatal(err)
 	}
-	publisher, err := NewPublisher(PublisherConfig{Store: store, Tenants: publisherIntegrationTenants{tenant: tenant}, Compiler: compiler, Planner: planner, Clock: timeSource, Publisher: temporalSessionPublisher{client: publisherClient, taskQueue: taskQueue}, Claimer: "public-sdk-temporal-publisher"})
+	publisher, err := NewPublisher(PublisherConfig{Store: store, Tenants: publisherIntegrationTenants{tenant: tenant}, Compiler: compiler, Planner: planner, Clock: timeSource, Publisher: temporalSessionPublisher{client: publisherClient, taskQueue: taskQueue}, Claimer: publicLifecycleFixtureClaimer})
 	if err != nil {
 		t.Fatal(err)
 	}
