@@ -4,6 +4,7 @@ set shell := ["bash", "-ceu"]
 check:
     go run ./cmd/generate-requirement-manifest --check
     go run ./cmd/generate-runtime-openapi --check
+    node ./scripts/generate-project-dashboard.mjs --check
     for evidence_file in evidence/afk/*.json; do go run ./cmd/afk-evidence -mode validate -file "$evidence_file"; done
     go mod verify
     go test -race ./...

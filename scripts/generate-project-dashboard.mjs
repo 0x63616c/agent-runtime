@@ -6,15 +6,28 @@ const output = resolve(root, 'docs/planning/requirements-dashboard.html');
 const master = await readFile(resolve(root, 'docs/planning/requirements/master-requirements.md'), 'utf8');
 const acceptance = await readFile(resolve(root, 'docs/planning/requirements/acceptance-ledger.md'), 'utf8');
 const ledger = JSON.parse(await readFile(resolve(root, 'evidence/requirements-ledger.json'), 'utf8'));
+const audit = JSON.parse(await readFile(resolve(root, 'docs/planning/current-main-audit.json'), 'utf8'));
 
 const requirements = parseRequirements(master);
 const proofs = parseProofs(acceptance);
+const assessments = new Map();
+for (const group of audit.groups) {
+  for (const id of group.ids) {
+    if (assessments.has(id)) throw new Error(`current-main audit duplicates ${id}`);
+    assessments.set(id, {assessment: group.assessment, assessmentReason: group.reason});
+  }
+}
 const rows = ledger.requirements.map(({id, status}) => {
   const requirement = requirements.get(id);
   const proof = proofs.get(id);
   if (!requirement || !proof) throw new Error(`dashboard source is incomplete for ${id}`);
-  return {id, status, ...requirement, ...proof};
+  const assessment = assessments.get(id) || {assessment: 'formally_completed', assessmentReason: 'The formal acceptance ledger marks this requirement complete.'};
+  return {id, ledgerStatus: status, ...assessment, ...requirement, ...proof};
 }).sort((left, right) => left.id.localeCompare(right.id));
+
+for (const requirement of ledger.requirements) {
+  if (requirement.status !== 'completed' && !assessments.has(requirement.id)) throw new Error(`current-main audit omits non-complete ${requirement.id}`);
+}
 
 const document = `<!doctype html>
 <html lang="en">
@@ -43,38 +56,44 @@ const document = `<!doctype html>
     .id { font-weight: 700; white-space: nowrap; }
     .area { color: #5c6375; font-size: .88rem; }
     .badge { display: inline-block; border-radius: 999px; padding: 3px 8px; font-weight: 700; font-size: .8rem; white-space: nowrap; }
-    .completed { background: #d8f3dd; color: #155724; }
-    .in_progress { background: #fff0bd; color: #714d00; }
+    .formally_completed, .verified_locally { background: #d8f3dd; color: #155724; }
+    .implemented_needs_environment_proof { background: #fff0bd; color: #714d00; }
+    .unfinished { background: #ffd9cf; color: #7b2515; }
+    .blocked_on_linux_kvm, .blocked_on_external_support { background: #eadcff; color: #4c2378; }
     .not_started { background: #eceef5; color: #3f4658; }
     .empty { padding: 36px; text-align: center; color: #5c6375; }
-    @media (prefers-color-scheme: dark) { :root { background: #10131a; color: #edf1fa; } .sub, .area, .empty { color: #b6bfd3; } .count, button, input, .table-wrap { background: #1a1f2a; border-color: #384154; } th { background: #202737; } td { border-color: #30394b; } button[aria-pressed="true"] { outline-color: #4d6cbe; } .completed { background: #174d2a; color: #d8f8df; } .in_progress { background: #624c10; color: #fff2bd; } .not_started { background: #303747; color: #e2e7f3; } }
+    @media (prefers-color-scheme: dark) { :root { background: #10131a; color: #edf1fa; } .sub, .area, .empty { color: #b6bfd3; } .count, button, input, .table-wrap { background: #1a1f2a; border-color: #384154; } th { background: #202737; } td { border-color: #30394b; } button[aria-pressed="true"] { outline-color: #4d6cbe; } .formally_completed, .verified_locally { background: #174d2a; color: #d8f8df; } .implemented_needs_environment_proof { background: #624c10; color: #fff2bd; } .unfinished { background: #672c22; color: #ffdcd5; } .blocked_on_linux_kvm, .blocked_on_external_support { background: #43295e; color: #ebdcff; } .not_started { background: #303747; color: #e2e7f3; } }
     @media (max-width: 640px) { main { padding: 24px 12px 48px; } .controls { grid-template-columns: 1fr; } }
   </style>
 </head>
 <body>
   <main>
     <h1>Agent Runtime requirements</h1>
-    <p class="sub">Every requirement, its current evidence state, the actual requirement, and the proof needed to call it done.</p>
+    <p class="sub">Audit of code revision <code>${audit.reviewed_revision}</code>. This page distinguishes the formal ledger from what current code and local checks establish. Update the audit after code changes; it is deliberately not a live release claim.</p>
     <div class="summary" id="summary" aria-label="Requirement totals"></div>
     <div class="controls">
       <input id="search" type="search" placeholder="Search ID, feature, or proof…" aria-label="Search requirements">
       <div class="filters" aria-label="Status filters">
         <button type="button" data-status="all" aria-pressed="true">All</button>
-        <button type="button" data-status="completed" aria-pressed="false">Done</button>
-        <button type="button" data-status="in_progress" aria-pressed="false">In progress</button>
+        <button type="button" data-status="formally_completed" aria-pressed="false">Formally done</button>
+        <button type="button" data-status="verified_locally" aria-pressed="false">Verified locally</button>
+        <button type="button" data-status="implemented_needs_environment_proof" aria-pressed="false">Needs real-environment proof</button>
+        <button type="button" data-status="unfinished" aria-pressed="false">Unfinished</button>
+        <button type="button" data-status="blocked_on_linux_kvm" aria-pressed="false">Blocked: Linux/KVM</button>
+        <button type="button" data-status="blocked_on_external_support" aria-pressed="false">Blocked: provider support</button>
         <button type="button" data-status="not_started" aria-pressed="false">Not started</button>
       </div>
     </div>
     <div class="table-wrap">
       <table>
-        <thead><tr><th>Requirement</th><th>State</th><th>What it means</th><th>What proves it</th></tr></thead>
+        <thead><tr><th>Requirement</th><th>Current-main assessment</th><th>Why</th><th>Formal proof still required</th></tr></thead>
         <tbody id="rows"></tbody>
       </table>
     </div>
   </main>
   <script>
     const requirements = ${JSON.stringify(rows).replace(/</g, '\\u003c')};
-    const labels = {completed: 'Done', in_progress: 'In progress', not_started: 'Not started'};
+    const labels = {formally_completed: 'Formally done', verified_locally: 'Verified locally', implemented_needs_environment_proof: 'Needs real-environment proof', unfinished: 'Unfinished', blocked_on_linux_kvm: 'Blocked: Linux/KVM', blocked_on_external_support: 'Blocked: provider support', not_started: 'Not started'};
     const rows = document.getElementById('rows');
     const search = document.getElementById('search');
     const buttons = [...document.querySelectorAll('[data-status]')];
@@ -83,20 +102,20 @@ const document = `<!doctype html>
     const cell = (row, value, className = '') => { const element = document.createElement('td'); if (className) element.className = className; element.append(text(value)); row.append(element); };
     function render() {
       const term = search.value.trim().toLowerCase();
-      const visible = requirements.filter(requirement => (selected === 'all' || requirement.status === selected) && JSON.stringify(requirement).toLowerCase().includes(term));
+      const visible = requirements.filter(requirement => (selected === 'all' || requirement.assessment === selected) && JSON.stringify(requirement).toLowerCase().includes(term));
       rows.replaceChildren();
       if (!visible.length) { const row = document.createElement('tr'); const item = document.createElement('td'); item.colSpan = 4; item.className = 'empty'; item.append(text('No requirements match this view.')); row.append(item); rows.append(row); return; }
       for (const requirement of visible) {
         const row = document.createElement('tr');
         const identifier = document.createElement('td'); identifier.innerHTML = '<div class="id"></div><div class="area"></div>'; identifier.querySelector('.id').append(text(requirement.id)); identifier.querySelector('.area').append(text(requirement.area)); row.append(identifier);
-        const state = document.createElement('td'); const badge = document.createElement('span'); badge.className = 'badge ' + requirement.status; badge.append(text(labels[requirement.status])); state.append(badge); row.append(state);
-        cell(row, requirement.description);
+        const state = document.createElement('td'); const badge = document.createElement('span'); badge.className = 'badge ' + requirement.assessment; badge.append(text(labels[requirement.assessment])); state.append(badge); row.append(state);
+        cell(row, requirement.assessmentReason + ' Formal ledger: ' + (requirement.ledgerStatus === 'completed' ? 'completed' : requirement.ledgerStatus.replace('_', ' ')) + '.');
         cell(row, requirement.acceptance + ' Documentation: ' + requirement.documentation);
         rows.append(row);
       }
     }
     const summary = document.getElementById('summary');
-    for (const status of ['completed', 'in_progress', 'not_started']) { const count = requirements.filter(item => item.status === status).length; const item = document.createElement('span'); item.className = 'count'; item.append(text(labels[status] + ': ' + count)); summary.append(item); }
+    for (const status of ['formally_completed', 'verified_locally', 'implemented_needs_environment_proof', 'unfinished', 'blocked_on_linux_kvm', 'blocked_on_external_support', 'not_started']) { const count = requirements.filter(item => item.assessment === status).length; const item = document.createElement('span'); item.className = 'count'; item.append(text(labels[status] + ': ' + count)); summary.append(item); }
     search.addEventListener('input', render);
     for (const button of buttons) button.addEventListener('click', () => { selected = button.dataset.status; for (const item of buttons) item.setAttribute('aria-pressed', String(item === button)); render(); });
     render();
