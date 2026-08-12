@@ -8,10 +8,13 @@ on:
       - go.sum
       - cmd/runtime/**
       - cmd/egress-proxy/**
-      - cmd/agent-runtime-api/**
-      - internal/**
-      - sandbox/**
-      - sdk/**
+      - internal/roles/**
+      - internal/egressproxy/**
+      - internal/runtimeorchestration/**
+      - internal/runtimepostgres/**
+      - internal/runtimestate/**
+      - internal/runtimecontent/**
+      - internal/temporalpayloadruntime/**
       - temporalpayload/**
       - deploy/production/Dockerfile
       - .dockerignore

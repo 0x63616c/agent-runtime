@@ -75,26 +75,6 @@ func TestConfigurationAcceptsOnlyCompleteDurablePostgresAndMinIOStorage(t *testi
 	}
 }
 
-func TestCheckRequiresEveryDeclaredCredentialWithoutStartingThePublicListener(t *testing.T) {
-	durable := strings.Replace(validConfig, `"storage": {"mode":"memory-unsafe"}`, `"storage":{"mode":"postgres","database_dsn_environment":"STATE_DATABASE_DSN","content":{"endpoint":"minio.runtime.svc:9000","access_key_environment":"CONTENT_ACCESS_KEY","secret_key_environment":"CONTENT_SECRET_KEY","bucket":"agent-runtime-content"}}`, 1)
-	config, err := runtimeapiprocess.Parse(strings.NewReader(durable))
-	if err != nil {
-		t.Fatalf("Parse(durable): %v", err)
-	}
-	if err := runtimeapiprocess.Check(config, mapLookup(map[string]string{"ADMIN_TOKEN": "admin-token-0000", "USER_TOKEN": "user-token-00000"})); err == nil {
-		t.Fatal("Check(missing durable credentials) error = nil")
-	}
-	if err := runtimeapiprocess.Check(config, mapLookup(map[string]string{
-		"ADMIN_TOKEN":        "admin-token-0000",
-		"USER_TOKEN":         "user-token-00000",
-		"STATE_DATABASE_DSN": "postgres://runtime",
-		"CONTENT_ACCESS_KEY": "content-access-key",
-		"CONTENT_SECRET_KEY": "content-secret-key",
-	})); err != nil {
-		t.Fatalf("Check(complete durable credentials): %v", err)
-	}
-}
-
 func TestRunnableRoleServesPublicSDKWithoutInternalTypes(t *testing.T) {
 	config, err := runtimeapiprocess.Parse(strings.NewReader(validConfig))
 	if err != nil {

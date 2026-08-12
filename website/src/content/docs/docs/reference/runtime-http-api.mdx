@@ -87,13 +87,6 @@ HTTP listener only on loopback or behind an operator-owned protected transport
 boundary. `max_request_bytes` must be between 3 MiB and 16 MiB; the example
 uses 4 MiB.
 
-An all-interface listener requires explicit `"public_listen":true`. The
-reviewed Stack opts in only for its separate `runtime-api` Pod, which has its
-own PostgreSQL/content and bearer-token Secret references. Its
-`--config-env RUNTIME_API_CONFIG --check` probe validates the strict document
-and every referenced API/storage credential without opening a listener or
-contacting infrastructure.
-
 ## Optional request-completion logs
 
 The standalone role emits no public `/v1` API completion record by default. To

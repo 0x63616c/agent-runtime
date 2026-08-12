@@ -41,30 +41,6 @@ func Run(ctx context.Context, config Config, lookup SecretLookup, ready func(str
 	return serve(ctx, config, lookup, listener, ready)
 }
 
-// Check validates the complete non-network startup contract without binding a listener or mutating infrastructure.
-func Check(config Config, lookup SecretLookup) error {
-	if lookup == nil {
-		return errors.New("check runtime API process: secret lookup is required")
-	}
-	if _, err := newAuthenticator(config, lookup); err != nil {
-		return errors.Wrap(err, "check runtime API process")
-	}
-	if config.storage.mode != "postgres" {
-		return nil
-	}
-	for _, environment := range []string{
-		config.storage.databaseDSNEnvironment,
-		config.storage.content.AccessKeyEnvironment,
-		config.storage.content.SecretKeyEnvironment,
-	} {
-		value, found := lookup(environment)
-		if !found || value == "" {
-			return errors.New("check runtime API process: required durable storage credential is missing")
-		}
-	}
-	return nil
-}
-
 // Serve runs the role on an already-owned listener so process tests need no timing guesses.
 func Serve(ctx context.Context, config Config, lookup SecretLookup, listener net.Listener) error {
 	return serve(ctx, config, lookup, listener, nil)
@@ -78,9 +54,17 @@ func serve(ctx context.Context, config Config, lookup SecretLookup, listener net
 	if err != nil {
 		return err
 	}
-	authenticator, err := newAuthenticator(config, lookup)
-	if err != nil {
-		return errors.Wrap(err, "serve runtime API process")
+	authenticator := &digestAuthenticator{identities: make(map[[32]byte]runtimeapi.Identity, len(config.principals))}
+	for _, configured := range config.principals {
+		token, found := lookup(configured.environment)
+		if !found || len(token) < 16 || len(token) > 4096 {
+			return errors.New("serve runtime API process: required bearer token is missing or invalid")
+		}
+		digest := sha256.Sum256([]byte(token))
+		if _, exists := authenticator.identities[digest]; exists {
+			return errors.New("serve runtime API process: bearer token is duplicated")
+		}
+		authenticator.identities[digest] = configured.identity
 	}
 	ids := &cryptoIDs{}
 	runtime, closeRuntime, err := composeRuntime(ctx, config, lookup, ids)
@@ -272,22 +256,6 @@ func composeRuntime(ctx context.Context, config Config, lookup SecretLookup, ids
 
 type digestAuthenticator struct {
 	identities map[[32]byte]runtimeapi.Identity
-}
-
-func newAuthenticator(config Config, lookup SecretLookup) (*digestAuthenticator, error) {
-	authenticator := &digestAuthenticator{identities: make(map[[32]byte]runtimeapi.Identity, len(config.principals))}
-	for _, configured := range config.principals {
-		token, found := lookup(configured.environment)
-		if !found || len(token) < 16 || len(token) > 4096 {
-			return nil, errors.New("required bearer token is missing or invalid")
-		}
-		digest := sha256.Sum256([]byte(token))
-		if _, exists := authenticator.identities[digest]; exists {
-			return nil, errors.New("bearer token is duplicated")
-		}
-		authenticator.identities[digest] = configured.identity
-	}
-	return authenticator, nil
 }
 
 func (authenticator *digestAuthenticator) Authenticate(ctx context.Context, token string) (runtimeapi.Identity, error) {

@@ -11,15 +11,12 @@ milestones. Do not treat a rendered reference Stack or published role image as
 a completed production rollout; live Kubernetes/Temporal/blob evidence is
 retained separately.
 
-The checked-in Stack keeps `runtime serve --role api` as the generic health-only
-role-composition fixture and separately declares `runtime-api` as the public
-`/v1` Deployment. `runtime-api` runs `/agent-runtime-api` with one strict,
-durable PostgreSQL/immutable-content configuration from `RUNTIME_API_CONFIG`,
-its own ServiceAccount, five named Secret environment references, a Service on
-port `8088`, and default-deny egress limited to the declared state and blob
-Services. It does not inherit credentials from the generic role. This is
-reviewed source composition and local-container smoke evidence, not a claim
-that the image digest is published or that an operator has rolled it out.
+The checked-in Stack's `runtime serve --role api` deployment remains the
+health-only role-composition fixture. The separately runnable
+`agent-runtime-api` has an explicit durable PostgreSQL/content configuration
+and named disposable-dependency integration evidence, but a production API
+credential/configuration rollout is operator work and is not inferred from the
+health-only Stack role.
 
 Agent Runtime is self-hosted as explicit, separately deployable processes. An
 operator applies a reviewed typed Stack with `stackctl`; no runtime binary,
@@ -46,7 +43,6 @@ credentials would destroy the trust boundary.
 | Role | Visible dependencies | Credential environment references | Explicitly absent |
 | --- | --- | --- | --- |
 | `api` | state, telemetry | none in this early composition slice | Temporal, model, tool, blob, sandbox secrets |
-| `runtime-api` | runtime PostgreSQL and immutable-content blob Service | `STATE_DATABASE_DSN`, `AR_RUNTIME_MINIO_ACCESS_KEY`, `AR_RUNTIME_MINIO_SECRET_KEY`, `RUNTIME_API_ADMIN_TOKEN`, `RUNTIME_API_DEVELOPER_TOKEN` | Temporal, model, tool, sandbox, and generic-role credentials |
 | `orchestration` | state, telemetry, Temporal | `STATE_DATABASE_DSN`, `TEMPORAL_AUTH_TOKEN` | Model, tool, blob, sandbox-host secrets |
 | `orchestration-codec` | state metadata, telemetry, Temporal, dedicated temporal-payload bucket/prefix and task queue; optional HTTPS audit sink | `STATE_DATABASE_DSN`, `TEMPORAL_AUTH_TOKEN`, `ORCHESTRATION_PAYLOAD_BLOB_ACCESS_KEY`, `ORCHESTRATION_PAYLOAD_BLOB_SECRET_KEY` | Public/API credentials, runtime-content bucket/prefix, model, tool, sandbox-host secrets. This source role is not selected by the current Stack image pin until its current-SHA image is published and attested. |
 | `model` | conversation, egress proxy, model, telemetry | `CONVERSATION_ACCESS_TOKEN`, `MODEL_API_KEY` | Temporal, state DB, tool, storage, host secrets |
