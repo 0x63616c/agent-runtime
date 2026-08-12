@@ -1273,11 +1273,11 @@
       "status": "completed",
       "evidence": [
         {
-          "revision": "6197e7ec3854aaab1b0a57b78ddbd162c5020f1f",
-          "utc_time": "2026-08-11T23:46:40Z",
+          "revision": "e0509f630a68df02ed9c5575c2aba5b1b2eec556",
+          "utc_time": "2026-08-12T02:00:00Z",
           "proof_level": "integration",
-          "command_id": "m5-durable-public-sdk-lifecycle",
-          "artifact_ref": "m5-temporal-public-6197e7e",
+          "command_id": "m5-durable-public-http-lifecycle",
+          "artifact_ref": "m5-temporal-public-http-e0509f6",
           "result": "passed"
         }
       ]

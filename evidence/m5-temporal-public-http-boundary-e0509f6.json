@@ -1,0 +1,33 @@
+{
+  "version": 1,
+  "milestone": "M5 durable agent runtime",
+  "implementation_revision": "e0509f630a68df02ed9c5575c2aba5b1b2eec556",
+  "utc_time": "2026-08-12T02:00:00Z",
+  "requirements": ["TMP-002"],
+  "commands": [
+    {
+      "id": "m5-durable-public-http-lifecycle",
+      "command": "deploy/runtimeapi/run-durable-integration.sh",
+      "result": "passed"
+    },
+    {
+      "id": "m5-public-boundary-full-gate",
+      "command": "just check",
+      "result": "passed"
+    }
+  ],
+  "coverage": {
+    "TMP-002": "A public Go SDK client calls the real HTTP handler backed by disposable PostgreSQL and MinIO. The raw HTTP bodies for Agent creation, Session creation, Input admission, and idempotent Input replay are captured at the transport boundary and reject Temporal, workflow, task-queue, run, namespace, database, storage, blob, and outbox identifiers before the state-owned outbox starts and signals the private Temporal Session workflow exactly once."
+  },
+  "documentation": [
+    "docs/planning/m5-evidence-eligibility-audit.md",
+    "docs/planning/m5-temporal-worker-composition.md",
+    "docs/reference/runtime-http-api.md"
+  ],
+  "limitations": [
+    "The HTTP handler, PostgreSQL, MinIO, and Temporal development server are disposable integration dependencies, not a protected production deployment.",
+    "This proof covers the captured TMP-002 lifecycle response bodies. It does not replace the separate public API inspection and compatibility coverage.",
+    "This evidence does not execute a live provider or an external sandbox command.",
+    "This evidence does not prove Firecracker or Linux KVM isolation."
+  ]
+}

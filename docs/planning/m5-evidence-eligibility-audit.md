@@ -3,6 +3,10 @@
 Initial mapping revision: `3d1e1c4ab5483d5ca3956ef03f19bfe4724782e3`.
 The `TMP-002` and `TMP-003` supplement is bound to
 `6197e7ec3854aaab1b0a57b78ddbd162c5020f1f`.
+The TMP-002 raw public-HTTP supplement is bound to
+`e0509f630a68df02ed9c5575c2aba5b1b2eec556` and its ledger reference
+`m5-temporal-public-http-e0509f6` resolves to
+[`m5-temporal-public-http-boundary-e0509f6.json`](../../evidence/m5-temporal-public-http-boundary-e0509f6.json).
 The public API supplement for `API-001`, `API-002`, `API-004` through
 `API-012` is bound to `77ca92ff30836d9847a0b7ee857f83d4eb2ce4bc`.
 Its ledger reference `m5-public-api-77ca92f` resolves to
@@ -72,7 +76,7 @@ The public-boundary supplement for `TMP-002` and `TMP-003` is
 | DAT-011 | state-owned cursor/event tests, producer-gap integration, and PostgreSQL-to-Temporal route recovery. | Promoted with retained data-authority evidence. |
 | DAT-012 | sealed-plan persistence plus acknowledgement-loss and child-process kill/recovery integrations. | Promoted with retained data-authority evidence. |
 | DAT-013 | production-adapter disposable matrix covers migration, conflict, recovery, expiry/gap, restore, erasure, and cross-tenant denial. | Not eligible until the protected operations report exists. |
-| TMP-002 | `TestPublicSDKInputStartsAndSignalsThePrivateSessionWorkflow` drives public Go SDK/HTTP admission through PostgreSQL outbox to a real private Temporal worker. | Promoted with disposable integration evidence; the typed SDK observation exposes runtime-owned Input and Turn IDs, while raw HTTP field omission is not asserted. |
+| TMP-002 | `TestPublicSDKInputStartsAndSignalsThePrivateSessionWorkflow` drives public Go SDK/HTTP admission through PostgreSQL outbox to a real private Temporal worker. It captures the raw Agent, Session, Input, and idempotent-replay HTTP response bodies and rejects private Temporal/workflow/task-queue/run/namespace/database/storage/blob/outbox identifiers. | Promoted with the retained public HTTP boundary supplement; runtime-owned Agent, Session, Input, and Turn IDs remain the only observed lifecycle identities. |
 | TMP-003 | `TestSessionWorkflowRejectsOversizedPrivatePayloads` rejects oversized continuation/command metadata before dispatch; durable harness replays historic workflow corpus. | Promoted with workflow bound and replay evidence. |
 | TMP-004 | Continue-As-New plus checked-in v1 historic replay and versioning guide. | Promoted in this bundle. |
 | TMP-009 | `TestDispatchStateCommandClassifiesRetrySafetyWithoutRepeatingUnknownEffects`, retry, and cancellation workflow tests. | Promoted in this bundle. |
