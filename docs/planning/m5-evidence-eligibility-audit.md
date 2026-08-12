@@ -7,6 +7,10 @@ The public API supplement for `API-001`, `API-002`, `API-004` through
 `API-012` is bound to `77ca92ff30836d9847a0b7ee857f83d4eb2ce4bc`.
 Its ledger reference `m5-public-api-77ca92f` resolves to
 [`m5-public-api-contract.json`](../../evidence/m5-public-api-contract.json).
+The domain-model supplement for `DOM-001`, `DOM-002`, and `DOM-004` through
+`DOM-013` is bound to `3f40dab755cecfb0d8647fcf88731db2aa757f48`.
+Its ledger reference `m5-domain-model-3f40dab` resolves to
+[`m5-domain-model-contract.json`](../../evidence/m5-domain-model-contract.json).
 
 This audit maps each M5 requirement to the current implementation proof. It is
 not a completion claim: a row changes to `completed` only in the atomic bundle
@@ -18,19 +22,19 @@ The public-boundary supplement for `TMP-002` and `TMP-003` is
 
 | Rows | Current implementation/test map | Evidence disposition |
 | --- | --- | --- |
-| DOM-001 | `TestCompilerCreatesTheOnlyReceiptBoundMutationAndPlannerCreatesRevision`; immutable Agent-revision public contract. | Defer to the domain/public bundle. |
-| DOM-002 | `TestStateRuntimeServesTheCompletePublicLifecycleThroughContentAndMemoryState`; revision-pinned Session. | Defer to the domain/public bundle. |
-| DOM-003 | `TestPlannerCancelsQueuedWorkClosesAfterDrainAndFencesOutboxLeases`; Session transition tests. | Defer to the domain/public bundle. |
-| DOM-004 | Compiler/planner Input tests plus `TestDurableStateRuntimeAuthorizesArtifactInputReferences`. | Defer to the domain/public bundle. |
-| DOM-005 | `TestPlannerPromotesQueuedTurnAfterOneWinningSettlement`. | Defer to the domain/public bundle. |
-| DOM-006 | `TestPlannerPromotesQueuedTurnAfterOneWinningSettlement` and cancellation/drain matrix. | Defer to the domain/public bundle. |
-| DOM-007 | Invocation fence/recovery tests in `internal/runtimemodel`, including normalized-stream durable integration. | Defer; it must be bound with its model-worker evidence. |
-| DOM-008 | `TestPlannerPersistsToolIntentBeforeApprovalDecision` and durable tool lifecycle. | Defer; it must not be confused with M7 broker acceptance. |
-| DOM-009 | `TestPlannerConsumesApprovedCapabilityOnlyWithinItsPolicyAndExpiry` and durable tool lifecycle. | Defer; it must be bound with its approval/grant evidence. |
-| DOM-010 | `TestPlannerAppendsConversationOnlyAtExpectedVersionAndReplaysIdempotently`. | Defer to the state/data bundle. |
-| DOM-011 | authorized Artifact tests in StateRuntime and durable PostgreSQL/MinIO input/readback tests. | Defer to the state/data bundle. |
-| DOM-012 | `TestStateRuntimeHTTPAndSDKExposeProviderNeutralUsageAndSafeModelFailure`. | Defer to the public API bundle. |
-| DOM-013 | `TestStateRuntimeHTTPAndSDKExposeProviderNeutralUsageAndSafeModelFailure`; durable normalized model output integration. | Defer; no live-provider claim is needed or made. |
+| DOM-001 | Kernel immutable Agent revision/revision-pinned Session test plus state compiler/planner revision-registration test. | Promoted with retained domain evidence. |
+| DOM-002 | Kernel resolved-revision Session creation and later-revision pin-preservation test. | Promoted with retained domain evidence. |
+| DOM-003 | Current planner/kernel implement and test `open` → `closing` → `completed`; `cancelled` and `failed` Session enum values have no current transition implementation/evidence. | Defer: the all-Session-state acceptance table is not met. |
+| DOM-004 | Kernel bounded/idempotent Input tests plus disposable PostgreSQL admission reference-only, concurrent, replay, and Artifact-authorization tests. | Promoted with retained domain evidence. |
+| DOM-005 | Kernel completion/cancellation race and planner one-winning-settlement tests. | Promoted with retained domain evidence. |
+| DOM-006 | Kernel 24-concurrent Input queue test plus disposable PostgreSQL concurrent distinct-admission test, now invoked by the durable harness. | Promoted with retained domain evidence. |
+| DOM-007 | State-planner retry-within-one-running-Turn test, model-worker fresh/recovery/uncertain tests, and disposable PostgreSQL/MinIO producer-loss and normalized-stream integrations. | Promoted without a live-provider claim. |
+| DOM-008 | Tool-intent/approval planner test plus durable authorized-descriptor lifecycle and pre-execution corruption/missing-descriptor refusal. | Promoted as control-plane authorization evidence only. |
+| DOM-009 | Grant owner/scope/expiry/max-use/policy/audit tests in planner/public StateRuntime plus durable tool lifecycle. | Promoted with no raw-secret claim. |
+| DOM-010 | `TestPlannerAppendsConversationOnlyAtExpectedVersionAndReplaysIdempotently`. | Promoted with retained domain evidence. |
+| DOM-011 | State/planner Artifact metadata/authorization tests plus disposable PostgreSQL/MinIO input and owner readback tests. | Promoted with retained domain evidence. |
+| DOM-012 | `TestStateRuntimeHTTPAndSDKExposeProviderNeutralUsageAndSafeModelFailure` and model-worker uncertainty translation tests. | Promoted with retained domain evidence. |
+| DOM-013 | Provider-neutral unknown-preserving public usage test plus durable normalized model-output integration. | Promoted without a live-provider claim. |
 | API-001 | Public Go SDK/HTTP suite covers the listed Session, Input, inspection, Event, cancellation, close, Artifact, and Approval commands; standalone binary and disposable durable composition also pass. | Promoted with retained public-contract evidence. |
 | API-002 | SDK package import graph and independent temporary consumer compile reject Temporal, provider, sandbox, blob, database, and telemetry implementation dependencies. | Promoted with retained contract evidence. |
 | API-003 | OpenAPI compatibility and generated route tests plus generated references build locally. | Defer: no current-SHA documentation publication/HTTPS evidence is retained. |

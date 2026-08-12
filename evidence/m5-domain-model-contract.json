@@ -1,0 +1,55 @@
+{
+  "version": 1,
+  "milestone": "M5 durable agent runtime",
+  "implementation_revision": "3f40dab755cecfb0d8647fcf88731db2aa757f48",
+  "utc_time": "2026-08-12T00:21:33Z",
+  "requirements": ["DOM-001", "DOM-002", "DOM-004", "DOM-005", "DOM-006", "DOM-007", "DOM-008", "DOM-009", "DOM-010", "DOM-011", "DOM-012", "DOM-013"],
+  "commands": [
+    {
+      "id": "m5-domain-runtime-contract-suite",
+      "command": "go test -race ./internal/runtime/kernel ./internal/runtimestate ./internal/runtimemodel ./internal/runtimetool ./internal/runtimeapi -count=1",
+      "result": "passed"
+    },
+    {
+      "id": "m5-domain-durable-composition",
+      "command": "deploy/runtimeapi/run-durable-integration.sh",
+      "result": "passed"
+    },
+    {
+      "id": "m5-domain-full-gate",
+      "command": "just check",
+      "result": "passed"
+    },
+    {
+      "id": "m5-domain-docs-check",
+      "command": "just docs-check",
+      "result": "passed"
+    }
+  ],
+  "coverage": {
+    "DOM-001": "The kernel creates immutable Agent revisions and preserves the selected revision after a later Agent revision; the state compiler/planner test exercises receipt-bound revision registration.",
+    "DOM-002": "The kernel creates a Session from a resolved revision and preserves the original revision pin across later Agent revisions and repeated inspection.",
+    "DOM-004": "Kernel Input tests cover canonical idempotent admission and bounded/invalid content refusal. The disposable PostgreSQL admission run verifies reference-only storage, replay, concurrent distinct Input admission, and pre-staging Artifact authorization denial.",
+    "DOM-005": "Kernel completion/cancellation race and state planner settlement tests prove one terminal Turn outcome and promotion only after the winning settlement.",
+    "DOM-006": "The kernel proves ordered one-active admission under 24 concurrent Inputs; the disposable PostgreSQL admission test independently proves concurrent distinct Inputs persist as distinct queued Turns behind the active Turn.",
+    "DOM-007": "The state planner proves a retryable failure retains the running Turn and a retry creates a distinct next ordinal/fence invocation within that same Turn. The model worker invokes a fresh intent once, reconciles an expired claim by its exact operation ID without reinvocation, and records an uncertain provider outcome safely. Disposable PostgreSQL/MinIO tests additionally prove producer-loss replay and normalized-output finalization.",
+    "DOM-008": "The state planner persists a Tool intent and approval decision before creating execution work. The durable tool lifecycle proves the authorized descriptor/approval/grant path; corrupt or missing descriptors are refused before adapter execution.",
+    "DOM-009": "Planner and public StateRuntime tests cover bounded grant owner/scope, expiry, maximum use, policy digest, idempotent audit facts, and refusal before execution. Public projections exclude capability bytes and descriptors.",
+    "DOM-010": "The planner persists Conversation content only by immutable reference, enforces expected-version conflict, and returns the original result on exact replay.",
+    "DOM-011": "Artifact registration retains ID/media type/size/digest metadata with authorization/audit/outbox effects. Disposable PostgreSQL/MinIO tests prove authorized input/readback and reject forged or cross-principal references.",
+    "DOM-012": "Public HTTP/SDK inspection returns the stable safe unavailable Failure code/message/retryability while the model worker retains uncertainty rather than leaking provider diagnostics.",
+    "DOM-013": "Public HTTP/SDK inspection keeps an absent output token count unknown rather than zero. The disposable normalized HTTP fixture persists and exposes provider-neutral input/output usage with the owner-readable immutable output Artifact."
+  },
+  "documentation": [
+    "docs/reference/runtime-go-contract.md",
+    "docs/reference/runtime-http-api.md",
+    "docs/reference/data-lifecycle.md",
+    "docs/architecture/system.md"
+  ],
+  "limitations": [
+    "DOM-003 remains unpromoted: SessionCancelled and SessionFailed are public enum values, but the current state planner/kernel evidence implements and tests only open, closing, and completed Session transitions.",
+    "The normalized HTTP endpoint is a local protocol fixture using disposable PostgreSQL and MinIO; it is not a supported external model-provider, deployed model-role, credential-source, or live-provider claim.",
+    "Tool evidence proves the durable authorization/control-plane lifecycle only. It does not execute an external sandbox command.",
+    "The disposable dependencies are not protected production operations and this evidence makes no Firecracker, Linux KVM, release-tag, or external-consumer claim."
+  ]
+}

@@ -373,11 +373,17 @@
     },
     {
       "id": "DOM-001",
-      "status": "not_started"
+      "status": "completed",
+      "evidence": [
+        {"revision": "3f40dab755cecfb0d8647fcf88731db2aa757f48", "utc_time": "2026-08-12T00:21:33Z", "proof_level": "unit", "command_id": "m5-domain-runtime-contract-suite", "artifact_ref": "m5-domain-model-3f40dab", "result": "passed"}
+      ]
     },
     {
       "id": "DOM-002",
-      "status": "not_started"
+      "status": "completed",
+      "evidence": [
+        {"revision": "3f40dab755cecfb0d8647fcf88731db2aa757f48", "utc_time": "2026-08-12T00:21:33Z", "proof_level": "unit", "command_id": "m5-domain-runtime-contract-suite", "artifact_ref": "m5-domain-model-3f40dab", "result": "passed"}
+      ]
     },
     {
       "id": "DOM-003",
@@ -385,43 +391,79 @@
     },
     {
       "id": "DOM-004",
-      "status": "not_started"
+      "status": "completed",
+      "evidence": [
+        {"revision": "3f40dab755cecfb0d8647fcf88731db2aa757f48", "utc_time": "2026-08-12T00:21:33Z", "proof_level": "contract", "command_id": "m5-domain-runtime-contract-suite", "artifact_ref": "m5-domain-model-3f40dab", "result": "passed"},
+        {"revision": "3f40dab755cecfb0d8647fcf88731db2aa757f48", "utc_time": "2026-08-12T00:21:33Z", "proof_level": "integration", "command_id": "m5-domain-durable-composition", "artifact_ref": "m5-domain-model-3f40dab", "result": "passed"}
+      ]
     },
     {
       "id": "DOM-005",
-      "status": "not_started"
+      "status": "completed",
+      "evidence": [
+        {"revision": "3f40dab755cecfb0d8647fcf88731db2aa757f48", "utc_time": "2026-08-12T00:21:33Z", "proof_level": "unit", "command_id": "m5-domain-runtime-contract-suite", "artifact_ref": "m5-domain-model-3f40dab", "result": "passed"}
+      ]
     },
     {
       "id": "DOM-006",
-      "status": "not_started"
+      "status": "completed",
+      "evidence": [
+        {"revision": "3f40dab755cecfb0d8647fcf88731db2aa757f48", "utc_time": "2026-08-12T00:21:33Z", "proof_level": "integration", "command_id": "m5-domain-durable-composition", "artifact_ref": "m5-domain-model-3f40dab", "result": "passed"}
+      ]
     },
     {
       "id": "DOM-007",
-      "status": "not_started"
+      "status": "completed",
+      "evidence": [
+        {"revision": "3f40dab755cecfb0d8647fcf88731db2aa757f48", "utc_time": "2026-08-12T00:21:33Z", "proof_level": "unit", "command_id": "m5-domain-runtime-contract-suite", "artifact_ref": "m5-domain-model-3f40dab", "result": "passed"},
+        {"revision": "3f40dab755cecfb0d8647fcf88731db2aa757f48", "utc_time": "2026-08-12T00:21:33Z", "proof_level": "integration", "command_id": "m5-domain-durable-composition", "artifact_ref": "m5-domain-model-3f40dab", "result": "passed"}
+      ]
     },
     {
       "id": "DOM-008",
-      "status": "not_started"
+      "status": "completed",
+      "evidence": [
+        {"revision": "3f40dab755cecfb0d8647fcf88731db2aa757f48", "utc_time": "2026-08-12T00:21:33Z", "proof_level": "contract", "command_id": "m5-domain-runtime-contract-suite", "artifact_ref": "m5-domain-model-3f40dab", "result": "passed"},
+        {"revision": "3f40dab755cecfb0d8647fcf88731db2aa757f48", "utc_time": "2026-08-12T00:21:33Z", "proof_level": "integration", "command_id": "m5-domain-durable-composition", "artifact_ref": "m5-domain-model-3f40dab", "result": "passed"}
+      ]
     },
     {
       "id": "DOM-009",
-      "status": "not_started"
+      "status": "completed",
+      "evidence": [
+        {"revision": "3f40dab755cecfb0d8647fcf88731db2aa757f48", "utc_time": "2026-08-12T00:21:33Z", "proof_level": "contract", "command_id": "m5-domain-runtime-contract-suite", "artifact_ref": "m5-domain-model-3f40dab", "result": "passed"},
+        {"revision": "3f40dab755cecfb0d8647fcf88731db2aa757f48", "utc_time": "2026-08-12T00:21:33Z", "proof_level": "integration", "command_id": "m5-domain-durable-composition", "artifact_ref": "m5-domain-model-3f40dab", "result": "passed"}
+      ]
     },
     {
       "id": "DOM-010",
-      "status": "not_started"
+      "status": "completed",
+      "evidence": [
+        {"revision": "3f40dab755cecfb0d8647fcf88731db2aa757f48", "utc_time": "2026-08-12T00:21:33Z", "proof_level": "contract", "command_id": "m5-domain-runtime-contract-suite", "artifact_ref": "m5-domain-model-3f40dab", "result": "passed"}
+      ]
     },
     {
       "id": "DOM-011",
-      "status": "not_started"
+      "status": "completed",
+      "evidence": [
+        {"revision": "3f40dab755cecfb0d8647fcf88731db2aa757f48", "utc_time": "2026-08-12T00:21:33Z", "proof_level": "contract", "command_id": "m5-domain-runtime-contract-suite", "artifact_ref": "m5-domain-model-3f40dab", "result": "passed"},
+        {"revision": "3f40dab755cecfb0d8647fcf88731db2aa757f48", "utc_time": "2026-08-12T00:21:33Z", "proof_level": "integration", "command_id": "m5-domain-durable-composition", "artifact_ref": "m5-domain-model-3f40dab", "result": "passed"}
+      ]
     },
     {
       "id": "DOM-012",
-      "status": "not_started"
+      "status": "completed",
+      "evidence": [
+        {"revision": "3f40dab755cecfb0d8647fcf88731db2aa757f48", "utc_time": "2026-08-12T00:21:33Z", "proof_level": "unit", "command_id": "m5-domain-runtime-contract-suite", "artifact_ref": "m5-domain-model-3f40dab", "result": "passed"}
+      ]
     },
     {
       "id": "DOM-013",
-      "status": "not_started"
+      "status": "completed",
+      "evidence": [
+        {"revision": "3f40dab755cecfb0d8647fcf88731db2aa757f48", "utc_time": "2026-08-12T00:21:33Z", "proof_level": "unit", "command_id": "m5-domain-runtime-contract-suite", "artifact_ref": "m5-domain-model-3f40dab", "result": "passed"},
+        {"revision": "3f40dab755cecfb0d8647fcf88731db2aa757f48", "utc_time": "2026-08-12T00:21:33Z", "proof_level": "integration", "command_id": "m5-domain-durable-composition", "artifact_ref": "m5-domain-model-3f40dab", "result": "passed"}
+      ]
     },
     {
       "id": "ENG-001",
