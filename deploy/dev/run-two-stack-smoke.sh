@@ -235,7 +235,8 @@ local_file() {
 
 remove_local_state() {
   local stack="$1"
-  rm -f -- "$(local_file "$stack" stack)" "$(local_file "$stack" secrets)" "$(local_file "$stack" state)"
+  rm -f -- "$(local_file "$stack" stack)" "$(local_file "$stack" secrets)" "$(local_file "$stack" state)" \
+    "$root/.runtime/dev/$stack.ci.bootstrap.json" "$root/.runtime/dev/$stack.ci.operator-audit.jsonl"
 }
 
 require_absent_local_state() {
@@ -247,6 +248,10 @@ require_absent_local_state() {
       exit 1
     fi
   done
+  if [[ -e "$root/.runtime/dev/$stack.ci.bootstrap.json" || -e "$root/.runtime/dev/$stack.ci.operator-audit.jsonl" ]]; then
+    echo "refuse to adopt pre-existing CI Stack authority state for $stack" >&2
+    exit 1
+  fi
 }
 
 kubectl --context "$context" get --raw=/readyz >/dev/null
@@ -496,7 +501,7 @@ if kubectl --context "$context" get "namespace/$namespace_a" >/dev/null 2>&1; th
   echo "first local Stack namespace survived its teardown" >&2
   exit 1
 fi
-if [[ -e "$(local_file "$stack_a" stack)" || -e "$(local_file "$stack_a" secrets)" || -e "$(local_file "$stack_a" state)" ]]; then
+if [[ -e "$(local_file "$stack_a" stack)" || -e "$(local_file "$stack_a" secrets)" || -e "$(local_file "$stack_a" state)" || -e "$root/.runtime/dev/$stack_a.ci.bootstrap.json" || -e "$root/.runtime/dev/$stack_a.ci.operator-audit.jsonl" ]]; then
   echo "first local Stack private state survived its teardown" >&2
   exit 1
 fi

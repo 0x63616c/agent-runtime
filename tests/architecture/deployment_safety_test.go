@@ -210,6 +210,17 @@ var _ = Describe("M1 deployment safety boundaries", func() {
 		Expect(read("Tiltfile")).To(ContainSubstring("ci_settings(readiness_timeout=ci_readiness_timeout)"))
 		Expect(read("Tiltfile")).To(ContainSubstring("ci_readiness_timeout = '12m' if profile == 'ci' else '10m'"))
 		Expect(read("Tiltfile")).To(ContainSubstring("if profile == 'local':\n    local_resource('stack-reconcile'"))
+		Expect(read("Tiltfile")).To(ContainSubstring("deploy/dev/reconcile-ci-stack.sh --stack=' + stack + ' --context=' + ci_context"))
+		Expect(read("Tiltfile")).To(ContainSubstring("resource_deps=['state', 'temporal', 'telemetry', 'stack-reconcile']"))
+		ciReconcile := read("deploy/dev/reconcile-ci-stack.sh")
+		for _, required := range []string{"--profile ci", "--providers-only", "--bootstrap-capability-file", "k3d-ar-ci-*", "CI Stack reconciliation accepts only --stack and --context"} {
+			Expect(ciReconcile).To(ContainSubstring(required))
+		}
+		unsafeCIReconcile := exec.Command("bash", "deploy/dev/reconcile-ci-stack.sh", "--stack=ci-fixture", "--context=orbstack")
+		unsafeCIReconcile.Dir = "../.."
+		unsafeOutput, unsafeErr := unsafeCIReconcile.CombinedOutput()
+		Expect(unsafeErr).To(HaveOccurred())
+		Expect(string(unsafeOutput)).To(ContainSubstring("requires a generated Stack and private k3d context"))
 		// Tilt's restricted build context must include every local source tree
 		// copied by the production image, or CI deploys before discovering that
 		// the image cannot be built.

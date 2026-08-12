@@ -71,12 +71,14 @@ k8s_resource('temporal', resource_deps=['temporal-state'], pod_readiness='wait')
 # processes never create their own namespace as a startup side effect.
 if profile == 'local':
     local_resource('stack-reconcile', cmd='go run ./tools/dev reconcile --stack=' + stack + ' --root=.', resource_deps=['temporal', 'migration-runner'])
+else:
+    local_resource('stack-reconcile', cmd='deploy/dev/reconcile-ci-stack.sh --stack=' + stack + ' --context=' + ci_context, resource_deps=['temporal', 'migration-runner', 'blob-reconciler'])
 k8s_resource('blob', pod_readiness='wait')
 k8s_resource('telemetry', pod_readiness='wait')
 k8s_resource('egress-proxy', pod_readiness='wait')
 k8s_resource('migration-runner', resource_deps=['state'], pod_readiness='wait')
 k8s_resource('api', resource_deps=['state', 'telemetry'], pod_readiness='wait', links=[link('http://api:8080/readyz', 'API runtime readiness')])
-k8s_resource('orchestration', resource_deps=['state', 'temporal', 'telemetry'], pod_readiness='wait', links=[link('http://orchestration:8081/readyz', 'Orchestration runtime readiness')])
+k8s_resource('orchestration', resource_deps=['state', 'temporal', 'telemetry', 'stack-reconcile'], pod_readiness='wait', links=[link('http://orchestration:8081/readyz', 'Orchestration runtime readiness')])
 k8s_resource('model', resource_deps=['api', 'egress-proxy', 'telemetry'], pod_readiness='wait')
 k8s_resource('tool', resource_deps=['api', 'sandbox-control', 'telemetry'], pod_readiness='wait')
 k8s_resource('blob-role', resource_deps=['blob', 'telemetry'], pod_readiness='wait')
