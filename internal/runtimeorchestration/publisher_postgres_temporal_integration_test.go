@@ -3,10 +3,12 @@
 package runtimeorchestration
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -229,8 +231,10 @@ func TestPublicSDKInputStartsAndSignalsThePrivateSessionWorkflow(t *testing.T) {
 	}
 	apiServer := httptest.NewServer(handler)
 	defer apiServer.Close()
-	admin := newPublicLifecycleClient(t, apiServer.URL, "admin-token-000000")
-	owner := newPublicLifecycleClient(t, apiServer.URL, "owner-token-000000")
+	responses := &publicLifecycleResponseCapture{base: http.DefaultTransport}
+	httpClient := &http.Client{Transport: responses}
+	admin := newPublicLifecycleClient(t, apiServer.URL, "admin-token-000000", httpClient)
+	owner := newPublicLifecycleClient(t, apiServer.URL, "owner-token-000000", httpClient)
 	agent, err := admin.CreateAgent(ctx, agentruntime.CreateAgentRequest{IdempotencyKey: "public-sdk-agent", Name: "public-sdk-temporal", ModelProfile: "balanced", Instructions: "route through durable state"})
 	if err != nil {
 		t.Fatalf("create Agent through public SDK: %v", err)
@@ -247,6 +251,7 @@ func TestPublicSDKInputStartsAndSignalsThePrivateSessionWorkflow(t *testing.T) {
 	if replay, err := owner.SendInput(ctx, request); err != nil || replay.Input.ID != accepted.Input.ID || replay.Turn.ID != accepted.Turn.ID {
 		t.Fatalf("replay public Input = %#v, %v; want durable Input/Turn IDs %#v/%#v", replay, err, accepted.Input.ID, accepted.Turn.ID)
 	}
+	assertPublicLifecycleResponsesHidePrivateRuntimeChoices(t, responses.bodies())
 
 	server, err := testsuite.StartDevServer(ctx, testsuite.DevServerOptions{})
 	if err != nil {
@@ -959,17 +964,65 @@ func (source *publicLifecycleRequestIDs) NextRequestID() (agentruntime.RequestID
 	return agentruntime.ParseRequestID(fmt.Sprintf("req_%016d", source.next))
 }
 
-func newPublicLifecycleClient(t *testing.T, baseURL, token string) *agentruntime.Client {
+func newPublicLifecycleClient(t *testing.T, baseURL, token string, httpClient *http.Client) *agentruntime.Client {
 	t.Helper()
 	credential, err := agentruntime.NewStaticBearerCredential(token)
 	if err != nil {
 		t.Fatal(err)
 	}
-	client, err := agentruntime.NewClient(agentruntime.ClientConfig{BaseURL: baseURL, HTTPClient: http.DefaultClient, Credentials: credential, RequestIDs: &publicLifecycleRequestIDs{}})
+	client, err := agentruntime.NewClient(agentruntime.ClientConfig{BaseURL: baseURL, HTTPClient: httpClient, Credentials: credential, RequestIDs: &publicLifecycleRequestIDs{}})
 	if err != nil {
 		t.Fatal(err)
 	}
 	return client
+}
+
+// publicLifecycleResponseCapture observes the actual public HTTP responses
+// while preserving the SDK's normal response-body ownership.
+type publicLifecycleResponseCapture struct {
+	base   http.RoundTripper
+	mu     sync.Mutex
+	values []string
+}
+
+func (capture *publicLifecycleResponseCapture) RoundTrip(request *http.Request) (*http.Response, error) {
+	response, err := capture.base.RoundTrip(request)
+	if err != nil || response == nil || response.Body == nil {
+		return response, err
+	}
+	body, readErr := io.ReadAll(response.Body)
+	closeErr := response.Body.Close()
+	if readErr != nil {
+		return nil, readErr
+	}
+	if closeErr != nil {
+		return nil, closeErr
+	}
+	response.Body = io.NopCloser(bytes.NewReader(body))
+	capture.mu.Lock()
+	capture.values = append(capture.values, string(body))
+	capture.mu.Unlock()
+	return response, nil
+}
+
+func (capture *publicLifecycleResponseCapture) bodies() []string {
+	capture.mu.Lock()
+	defer capture.mu.Unlock()
+	return append([]string(nil), capture.values...)
+}
+
+func assertPublicLifecycleResponsesHidePrivateRuntimeChoices(t *testing.T, bodies []string) {
+	t.Helper()
+	if len(bodies) != 4 {
+		t.Fatalf("public lifecycle response count = %d, want create Agent, create Session, and two Input responses", len(bodies))
+	}
+	for _, body := range bodies {
+		for _, forbidden := range []string{"temporal", "workflow", "task_queue", "run_id", "namespace", "database", "postgres", "minio", "outbox", "payload_blob", "storage_url"} {
+			if strings.Contains(strings.ToLower(body), forbidden) {
+				t.Fatalf("public lifecycle response leaked private runtime choice %q: %s", forbidden, body)
+			}
+		}
+	}
 }
 
 type auditPublisherRetention struct{}

@@ -97,12 +97,28 @@ var _ = Describe("binding governance", func() {
 		for _, required := range required {
 			Expect(workflow).To(ContainSubstring(required))
 		}
+		for _, dependency := range []string{
+			"internal/runtimeorchestration/**",
+			"internal/runtimepostgres/**",
+			"internal/runtimestate/**",
+			"internal/runtimecontent/**",
+			"internal/temporalpayloadruntime/**",
+			"temporalpayload/**",
+		} {
+			Expect(workflow).To(ContainSubstring(dependency))
+		}
 		Expect(workflow).NotTo(ContainSubstring("pull_request:"))
 
 		contextIgnore := read(".dockerignore")
 		for _, excluded := range []string{"deploy/", "docs/", "website/", "evidence/"} {
 			Expect(contextIgnore).To(ContainSubstring(excluded))
 		}
+	})
+
+	It("keeps the documented Stack role check aligned with its canonical role document", func() {
+		document := read("docs/operations/self-hosted-deployment.md")
+		Expect(document).To(ContainSubstring("jq -c '.orchestration')"))
+		Expect(document).To(ContainSubstring("--role orchestration-codec --check"))
 	})
 })
 

@@ -10,6 +10,12 @@ on:
       - cmd/egress-proxy/**
       - internal/roles/**
       - internal/egressproxy/**
+      - internal/runtimeorchestration/**
+      - internal/runtimepostgres/**
+      - internal/runtimestate/**
+      - internal/runtimecontent/**
+      - internal/temporalpayloadruntime/**
+      - temporalpayload/**
       - deploy/production/Dockerfile
       - .dockerignore
       - .github/workflows/publish-production-image.yml

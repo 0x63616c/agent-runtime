@@ -224,7 +224,7 @@ RUNTIME_ROLE_CONFIG="$(go run ./cmd/stackctl role-configs \
   --stack-file deploy/production/stack.json --profile production |
   jq -c '.orchestration')" \
 go run ./cmd/runtime serve --config-env RUNTIME_ROLE_CONFIG \
-  --role orchestration --check
+  --role orchestration-codec --check
 ```
 
 The command verifies strict schema, the role allowlist, endpoint shape,

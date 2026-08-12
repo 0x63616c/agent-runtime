@@ -6,7 +6,20 @@
     {"id": "getAgentRevision", "method": "get", "path": "/v1/admin/agents/{agent_id}/revisions/{revision_id}", "status": "200"},
     {"id": "createPolicy", "method": "post", "path": "/v1/admin/policies", "status": "201"},
     {"id": "revisePolicy", "method": "post", "path": "/v1/admin/policies/{policy_name}/revisions", "status": "201"},
-    {"id": "getPolicy", "method": "get", "path": "/v1/admin/policies/{policy_name}/revisions/{revision}", "status": "200"}
+    {"id": "getPolicy", "method": "get", "path": "/v1/admin/policies/{policy_name}/revisions/{revision}", "status": "200"},
+    {"id": "readArtifact", "method": "get", "path": "/v1/artifacts/{artifact_id}", "status": "200"},
+    {"id": "inspectApproval", "method": "get", "path": "/v1/approvals/{approval_id}", "status": "200"},
+    {"id": "decideApproval", "method": "post", "path": "/v1/approvals/{approval_id}/decide", "status": "200"},
+    {"id": "idempotencyStatus", "method": "get", "path": "/v1/idempotency", "status": "200"},
+    {"id": "createSession", "method": "post", "path": "/v1/sessions", "status": "201"},
+    {"id": "inspectSession", "method": "get", "path": "/v1/sessions/{session_id}", "status": "200"},
+    {"id": "sendInput", "method": "post", "path": "/v1/sessions/{session_id}/inputs", "status": "202"},
+    {"id": "inspectTurn", "method": "get", "path": "/v1/sessions/{session_id}/turns/{turn_id}", "status": "200"},
+    {"id": "inspectToolCalls", "method": "get", "path": "/v1/sessions/{session_id}/turns/{turn_id}/tools", "status": "200"},
+    {"id": "listEvents", "method": "get", "path": "/v1/sessions/{session_id}/events", "status": "200"},
+    {"id": "cancelTurn", "method": "post", "path": "/v1/sessions/{session_id}/turns/{turn_id}/cancel", "status": "200"},
+    {"id": "closeSession", "method": "post", "path": "/v1/sessions/{session_id}/close", "status": "200"},
+    {"id": "cancelSession", "method": "post", "path": "/v1/sessions/{session_id}/cancel", "status": "200"}
   ],
   "schemas": {
     "AgentSpecification": {"required": ["id", "revision_id", "revision", "name", "model_profile", "instructions", "created_at"]},
