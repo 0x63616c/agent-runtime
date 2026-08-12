@@ -15,9 +15,11 @@ serialized Turns, cancellation, and cursor-addressed Product events. The
 contract compiles from an independent module. It is not yet backed by the
 public HTTP service, PostgreSQL, or Temporal orchestration.
 
-The current Tilt foundation uses small health-only API/worker/codec images to
-prove isolated infrastructure, image builds, readiness, reset, and teardown.
-It is not yet the public Agent Runtime. See the
+The current Tilt foundation projects the reviewed typed local Stack into eight
+health-only trust-scoped role images—API, orchestration, model, tool, blob,
+codec, sandbox control, and sandbox host—with per-role identities and exact
+credential references. It proves isolated infrastructure, image builds,
+readiness, reset, and teardown; it is not yet the public Agent Runtime. See the
 [local Stack guide](website/docs/build-and-run/local-stack.mdx) for the exact
 boundary.
 

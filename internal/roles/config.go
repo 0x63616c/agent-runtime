@@ -51,6 +51,15 @@ type SecretSource interface {
 	Lookup(context.Context, string) (string, bool, error)
 }
 
+// CredentialInventory enumerates the known credential environment names that
+// are present at the process boundary. It never returns credential values.
+// Prepare requires this seam so a role cannot silently inherit another role's
+// mounted credential.
+type CredentialInventory interface {
+	// KnownCredentialEnvironmentNames returns present names from the reviewed credential inventory.
+	KnownCredentialEnvironmentNames(context.Context) ([]string, error)
+}
+
 // Config is a validated operator-owned configuration for one runtime role.
 // It contains endpoints and environment-key references, never secret values.
 type Config struct {
@@ -94,8 +103,8 @@ type dependency struct {
 }
 
 type requirement struct {
-	name           string
-	requiresSecret bool
+	name              string
+	secretEnvironment string
 }
 
 var roleRequirements = map[Role][]requirement{
@@ -103,26 +112,47 @@ var roleRequirements = map[Role][]requirement{
 		{name: "state"}, {name: "telemetry"},
 	},
 	RoleOrchestration: {
-		{name: "state", requiresSecret: true}, {name: "telemetry"}, {name: "temporal", requiresSecret: true},
+		{name: "state", secretEnvironment: "STATE_DATABASE_DSN"}, {name: "telemetry"}, {name: "temporal", secretEnvironment: "TEMPORAL_AUTH_TOKEN"},
 	},
 	RoleModel: {
-		{name: "conversation", requiresSecret: true}, {name: "egress-proxy"}, {name: "model", requiresSecret: true}, {name: "telemetry"},
+		{name: "conversation", secretEnvironment: "CONVERSATION_ACCESS_TOKEN"}, {name: "egress-proxy"}, {name: "model", secretEnvironment: "MODEL_API_KEY"}, {name: "telemetry"},
 	},
 	RoleTool: {
-		{name: "sandbox-control", requiresSecret: true}, {name: "telemetry"}, {name: "tool-broker", requiresSecret: true},
+		{name: "sandbox-control", secretEnvironment: "SANDBOX_CONTROL_TOKEN"}, {name: "telemetry"}, {name: "tool-broker", secretEnvironment: "TOOL_BROKER_TOKEN"},
 	},
 	RoleBlob: {
-		{name: "storage", requiresSecret: true}, {name: "telemetry"},
+		{name: "storage", secretEnvironment: "BLOB_STORAGE_CREDENTIAL"}, {name: "telemetry"},
 	},
 	RoleCodec: {
-		{name: "blob", requiresSecret: true}, {name: "telemetry"},
+		{name: "blob", secretEnvironment: "CODEC_BLOB_CREDENTIAL"}, {name: "telemetry"},
 	},
 	RoleSandboxControl: {
-		{name: "host-ca", requiresSecret: true}, {name: "sandbox-state", requiresSecret: true}, {name: "telemetry"},
+		{name: "host-ca", secretEnvironment: "SANDBOX_HOST_CA"}, {name: "sandbox-state", secretEnvironment: "SANDBOX_STATE_DSN"}, {name: "telemetry"},
 	},
 	RoleSandboxHost: {
-		{name: "host-identity", requiresSecret: true}, {name: "sandbox-control", requiresSecret: true}, {name: "telemetry"},
+		{name: "host-identity", secretEnvironment: "SANDBOX_HOST_IDENTITY"}, {name: "sandbox-control", secretEnvironment: "SANDBOX_CONTROL_TOKEN"}, {name: "telemetry"},
 	},
+}
+
+// KnownCredentialEnvironmentNames returns the reviewed, complete credential
+// key inventory. It contains names only and is safe to use in diagnostics.
+func KnownCredentialEnvironmentNames() []string {
+	known := make([]string, 0)
+	seen := make(map[string]struct{})
+	for _, requirements := range roleRequirements {
+		for _, requirement := range requirements {
+			if requirement.secretEnvironment == "" {
+				continue
+			}
+			if _, exists := seen[requirement.secretEnvironment]; exists {
+				continue
+			}
+			seen[requirement.secretEnvironment] = struct{}{}
+			known = append(known, requirement.secretEnvironment)
+		}
+	}
+	sort.Strings(known)
+	return known
 }
 
 // Parse decodes one strict operator role document. Application configuration
@@ -207,9 +237,9 @@ func validateDependencies(input []Dependency, requirements []requirement) ([]dep
 		if !validEndpoint(item.Endpoint) {
 			return nil, errors.Newf("validate runtime role configuration: dependency %s endpoint must be an explicit non-secret URL or host:port", item.Name)
 		}
-		if requirement.requiresSecret {
-			if !environmentNamePattern.MatchString(item.SecretEnvironment) {
-				return nil, errors.Newf("validate runtime role configuration: dependency %s requires a secret_environment name", item.Name)
+		if requirement.secretEnvironment != "" {
+			if item.SecretEnvironment != requirement.secretEnvironment {
+				return nil, errors.Newf("validate runtime role configuration: dependency %s requires credential environment %s", item.Name, requirement.secretEnvironment)
 			}
 		} else if item.SecretEnvironment != "" {
 			return nil, errors.Newf("validate runtime role configuration: dependency %s must not receive a secret_environment", item.Name)
@@ -259,6 +289,40 @@ func (plan Plan) String() string {
 func Prepare(ctx context.Context, config Config, source SecretSource) (Plan, error) {
 	if source == nil {
 		return Plan{}, errors.New("prepare runtime role: secret source is required")
+	}
+	inventory, ok := source.(CredentialInventory)
+	if !ok {
+		return Plan{}, errors.New("prepare runtime role: secret source must enumerate known credentials")
+	}
+	present, err := inventory.KnownCredentialEnvironmentNames(ctx)
+	if err != nil {
+		return Plan{}, errors.Wrap(err, "prepare runtime role: enumerate known credentials")
+	}
+	allowed := make(map[string]struct{}, len(config.dependencies))
+	for _, dependency := range config.dependencies {
+		if dependency.secretEnvironment != "" {
+			allowed[dependency.secretEnvironment] = struct{}{}
+		}
+	}
+	known := make(map[string]struct{}, len(KnownCredentialEnvironmentNames()))
+	for _, environment := range KnownCredentialEnvironmentNames() {
+		known[environment] = struct{}{}
+	}
+	seen := make(map[string]struct{}, len(present))
+	for _, environment := range present {
+		if !environmentNamePattern.MatchString(environment) {
+			return Plan{}, errors.New("prepare runtime role: credential inventory returned an invalid environment name")
+		}
+		if _, duplicate := seen[environment]; duplicate {
+			return Plan{}, errors.Newf("prepare runtime role: credential inventory lists %s more than once", environment)
+		}
+		seen[environment] = struct{}{}
+		if _, recognized := known[environment]; !recognized {
+			return Plan{}, errors.Newf("prepare runtime role: credential inventory lists unknown credential %s", environment)
+		}
+		if _, entitled := allowed[environment]; !entitled {
+			return Plan{}, errors.Newf("prepare runtime role: known credential %s is not entitled to role %s", environment, config.role)
+		}
 	}
 	secretEnvironments := make([]string, 0, len(config.dependencies))
 	for _, dependency := range config.dependencies {

@@ -165,6 +165,52 @@ for role in api orchestration model tool blob-role codec sandbox-control sandbox
 done
 echo "all 8 independently configured runtime roles are Ready"
 
+# Existing role Pods prove their declared credentials work. Compare the live
+# credential-key inventory to the reviewed manifest without reading values.
+# Then start one disposable negative Pod per role with a foreign known key; the
+# composition boundary must reject it before a listener opens.
+for role in api orchestration model tool blob-role codec sandbox-control sandbox-host; do
+  expected_credentials="$(printf '%s' "$manifests" | jq -c --arg role "$role" '
+    .items[] | select(.kind == "Deployment" and .metadata.name == $role) |
+    [.spec.template.spec.containers[0].env[]? | select(.valueFrom.secretKeyRef != null) | .name] | sort
+  ')"
+  actual_credentials="$(kubectl --kubeconfig "$kubeconfig" --context "$context" --namespace "$namespace" \
+    get "deployment/$role" -o json | jq -c '
+      [.spec.template.spec.containers[0].env[]? | select(.valueFrom.secretKeyRef != null) | .name] | sort
+    ')"
+  if [[ "$actual_credentials" != "$expected_credentials" ]]; then
+    echo "live credential-key inventory differs for $role" >&2
+    exit 1
+  fi
+
+  runtime_role="${role/blob-role/blob}"
+  foreign_credential="MODEL_API_KEY"
+  if [[ "$runtime_role" == "model" ]]; then
+    foreign_credential="STATE_DATABASE_DSN"
+  fi
+  configuration="$(printf '%s' "$manifests" | jq -cer --arg role "$role" '
+    .items[] | select(.kind == "Deployment" and .metadata.name == $role) |
+    .spec.template.spec.containers[0].env[] | select(.name == "RUNTIME_ROLE_CONFIG") | .value
+  ')"
+  image="$(printf '%s' "$manifests" | jq -cer --arg role "$role" '
+    .items[] | select(.kind == "Deployment" and .metadata.name == $role) |
+    .spec.template.spec.containers[0].image
+  ')"
+  service_account="$(printf '%s' "$manifests" | jq -cer --arg role "$role" '
+    .items[] | select(.kind == "Deployment" and .metadata.name == $role) |
+    .spec.template.spec.serviceAccountName
+  ')"
+  negative_pod="credential-negative-$role"
+  jq -n \
+    --arg name "$negative_pod" --arg image "$image" --arg account "$service_account" \
+    --arg configuration "$configuration" --arg role "$runtime_role" --arg foreign "$foreign_credential" \
+    '{apiVersion:"v1",kind:"Pod",metadata:{name:$name},spec:{restartPolicy:"Never",serviceAccountName:$account,automountServiceAccountToken:false,containers:[{name:"runtime",image:$image,command:["/runtime"],args:["serve","--config-env","RUNTIME_ROLE_CONFIG","--role",$role,"--check"],env:[{name:"RUNTIME_ROLE_CONFIG",value:$configuration},{name:$foreign,value:"synthetic-negative"}],resources:{requests:{cpu:"100m",memory:"128Mi"},limits:{cpu:"500m",memory:"512Mi"}}]}}' |
+    kubectl --kubeconfig "$kubeconfig" --context "$context" --namespace "$namespace" create -f - >/dev/null
+  kubectl --kubeconfig "$kubeconfig" --context "$context" --namespace "$namespace" \
+    wait --for=jsonpath='{.status.phase}'=Failed "pod/$negative_pod" --timeout=30s >/dev/null
+done
+echo "all live role credential inventories matched and all 8 foreign-credential Pods were rejected"
+
 temporal_namespace="$(printf '%s' "$rendered" | jq -er '.resources[] | select(.kind == "orchestration") | .orchestration.namespace')"
 retention_days="$(printf '%s' "$rendered" | jq -er '.resources[] | select(.kind == "orchestration") | .orchestration.retention_days')"
 expected_retention_seconds=$((retention_days * 24 * 60 * 60))

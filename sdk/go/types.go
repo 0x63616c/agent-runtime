@@ -4,9 +4,10 @@ import "time"
 
 // Public request limits keep durable records bounded before transport-specific limits apply.
 const (
-	MaxIdempotencyKeyBytes = 128
-	MaxInputParts          = 32
-	MaxTextPartBytes       = 64 * 1024
+	MaxIdempotencyKeyBytes    = 128
+	MaxInputParts             = 32
+	MaxTextPartBytes          = 64 * 1024
+	MaxSessionViewQueuedTurns = 100
 )
 
 // ToolDefinition describes model-visible intent without granting execution authority.
@@ -230,10 +231,12 @@ type SendInputResult struct {
 
 // SessionView contains only runtime-owned public Session state and references.
 type SessionView struct {
-	Session      Session `json:"session"`
-	ActiveTurn   *Turn   `json:"active_turn,omitempty"`
-	QueuedTurns  []Turn  `json:"queued_turns,omitempty"`
-	RecentEvents []Event `json:"recent_events,omitempty"`
+	Session              Session `json:"session"`
+	ActiveTurn           *Turn   `json:"active_turn,omitempty"`
+	QueuedTurns          []Turn  `json:"queued_turns,omitempty"`
+	QueuedTurnCount      uint64  `json:"queued_turn_count"`
+	QueuedTurnsTruncated bool    `json:"queued_turns_truncated"`
+	RecentEvents         []Event `json:"recent_events,omitempty"`
 }
 
 // Clone returns an independent Session inspection snapshot.
@@ -308,8 +311,9 @@ type EventPage struct {
 
 // CancelTurnRequest explicitly cancels one active or queued Turn.
 type CancelTurnRequest struct {
-	TurnID         TurnID `json:"turn_id"`
-	IdempotencyKey string `json:"idempotency_key"`
+	SessionID      SessionID `json:"session_id"`
+	TurnID         TurnID    `json:"turn_id"`
+	IdempotencyKey string    `json:"idempotency_key"`
 }
 
 // CloseSessionRequest stops new admission and drains already accepted Input.

@@ -17,8 +17,8 @@ or telemetry implementation.
 The package defines strict opaque IDs; immutable Agent revision and
 revision-pinned Session snapshots; bounded text and Artifact-reference Input;
 serialized Turn states; stable safe Failure codes; ordered bounded Product
-events; opaque Cursors and explicit Gaps; and a small `Client` command/query
-interface.
+events; opaque Cursors and explicit Gaps; and a narrow `RuntimeClient`
+interface with a concrete strict HTTP `Client`.
 
 The internal deterministic kernel currently proves these transitions:
 
@@ -40,9 +40,13 @@ Gap that directs the caller to inspect current Session state.
 
 ## Current boundary
 
-The in-memory repository is deterministic unit/concurrency evidence only. It
-does not prove process-restart durability. There is not yet an HTTP client or
-server, OpenAPI document, authentication transport, PostgreSQL adapter/outbox,
-Temporal workflow, model/tool/approval execution path, Artifact download, or
-runnable example. No M5 milestone requirement is complete on the strength of
-this slice alone.
+The HTTP client requires explicit transport, credential, request-ID, and size
+bound dependencies. It performs no hidden retries and rejects unknown or
+trailing JSON, oversized responses, unsafe failure envelopes, and request-ID
+mismatches.
+
+The standalone API role still uses explicitly labelled `memory-unsafe`
+storage. It does not prove restart durability. PostgreSQL/outbox authority,
+Temporal workflow execution, model/tool/approval execution, Artifact transfer,
+and live push streaming remain unimplemented. No M5 milestone requirement is
+complete on the strength of this slice alone.

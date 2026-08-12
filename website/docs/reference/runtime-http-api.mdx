@@ -1,0 +1,40 @@
+---
+title: Runtime HTTP API
+description: The implemented versioned public API, Go SDK transport, and local standalone role.
+---
+
+# Runtime HTTP API
+
+[`api/openapi/openapi.yaml`](https://github.com/0x63616c/agent-runtime/blob/main/api/openapi/openapi.yaml)
+is the canonical `/v1` transport contract. The generated Go SDK and server
+route constants are checked against its ten operations.
+
+The API creates and reads immutable Agent revisions, creates and inspects
+Sessions, idempotently submits Input, observes Turns and cursor-addressed
+Product events, explicitly cancels a Turn, and drain-closes a Session. Agent
+catalog operations require a tenant administrator. Session access is scoped to
+the authenticated tenant and principal; absent and unauthorized objects share
+the same safe `not_found` result.
+
+All `/v1` requests use bearer authentication and typed `X-Request-ID` correlation.
+Mutations also require `Idempotency-Key`. JSON and bodies are strict and
+bounded. Observation reconnects by requesting the next page after the last
+accepted opaque Cursor; a disconnect does not imply cancellation.
+
+`GET /healthz` and `GET /readyz` are deliberately unauthenticated and return
+only the role and readiness state.
+
+## Run the current local role
+
+```bash
+export AGENT_RUNTIME_ADMIN_TOKEN='replace-with-at-least-16-bytes'
+export AGENT_RUNTIME_DEVELOPER_TOKEN='replace-with-at-least-16-bytes'
+go run ./cmd/agent-runtime-api --config "$PWD/deploy/runtimeapi/api.example.json"
+```
+
+The example config contains only environment-variable names. It deliberately
+declares `memory-unsafe` storage, so state disappears on restart. This is a
+transport integration role, not production durability evidence. Use its plain
+HTTP listener only on loopback or behind an operator-owned protected transport
+boundary. `max_request_bytes` must be between 3 MiB and 16 MiB; the example
+uses 4 MiB.

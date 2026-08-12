@@ -195,6 +195,10 @@ func (architectureFixtureSecrets) Lookup(context.Context, string) (string, bool,
 	return "fixture-secret", true, nil
 }
 
+func (architectureFixtureSecrets) KnownCredentialEnvironmentNames(context.Context) ([]string, error) {
+	return nil, nil
+}
+
 func secretEnvironmentNames(resource stack.Resource) []string {
 	result := make([]string, 0, len(resource.Kubernetes.SecretEnvironment))
 	for _, variable := range resource.Kubernetes.SecretEnvironment {

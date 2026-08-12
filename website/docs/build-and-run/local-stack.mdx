@@ -7,14 +7,15 @@ description: Launch and remove a disposable full local infrastructure Stack on O
 
 The M1 local environment is runnable on macOS with an already-running OrbStack
 Kubernetes cluster. It starts one disposable namespace containing dedicated
-PostgreSQL storage, Temporal and Temporal UI, MinIO-compatible blob storage,
-telemetry, and three small API/worker/codec role images. Each role currently
-uses the actual trust-scoped `cmd/runtime` binary and an explicit checked role
-configuration: API, orchestration (the `worker` Deployment), or codec. Tilt
-groups their logs and rebuilds all three images when `cmd/runtime` or
-`internal/roles` changes. This proves binary build, configuration validation,
-secret-reference injection, readiness, and lifecycle—not the complete public
-Agent Runtime API, Temporal payload codec behavior, or any example app.
+runtime and Temporal PostgreSQL storage, Temporal primary/visibility database
+declarations, MinIO-compatible blob storage, telemetry, and all eight
+trust-scoped runtime roles: API, orchestration, model, tool, blob, codec,
+sandbox control, and sandbox host. Each role uses the actual `cmd/runtime`
+binary and its one checked operator configuration. Tilt groups their logs and
+rebuilds stack-scoped copies of the production composition image. This proves
+binary build, configuration validation, secret-reference injection, readiness,
+and lifecycle—not the complete public Agent Runtime API, Temporal payload codec
+behavior, or any example app.
 
 ## Start
 
@@ -52,25 +53,31 @@ just dev-api stack=research-a
 
 `dev-api` is a foreground port-forward. It selects a local port and exits when
 you stop it; it does not create a hidden background daemon. Tilt exposes links
-for the API, orchestration worker, and codec runtime readiness endpoints,
-Temporal UI, and these docs.
+for the API, orchestration, and codec runtime readiness endpoints and these
+docs.
 
 ## Credentials and persistence
 
 The checked-in Stack contains only Secret references and their key names. The
-local materializer generates random development-only values once per Stack and
-stores them in a mode-`0600`, ignored local file. Values never appear in the
-typed Stack document or repository. `dev-down` removes the namespace and those
-Kubernetes Secrets; remove the ignored local state if you want entirely fresh
-development credentials next time.
+local materializer enumerates those references from the reviewed local profile,
+generates random development-only values once per Stack, and stores them in a
+mode-`0600`, ignored local file. Each role receives only its declared
+credential keys. Startup enumerates the known credential-key inventory and
+refuses a role with any present key that it is not entitled to use. Values never
+appear in the typed Stack document, logs, health response, or repository.
+`dev-down` removes the namespace and those Kubernetes Secrets; remove the
+ignored local state if you want entirely fresh development credentials next
+time.
 
-Workloads use an explicit ServiceAccount with token automounting disabled, and
-they receive no Kubernetes Role or RoleBinding. The local role images do not
-call the Kubernetes API.
+Every runtime role has its own explicit ServiceAccount with token automounting
+disabled and a default-deny, role-scoped egress NetworkPolicy. The local role
+images do not call the Kubernetes API.
 
-PostgreSQL and blob storage each use a finite per-Stack persistent claim.
-Temporal task-queue routing, the Temporal namespace declaration, blob prefix,
-resource labels, and image names derive from the same Stack identity.
+Runtime PostgreSQL, Temporal PostgreSQL, and blob storage each use finite
+per-Stack persistent claims. Temporal task-queue routing, the Temporal
+namespace declaration, primary/visibility database declarations, blob prefix,
+resource labels, Secret names, and image names derive from the same Stack
+identity.
 
 ## Reset and teardown
 
@@ -79,7 +86,7 @@ just dev-reset stack=research-a
 just dev-down stack=research-a
 ```
 
-`dev-reset` restarts only the declared API, worker, and codec Deployments.
+`dev-reset` restarts only the eight declared runtime-role Deployments.
 Before reset or teardown, the launcher re-reads the target Namespace and
 requires its UID plus Agent Runtime, Stack, and local-profile labels to match.
 It refuses a missing, relabelled, or foreign namespace. It never targets

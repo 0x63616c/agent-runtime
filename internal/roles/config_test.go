@@ -2,6 +2,8 @@ package roles_test
 
 import (
 	"context"
+	"fmt"
+	"maps"
 	"strings"
 
 	"github.com/0x63616c/agent-runtime/internal/roles"
@@ -39,7 +41,7 @@ var _ = Describe("Operator role configuration", func() {
 
 		missingSecret := strings.Replace(orchestrationConfig, `"secret_environment":"TEMPORAL_AUTH_TOKEN"`, `"secret_environment":""`, 1)
 		_, err = roles.Parse(strings.NewReader(missingSecret))
-		Expect(err).To(MatchError(ContainSubstring("requires a secret_environment")))
+		Expect(err).To(MatchError(ContainSubstring("requires credential environment TEMPORAL_AUTH_TOKEN")))
 	})
 
 	It("does not permit an all role process to merge trust boundaries", func() {
@@ -57,6 +59,32 @@ var _ = Describe("Operator role configuration", func() {
 		Expect(err).To(MatchError(ContainSubstring("STATE_DATABASE_DSN")))
 		Expect(err).NotTo(MatchError(ContainSubstring("present")))
 	})
+
+	It("rejects every known credential that is not entitled to the selected role", func() {
+		for _, fixture := range roleFixtures {
+			config, err := roles.Parse(strings.NewReader(fixture.configuration))
+			Expect(err).NotTo(HaveOccurred(), fixture.role)
+
+			allowed := fakeSecrets{}
+			for _, environment := range fixture.allowed {
+				allowed[environment] = "synthetic-" + environment
+			}
+			plan, err := roles.Prepare(context.Background(), config, allowed)
+			Expect(err).NotTo(HaveOccurred(), fixture.role)
+			Expect(plan.SecretEnvironmentNames()).To(ConsistOf(fixture.allowed), fixture.role)
+
+			for _, foreign := range roles.KnownCredentialEnvironmentNames() {
+				if _, entitled := allowed[foreign]; entitled {
+					continue
+				}
+				withForeign := maps.Clone(allowed)
+				withForeign[foreign] = "synthetic-foreign-" + foreign
+				_, err = roles.Prepare(context.Background(), config, withForeign)
+				Expect(err).To(MatchError(ContainSubstring("not entitled to role "+string(fixture.role))), string(fixture.role)+" with "+foreign)
+				Expect(err).NotTo(MatchError(ContainSubstring(withForeign[foreign])), string(fixture.role)+" with "+foreign)
+			}
+		}
+	})
 })
 
 type fakeSecrets map[string]string
@@ -64,6 +92,37 @@ type fakeSecrets map[string]string
 func (secrets fakeSecrets) Lookup(_ context.Context, environment string) (string, bool, error) {
 	value, ok := secrets[environment]
 	return value, ok, nil
+}
+
+func (secrets fakeSecrets) KnownCredentialEnvironmentNames(_ context.Context) ([]string, error) {
+	environments := make([]string, 0, len(secrets))
+	for environment, value := range secrets {
+		if value != "" {
+			environments = append(environments, environment)
+		}
+	}
+	return environments, nil
+}
+
+type roleFixture struct {
+	role          roles.Role
+	configuration string
+	allowed       []string
+}
+
+var roleFixtures = []roleFixture{
+	{roles.RoleAPI, roleConfig(roles.RoleAPI, 8080, `[{"name":"state","endpoint":"http://state:8080"},{"name":"telemetry","endpoint":"http://telemetry:4318"}]`), nil},
+	{roles.RoleOrchestration, orchestrationConfig, []string{"STATE_DATABASE_DSN", "TEMPORAL_AUTH_TOKEN"}},
+	{roles.RoleModel, roleConfig(roles.RoleModel, 8082, `[{"name":"conversation","endpoint":"http://api:8080","secret_environment":"CONVERSATION_ACCESS_TOKEN"},{"name":"egress-proxy","endpoint":"http://egress-proxy:8088"},{"name":"model","endpoint":"https://model.example.invalid","secret_environment":"MODEL_API_KEY"},{"name":"telemetry","endpoint":"http://telemetry:4318"}]`), []string{"CONVERSATION_ACCESS_TOKEN", "MODEL_API_KEY"}},
+	{roles.RoleTool, roleConfig(roles.RoleTool, 8083, `[{"name":"sandbox-control","endpoint":"https://sandbox-control:8443","secret_environment":"SANDBOX_CONTROL_TOKEN"},{"name":"telemetry","endpoint":"http://telemetry:4318"},{"name":"tool-broker","endpoint":"http://api:8080","secret_environment":"TOOL_BROKER_TOKEN"}]`), []string{"SANDBOX_CONTROL_TOKEN", "TOOL_BROKER_TOKEN"}},
+	{roles.RoleBlob, roleConfig(roles.RoleBlob, 8084, `[{"name":"storage","endpoint":"http://blob:9000","secret_environment":"BLOB_STORAGE_CREDENTIAL"},{"name":"telemetry","endpoint":"http://telemetry:4318"}]`), []string{"BLOB_STORAGE_CREDENTIAL"}},
+	{roles.RoleCodec, roleConfig(roles.RoleCodec, 8085, `[{"name":"blob","endpoint":"http://blob:9000","secret_environment":"CODEC_BLOB_CREDENTIAL"},{"name":"telemetry","endpoint":"http://telemetry:4318"}]`), []string{"CODEC_BLOB_CREDENTIAL"}},
+	{roles.RoleSandboxControl, roleConfig(roles.RoleSandboxControl, 8086, `[{"name":"host-ca","endpoint":"https://host-ca.example.invalid","secret_environment":"SANDBOX_HOST_CA"},{"name":"sandbox-state","endpoint":"postgres://state:5432/sandbox","secret_environment":"SANDBOX_STATE_DSN"},{"name":"telemetry","endpoint":"http://telemetry:4318"}]`), []string{"SANDBOX_HOST_CA", "SANDBOX_STATE_DSN"}},
+	{roles.RoleSandboxHost, roleConfig(roles.RoleSandboxHost, 8087, `[{"name":"host-identity","endpoint":"https://host.example.invalid","secret_environment":"SANDBOX_HOST_IDENTITY"},{"name":"sandbox-control","endpoint":"https://sandbox-control:8443","secret_environment":"SANDBOX_CONTROL_TOKEN"},{"name":"telemetry","endpoint":"http://telemetry:4318"}]`), []string{"SANDBOX_HOST_IDENTITY", "SANDBOX_CONTROL_TOKEN"}},
+}
+
+func roleConfig(role roles.Role, port int, dependencies string) string {
+	return fmt.Sprintf(`{"version":1,"role":%q,"namespace":"agent-runtime","listen_address":"127.0.0.1:%d","dependencies":%s}`, role, port, dependencies)
 }
 
 const orchestrationConfig = `{
