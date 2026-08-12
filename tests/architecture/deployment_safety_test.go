@@ -224,6 +224,8 @@ var _ = Describe("M1 deployment safety boundaries", func() {
 			`readiness_timeout=12m`,
 			`write_safe_diagnostic_summary`,
 			`diagnostic-summary/v1`,
+			`runtime_role_status`,
+			`capture_plan_failure_diagnostics`,
 			`--self-test-diagnostics`,
 			`capture_stack_diagnostics`,
 			`declared_egress_consecutive_successes`,

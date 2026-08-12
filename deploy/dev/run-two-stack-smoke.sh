@@ -85,6 +85,27 @@ runtime_roles_ready() {
   ' >/dev/null
 }
 
+empty_runtime_role_status() {
+  jq -nc --argjson roles "$runtime_role_ids" '
+    $roles | map({id:.,replicas:0,ready_replicas:0,available_replicas:0})
+  '
+}
+
+runtime_role_status() {
+  jq -c --argjson roles "$runtime_role_ids" '
+    [
+      $roles[] as $id |
+      ([.items[] | select(.metadata.labels["agent-runtime.dev/resource"] == $id)] | if length == 1 then .[0] else null end) as $deployment |
+      {
+        id:$id,
+        replicas:($deployment.spec.replicas // 0),
+        ready_replicas:($deployment.status.readyReplicas // 0),
+        available_replicas:($deployment.status.availableReplicas // 0)
+      }
+    ]
+  '
+}
+
 # Diagnostics are a deliberately small, typed status record, not a redacted
 # copy of Kubernetes/Tilt output.  Workload output can contain credentials in
 # arbitrary JSON, headers, or environment dumps, so retaining it is unsafe even
@@ -96,6 +117,7 @@ write_safe_diagnostic_summary() {
   local probe_status="$4"
   local roles_observed="$5"
   local roles_ready="$6"
+  local role_status="$7"
   local destination="$diagnostics_dir/$stack.summary.json"
 
   jq -n \
@@ -106,15 +128,21 @@ write_safe_diagnostic_summary() {
     --argjson tilt_ci_exit_code "$ci_status" \
     --argjson runtime_roles_observed "$roles_observed" \
     --argjson runtime_roles_ready "$roles_ready" \
-    '{kind:"diagnostic-summary/v1",version:1,stack:$stack,namespace:$namespace,profile:$profile,tilt_ci_exit_code:$tilt_ci_exit_code,workload_probe:$probe_status,runtime_roles_observed:$runtime_roles_observed,runtime_roles_ready:$runtime_roles_ready}' \
+    --argjson runtime_role_status "$role_status" \
+    '{kind:"diagnostic-summary/v1",version:1,stack:$stack,namespace:$namespace,profile:$profile,tilt_ci_exit_code:$tilt_ci_exit_code,workload_probe:$probe_status,runtime_roles_observed:$runtime_roles_observed,runtime_roles_ready:$runtime_roles_ready,runtime_role_status:$runtime_role_status}' \
     >"$destination"
 
   jq -e '
-    keys == ["kind","namespace","profile","runtime_roles_observed","runtime_roles_ready","stack","tilt_ci_exit_code","version","workload_probe"] and
+    keys == ["kind","namespace","profile","runtime_role_status","runtime_roles_observed","runtime_roles_ready","stack","tilt_ci_exit_code","version","workload_probe"] and
     .kind == "diagnostic-summary/v1" and .version == 1 and
     (.stack | type == "string") and (.namespace | type == "string") and (.profile | type == "string") and
     (.tilt_ci_exit_code | type == "number") and (.workload_probe | type == "string") and
-    (.runtime_roles_observed | type == "number") and (.runtime_roles_ready | type == "boolean")
+    (.runtime_roles_observed | type == "number") and (.runtime_roles_ready | type == "boolean") and
+    (.runtime_role_status | type == "array" and length == 8 and
+      ([.[].id] | unique | sort) == ["api","blob-role","codec","model","orchestration","sandbox-control","sandbox-host","tool"] and
+      all(.[]; keys == ["available_replicas","id","ready_replicas","replicas"] and
+        (.id | type == "string") and (.replicas | type == "number") and
+        (.ready_replicas | type == "number") and (.available_replicas | type == "number")))
   ' "$destination" >/dev/null || {
     rm -f -- "$destination"
     echo "refusing to retain a diagnostic summary outside the safe schema" >&2
@@ -128,7 +156,7 @@ write_safe_diagnostic_summary() {
 capture_plan_failure_diagnostics() {
   local stack="$1"
   local namespace="$2"
-  write_safe_diagnostic_summary "$stack" "$namespace" 1 "unavailable" 0 false
+  write_safe_diagnostic_summary "$stack" "$namespace" 1 "unavailable" 0 false "$(empty_runtime_role_status)"
 }
 
 if [[ "$diagnostic_self_test" == true ]]; then
@@ -136,7 +164,8 @@ if [[ "$diagnostic_self_test" == true ]]; then
     echo "jq is required for diagnostic self-test" >&2
     exit 1
   }
-  write_safe_diagnostic_summary "fixture-stack" "ar-fixture-stack" 7 "unavailable" 0 false
+  fixture_role_status="$(empty_runtime_role_status)"
+  write_safe_diagnostic_summary "fixture-stack" "ar-fixture-stack" 7 "unavailable" 0 false "$fixture_role_status"
   for unsafe_value in 'Bearer adversarial-header-token' 'MODEL_API_KEY=adversarial-env-secret' '{"token":"adversarial-json-secret"}'; do
     if grep -F -- "$unsafe_value" "$diagnostics_dir/fixture-stack.summary.json" >/dev/null; then
       echo "safe diagnostic summary retained an unsafe fixture value" >&2
@@ -147,7 +176,8 @@ if [[ "$diagnostic_self_test" == true ]]; then
   jq -e '
     .stack == "preflight-stack" and .namespace == "ar-preflight-stack" and
     .tilt_ci_exit_code == 1 and .workload_probe == "unavailable" and
-    .runtime_roles_observed == 0 and .runtime_roles_ready == false
+    .runtime_roles_observed == 0 and .runtime_roles_ready == false and
+    (.runtime_role_status | length == 8 and all(.[]; .replicas == 0 and .ready_replicas == 0 and .available_replicas == 0))
   ' "$diagnostics_dir/preflight-stack.summary.json" >/dev/null || {
     echo "preflight diagnostic summary did not retain bounded failed-plan metadata" >&2
     exit 1
@@ -358,6 +388,7 @@ capture_stack_diagnostics() {
   local probe_status="unavailable"
   local roles_observed=0
   local roles_ready=false
+  local role_status
   local deployment_state
 
   if deployment_state="$(kubectl --context "$context" --namespace "$namespace" get deployments -l "app.kubernetes.io/part-of=agent-runtime,agent-runtime.dev/profile=$profile,agent-runtime.dev/stack=$stack" -o json 2>/dev/null)"; then
@@ -366,8 +397,11 @@ capture_stack_diagnostics() {
     if printf '%s' "$deployment_state" | runtime_roles_ready; then
       roles_ready=true
     fi
+    role_status="$(printf '%s' "$deployment_state" | runtime_role_status)"
+  else
+    role_status="$(empty_runtime_role_status)"
   fi
-  write_safe_diagnostic_summary "$stack" "$namespace" "$ci_status" "$probe_status" "$roles_observed" "$roles_ready"
+  write_safe_diagnostic_summary "$stack" "$namespace" "$ci_status" "$probe_status" "$roles_observed" "$roles_ready" "$role_status"
 }
 
 start_stack() {
