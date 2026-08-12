@@ -20,6 +20,7 @@ type MemoryRuntimeStateStore struct {
 }
 
 var _ RuntimeStateStore = (*MemoryRuntimeStateStore)(nil)
+var _ AtomicTransitionStore = (*MemoryRuntimeStateStore)(nil)
 var _ OutboxTenantSource = (*MemoryRuntimeStateStore)(nil)
 
 // NewMemoryRuntimeStateStore constructs the complete in-memory plan persistence adapter.
@@ -64,17 +65,23 @@ func (store *MemoryRuntimeStateStore) PersistTransitionPlan(ctx context.Context,
 
 // Apply atomically loads, plans, and persists one compiler-sealed mutation.
 func (store *MemoryRuntimeStateStore) Apply(ctx context.Context, mutation CompiledMutation) (TransitionPlan, error) {
+	return store.ApplyCompiledMutation(ctx, store.planner, mutation)
+}
+
+// ApplyCompiledMutation atomically plans a compiler-sealed mutation against
+// the current in-memory tenant state and stores the resulting replacement.
+func (store *MemoryRuntimeStateStore) ApplyCompiledMutation(ctx context.Context, planner *RuntimeStatePlanner, mutation CompiledMutation) (TransitionPlan, error) {
 	if err := ctx.Err(); err != nil {
 		return TransitionPlan{}, err
 	}
-	if store == nil || store.planner == nil || mutation.ReceiptBinding().Scope.Tenant == "" {
+	if store == nil || planner == nil || mutation.ReceiptBinding().Scope.Tenant == "" {
 		return TransitionPlan{}, ErrIntegrity
 	}
 	tenant := string(mutation.ReceiptBinding().Scope.Tenant)
 	store.mu.Lock()
 	defer store.mu.Unlock()
 	prior := store.states[tenant].Clone()
-	plan, err := store.planner.Plan(ctx, prior, mutation)
+	plan, err := planner.Plan(ctx, prior, mutation)
 	if err != nil {
 		return TransitionPlan{}, err
 	}

@@ -108,8 +108,10 @@ func NewActivities(dispatcher StateDispatcher) (*Activities, error) {
 // outbox record with the matching tenant, Session, and event route.
 type DurableStateDispatcher struct {
 	store    runtimestate.RuntimeStateStore
+	atomic   runtimestate.AtomicTransitionStore
 	compiler *runtimestate.Compiler
 	planner  *runtimestate.RuntimeStatePlanner
+	observe  func(InvocationSchedule)
 }
 
 // NewDurableStateDispatcher creates the state-only activity authority. It has
@@ -124,11 +126,11 @@ func NewDurableStateDispatcher(store runtimestate.RuntimeStateStore) (*DurableSt
 // NewDurableStateDispatcherWithInvocationScheduler composes the private
 // public-input-to-model-intent scheduler. It retains the exact durable outbox
 // route check and has no public API or content-read authority.
-func NewDurableStateDispatcherWithInvocationScheduler(store runtimestate.RuntimeStateStore, compiler *runtimestate.Compiler, planner *runtimestate.RuntimeStatePlanner) (*DurableStateDispatcher, error) {
+func NewDurableStateDispatcherWithInvocationScheduler(store runtimestate.AtomicTransitionStore, compiler *runtimestate.Compiler, planner *runtimestate.RuntimeStatePlanner, observe func(InvocationSchedule)) (*DurableStateDispatcher, error) {
 	if store == nil || compiler == nil || planner == nil {
 		return nil, errors.New("create durable state dispatcher: state, compiler, and planner are required")
 	}
-	return &DurableStateDispatcher{store: store, compiler: compiler, planner: planner}, nil
+	return &DurableStateDispatcher{store: store, atomic: store, compiler: compiler, planner: planner, observe: observe}, nil
 }
 
 // Dispatch confirms the publisher-selected outbox route remains durable.
@@ -168,6 +170,9 @@ func (dispatcher *DurableStateDispatcher) Dispatch(ctx context.Context, command 
 
 func (dispatcher *DurableStateDispatcher) beginInvocation(ctx context.Context, record runtimestate.OutboxRecord) error {
 	scope := runtimestate.MutationScope{Tenant: record.Tenant, Principal: record.Principal, Authority: runtimestate.AuthorityRuntimeWorker}
+	if dispatcher.atomic == nil {
+		return runtimestate.ErrIntegrity
+	}
 	state, err := dispatcher.store.LoadRuntimeState(ctx, scope)
 	if err != nil {
 		return err
@@ -194,28 +199,31 @@ func (dispatcher *DurableStateDispatcher) beginInvocation(ctx context.Context, r
 	if turn.State != agentruntime.TurnRunning {
 		return nil
 	}
+	operationID := runtimestate.OperationID("orchestration-invocation-" + string(record.OutboxID))
 	for _, invocation := range state.Invocations {
-		if invocation.Tenant == record.Tenant && invocation.Principal == record.Principal && invocation.SessionID == record.SessionID && invocation.TurnID == record.TurnID {
+		if invocation.Tenant == record.Tenant && invocation.Principal == record.Principal && invocation.SessionID == record.SessionID && invocation.TurnID == record.TurnID && invocation.OperationID == operationID {
 			return nil
 		}
 	}
 	mutation, err := dispatcher.compiler.CompileBeginInvocationAttempt(runtimestate.BeginInvocationAttemptCommand{
 		Scope:                  scope,
-		IdempotencyKey:         "orchestration-invocation-" + string(record.OutboxID),
+		IdempotencyKey:         string(operationID),
 		SessionID:              record.SessionID,
 		TurnID:                 record.TurnID,
-		OperationID:            runtimestate.OperationID("orchestration-invocation-" + string(record.OutboxID)),
+		OperationID:            operationID,
 		ExpectedSessionVersion: session.Version,
 		ExpectedTurnVersion:    turn.Version,
 	})
 	if err != nil {
 		return err
 	}
-	plan, err := dispatcher.planner.Plan(ctx, state, mutation)
-	if err != nil {
+	if _, err = dispatcher.atomic.ApplyCompiledMutation(ctx, dispatcher.planner, mutation); err != nil {
 		return err
 	}
-	return dispatcher.store.PersistTransitionPlan(ctx, plan)
+	if dispatcher.observe != nil {
+		dispatcher.observe(InvocationSchedule{Tenant: string(record.Tenant), SessionID: string(record.SessionID), TurnID: string(record.TurnID), OperationID: operationID})
+	}
+	return nil
 }
 
 // DispatchStateCommand delivers one already-durable command to the state-backed dispatcher.

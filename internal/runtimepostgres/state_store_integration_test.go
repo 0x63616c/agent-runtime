@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net/http/httptest"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -114,6 +115,122 @@ func TestPostgresRuntimeStateStorePersistsASealedPlanAndRejectsItsStaleBase(t *t
 	}
 	if err := store.PersistTransitionPlan(ctx, plan); !errors.Is(err, runtimestate.ErrConflict) {
 		t.Fatalf("persist stale plan error = %v, want conflict", err)
+	}
+}
+
+func TestPostgresAtomicTransitionReplansAfterPublisherClaimBeforeInvocation(t *testing.T) {
+	ctx := context.Background()
+	pool := openRuntimePool(t)
+	resetRuntimeV2(t, ctx, pool)
+	applyRuntimeMigrations(t, ctx, pool)
+
+	tenant, _ := runtimecontent.ParseTenantID("atomic-transition-tenant")
+	principal, _ := runtimecontent.ParsePrincipalID("atomic-transition-owner")
+	content, err := runtimecontent.New("atomic-transition-content", &stateStoreObjects{values: map[string][]byte{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	clockSource, err := clock.NewFake(time.Date(2026, 8, 12, 8, 0, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatal(err)
+	}
+	compiler, err := runtimestate.NewCompiler(content)
+	if err != nil {
+		t.Fatal(err)
+	}
+	planner, err := runtimestate.NewRuntimeStatePlanner(clockSource, &stateStoreIDs{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := runtimepostgres.NewRuntimeStateStore(pool, clockSource)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err := content.StageAgentSpecificationBody(ctx, tenant, runtimecontent.AgentSpecificationBody{Name: "atomic-transition", ModelProfile: "balanced", Instructions: "schedule once"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	registration, err := compiler.CompileRegisterAgentRevision(runtimestate.RegisterAgentRevisionCommand{Scope: runtimestate.MutationScope{Tenant: tenant, Authority: runtimestate.AuthorityTenantAdministrator}, IdempotencyKey: "atomic-register", Specification: body})
+	if err != nil {
+		t.Fatal(err)
+	}
+	registered, err := store.ApplyCompiledMutation(ctx, planner, registration)
+	if err != nil {
+		t.Fatal(err)
+	}
+	created, err := compiler.CompileCreateSession(runtimestate.CreateSessionCommand{Scope: runtimestate.MutationScope{Tenant: tenant, Principal: principal, Authority: runtimestate.AuthoritySessionOwner}, IdempotencyKey: "atomic-session", RevisionID: registered.Result().Revision.RevisionID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	session, err := store.ApplyCompiledMutation(ctx, planner, created)
+	if err != nil {
+		t.Fatal(err)
+	}
+	input, err := content.StageInputEnvelope(ctx, tenant, []agentruntime.ContentPart{{Kind: agentruntime.ContentText, Text: "start atomically"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	accepted, err := compiler.CompileAdmitInput(runtimestate.AdmitInputCommand{Scope: runtimestate.MutationScope{Tenant: tenant, Principal: principal, Authority: runtimestate.AuthoritySessionOwner}, IdempotencyKey: "atomic-input", SessionID: session.Result().Session.SessionID, Input: input})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.ApplyCompiledMutation(ctx, planner, accepted); err != nil {
+		t.Fatal(err)
+	}
+
+	workerScope := runtimestate.MutationScope{Tenant: tenant, Principal: principal, Authority: runtimestate.AuthorityRuntimeWorker}
+	beforeClaim, err := store.LoadRuntimeState(ctx, workerScope)
+	if err != nil {
+		t.Fatal(err)
+	}
+	inputRoute, found := atomicInputRoute(beforeClaim)
+	if !found {
+		t.Fatalf("outbox = %#v, want input route", beforeClaim.Outbox)
+	}
+	currentSession, currentTurn, found := atomicSessionTurn(beforeClaim, session.Result().Session.SessionID)
+	if !found {
+		t.Fatalf("state = %#v, want current session and turn", beforeClaim)
+	}
+	operationID := runtimestate.OperationID("orchestration-invocation-" + string(inputRoute.OutboxID))
+	begin, err := compiler.CompileBeginInvocationAttempt(runtimestate.BeginInvocationAttemptCommand{Scope: workerScope, IdempotencyKey: string(operationID), SessionID: currentSession.SessionID, TurnID: currentTurn.TurnID, OperationID: operationID, ExpectedSessionVersion: currentSession.Version, ExpectedTurnVersion: currentTurn.Version})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// This is the publisher's real compiled lease transition, committed after
+	// the dispatcher's prior read/compile but before its atomic apply. It adds
+	// the normal claim receipt and audit batch to the same PostgreSQL snapshot.
+	claim, err := compiler.CompileClaimOutbox(runtimestate.ClaimOutboxCommand{Scope: runtimestate.MutationScope{Tenant: tenant, Authority: runtimestate.AuthorityOutboxPublisher}, IdempotencyKey: "atomic-publisher-claim", OutboxID: inputRoute.OutboxID, ExpectedVersion: inputRoute.Version, Claimer: "atomic-publisher", ClaimUntil: clockSource.Now().Add(time.Minute)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	claimPlan, err := planner.Plan(ctx, beforeClaim, claim)
+	if err != nil {
+		t.Fatalf("plan competing publisher claim: %v", err)
+	}
+	if err := store.PersistTransitionPlan(ctx, claimPlan); err != nil {
+		t.Fatalf("commit competing publisher claim: %v", err)
+	}
+	if _, err := store.ApplyCompiledMutation(ctx, planner, begin); err != nil {
+		t.Fatalf("atomically replan invocation after publisher claim: %v", err)
+	}
+	if _, err := store.ApplyCompiledMutation(ctx, planner, begin); err != nil {
+		t.Fatalf("replay exact invocation operation: %v", err)
+	}
+	after, err := store.LoadRuntimeState(ctx, workerScope)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !atomicAuditOperation(after.Audit, "outbox.claimed", "atomic-publisher-claim") || !atomicReceiptOperation(after.Receipts, "atomic-publisher-claim") {
+		t.Fatalf("publisher claim effects = audit %#v receipts %#v, want committed receipt and audit", after.Audit, after.Receipts)
+	}
+	invocationCount := 0
+	for _, invocation := range after.Invocations {
+		if invocation.SessionID == currentSession.SessionID && invocation.TurnID == currentTurn.TurnID && invocation.OperationID == operationID {
+			invocationCount++
+		}
+	}
+	if invocationCount != 1 {
+		t.Fatalf("input-owned invocations = %#v, want exactly one operation %q", after.Invocations, operationID)
 	}
 }
 
@@ -914,6 +1031,47 @@ func TestPostgresContentlessTenantErasureSucceeds(t *testing.T) {
 }
 
 type stateStoreClock struct{ now time.Time }
+
+func atomicInputRoute(state runtimestate.RuntimeState) (runtimestate.OutboxRecord, bool) {
+	for _, route := range state.Outbox {
+		if route.EventKind == agentruntime.EventInputAccepted {
+			return route, true
+		}
+	}
+	return runtimestate.OutboxRecord{}, false
+}
+
+func atomicSessionTurn(state runtimestate.RuntimeState, sessionID agentruntime.SessionID) (runtimestate.SessionRecord, runtimestate.TurnRecord, bool) {
+	for _, session := range state.Sessions {
+		if session.SessionID != sessionID {
+			continue
+		}
+		for _, turn := range state.Turns {
+			if turn.SessionID == sessionID && turn.State == agentruntime.TurnRunning {
+				return session, turn, true
+			}
+		}
+	}
+	return runtimestate.SessionRecord{}, runtimestate.TurnRecord{}, false
+}
+
+func atomicAuditOperation(facts []runtimestate.AuditFactRecord, kind, operationID string) bool {
+	for _, fact := range facts {
+		if fact.Kind == kind && string(fact.OperationID) == operationID {
+			return true
+		}
+	}
+	return false
+}
+
+func atomicReceiptOperation(receipts []runtimestate.MutationReceipt, operationID string) bool {
+	for _, receipt := range receipts {
+		if strings.HasPrefix(string(receipt.OperationID), operationID) {
+			return true
+		}
+	}
+	return false
+}
 
 func (clock stateStoreClock) Now() time.Time { return clock.now }
 

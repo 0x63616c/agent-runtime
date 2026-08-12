@@ -107,5 +107,6 @@ go test -race -tags=integration ./internal/runtimeapiprocess -run 'TestDurableWo
 # package proofs above. It owns only disposable PostgreSQL, MinIO, and
 # Temporal test services; it is not a production deployment attestation.
 reset_runtime_schema
-go test -race -tags=integration ./internal/runtimeapiprocess \
+AR_RUNTIME_API_WORKER_POSTGRES_DSN="$runtime_worker_dsn" \
+  go test -race -tags=integration ./internal/runtimeapiprocess \
   -run '^TestResearchDossierRecoversLongRunningToolResearchThroughThePublicContract$' -count=1

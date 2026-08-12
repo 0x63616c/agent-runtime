@@ -41,9 +41,13 @@ import (
 // authority; the scripted model and research adapters are private disposable
 // worker seams that demonstrate brokered allowed-tool artifact production.
 func TestResearchDossierRecoversLongRunningToolResearchThroughThePublicContract(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	// This end-to-end proof deliberately restarts the public API, drives the
+	// terminal and web binaries, and streams a >512 KiB retained artifact. Keep
+	// the global bound finite but large enough for those real subprocess paths.
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
-	dsn := requiredRuntimeAPIEnvironment(t, "AR_RUNTIME_API_POSTGRES_DSN")
+	applicationDSN := requiredRuntimeAPIEnvironment(t, "AR_RUNTIME_API_POSTGRES_DSN")
+	workerDSN := requiredRuntimeAPIEnvironment(t, "AR_RUNTIME_API_WORKER_POSTGRES_DSN")
 	endpoint := requiredRuntimeAPIEnvironment(t, "AR_RUNTIME_API_MINIO_ENDPOINT")
 	access := requiredRuntimeAPIEnvironment(t, "AR_RUNTIME_API_MINIO_ACCESS_KEY")
 	secret := requiredRuntimeAPIEnvironment(t, "AR_RUNTIME_API_MINIO_SECRET_KEY")
@@ -61,7 +65,11 @@ func TestResearchDossierRecoversLongRunningToolResearchThroughThePublicContract(
 	if err != nil {
 		t.Fatal(err)
 	}
-	secrets := map[string]string{"STATE_DSN": dsn, "CONTENT_ACCESS": access, "CONTENT_SECRET": secret, "ADMIN_TOKEN": "research-dossier-admin-token", "RESEARCHER_TOKEN": "research-dossier-researcher-token"}
+	// The public API has only tenant-bound application authority. The private
+	// model, tool, and orchestration roles must use their separately provisioned
+	// worker login because publishing the durable outbox needs its explicit
+	// tenant-partition projection.
+	secrets := map[string]string{"STATE_DSN": applicationDSN, "CONTENT_ACCESS": access, "CONTENT_SECRET": secret, "ADMIN_TOKEN": "research-dossier-admin-token", "RESEARCHER_TOKEN": "research-dossier-researcher-token"}
 	baseURL, stopAPI := startDurableRuntimeProcess(t, config, secrets)
 	admin := durableProcessClient(t, baseURL, secrets["ADMIN_TOKEN"], &durableRequestIDs{})
 	researcher := durableProcessClient(t, baseURL, secrets["RESEARCHER_TOKEN"], &durableRequestIDs{})
@@ -89,13 +97,20 @@ func TestResearchDossierRecoversLongRunningToolResearchThroughThePublicContract(
 		t.Fatalf("start disposable Temporal: %v", err)
 	}
 	defer func() { _ = temporalServer.Stop() }()
-	stopOrchestration := startM8Orchestration(t, ctx, runtimeorchestration.ProcessConfig{DatabaseDSN: dsn, TemporalEndpoint: temporalServer.FrontendHostPort(), TemporalToken: "m8-private-temporal-token", Namespace: "research-dossier-e2e", TaskQueue: "research-dossier-e2e", PayloadBlobEndpoint: endpoint, PayloadBlobBucket: bucket + "-m8-temporal-payload", PayloadBlobPrefix: "m8", PayloadAccessKey: access, PayloadSecretKey: secret})
-	defer stopOrchestration()
+	invocations := make(chan runtimeorchestration.InvocationSchedule, 3)
+	orchestrationConfig := runtimeorchestration.ProcessConfig{DatabaseDSN: workerDSN, TemporalEndpoint: temporalServer.FrontendHostPort(), TemporalToken: "m8-private-temporal-token", Namespace: "research-dossier-e2e", TaskQueue: "research-dossier-e2e", PayloadBlobEndpoint: endpoint, PayloadBlobBucket: bucket + "-m8-temporal-payload", PayloadBlobPrefix: "m8", PayloadAccessKey: access, PayloadSecretKey: secret, InvocationScheduled: func(schedule runtimeorchestration.InvocationSchedule) {
+		select {
+		case invocations <- schedule:
+		default:
+		}
+	}}
+	orchestration := startM8Orchestration(t, ctx, orchestrationConfig)
+	defer orchestration.stop()
 	if err := assertM8TemporalSession(ctx, temporalServer.FrontendHostPort(), session.ID); err != nil {
 		t.Fatalf("public dossier Session has no durable Temporal workflow: %v", err)
 	}
 
-	pool, err := pgxpool.New(ctx, dsn)
+	pool, err := pgxpool.New(ctx, workerDSN)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -145,7 +160,7 @@ func TestResearchDossierRecoversLongRunningToolResearchThroughThePublicContract(
 	if err != nil {
 		t.Fatal(err)
 	}
-	runM8ResearchStep(t, ctx, model, tool, researcher, session.ID, 1)
+	runM8ResearchStep(t, ctx, invocations, model, tool, researcher, session.ID, 1)
 	artifacts, err := app.Artifacts(ctx, session.ID)
 	if err != nil || len(artifacts.Artifacts) != 1 {
 		t.Fatalf("first public retained Artifact index = %#v, %v", artifacts, err)
@@ -174,11 +189,17 @@ func TestResearchDossierRecoversLongRunningToolResearchThroughThePublicContract(
 		t.Fatalf("public cursor resume after API restart = %#v, %v", afterRestart, err)
 	}
 	researcher = restartedClient
-	runM8ResearchStep(t, ctx, model, tool, researcher, session.ID, 2)
+	if err := orchestration.scan(); err != nil {
+		t.Fatalf("publish second ordered public research step: %v", err)
+	}
+	runM8ResearchStep(t, ctx, invocations, model, tool, researcher, session.ID, 2)
 	if _, err := restartedApp.Research(ctx, session.ID, "Research the final reconciliation source and produce the downloadable dossier."); err != nil {
 		t.Fatalf("queue third ordered public research step: %v", err)
 	}
-	runM8ResearchStep(t, ctx, model, tool, researcher, session.ID, 3)
+	if err := orchestration.scan(); err != nil {
+		t.Fatalf("publish third ordered public research step: %v", err)
+	}
+	runM8ResearchStep(t, ctx, invocations, model, tool, researcher, session.ID, 3)
 	restartedArtifacts, err := restartedApp.Artifacts(ctx, session.ID)
 	if err != nil || len(restartedArtifacts.Artifacts) != 3 {
 		t.Fatalf("public Artifact retention after sequential research = %#v, %v", restartedArtifacts, err)
@@ -287,8 +308,16 @@ func (adapter *m8ResearchTool) Executions() int {
 	return adapter.executions
 }
 
-func runM8ResearchStep(t *testing.T, ctx context.Context, model *runtimemodel.Worker, tool *runtimetool.Worker, researcher *agentruntime.Client, sessionID agentruntime.SessionID, ordinal int) {
+func runM8ResearchStep(t *testing.T, ctx context.Context, invocations <-chan runtimeorchestration.InvocationSchedule, model *runtimemodel.Worker, tool *runtimetool.Worker, researcher *agentruntime.Client, sessionID agentruntime.SessionID, ordinal int) {
 	t.Helper()
+	select {
+	case invocation := <-invocations:
+		if invocation.SessionID != sessionID.String() || invocation.TurnID == "" || !strings.HasPrefix(string(invocation.OperationID), "orchestration-invocation-outbox_") {
+			t.Fatalf("durably scheduled invocation %d = %#v, want this session and deterministic operation", ordinal, invocation)
+		}
+	case <-ctx.Done():
+		t.Fatalf("wait for durable model invocation %d: %v", ordinal, ctx.Err())
+	}
 	if err := model.ScanOnce(ctx); err != nil {
 		t.Fatalf("run private model research step %d: %v", ordinal, err)
 	}
@@ -318,32 +347,85 @@ func runM8ResearchStep(t *testing.T, ctx context.Context, model *runtimemodel.Wo
 	}
 }
 
-func startM8Orchestration(t *testing.T, parent context.Context, config runtimeorchestration.ProcessConfig) func() {
+type m8Orchestration struct {
+	scan func() error
+	stop func()
+}
+
+func startM8Orchestration(t *testing.T, parent context.Context, config runtimeorchestration.ProcessConfig) m8Orchestration {
 	t.Helper()
 	ctx, cancel := context.WithCancel(parent)
 	firstWait := make(chan struct{})
+	scans := make(chan chan error)
 	var waited sync.Once
-	done := make(chan error, 1)
+	var stopped sync.Once
+	var runMu sync.Mutex
+	var runErr error
+	done := make(chan struct{})
+	var completed chan error
 	go func() {
-		done <- runtimeorchestration.RunWithWait(ctx, config, func(waitCtx context.Context, _ time.Duration) error {
+		err := runtimeorchestration.RunWithWait(ctx, config, func(waitCtx context.Context, _ time.Duration) error {
 			waited.Do(func() { close(firstWait) })
-			<-waitCtx.Done()
-			return waitCtx.Err()
+			if completed != nil {
+				completed <- nil
+				completed = nil
+			}
+			select {
+			case completed = <-scans:
+				return nil
+			case <-waitCtx.Done():
+				return waitCtx.Err()
+			}
 		})
+		runMu.Lock()
+		runErr = err
+		runMu.Unlock()
+		close(done)
 	}()
+	readRunErr := func() error {
+		runMu.Lock()
+		defer runMu.Unlock()
+		return runErr
+	}
 	select {
 	case <-firstWait:
-	case err := <-done:
-		t.Fatalf("start M8 Temporal orchestration: %v", err)
+	case <-done:
+		t.Fatalf("start M8 Temporal orchestration: %v", readRunErr())
 	case <-parent.Done():
 		t.Fatalf("start M8 Temporal orchestration: %v", parent.Err())
 	}
-	return func() {
-		cancel()
-		if err := <-done; err != nil {
-			t.Fatalf("stop M8 Temporal orchestration: %v", err)
+	return m8Orchestration{scan: func() error {
+		completed := make(chan error, 1)
+		select {
+		case scans <- completed:
+		case <-done:
+			return readRunErr()
+		case <-ctx.Done():
+			return ctx.Err()
 		}
-	}
+		select {
+		case err := <-completed:
+			return err
+		case <-done:
+			return readRunErr()
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}, stop: func() {
+		stopped.Do(func() {
+			cancel()
+			joinCtx, joinCancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer joinCancel()
+			select {
+			case <-done:
+				if err := readRunErr(); err != nil {
+					t.Errorf("stop M8 Temporal orchestration: %v", err)
+				}
+			case <-joinCtx.Done():
+				t.Errorf("stop M8 Temporal orchestration: %v", joinCtx.Err())
+			}
+		})
+	}}
 }
 
 func assertM8TemporalSession(ctx context.Context, endpoint string, sessionID agentruntime.SessionID) error {

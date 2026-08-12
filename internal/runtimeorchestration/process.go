@@ -41,6 +41,18 @@ type ProcessConfig struct {
 	// as a fail-closed state mutation boundary.
 	AuditSinkEndpoint string
 	AuditSinkTimeout  time.Duration
+	// InvocationScheduled observes a committed model invocation intent. It is
+	// an optional local process observer; it has no authority to alter durable
+	// dispatch and must return promptly.
+	InvocationScheduled func(InvocationSchedule)
+}
+
+// InvocationSchedule identifies one committed input-owned invocation intent.
+type InvocationSchedule struct {
+	Tenant      string
+	SessionID   string
+	TurnID      string
+	OperationID runtimestate.OperationID
 }
 
 // Wait is the private scheduling seam used between durable outbox scans.
@@ -78,6 +90,15 @@ func RunWithWait(ctx context.Context, config ProcessConfig, wait Wait) error {
 	if err != nil {
 		return err
 	}
+	compiler, err := runtimestate.NewCompiler(rejectContentHandoff{})
+	if err != nil {
+		return err
+	}
+	ids := processIDs{}
+	planner, err := runtimestate.NewRuntimeStatePlanner(timeSource, &ids)
+	if err != nil {
+		return err
+	}
 	factory, err := temporalpayloadruntime.NewS3Factory(temporalpayloadruntime.S3Config{Endpoint: config.PayloadBlobEndpoint, Bucket: config.PayloadBlobBucket, Prefix: config.PayloadBlobPrefix, AccessKey: config.PayloadAccessKey, SecretKey: config.PayloadSecretKey})
 	if err != nil {
 		return err
@@ -91,7 +112,11 @@ func RunWithWait(ctx context.Context, config ProcessConfig, wait Wait) error {
 	if err != nil {
 		return err
 	}
-	dispatcher, err := NewDurableStateDispatcher(state)
+	// Public input routes become model invocation intents only through this
+	// private, state-backed scheduler. A dispatcher without the scheduler can
+	// acknowledge Temporal delivery while leaving the input permanently
+	// unprocessed.
+	dispatcher, err := NewDurableStateDispatcherWithInvocationScheduler(state, compiler, planner, config.InvocationScheduled)
 	if err != nil {
 		return err
 	}
@@ -100,19 +125,6 @@ func RunWithWait(ctx context.Context, config ProcessConfig, wait Wait) error {
 		return err
 	}
 	if err := Register(workerRuntime, activities); err != nil {
-		return err
-	}
-	if err := workerRuntime.Start(); err != nil {
-		return errors.Wrap(err, "run runtime orchestration worker: start Temporal worker")
-	}
-	defer workerRuntime.Stop()
-	compiler, err := runtimestate.NewCompiler(rejectContentHandoff{})
-	if err != nil {
-		return err
-	}
-	ids := processIDs{}
-	planner, err := runtimestate.NewRuntimeStatePlanner(timeSource, &ids)
-	if err != nil {
 		return err
 	}
 	audit, err := configuredAuditExporter(config)
@@ -126,6 +138,14 @@ func RunWithWait(ctx context.Context, config ProcessConfig, wait Wait) error {
 	if err := publisher.ScanOnce(ctx); err != nil {
 		return errors.Wrap(err, "run runtime orchestration worker: publish initial outbox")
 	}
+	// Publish and acknowledge the currently durable routes before starting
+	// activity dispatch. This prevents the activity which turns an accepted
+	// Input into an invocation intent from racing the publisher's own lease
+	// acknowledgement for that exact Input route.
+	if err := workerRuntime.Start(); err != nil {
+		return errors.Wrap(err, "run runtime orchestration worker: start Temporal worker")
+	}
+	defer workerRuntime.Stop()
 	return publishUntilCancelled(ctx, wait, publisher.ScanOnce)
 }
 

@@ -1307,6 +1307,15 @@ type RuntimeStateStore interface {
 	AuthorizeToolActionDescriptorRead(context.Context, CompiledReadAuthorization) (runtimecontent.ToolActionDescriptorCommitment, error)
 }
 
+// AtomicTransitionStore applies one compiler-sealed mutation against the
+// current tenant state inside the persistence authority's atomic boundary.
+// It is deliberately separate from RuntimeStateStore so consumers that only
+// read or persist already-planned transitions do not gain mutation authority.
+type AtomicTransitionStore interface {
+	RuntimeStateStore
+	ApplyCompiledMutation(context.Context, *RuntimeStatePlanner, CompiledMutation) (TransitionPlan, error)
+}
+
 // OutboxTenantSource is the deliberately narrow discovery capability used by
 // a private outbox publisher. It exposes tenant identifiers only; it is not a
 // public runtime query and it never grants content-read authority.

@@ -118,7 +118,7 @@ func TestSessionWorkflowDoesNotStartAWaitingApprovalTurn(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	dispatcher, err := runtimeorchestration.NewDurableStateDispatcherWithInvocationScheduler(store, compiler, planner)
+	dispatcher, err := runtimeorchestration.NewDurableStateDispatcherWithInvocationScheduler(store, compiler, planner, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

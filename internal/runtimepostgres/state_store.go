@@ -23,6 +23,7 @@ type RuntimeStateStore struct {
 }
 
 var _ runtimestate.RuntimeStateStore = (*RuntimeStateStore)(nil)
+var _ runtimestate.AtomicTransitionStore = (*RuntimeStateStore)(nil)
 var _ runtimestate.OutboxTenantSource = (*RuntimeStateStore)(nil)
 
 // NewRuntimeStateStore constructs the PostgreSQL authority from explicit pool and clock dependencies.
@@ -109,6 +110,62 @@ func (store *RuntimeStateStore) PersistTransitionPlan(ctx context.Context, plan 
 		return runtimestate.ErrUnavailable
 	}
 	return nil
+}
+
+// ApplyCompiledMutation plans one compiler-sealed mutation against the current
+// tenant snapshot while holding the same transaction-scoped tenant lock used
+// for durable persistence. Unrelated receipt or audit updates therefore become
+// part of the planner input instead of invalidating an already-planned intent.
+func (store *RuntimeStateStore) ApplyCompiledMutation(ctx context.Context, planner *runtimestate.RuntimeStatePlanner, mutation runtimestate.CompiledMutation) (runtimestate.TransitionPlan, error) {
+	if err := ctx.Err(); err != nil {
+		return runtimestate.TransitionPlan{}, err
+	}
+	if store == nil || store.pool == nil || planner == nil || mutation.ReceiptBinding().Scope.Tenant == "" {
+		return runtimestate.TransitionPlan{}, runtimestate.ErrIntegrity
+	}
+	tenant := mutation.ReceiptBinding().Scope.Tenant
+	tx, err := store.pool.Begin(ctx)
+	if err != nil {
+		return runtimestate.TransitionPlan{}, runtimestate.ErrUnavailable
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if err := bindTenant(ctx, tx, tenant); err != nil {
+		return runtimestate.TransitionPlan{}, runtimestate.ErrUnavailable
+	}
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, string(tenant)); err != nil {
+		return runtimestate.TransitionPlan{}, runtimestate.ErrUnavailable
+	}
+	current, err := store.load(ctx, tx, tenant)
+	if err != nil {
+		return runtimestate.TransitionPlan{}, err
+	}
+	plan, err := planner.Plan(ctx, current, mutation)
+	if err != nil {
+		return runtimestate.TransitionPlan{}, err
+	}
+	if plan.Validate() != nil || !reflect.DeepEqual(current, plan.BaseState()) {
+		return runtimestate.TransitionPlan{}, runtimestate.ErrIntegrity
+	}
+	encoded, err := json.Marshal(plan.State())
+	if err != nil {
+		return runtimestate.TransitionPlan{}, runtimestate.ErrIntegrity
+	}
+	if _, err := tx.Exec(ctx, `INSERT INTO runtime.tenants (tenant_id, created_at) VALUES ($1, now()) ON CONFLICT (tenant_id) DO NOTHING`, string(tenant)); err != nil {
+		return runtimestate.TransitionPlan{}, runtimestate.ErrUnavailable
+	}
+	if _, err := tx.Exec(ctx, `INSERT INTO runtime.tenant_retention_jobs (tenant_id, next_collection_at)
+		VALUES ($1, now() + interval '24 hours') ON CONFLICT (tenant_id) DO NOTHING`, string(tenant)); err != nil {
+		return runtimestate.TransitionPlan{}, runtimestate.ErrUnavailable
+	}
+	if _, err := tx.Exec(ctx, `INSERT INTO runtime.runtime_state_snapshots (tenant_id, generation, state, updated_at)
+		VALUES ($1, 1, $2::jsonb, now())
+		ON CONFLICT (tenant_id) DO UPDATE SET generation = runtime.runtime_state_snapshots.generation + 1, state = EXCLUDED.state, updated_at = EXCLUDED.updated_at`, string(tenant), encoded); err != nil {
+		return runtimestate.TransitionPlan{}, runtimestate.ErrUnavailable
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return runtimestate.TransitionPlan{}, runtimestate.ErrUnavailable
+	}
+	return plan, nil
 }
 
 // bindTenant establishes the only database-side tenant selector. It is local

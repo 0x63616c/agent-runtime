@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net/url"
 	"regexp"
 	"strings"
@@ -135,6 +136,21 @@ type Dossier struct {
 func (app *App) Download(ctx context.Context, artifactID agentruntime.ArtifactID) (Dossier, error) {
 	if _, err := agentruntime.ParseArtifactID(artifactID.String()); err != nil {
 		return Dossier{}, errors.New("download Research Dossier: Artifact is invalid")
+	}
+	if streaming, ok := app.client.(agentruntime.ArtifactStreamer); ok {
+		stream, err := streaming.OpenArtifact(ctx, artifactID)
+		if err != nil {
+			return Dossier{}, err
+		}
+		body, readErr := io.ReadAll(stream.Body)
+		closeErr := stream.Body.Close()
+		if readErr != nil {
+			return Dossier{}, fmt.Errorf("download Research Dossier: read Artifact stream: %w", readErr)
+		}
+		if closeErr != nil {
+			return Dossier{}, fmt.Errorf("download Research Dossier: close Artifact stream: %w", closeErr)
+		}
+		return Dossier{Artifact: stream.Artifact, Body: append([]byte(nil), body...), Citations: ExtractCitations(body)}, nil
 	}
 	download, err := app.client.ReadArtifact(ctx, artifactID)
 	if err != nil {

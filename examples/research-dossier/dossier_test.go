@@ -2,6 +2,8 @@ package researchdossier
 
 import (
 	"context"
+	"errors"
+	"io"
 	"strings"
 	"testing"
 
@@ -46,6 +48,33 @@ func TestDossierRunsResearchAndRecoversProgressUsingOnlyPublicContract(t *testin
 	}
 }
 
+func TestDossierDownloadsStreamingPublicArtifacts(t *testing.T) {
+	artifact := agentruntime.ArtifactReference{ID: "art_0000000000000001", MediaType: "text/markdown", SizeBytes: 68, SHA256: strings.Repeat("a", 64)}
+	body := &recordingReadCloser{Reader: strings.NewReader("# Research Dossier\n\nEvidence: https://example.com/stream")}
+	client := &streamingRecordingClient{recordingClient: recordingClient{download: agentruntime.ArtifactDownload{Artifact: artifact, Body: []byte("legacy body")}}, stream: agentruntime.ArtifactStream{Artifact: artifact, Body: body}}
+	app, err := NewApp(client, fixedKeys{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	dossier, err := app.Download(context.Background(), artifact.ID)
+	if err != nil || !body.closed || string(dossier.Body) == "legacy body" || len(dossier.Citations) != 1 || dossier.Citations[0].URL != "https://example.com/stream" {
+		t.Fatalf("stream dossier = %#v, %v", dossier, err)
+	}
+}
+
+func TestDossierReportsStreamingCloseFailure(t *testing.T) {
+	artifact := agentruntime.ArtifactReference{ID: "art_0000000000000001", MediaType: "text/markdown", SizeBytes: 68, SHA256: strings.Repeat("a", 64)}
+	body := &recordingReadCloser{Reader: strings.NewReader("complete body"), closeErr: errors.New("close failed")}
+	client := &streamingRecordingClient{stream: agentruntime.ArtifactStream{Artifact: artifact, Body: body}}
+	app, err := NewApp(client, fixedKeys{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := app.Download(context.Background(), artifact.ID); err == nil || !body.closed {
+		t.Fatalf("stream close failure = %v, closed=%t", err, body.closed)
+	}
+}
+
 func TestDossierRefusesInvalidPublicInputsAndUnsafeCitationURLs(t *testing.T) {
 	app, err := NewApp(&recordingClient{}, fixedKeys{})
 	if err != nil {
@@ -87,6 +116,26 @@ type recordingClient struct {
 	artifacts agentruntime.ArtifactPage
 	download  agentruntime.ArtifactDownload
 	events    agentruntime.EventPage
+}
+
+type streamingRecordingClient struct {
+	recordingClient
+	stream agentruntime.ArtifactStream
+}
+
+type recordingReadCloser struct {
+	io.Reader
+	closeErr error
+	closed   bool
+}
+
+func (reader *recordingReadCloser) Close() error {
+	reader.closed = true
+	return reader.closeErr
+}
+
+func (client *streamingRecordingClient) OpenArtifact(context.Context, agentruntime.ArtifactID) (agentruntime.ArtifactStream, error) {
+	return client.stream, nil
 }
 
 func (client *recordingClient) CreateSession(context.Context, agentruntime.CreateSessionRequest) (agentruntime.Session, error) {

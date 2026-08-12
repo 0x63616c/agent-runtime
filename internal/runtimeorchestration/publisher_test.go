@@ -321,7 +321,25 @@ func TestDurableInputDispatchBeginsOneInvocationAcrossRepeatedRoutes(t *testing.
 	if inputRoute.OutboxID == "" {
 		t.Fatalf("published commands = %#v, want input route", temporal.commands)
 	}
-	dispatcher, err := runtimeorchestration.NewDurableStateDispatcherWithInvocationScheduler(store, compiler, planner)
+	competing, err := compiler.CompileCreateSession(runtimestate.CreateSessionCommand{Scope: runtimestate.MutationScope{Tenant: tenant, Principal: principal, Authority: runtimestate.AuthoritySessionOwner}, IdempotencyKey: "competing-publisher-session", RevisionID: registered.Result().Revision.RevisionID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	competingPlan, err := store.Apply(ctx, competing)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var competingRoute runtimestate.OutboxRecord
+	for _, route := range competingPlan.Effects().Outbox {
+		if route.Aggregate != "audit_fact" {
+			competingRoute = route
+			break
+		}
+	}
+	if competingRoute.OutboxID == "" {
+		t.Fatalf("competing session routes = %#v, want a publisher-audited route", competingPlan.Effects().Outbox)
+	}
+	dispatcher, err := runtimeorchestration.NewDurableStateDispatcherWithInvocationScheduler(&competingPublisherMutationStore{MemoryRuntimeStateStore: store, compiler: compiler, competing: competingRoute}, compiler, planner, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -340,6 +358,9 @@ func TestDurableInputDispatchBeginsOneInvocationAcrossRepeatedRoutes(t *testing.
 	invocation := state.Invocations[0]
 	if invocation.SessionID != session.Result().Session.SessionID || invocation.TurnID == "" || invocation.OperationID != runtimestate.OperationID("orchestration-invocation-"+inputRoute.OutboxID) {
 		t.Fatalf("invocation = %#v, want deterministic input-owned operation", invocation)
+	}
+	if !hasAuditOperation(state.Audit, "outbox.claimed", "competing-publisher-claim") || !hasReceiptOperation(state.Receipts, "competing-publisher-claim") {
+		t.Fatalf("competing publisher mutation = audit %#v receipts %#v, want its committed receipt and audit", state.Audit, state.Receipts)
 	}
 }
 
@@ -465,6 +486,61 @@ func hasAuditOperation(facts []runtimestate.AuditFactRecord, kind, operationPref
 type failFirstAcknowledgementStore struct {
 	*runtimestate.MemoryRuntimeStateStore
 	failed bool
+}
+
+// competingPublisherMutationStore injects one actual publisher claim between
+// the dispatcher's read and CAS. Claiming appends the normal publisher receipt
+// and audit fact, so the dispatcher must rehydrate/replan its exact operation.
+type competingPublisherMutationStore struct {
+	*runtimestate.MemoryRuntimeStateStore
+	compiler  *runtimestate.Compiler
+	competing runtimestate.OutboxRecord
+	mutated   bool
+}
+
+func (store *competingPublisherMutationStore) ApplyCompiledMutation(ctx context.Context, planner *runtimestate.RuntimeStatePlanner, mutation runtimestate.CompiledMutation) (runtimestate.TransitionPlan, error) {
+	if mutation.ReceiptBinding().Command == runtimestate.CommandBeginInvocation && !store.mutated {
+		store.mutated = true
+		state, err := store.MemoryRuntimeStateStore.LoadRuntimeState(ctx, runtimestate.MutationScope{Tenant: store.competing.Tenant, Authority: runtimestate.AuthorityOutboxPublisher})
+		if err != nil {
+			return runtimestate.TransitionPlan{}, err
+		}
+		current, found := outboxByID(state, store.competing.OutboxID)
+		if !found {
+			return runtimestate.TransitionPlan{}, runtimestate.ErrNotFoundOrDenied
+		}
+		claim, err := store.compiler.CompileClaimOutbox(runtimestate.ClaimOutboxCommand{Scope: runtimestate.MutationScope{Tenant: current.Tenant, Authority: runtimestate.AuthorityOutboxPublisher}, IdempotencyKey: "competing-publisher-claim", OutboxID: current.OutboxID, ExpectedVersion: current.Version, Claimer: "competing-publisher", ClaimUntil: current.CommittedAt.Add(time.Minute)})
+		if err != nil {
+			return runtimestate.TransitionPlan{}, err
+		}
+		if _, err := store.MemoryRuntimeStateStore.Apply(ctx, claim); err != nil {
+			return runtimestate.TransitionPlan{}, fmt.Errorf("claim competing publisher route %#v: %w", current, err)
+		}
+	}
+	plan, err := store.MemoryRuntimeStateStore.ApplyCompiledMutation(ctx, planner, mutation)
+	if err != nil {
+		state, loadErr := store.MemoryRuntimeStateStore.LoadRuntimeState(ctx, mutation.ReceiptBinding().Scope)
+		return runtimestate.TransitionPlan{}, fmt.Errorf("atomic begin after competing claim (sessions=%#v turns=%#v invocations=%#v load=%v): %w", state.Sessions, state.Turns, state.Invocations, loadErr, err)
+	}
+	return plan, nil
+}
+
+func hasReceiptOperation(receipts []runtimestate.MutationReceipt, operationPrefix string) bool {
+	for _, receipt := range receipts {
+		if strings.HasPrefix(string(receipt.OperationID), operationPrefix) {
+			return true
+		}
+	}
+	return false
+}
+
+func outboxByID(state runtimestate.RuntimeState, outboxID runtimestate.OutboxID) (runtimestate.OutboxRecord, bool) {
+	for _, record := range state.Outbox {
+		if record.OutboxID == outboxID {
+			return record, true
+		}
+	}
+	return runtimestate.OutboxRecord{}, false
 }
 
 func (store *failFirstAcknowledgementStore) PersistTransitionPlan(ctx context.Context, plan runtimestate.TransitionPlan) error {
