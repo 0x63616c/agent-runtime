@@ -147,6 +147,64 @@ func TestCompilerCreatesTheOnlyReceiptBoundMutationAndPlannerCreatesRevision(t *
 	}
 }
 
+func TestPlannerAppendsAuditFactsAndDeduplicatesExactOperationReplay(t *testing.T) {
+	content, _, tenant, principal := testRuntimeContent(t)
+	compiler, err := runtimestate.NewCompiler(content)
+	if err != nil {
+		t.Fatalf("new compiler: %v", err)
+	}
+	planner, err := runtimestate.NewRuntimeStatePlanner(fixedPlannerClock{now: time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC)}, &uniquePlannerIDs{})
+	if err != nil {
+		t.Fatalf("new planner: %v", err)
+	}
+	body, err := content.StageAgentSpecificationBody(context.Background(), tenant, runtimecontent.AgentSpecificationBody{Name: "audit", ModelProfile: "balanced", Instructions: "retain audit facts"})
+	if err != nil {
+		t.Fatalf("stage Agent specification: %v", err)
+	}
+	register, err := compiler.CompileRegisterAgentRevision(runtimestate.RegisterAgentRevisionCommand{Scope: runtimestate.MutationScope{Tenant: tenant, Authority: runtimestate.AuthorityTenantAdministrator}, IdempotencyKey: "audit-register", Specification: body})
+	if err != nil {
+		t.Fatalf("compile registration: %v", err)
+	}
+	registered, err := planner.Plan(context.Background(), runtimestate.RuntimeState{}, register)
+	if err != nil {
+		t.Fatalf("plan registration: %v", err)
+	}
+	before := append([]runtimestate.AuditFactRecord(nil), registered.State().Audit...)
+	if len(before) == 0 {
+		t.Fatal("registration emitted no audit facts")
+	}
+
+	create, err := compiler.CompileCreateSession(runtimestate.CreateSessionCommand{Scope: ownerScope(tenant, principal), IdempotencyKey: "audit-session", RevisionID: registered.Result().Revision.RevisionID})
+	if err != nil {
+		t.Fatalf("compile Session: %v", err)
+	}
+	created, err := planner.Plan(context.Background(), registered.State(), create)
+	if err != nil {
+		t.Fatalf("plan Session: %v", err)
+	}
+	if len(created.State().Audit) <= len(before) {
+		t.Fatalf("audit count after new operation = %d, want append after %d", len(created.State().Audit), len(before))
+	}
+	for index, fact := range before {
+		if created.State().Audit[index] != fact {
+			t.Fatalf("prior audit fact %d changed from %#v to %#v", index, fact, created.State().Audit[index])
+		}
+	}
+
+	replayed, err := planner.Plan(context.Background(), created.State(), create)
+	if err != nil {
+		t.Fatalf("replay exact Session operation: %v", err)
+	}
+	if len(replayed.State().Audit) != len(created.State().Audit) {
+		t.Fatalf("replayed audit count = %d, want deduplicated %d", len(replayed.State().Audit), len(created.State().Audit))
+	}
+	for index, fact := range created.State().Audit {
+		if replayed.State().Audit[index] != fact {
+			t.Fatalf("replayed audit fact %d changed from %#v to %#v", index, fact, replayed.State().Audit[index])
+		}
+	}
+}
+
 func TestPlannerAssignsIndependentRetentionHorizonsByDataClass(t *testing.T) {
 	now := time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC)
 	content, _, tenant, principal := testRuntimeContent(t)
