@@ -65,9 +65,9 @@ k8s_resource('state', pod_readiness='wait')
 k8s_resource('temporal-state', pod_readiness='wait')
 k8s_resource('temporal', resource_deps=['temporal-state'], pod_readiness='wait')
 # The local Stack's private bootstrap capability is created before Tilt starts.
-# Reconciliation is a separately audited local operator action and runs only
-# after the owned Temporal Deployment reports Ready. The disposable CI profile
-# deliberately has no local state/capability to reconcile, and runtime
+# Reconciliation is a separately audited operator action and runs only after
+# the owned Temporal Deployment reports Ready. The CI harness establishes its
+# private authority before Tilt applies the reviewed topology; runtime
 # processes never create their own namespace as a startup side effect.
 if profile == 'local':
     local_resource('stack-reconcile', cmd='go run ./tools/dev reconcile --stack=' + stack + ' --root=.', resource_deps=['temporal', 'migration-runner'])

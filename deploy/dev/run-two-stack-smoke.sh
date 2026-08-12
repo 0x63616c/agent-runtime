@@ -413,10 +413,18 @@ start_stack() {
   local stack="$1"
   local namespace="$2"
   local ci_status=0
+  if [[ "$profile" == "ci" ]]; then
+    # Bootstrap is deliberately outside the Tiltfile: plan rendering must be
+    # side-effect free, and stackctl must create the Namespace before Tilt can
+    # apply the same reviewed topology.
+    deploy/dev/bootstrap-ci-stack.sh --stack="$stack" --context="$context" >/dev/null 2>&1 || ci_status=$?
+  fi
   # Do not retain Tilt output: it may contain workload environment or headers.
   # The allowlisted summary below records only bounded readiness metadata.
-  tilt ci --context "$context" --namespace "$namespace" --port 0 --timeout "$readiness_timeout" \
-    -- --stack="$stack" --profile="$profile" "${ci_tilt_args[@]}" >/dev/null 2>&1 || ci_status=$?
+  if [[ "$ci_status" == 0 ]]; then
+    tilt ci --context "$context" --namespace "$namespace" --port 0 --timeout "$readiness_timeout" \
+      -- --stack="$stack" --profile="$profile" "${ci_tilt_args[@]}" >/dev/null 2>&1 || ci_status=$?
+  fi
   capture_stack_diagnostics "$stack" "$namespace" "$ci_status"
   if [[ "$ci_status" != 0 ]]; then
     return "$ci_status"

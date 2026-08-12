@@ -212,8 +212,17 @@ var _ = Describe("M1 deployment safety boundaries", func() {
 		Expect(read("Tiltfile")).To(ContainSubstring("if profile == 'local':\n    local_resource('stack-reconcile'"))
 		Expect(read("Tiltfile")).To(ContainSubstring("deploy/dev/reconcile-ci-stack.sh --stack=' + stack + ' --context=' + ci_context"))
 		Expect(read("Tiltfile")).To(ContainSubstring("resource_deps=['state', 'temporal', 'telemetry', 'stack-reconcile']"))
+		ciBootstrap := read("deploy/dev/bootstrap-ci-stack.sh")
+		for _, required := range []string{"go run ./tools/dev render", "stackctl bootstrap", "--profile ci", "--bootstrap-capability-file", "k3d-ar-ci-*", "CI Stack bootstrap accepts only --stack and --context"} {
+			Expect(ciBootstrap).To(ContainSubstring(required))
+		}
+		unsafeCIBootstrap := exec.Command("bash", "deploy/dev/bootstrap-ci-stack.sh", "--stack=ci-fixture", "--context=orbstack")
+		unsafeCIBootstrap.Dir = "../.."
+		unsafeBootstrapOutput, unsafeBootstrapErr := unsafeCIBootstrap.CombinedOutput()
+		Expect(unsafeBootstrapErr).To(HaveOccurred())
+		Expect(string(unsafeBootstrapOutput)).To(ContainSubstring("requires a generated Stack and private k3d context"))
 		ciReconcile := read("deploy/dev/reconcile-ci-stack.sh")
-		for _, required := range []string{"--profile ci", "--providers-only", "--bootstrap-capability-file", "k3d-ar-ci-*", "CI Stack reconciliation accepts only --stack and --context"} {
+		for _, required := range []string{"--profile ci", "--providers-only", "--bootstrap-capability-file", "k3d-ar-ci-*", "CI Stack reconciliation accepts only --stack and --context", "requires existing rendered state and private authority"} {
 			Expect(ciReconcile).To(ContainSubstring(required))
 		}
 		unsafeCIReconcile := exec.Command("bash", "deploy/dev/reconcile-ci-stack.sh", "--stack=ci-fixture", "--context=orbstack")
@@ -229,6 +238,8 @@ var _ = Describe("M1 deployment safety boundaries", func() {
 		}
 		Expect(read("Justfile")).To(ContainSubstring(`two-stack-smoke profile="local"`))
 		twoStackScript := read("deploy/dev/run-two-stack-smoke.sh")
+		Expect(twoStackScript).To(ContainSubstring("deploy/dev/bootstrap-ci-stack.sh --stack=\"$stack\" --context=\"$context\""))
+		Expect(strings.Index(twoStackScript, "deploy/dev/bootstrap-ci-stack.sh --stack=\"$stack\" --context=\"$context\"\n")).To(BeNumerically("<", strings.Index(twoStackScript, "tilt ci --context \"$context\"")), "CI bootstrap must establish namespace authority before Tilt applies the topology")
 		for _, required := range []string{
 			`AGENT_RUNTIME_DEV_PROFILE:-local`,
 			`AGENT_RUNTIME_TWO_STACK_EVIDENCE`,
