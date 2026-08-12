@@ -3,6 +3,7 @@ package runtimeapi_test
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -176,6 +177,58 @@ func TestStateRuntimeHTTPAndSDKEnforceRequestAndEventLimits(t *testing.T) {
 			t.Fatalf("SDK Events limit %d error = %v, want invalid input", limit, err)
 		}
 	}
+}
+
+func TestStateRuntimeHTTPInspectionExcludesBackendExecutionIdentifiers(t *testing.T) {
+	runtime := newMemoryStateRuntime(t)
+	handler, err := runtimeapi.NewHandler(runtimeapi.Config{Runtime: runtime, Authenticator: staticAuth{identities: map[string]runtimeapi.Identity{
+		"admin-token-000000": {Tenant: "tenant-a", Principal: "admin", Admin: true},
+		"alice-token-000000": {Tenant: "tenant-a", Principal: "alice"},
+	}}, RequestIDs: &requestIDs{}})
+	if err != nil {
+		t.Fatalf("new handler: %v", err)
+	}
+	server := httptest.NewServer(handler)
+	defer server.Close()
+
+	ctx := context.Background()
+	admin := newStateRuntimeHTTPClient(t, server.URL, "admin-token-000000")
+	alice := newStateRuntimeHTTPClient(t, server.URL, "alice-token-000000")
+	agent, err := admin.CreateAgent(ctx, agentruntime.CreateAgentRequest{IdempotencyKey: "inspection-agent", Name: "assistant", ModelProfile: "balanced", Instructions: "safe"})
+	if err != nil {
+		t.Fatalf("create Agent: %v", err)
+	}
+	session, err := alice.CreateSession(ctx, agentruntime.CreateSessionRequest{IdempotencyKey: "inspection-session", AgentRevision: agent.RevisionID})
+	if err != nil {
+		t.Fatalf("create Session: %v", err)
+	}
+	if _, err := alice.SendInput(ctx, agentruntime.SendInputRequest{SessionID: session.ID, IdempotencyKey: "inspection-input", Parts: []agentruntime.ContentPart{{Kind: agentruntime.ContentText, Text: "inspect only runtime-owned IDs"}}}); err != nil {
+		t.Fatalf("send Input: %v", err)
+	}
+
+	request, err := http.NewRequest(http.MethodGet, server.URL+"/v1/sessions/"+session.ID.String(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Header.Set("Authorization", "Bearer alice-token-000000")
+	request.Header.Set("X-Request-ID", "req_0000000000000001")
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, readErr := io.ReadAll(response.Body)
+	closeErr := response.Body.Close()
+	if readErr != nil || closeErr != nil {
+		t.Fatalf("read Session inspection = %v, %v", readErr, closeErr)
+	}
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("inspect Session status = %d, want %d", response.StatusCode, http.StatusOK)
+	}
+	var inspection any
+	if err := json.Unmarshal(body, &inspection); err != nil {
+		t.Fatalf("decode Session inspection: %v", err)
+	}
+	assertNoBackendExecutionIdentifier(t, inspection)
 }
 
 func TestStateRuntimeReadsOnlyStateAuthorizedArtifactBytes(t *testing.T) {
@@ -1095,4 +1148,22 @@ func (ids *stateRuntimeIDs) NextIdentifier(kind runtimestate.IdentifierKind) (st
 func hasFailure(err error, code agentruntime.FailureCode) bool {
 	var runtimeError *agentruntime.Error
 	return errors.As(err, &runtimeError) && runtimeError.Failure.Code == code
+}
+
+func assertNoBackendExecutionIdentifier(t *testing.T, value any) {
+	t.Helper()
+	switch typed := value.(type) {
+	case []any:
+		for _, item := range typed {
+			assertNoBackendExecutionIdentifier(t, item)
+		}
+	case map[string]any:
+		for key, item := range typed {
+			switch key {
+			case "workflow_id", "run_id", "task_queue", "temporal_workflow_id", "database_position", "backend_id":
+				t.Fatalf("Session inspection exposed forbidden backend identifier field %q", key)
+			}
+			assertNoBackendExecutionIdentifier(t, item)
+		}
+	}
 }
