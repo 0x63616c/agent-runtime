@@ -9,6 +9,7 @@ import (
 	"regexp"
 
 	"github.com/0x63616c/agent-runtime/internal/runtimeapi"
+	"github.com/0x63616c/agent-runtime/internal/runtimecontent"
 	"github.com/cockroachdb/errors"
 )
 
@@ -112,7 +113,13 @@ func Parse(input io.Reader) (Config, error) {
 	principals := make([]principal, len(decoded.Principals))
 	seen := make(map[string]struct{})
 	for index, configured := range decoded.Principals {
-		if configured.Tenant == "" || len(configured.Tenant) > 128 || configured.Principal == "" || len(configured.Principal) > 128 || !environmentName.MatchString(configured.BearerTokenEnvironment) {
+		if _, err := runtimecontent.ParseTenantID(configured.Tenant); err != nil {
+			return Config{}, errors.New("validate runtime API configuration: principal is invalid")
+		}
+		if _, err := runtimecontent.ParsePrincipalID(configured.Principal); err != nil {
+			return Config{}, errors.New("validate runtime API configuration: principal is invalid")
+		}
+		if !environmentName.MatchString(configured.BearerTokenEnvironment) {
 			return Config{}, errors.New("validate runtime API configuration: principal is invalid")
 		}
 		key := configured.Tenant + "\x00" + configured.Principal

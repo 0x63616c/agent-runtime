@@ -84,6 +84,39 @@ func TestDurablePostgresMinIOAPIProcessSurvivesRestart(t *testing.T) {
 	}
 }
 
+func TestRuntimeProcessAnnouncesReadinessOnlyAfterHealthRouteServes(t *testing.T) {
+	config, err := runtimeapiprocess.Parse(strings.NewReader(`{"version":1,"listen_address":"127.0.0.1:0","storage":{"mode":"memory-unsafe"},"model_profiles":["balanced"],"max_request_bytes":4194304,"principals":[{"tenant":"local","principal":"admin","admin":true,"bearer_token_environment":"ADMIN_TOKEN"}]}`))
+	if err != nil {
+		t.Fatalf("parse process configuration: %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	readiness := make(chan error, 1)
+	done := make(chan error, 1)
+	go func() {
+		done <- runtimeapiprocess.Run(ctx, config, mapLookup(map[string]string{"ADMIN_TOKEN": "admin-token-0000"}), func(address string) {
+			response, err := http.Get("http://" + address + "/readyz") // #nosec G107 -- address is the process-owned loopback listener.
+			if err != nil {
+				readiness <- err
+				return
+			}
+			defer func() { _ = response.Body.Close() }()
+			if response.StatusCode != http.StatusOK {
+				readiness <- fmt.Errorf("readiness status = %d", response.StatusCode)
+				return
+			}
+			readiness <- nil
+		})
+	}()
+	if err := <-readiness; err != nil {
+		t.Fatalf("readiness callback observed unavailable route: %v", err)
+	}
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatalf("stop runtime process: %v", err)
+	}
+}
+
 func isSafeDurablePolicyDenial(err error) bool {
 	var runtimeError *agentruntime.Error
 	return errors.As(err, &runtimeError) && runtimeError.Failure.Code == agentruntime.FailureNotFound && !strings.Contains(err.Error(), "workspace-write") && !strings.Contains(err.Error(), "durable-alice-token")

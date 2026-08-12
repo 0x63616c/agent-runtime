@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"sync"
 	"time"
 
 	"github.com/0x63616c/agent-runtime/internal/runtime/kernel"
@@ -79,12 +80,19 @@ func serve(ctx context.Context, config Config, lookup SecretLookup, listener net
 	mux.HandleFunc("GET /healthz", ready)
 	mux.HandleFunc("GET /readyz", ready)
 	mux.Handle("/", handler)
-	server := newHTTPServer(mux)
-	if announceReady != nil && ctx.Err() == nil {
-		announceReady(listener.Addr().String())
-	}
+	server := &http.Server{Handler: mux, ReadHeaderTimeout: 5 * time.Second, IdleTimeout: 30 * time.Second, MaxHeaderBytes: 16 << 10}
 	result := make(chan error, 1)
-	go func() { result <- server.Serve(listener) }()
+	started := make(chan struct{})
+	go func() {
+		close(started)
+		result <- server.Serve(listener)
+	}()
+	if announceReady != nil {
+		gate := newReadinessGate(ctx, announceReady)
+		<-started
+		gate.announce(listener.Addr().String())
+		defer gate.stop()
+	}
 	select {
 	case err := <-result:
 		if err == nil || errors.Is(err, http.ErrServerClosed) {
@@ -105,15 +113,37 @@ func serve(ctx context.Context, config Config, lookup SecretLookup, listener net
 	}
 }
 
-func newHTTPServer(handler http.Handler) *http.Server {
-	return &http.Server{
-		Handler:           handler,
-		ReadHeaderTimeout: 5 * time.Second,
-		ReadTimeout:       15 * time.Second,
-		WriteTimeout:      15 * time.Second,
-		IdleTimeout:       30 * time.Second,
-		MaxHeaderBytes:    16 << 10,
+type readinessGate struct {
+	mu        sync.Mutex
+	ctx       context.Context
+	cancelled bool
+	announced bool
+	ready     func(string)
+	stopWatch func() bool
+}
+
+func newReadinessGate(ctx context.Context, ready func(string)) *readinessGate {
+	gate := &readinessGate{ctx: ctx, ready: ready}
+	gate.stopWatch = context.AfterFunc(ctx, func() {
+		gate.mu.Lock()
+		defer gate.mu.Unlock()
+		gate.cancelled = true
+	})
+	return gate
+}
+
+func (gate *readinessGate) announce(address string) {
+	gate.mu.Lock()
+	defer gate.mu.Unlock()
+	if gate.cancelled || gate.announced || gate.ctx.Err() != nil {
+		return
 	}
+	gate.announced = true
+	gate.ready(address)
+}
+
+func (gate *readinessGate) stop() {
+	gate.stopWatch()
 }
 
 func composeRuntime(ctx context.Context, config Config, lookup SecretLookup, ids *cryptoIDs) (runtimeapi.Runtime, func(), error) {

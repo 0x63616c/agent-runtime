@@ -16,6 +16,7 @@
         "cmd/sandbox-control/main.go",
         "internal/runtimeapi/server.go",
         "internal/runtimeapi/observation.go",
+        "internal/runtimeapiprocess/config.go",
         "internal/runtimeapiprocess/run.go",
         "internal/runtimeapiprocess/observability.go",
         "deploy/runtimeapi/api.example.json",
