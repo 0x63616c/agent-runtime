@@ -11,6 +11,10 @@ The domain-model supplement for `DOM-001`, `DOM-002`, and `DOM-004` through
 `DOM-013` is bound to `3f40dab755cecfb0d8647fcf88731db2aa757f48`.
 Its ledger reference `m5-domain-model-3f40dab` resolves to
 [`m5-domain-model-contract.json`](../../evidence/m5-domain-model-contract.json).
+The data-authority supplement for `DAT-002` through `DAT-008` and `DAT-011`
+through `DAT-012` is bound to `4454bf9c5cbb1a7120508d6f84f14fd5be6d110f`.
+Its ledger reference `m5-data-authority-4454bf9` resolves to
+[`m5-data-authority-contract.json`](../../evidence/m5-data-authority-contract.json).
 
 This audit maps each M5 requirement to the current implementation proof. It is
 not a completion claim: a row changes to `completed` only in the atomic bundle
@@ -47,18 +51,18 @@ The public-boundary supplement for `TMP-002` and `TMP-003` is
 | API-010 | Public SDK rejects an unconfigured model profile and raw HTTP rejects a provider credential-shaped field without echoing it. | Promoted with retained public-contract evidence. |
 | API-011 | Checked-in v1 compatibility baseline, generated route-table drift check, temporary `GOWORK=off` consumer compile, and migration policy pass. | Promoted as candidate-module compatibility evidence; no immutable release tag is claimed. |
 | API-012 | Immutable Agent/Policy revision lifecycle and admin/non-admin HTTP/SDK separation pass. | Promoted with retained public-contract evidence. |
-| DAT-001 | conversation expected-version/idempotency planner test. | Defer to the PostgreSQL state bundle. |
-| DAT-002 | Artifact authorization/integrity/streaming tests and durable MinIO input path. | Defer to the PostgreSQL state bundle. |
-| DAT-003 | ordered event/outbox planner and public cursor tests. | Defer to the PostgreSQL state bundle. |
-| DAT-004 | durable producer-gap and publisher-recovery integrations. | Defer to the PostgreSQL state bundle. |
-| DAT-005 | retention/cursor fake-clock and collector tests. | Defer to the PostgreSQL state bundle. |
-| DAT-006 | `TestEveryClosedMutationVocabularyHasDurableAuditLifecyclePhases`. | Defer to the PostgreSQL state bundle. |
-| DAT-007 | audit exporter outage/reclaim integration. | Defer to the PostgreSQL state bundle. |
-| DAT-008 | retention-class inventory plus collector/erasure lifecycle tests. | Defer to the PostgreSQL state bundle. |
+| DAT-001 | Conversation expected-version/idempotency/replay is planner-only. | Defer: add a Conversation-specific persisted PostgreSQL replay/conflict test. |
+| DAT-002 | Artifact authorization/integrity/streaming tests and disposable PostgreSQL/MinIO input/readback path. | Promoted with retained data-authority evidence. |
+| DAT-003 | ordered event/outbox planner, public cursor, producer-loss and publisher-recovery tests. | Promoted with retained data-authority evidence. |
+| DAT-004 | durable producer-gap and PostgreSQL/Temporal publisher acknowledgement-loss/process-recovery integrations. | Promoted with retained data-authority evidence. |
+| DAT-005 | retention-class policy plus cursor compaction/explicit Gap and current-inspection tests. | Promoted with retained data-authority evidence. |
+| DAT-006 | complete audit lifecycle vocabulary plus durable PostgreSQL audit export outage/reclaim integration. | Promoted with retained data-authority evidence. |
+| DAT-007 | concrete HTTP audit exporter and durable PostgreSQL lease-reclaim-after-outage integration; explicitly at-least-once. | Promoted with retained data-authority evidence. |
+| DAT-008 | retention-class inventory lint, exact collector/erasure reconciliation integrations, and lifecycle documentation. | Promoted with retained data-authority evidence. |
 | DAT-009 | partition/RLS and unbound/cross-tenant integration tests. | Not eligible until the protected operations report exists. |
 | DAT-010 | migration, rollback refusal, locking, collection, erasure, and disposable backup/restore tests. | Not eligible until protected retention/PITR evidence exists. |
-| DAT-011 | state-owned cursor/event tests and PostgreSQL-to-Temporal route recovery. | Defer with the PostgreSQL state bundle. |
-| DAT-012 | outbox acknowledgement-loss and child-process kill/recovery integrations. | Defer with the PostgreSQL state bundle. |
+| DAT-011 | state-owned cursor/event tests, producer-gap integration, and PostgreSQL-to-Temporal route recovery. | Promoted with retained data-authority evidence. |
+| DAT-012 | sealed-plan persistence plus acknowledgement-loss and child-process kill/recovery integrations. | Promoted with retained data-authority evidence. |
 | DAT-013 | production-adapter disposable matrix covers migration, conflict, recovery, expiry/gap, restore, erasure, and cross-tenant denial. | Not eligible until the protected operations report exists. |
 | TMP-002 | `TestPublicSDKInputStartsAndSignalsThePrivateSessionWorkflow` drives public Go SDK/HTTP admission through PostgreSQL outbox to a real private Temporal worker. | Promoted with disposable integration evidence; the typed SDK observation exposes runtime-owned Input and Turn IDs, while raw HTTP field omission is not asserted. |
 | TMP-003 | `TestSessionWorkflowRejectsOversizedPrivatePayloads` rejects oversized continuation/command metadata before dispatch; durable harness replays historic workflow corpus. | Promoted with workflow bound and replay evidence. |

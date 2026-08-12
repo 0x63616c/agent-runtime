@@ -1,0 +1,52 @@
+{
+  "version": 1,
+  "milestone": "M5 durable agent runtime",
+  "implementation_revision": "4454bf9c5cbb1a7120508d6f84f14fd5be6d110f",
+  "utc_time": "2026-08-12T00:32:53Z",
+  "requirements": ["DAT-002", "DAT-003", "DAT-004", "DAT-005", "DAT-006", "DAT-007", "DAT-008", "DAT-011", "DAT-012"],
+  "commands": [
+    {
+      "id": "m5-data-authority-contract-suite",
+      "command": "go test -race ./internal/runtimestate ./internal/runtimeapi ./internal/runtimepostgres ./internal/runtimeorchestration ./internal/runtimemodel ./internal/runtimetool ./tests/architecture -count=1",
+      "result": "passed"
+    },
+    {
+      "id": "m5-data-authority-durable-composition",
+      "command": "deploy/runtimeapi/run-durable-integration.sh",
+      "result": "passed"
+    },
+    {
+      "id": "m5-data-authority-full-gate",
+      "command": "just check",
+      "result": "passed"
+    },
+    {
+      "id": "m5-data-authority-docs-check",
+      "command": "just docs-check",
+      "result": "passed"
+    }
+  ],
+  "coverage": {
+    "DAT-002": "State/HTTP Artifact tests enforce immutable ID/media type/size/digest metadata, owner authorization, bounded streaming and digest verification. Disposable PostgreSQL/MinIO tests prove authorized input/readback and reject forged or cross-principal references before staging.",
+    "DAT-003": "Kernel and public StateRuntime cursor tests prove ordered bounded events, opaque replay/resume and explicit Gap semantics. Disposable producer-loss and durable publisher tests prove finalizable at-least-once delivery without silent loss.",
+    "DAT-004": "Disposable PostgreSQL/MinIO producer-loss integration records a durable producer gap and terminal failure, then replays the ordered public Event sequence. The PostgreSQL/Temporal publisher integration reclaims acknowledgement-loss and process-kill routes.",
+    "DAT-005": "Fake-clock cursor compaction/Gap tests and public Event contracts give clients a recoverable current-inspection path. Event retention is independently assigned by the planner's data-class policy.",
+    "DAT-006": "The state planner test proves a distinct mutation appends without changing prior audit facts and an exact operation replay adds or changes none; the lifecycle vocabulary test requires attempted/authorized/committed and terminal/reconciled phases where applicable. Disposable PostgreSQL migration integration rejects a duplicate `(operation_id, fact_kind)` audit insert, while the durable outage integration proves audit retention exceeds its export route.",
+    "DAT-007": "The concrete HTTP audit-exporter and disposable PostgreSQL outage integration retain a claimed exact audit route after a sink failure, reclaim it after lease expiry, export the retained fact, and record publication. The protocol is explicitly at-least-once, not transactional fail-closed.",
+    "DAT-008": "The planner assigns named independent retention classes; the architecture inventory test requires every runtime-state class in the lifecycle documentation. PostgreSQL/MinIO collection and tenant-erasure integrations prove exact reference deletion/reconciliation, while the documentation states the separate payload and sandbox lifecycle authorities.",
+    "DAT-011": "The runtime-state planner owns ordered runtime event sequence/cursor state. Producer-loss replay and PostgreSQL-to-Temporal publisher integrations retain PostgreSQL as the public event/cursor authority and exercise gap/finalization recovery without treating workflow transport as a public cursor.",
+    "DAT-012": "Sealed-plan persistence, durable Artifact/model/tool paths, and PostgreSQL/Temporal acknowledgement-loss and child-process-kill integrations prove explicit transaction or at-least-once/reconciled boundaries. No stronger exactly-once effect claim is made."
+  },
+  "documentation": [
+    "docs/reference/data-lifecycle.md",
+    "docs/reference/runtime-go-contract.md",
+    "docs/architecture/system.md",
+    "docs/operations/self-hosted-deployment.md"
+  ],
+  "limitations": [
+    "DAT-001 remains unpromoted: current expected-version/idempotent Conversation coverage is planner-only; a Conversation-specific persisted PostgreSQL replay/conflict test is still required.",
+    "DAT-009, DAT-010, and DAT-013 remain unpromoted. The current PostgreSQL/MinIO/Temporal harness is disposable and does not provide an authorized protected-environment role-grant, scheduled-retention, active-WAL, isolated-PITR, or current production-configuration report.",
+    "The disposable backup/restore check is not a protected production backup/PITR drill, and no production operations claim is made.",
+    "This evidence does not prove a live model provider, deployed model-role credential source, external sandbox command, Firecracker, Linux KVM, release tag, or external consumer."
+  ]
+}

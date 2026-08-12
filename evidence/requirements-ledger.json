@@ -93,31 +93,56 @@
     },
     {
       "id": "DAT-002",
-      "status": "not_started"
+      "status": "completed",
+      "evidence": [
+        {"revision": "4454bf9c5cbb1a7120508d6f84f14fd5be6d110f", "utc_time": "2026-08-12T00:32:53Z", "proof_level": "contract", "command_id": "m5-data-authority-contract-suite", "artifact_ref": "m5-data-authority-4454bf9", "result": "passed"},
+        {"revision": "4454bf9c5cbb1a7120508d6f84f14fd5be6d110f", "utc_time": "2026-08-12T00:32:53Z", "proof_level": "integration", "command_id": "m5-data-authority-durable-composition", "artifact_ref": "m5-data-authority-4454bf9", "result": "passed"}
+      ]
     },
     {
       "id": "DAT-003",
-      "status": "not_started"
+      "status": "completed",
+      "evidence": [
+        {"revision": "4454bf9c5cbb1a7120508d6f84f14fd5be6d110f", "utc_time": "2026-08-12T00:32:53Z", "proof_level": "contract", "command_id": "m5-data-authority-contract-suite", "artifact_ref": "m5-data-authority-4454bf9", "result": "passed"},
+        {"revision": "4454bf9c5cbb1a7120508d6f84f14fd5be6d110f", "utc_time": "2026-08-12T00:32:53Z", "proof_level": "integration", "command_id": "m5-data-authority-durable-composition", "artifact_ref": "m5-data-authority-4454bf9", "result": "passed"}
+      ]
     },
     {
       "id": "DAT-004",
-      "status": "not_started"
+      "status": "completed",
+      "evidence": [
+        {"revision": "4454bf9c5cbb1a7120508d6f84f14fd5be6d110f", "utc_time": "2026-08-12T00:32:53Z", "proof_level": "integration", "command_id": "m5-data-authority-durable-composition", "artifact_ref": "m5-data-authority-4454bf9", "result": "passed"}
+      ]
     },
     {
       "id": "DAT-005",
-      "status": "not_started"
+      "status": "completed",
+      "evidence": [
+        {"revision": "4454bf9c5cbb1a7120508d6f84f14fd5be6d110f", "utc_time": "2026-08-12T00:32:53Z", "proof_level": "contract", "command_id": "m5-data-authority-contract-suite", "artifact_ref": "m5-data-authority-4454bf9", "result": "passed"}
+      ]
     },
     {
       "id": "DAT-006",
-      "status": "not_started"
+      "status": "completed",
+      "evidence": [
+        {"revision": "4454bf9c5cbb1a7120508d6f84f14fd5be6d110f", "utc_time": "2026-08-12T00:32:53Z", "proof_level": "unit", "command_id": "m5-data-authority-contract-suite", "artifact_ref": "m5-data-authority-4454bf9", "result": "passed"},
+        {"revision": "4454bf9c5cbb1a7120508d6f84f14fd5be6d110f", "utc_time": "2026-08-12T00:32:53Z", "proof_level": "integration", "command_id": "m5-data-authority-durable-composition", "artifact_ref": "m5-data-authority-4454bf9", "result": "passed"}
+      ]
     },
     {
       "id": "DAT-007",
-      "status": "not_started"
+      "status": "completed",
+      "evidence": [
+        {"revision": "4454bf9c5cbb1a7120508d6f84f14fd5be6d110f", "utc_time": "2026-08-12T00:32:53Z", "proof_level": "integration", "command_id": "m5-data-authority-durable-composition", "artifact_ref": "m5-data-authority-4454bf9", "result": "passed"}
+      ]
     },
     {
       "id": "DAT-008",
-      "status": "not_started"
+      "status": "completed",
+      "evidence": [
+        {"revision": "4454bf9c5cbb1a7120508d6f84f14fd5be6d110f", "utc_time": "2026-08-12T00:32:53Z", "proof_level": "integration", "command_id": "m5-data-authority-durable-composition", "artifact_ref": "m5-data-authority-4454bf9", "result": "passed"},
+        {"revision": "4454bf9c5cbb1a7120508d6f84f14fd5be6d110f", "utc_time": "2026-08-12T00:32:53Z", "proof_level": "documentation", "command_id": "m5-data-authority-docs-check", "artifact_ref": "m5-data-authority-4454bf9", "result": "passed"}
+      ]
     },
     {
       "id": "DAT-009",
@@ -129,11 +154,18 @@
     },
     {
       "id": "DAT-011",
-      "status": "not_started"
+      "status": "completed",
+      "evidence": [
+        {"revision": "4454bf9c5cbb1a7120508d6f84f14fd5be6d110f", "utc_time": "2026-08-12T00:32:53Z", "proof_level": "contract", "command_id": "m5-data-authority-contract-suite", "artifact_ref": "m5-data-authority-4454bf9", "result": "passed"},
+        {"revision": "4454bf9c5cbb1a7120508d6f84f14fd5be6d110f", "utc_time": "2026-08-12T00:32:53Z", "proof_level": "integration", "command_id": "m5-data-authority-durable-composition", "artifact_ref": "m5-data-authority-4454bf9", "result": "passed"}
+      ]
     },
     {
       "id": "DAT-012",
-      "status": "not_started"
+      "status": "completed",
+      "evidence": [
+        {"revision": "4454bf9c5cbb1a7120508d6f84f14fd5be6d110f", "utc_time": "2026-08-12T00:32:53Z", "proof_level": "integration", "command_id": "m5-data-authority-durable-composition", "artifact_ref": "m5-data-authority-4454bf9", "result": "passed"}
+      ]
     },
     {
       "id": "DAT-013",
