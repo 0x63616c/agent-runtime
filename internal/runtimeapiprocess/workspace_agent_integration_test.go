@@ -5,7 +5,6 @@ package runtimeapiprocess_test
 import (
 	"bytes"
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -75,7 +74,10 @@ func TestDurableWorkspaceAgentBinariesUseOnlyThePublicAPI(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer pool.Close()
-	source, err := clock.NewFake(time.Now().UTC())
+	// The broker clock stays deliberately behind the public API process clock.
+	// This lets the private producer admit an expiry that the public API can
+	// deterministically observe as elapsed, without a wall-clock wait.
+	source, err := clock.NewFake(time.Now().UTC().Add(-2 * time.Hour))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -145,10 +147,11 @@ func TestDurableWorkspaceAgentBinariesUseOnlyThePublicAPI(t *testing.T) {
 		}
 		return seededApproval{approvalID: id, sessionID: session.ID, turnID: accepted.Turn.ID, toolCallID: "tcall_" + suffix + "00000000"}
 	}
-	approve := seed("APPROVEA", source.Now().Add(time.Hour))
-	deny := seed("DENYBBBB", source.Now().Add(time.Hour))
-	cancel := seed("CANCELCC", source.Now().Add(time.Hour))
-	pending := seed("PENDINGE", source.Now().Add(time.Hour))
+	futureExpiry := source.Now().Add(4 * time.Hour)
+	approve := seed("APPROVEA", futureExpiry)
+	deny := seed("DENYBBBB", futureExpiry)
+	cancel := seed("CANCELCC", futureExpiry)
+	pending := seed("PENDINGE", futureExpiry)
 
 	// The owner web binary presents the public safe action summary and the
 	// unavailable sandbox status, then approves one request over HTTP.
@@ -185,18 +188,10 @@ func TestDurableWorkspaceAgentBinariesUseOnlyThePublicAPI(t *testing.T) {
 		t.Fatalf("cancel invalidates pending approval = %#v, %v", approval, e)
 	}
 
-	// The browser must also surface a truthful refusal once the durable API
-	// expires a pending request.  The broker sees its fixed fake-clock expiry
-	// in the future; the public API role owns wall-clock expiry enforcement.
-	expiresAt := time.Now().UTC().Add(50 * time.Millisecond)
-	expire := seed("EXPIREDD", expiresAt)
-	expiryWait, stopExpiryWait := context.WithDeadline(ctx, expiresAt.Add(100*time.Millisecond))
-	<-expiryWait.Done()
-	waitErr := expiryWait.Err()
-	stopExpiryWait()
-	if !errors.Is(waitErr, context.DeadlineExceeded) {
-		t.Fatalf("await Workspace Approval expiry deadline: %v", waitErr)
-	}
+	// The broker sees this fixed fake-clock expiry in the future, while the
+	// public API role's clock is already past it. Its public decision therefore
+	// exercises durable expiry without waiting for wall time.
+	expire := seed("EXPIREDD", source.Now().Add(time.Hour))
 	postWorkspaceFormFailure(t, webURL+"/approvals/"+expire.approvalID.String()+"/approve", "web-expired")
 	if approval, e := alice.InspectApproval(ctx, expire.approvalID); e != nil || approval.State != agentruntime.ApprovalExpired {
 		t.Fatalf("web expiry = %#v, %v", approval, e)

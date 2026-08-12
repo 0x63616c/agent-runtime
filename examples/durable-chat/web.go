@@ -142,9 +142,6 @@ func sameOrigin(request *http.Request) bool {
 	return err == nil && origin.Scheme == "http" && origin.Host == request.Host && origin.User == nil
 }
 
-func safeNotice(err error) string {
-	if err == nil {
-		return "request could not be completed"
-	}
-	return "request could not be completed: " + err.Error()
+func safeNotice(_ error) string {
+	return "request could not be completed"
 }

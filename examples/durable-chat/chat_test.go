@@ -3,6 +3,7 @@ package durablechat_test
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -73,6 +74,24 @@ func TestWebHandlerUsesSameDurableControllerAndLabelsSubscriptionState(t *testin
 	handler.ServeHTTP(page, httptest.NewRequest(http.MethodGet, "/?session=sess_1234567890ABCDEF", nil))
 	if !strings.Contains(page.Body.String(), "subscription canary blocked") || strings.Contains(page.Body.String(), "token") {
 		t.Fatalf("page = %q", page.Body.String())
+	}
+}
+
+func TestWebHandlerDoesNotRenderPrivateFailureDetails(t *testing.T) {
+	client := &fakeClient{sendErr: errors.New("private workflow ID workflow-internal-123 and runtime bearer durable-secret-token")}
+	app, _ := durablechat.NewApp(client, &keys{})
+	handler, err := durablechat.NewWebHandler(durablechat.WebConfig{App: app})
+	if err != nil {
+		t.Fatal(err)
+	}
+	response := httptest.NewRecorder()
+	request := webMutationRequest(http.MethodPost, "/sessions/sess_1234567890ABCDEF/messages", url.Values{
+		"csrf": {webCSRFToken(t, handler)},
+		"text": {"trigger a public failure"},
+	})
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), "request could not be completed") || strings.Contains(response.Body.String(), "workflow-internal-123") || strings.Contains(response.Body.String(), "durable-secret-token") {
+		t.Fatalf("web public failure = status=%d body=%q", response.Code, response.Body.String())
 	}
 }
 
@@ -162,10 +181,11 @@ func (keys *keys) Next(action string) (string, error) {
 }
 
 type fakeClient struct {
-	create agentruntime.CreateSessionRequest
-	sent   agentruntime.SendInputRequest
-	after  agentruntime.Cursor
-	cancel agentruntime.CancelTurnRequest
+	create  agentruntime.CreateSessionRequest
+	sent    agentruntime.SendInputRequest
+	after   agentruntime.Cursor
+	cancel  agentruntime.CancelTurnRequest
+	sendErr error
 }
 
 func (client *fakeClient) CreateSession(_ context.Context, request agentruntime.CreateSessionRequest) (agentruntime.Session, error) {
@@ -174,6 +194,9 @@ func (client *fakeClient) CreateSession(_ context.Context, request agentruntime.
 }
 func (client *fakeClient) SendInput(_ context.Context, request agentruntime.SendInputRequest) (agentruntime.SendInputResult, error) {
 	client.sent = request
+	if client.sendErr != nil {
+		return agentruntime.SendInputResult{}, client.sendErr
+	}
 	return agentruntime.SendInputResult{Turn: agentruntime.Turn{ID: "turn_1234567890ABCDEF", State: agentruntime.TurnQueued}}, nil
 }
 func (*fakeClient) InspectSession(context.Context, agentruntime.SessionID) (agentruntime.SessionView, error) {
