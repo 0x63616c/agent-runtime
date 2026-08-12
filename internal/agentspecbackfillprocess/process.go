@@ -132,11 +132,8 @@ func (controller *Controller) Run(ctx context.Context) error {
 			}
 			continue
 		}
-		err = controller.consumeWatch(ctx, watch)
-		closeErr := watch.Close()
-		if err == nil && closeErr != nil {
-			err = errors.Wrap(closeErr, "close agent spec backfill watch")
-		}
+		_ = controller.consumeWatch(ctx, watch)
+		_ = watch.Close()
 		if ctx.Err() != nil {
 			return nil
 		}

@@ -57,7 +57,11 @@ func TestSandboxAdapterExecutesThroughControlProcess(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer client.Close(context.Background())
+	defer func() {
+		if closeErr := client.Close(context.Background()); closeErr != nil {
+			t.Errorf("close sandbox client: %v", closeErr)
+		}
+	}()
 	adapter, err := runtimetool.NewSandboxAdapter(client)
 	if err != nil {
 		t.Fatal(err)

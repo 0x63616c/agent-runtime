@@ -19,13 +19,21 @@ func TestUnixFirecrackerHTTPWritesTheFixedLaunchSequenceToItsBoundSocket(t *test
 	if err != nil {
 		t.Fatalf("make short socket directory: %v", err)
 	}
-	defer os.RemoveAll(directory)
+	defer func() {
+		if closeErr := os.RemoveAll(directory); closeErr != nil {
+			t.Errorf("remove socket directory: %v", closeErr)
+		}
+	}()
 	socketPath := filepath.Join(directory, "firecracker.sock")
 	listener, err := net.Listen("unix", socketPath)
 	if err != nil {
 		t.Fatalf("listen on Firecracker socket: %v", err)
 	}
-	defer listener.Close()
+	defer func() {
+		if closeErr := listener.Close(); closeErr != nil && !errors.Is(closeErr, net.ErrClosed) {
+			t.Errorf("close socket listener: %v", closeErr)
+		}
+	}()
 
 	type receivedRequest struct {
 		method string
@@ -49,7 +57,11 @@ func TestUnixFirecrackerHTTPWritesTheFixedLaunchSequenceToItsBoundSocket(t *test
 		writer.WriteHeader(http.StatusNoContent)
 	})}
 	go func() { _ = server.Serve(listener) }()
-	defer server.Close()
+	defer func() {
+		if closeErr := server.Close(); closeErr != nil {
+			t.Errorf("close HTTP server: %v", closeErr)
+		}
+	}()
 
 	port, err := newUnixFirecrackerHTTP(socketPath, &net.Dialer{})
 	if err != nil {
@@ -161,16 +173,28 @@ func TestUnixFirecrackerHTTPSolelyDialsTheBoundUnixSocket(t *testing.T) {
 	if err != nil {
 		t.Fatalf("make short socket directory: %v", err)
 	}
-	defer os.RemoveAll(directory)
+	defer func() {
+		if closeErr := os.RemoveAll(directory); closeErr != nil {
+			t.Errorf("remove socket directory: %v", closeErr)
+		}
+	}()
 	socketPath := filepath.Join(directory, "firecracker.sock")
 	listener, err := net.Listen("unix", socketPath)
 	if err != nil {
 		t.Fatalf("listen on Firecracker socket: %v", err)
 	}
-	defer listener.Close()
+	defer func() {
+		if closeErr := listener.Close(); closeErr != nil && !errors.Is(closeErr, net.ErrClosed) {
+			t.Errorf("close socket listener: %v", closeErr)
+		}
+	}()
 	server := &http.Server{Handler: http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) { writer.WriteHeader(http.StatusNoContent) })}
 	go func() { _ = server.Serve(listener) }()
-	defer server.Close()
+	defer func() {
+		if closeErr := server.Close(); closeErr != nil {
+			t.Errorf("close HTTP server: %v", closeErr)
+		}
+	}()
 	t.Setenv("HTTP_PROXY", "http://proxy.invalid:8080")
 	dialer := &recordingUnixDialer{}
 	port, err := newUnixFirecrackerHTTP(socketPath, dialer)
@@ -193,19 +217,31 @@ func TestUnixFirecrackerHTTPRefusesOversizedErrorResponsesWithoutReturningTheirC
 	if err != nil {
 		t.Fatalf("make short socket directory: %v", err)
 	}
-	defer os.RemoveAll(directory)
+	defer func() {
+		if closeErr := os.RemoveAll(directory); closeErr != nil {
+			t.Errorf("remove socket directory: %v", closeErr)
+		}
+	}()
 	socketPath := filepath.Join(directory, "firecracker.sock")
 	listener, err := net.Listen("unix", socketPath)
 	if err != nil {
 		t.Fatalf("listen on Firecracker socket: %v", err)
 	}
-	defer listener.Close()
+	defer func() {
+		if closeErr := listener.Close(); closeErr != nil && !errors.Is(closeErr, net.ErrClosed) {
+			t.Errorf("close socket listener: %v", closeErr)
+		}
+	}()
 	server := &http.Server{Handler: http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
 		writer.WriteHeader(http.StatusInternalServerError)
 		_, _ = io.WriteString(writer, strings.Repeat("server-secret", maximumFirecrackerAPIResponseBytes))
 	})}
 	go func() { _ = server.Serve(listener) }()
-	defer server.Close()
+	defer func() {
+		if closeErr := server.Close(); closeErr != nil {
+			t.Errorf("close HTTP server: %v", closeErr)
+		}
+	}()
 	port, err := newUnixFirecrackerHTTP(socketPath, &net.Dialer{})
 	if err != nil {
 		t.Fatalf("newUnixFirecrackerHTTP() error = %v", err)
@@ -227,19 +263,19 @@ func TestUnixFirecrackerHTTPFailsClosedOnANonSuccessfulStatusWithoutReturningIts
 	if err != nil {
 		t.Fatalf("make short socket directory: %v", err)
 	}
-	defer os.RemoveAll(directory)
+	defer func() { _ = os.RemoveAll(directory) }()
 	socketPath := filepath.Join(directory, "firecracker.sock")
 	listener, err := net.Listen("unix", socketPath)
 	if err != nil {
 		t.Fatalf("listen on Firecracker socket: %v", err)
 	}
-	defer listener.Close()
+	defer func() { _ = listener.Close() }()
 	server := &http.Server{Handler: http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
 		writer.WriteHeader(http.StatusConflict)
 		_, _ = io.WriteString(writer, "private-server-detail")
 	})}
 	go func() { _ = server.Serve(listener) }()
-	defer server.Close()
+	defer func() { _ = server.Close() }()
 	port, err := newUnixFirecrackerHTTP(socketPath, &net.Dialer{})
 	if err != nil {
 		t.Fatalf("newUnixFirecrackerHTTP() error = %v", err)
@@ -261,20 +297,20 @@ func TestUnixFirecrackerHTTPPropagatesCancellationDuringAnInFlightRequest(t *tes
 	if err != nil {
 		t.Fatalf("make short socket directory: %v", err)
 	}
-	defer os.RemoveAll(directory)
+	defer func() { _ = os.RemoveAll(directory) }()
 	socketPath := filepath.Join(directory, "firecracker.sock")
 	listener, err := net.Listen("unix", socketPath)
 	if err != nil {
 		t.Fatalf("listen on Firecracker socket: %v", err)
 	}
-	defer listener.Close()
+	defer func() { _ = listener.Close() }()
 	started := make(chan struct{})
 	server := &http.Server{Handler: http.HandlerFunc(func(_ http.ResponseWriter, request *http.Request) {
 		close(started)
 		<-request.Context().Done()
 	})}
 	go func() { _ = server.Serve(listener) }()
-	defer server.Close()
+	defer func() { _ = server.Close() }()
 	port, err := newUnixFirecrackerHTTP(socketPath, &net.Dialer{})
 	if err != nil {
 		t.Fatalf("newUnixFirecrackerHTTP() error = %v", err)

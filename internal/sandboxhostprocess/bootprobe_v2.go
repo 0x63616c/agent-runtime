@@ -2,9 +2,10 @@ package sandboxhostprocess
 
 import (
 	"context"
+	"net/http"
+
 	"github.com/0x63616c/agent-runtime/internal/firecrackerbootprobev2"
 	"github.com/0x63616c/agent-runtime/internal/sandboxbootprobehostprocess"
-	"net/http"
 )
 
 // RunBootProbeV2Once is the private M3 preparation flow. It never invokes the

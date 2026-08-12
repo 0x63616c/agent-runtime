@@ -252,12 +252,16 @@ func verifyPrivateRootFSCopy(ctx context.Context, rootFSCopyPath string, rootFS 
 	return verifyRegularArtifact(ctx, PinnedArtifact{Path: rootFSCopyPath, Digest: rootFS.Digest})
 }
 
-func verifyRegularArtifact(ctx context.Context, artifact PinnedArtifact) error {
+func verifyRegularArtifact(ctx context.Context, artifact PinnedArtifact) (err error) {
 	file, err := openRegularNoFollow(artifact.Path)
 	if err != nil {
 		return fmt.Errorf("%w: open pinned artifact: %v", ErrArtifactIntegrity, err)
 	}
-	defer file.Close()
+	defer func() {
+		if closeErr := file.Close(); closeErr != nil && err == nil {
+			err = fmt.Errorf("close pinned artifact: %w", closeErr)
+		}
+	}()
 	actual, err := digestOpenFile(ctx, file)
 	if err != nil {
 		return fmt.Errorf("verify pinned artifact digest: %w", err)
@@ -268,7 +272,7 @@ func verifyRegularArtifact(ctx context.Context, artifact PinnedArtifact) error {
 	return nil
 }
 
-func copyVerifiedArtifact(ctx context.Context, artifact PinnedArtifact, destination string, mode os.FileMode) error {
+func copyVerifiedArtifact(ctx context.Context, artifact PinnedArtifact, destination string, mode os.FileMode) (err error) {
 	if err := contextError(ctx); err != nil {
 		return err
 	}
@@ -276,7 +280,11 @@ func copyVerifiedArtifact(ctx context.Context, artifact PinnedArtifact, destinat
 	if err != nil {
 		return fmt.Errorf("%w: open pinned artifact for Jailer stage: %v", ErrArtifactIntegrity, err)
 	}
-	defer source.Close()
+	defer func() {
+		if closeErr := source.Close(); closeErr != nil && err == nil {
+			err = fmt.Errorf("close pinned artifact for Jailer stage: %w", closeErr)
+		}
+	}()
 	destinationFile, err := os.OpenFile(destination, os.O_WRONLY|os.O_CREATE|os.O_EXCL, mode)
 	if err != nil {
 		return fmt.Errorf("%w: create Jailer staged artifact: %v", ErrSmokeUnavailable, err)

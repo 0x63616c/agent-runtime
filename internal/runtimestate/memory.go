@@ -124,10 +124,11 @@ func (store *MemoryRuntimeStateStore) GetSessionView(ctx context.Context, query 
 		if turn.SessionID != query.SessionID {
 			continue
 		}
-		if turn.State == "running" {
+		switch turn.State {
+		case "running":
 			copy := turn.Clone()
 			view.ActiveTurn = &copy
-		} else if turn.State == "queued" {
+		case "queued":
 			view.QueuedTurnCount++
 			if uint32(len(view.QueuedTurns)) < query.QueuedTurnLimit {
 				view.QueuedTurns = append(view.QueuedTurns, turn.Clone())

@@ -50,7 +50,7 @@ func (port *unixFirecrackerHTTP) Bind(ctx context.Context, socketPath string) er
 	return nil
 }
 
-func (port *unixFirecrackerHTTP) Put(ctx context.Context, endpoint string, body any) error {
+func (port *unixFirecrackerHTTP) Put(ctx context.Context, endpoint string, body any) (err error) {
 	if err := contextError(ctx); err != nil {
 		return err
 	}
@@ -89,7 +89,11 @@ func (port *unixFirecrackerHTTP) Put(ctx context.Context, endpoint string, body 
 	if err != nil {
 		return fmt.Errorf("call Firecracker API %s: %w", endpoint, err)
 	}
-	defer response.Body.Close()
+	defer func() {
+		if closeErr := response.Body.Close(); closeErr != nil && err == nil {
+			err = fmt.Errorf("close Firecracker API response %s: %w", endpoint, closeErr)
+		}
+	}()
 	responseBody, err := io.ReadAll(io.LimitReader(response.Body, maximumFirecrackerAPIResponseBytes+1))
 	if err != nil {
 		return fmt.Errorf("read bounded Firecracker API response %s: %w", endpoint, err)

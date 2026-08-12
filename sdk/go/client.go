@@ -274,11 +274,11 @@ func (client *Client) OpenArtifact(ctx context.Context, artifactID ArtifactID) (
 		return ArtifactStream{}, errors.Wrap(err, "open Artifact")
 	}
 	if resp.Header.Get("X-Request-ID") != requestID.String() {
-		resp.Body.Close()
+		_ = resp.Body.Close()
 		return ArtifactStream{}, errors.New("open Artifact: request ID mismatch")
 	}
 	if resp.StatusCode != http.StatusOK {
-		defer resp.Body.Close()
+		defer func() { _ = resp.Body.Close() }()
 		return ArtifactStream{}, artifactResponseFailure(resp, requestID, client.maxResponseBytes, "open Artifact")
 	}
 	sizeHeader := resp.Header.Get("X-Agent-Runtime-Artifact-Size")
@@ -287,12 +287,12 @@ func (client *Client) OpenArtifact(ctx context.Context, artifactID ArtifactID) (
 	}
 	size, err := strconv.ParseInt(sizeHeader, 10, 64)
 	if err != nil || size < 1 || size > client.maxResponseBytes {
-		resp.Body.Close()
+		_ = resp.Body.Close()
 		return ArtifactStream{}, errors.New("open Artifact: invalid Artifact size")
 	}
 	media, _, err := mime.ParseMediaType(resp.Header.Get("Content-Type"))
 	if err != nil || media == "" || media == "application/json" {
-		resp.Body.Close()
+		_ = resp.Body.Close()
 		return ArtifactStream{}, errors.New("open Artifact: invalid media type")
 	}
 	streamingDigest := resp.Header.Get("X-Agent-Runtime-Artifact-SHA256")
@@ -301,7 +301,7 @@ func (client *Client) OpenArtifact(ctx context.Context, artifactID ArtifactID) (
 		digest = strings.TrimPrefix(resp.Header.Get("Digest"), "sha-256=")
 	}
 	if !validSHA256(digest) {
-		resp.Body.Close()
+		_ = resp.Body.Close()
 		return ArtifactStream{}, errors.New("open Artifact: invalid Artifact digest")
 	}
 	return ArtifactStream{Artifact: ArtifactReference{ID: artifactID, MediaType: media, SizeBytes: size, SHA256: digest}, Body: &verifiedArtifactBody{ReadCloser: resp.Body, response: resp, remaining: size, expectedDigest: digest, requireTrailer: streamingDigest != "", digester: sha256.New()}}, nil

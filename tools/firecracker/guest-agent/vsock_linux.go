@@ -15,11 +15,15 @@ func newGuestControlListener() (guestControlListener, error) {
 		return nil, fmt.Errorf("open AF_VSOCK socket: %w", err)
 	}
 	if err := unix.Bind(fileDescriptor, &unix.SockaddrVM{CID: unix.VMADDR_CID_ANY, Port: guestControlPort}); err != nil {
-		unix.Close(fileDescriptor)
+		if closeErr := unix.Close(fileDescriptor); closeErr != nil {
+			return nil, fmt.Errorf("close AF_VSOCK socket after bind failure: %w", closeErr)
+		}
 		return nil, fmt.Errorf("bind AF_VSOCK port: %w", err)
 	}
 	if err := unix.Listen(fileDescriptor, 1); err != nil {
-		unix.Close(fileDescriptor)
+		if closeErr := unix.Close(fileDescriptor); closeErr != nil {
+			return nil, fmt.Errorf("close AF_VSOCK socket after listen failure: %w", closeErr)
+		}
 		return nil, fmt.Errorf("listen on AF_VSOCK port: %w", err)
 	}
 	return &linuxGuestControlListener{fileDescriptor: fileDescriptor}, nil

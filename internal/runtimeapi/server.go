@@ -316,9 +316,8 @@ func (server *server) readArtifact(writer http.ResponseWriter, request *http.Req
 			server.writeFailure(writer, contextValue.requestID, http.StatusInternalServerError, agentruntime.Failure{Code: agentruntime.FailureInternal, Message: "request failed"})
 			return
 		}
-		defer stream.Body.Close()
+		defer func() { _ = stream.Body.Close() }()
 		if !validArtifactStreamReference(stream.Reference) {
-			_ = stream.Body.Close()
 			server.writeFailure(writer, contextValue.requestID, http.StatusInternalServerError, agentruntime.Failure{Code: agentruntime.FailureInternal, Message: "request failed"})
 			return
 		}

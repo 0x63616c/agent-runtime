@@ -38,7 +38,11 @@ func TestS3ObjectsConditionallyCreatesAndBoundsReads(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open = %v", err)
 	}
-	defer stream.Close()
+	defer func() {
+		if closeErr := stream.Close(); closeErr != nil {
+			t.Errorf("close immutable object stream: %v", closeErr)
+		}
+	}()
 	if got, err := io.ReadAll(stream); err != nil || string(got) != "value" || client.opens != 1 {
 		t.Fatalf("open value = %q, %v opens=%d", got, err, client.opens)
 	}

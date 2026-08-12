@@ -12,7 +12,7 @@ func TestRESTConfigPinsTheDeclaredServiceAccountConnectionWithoutAmbientProxy(t 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if configured.Host != "https://kubernetes.example.test:6443" || configured.TLSClientConfig.CAFile != "/var/run/certs/ca.crt" || configured.TLSClientConfig.ServerName != "kubernetes.example.test" || configured.BearerTokenFile != "/var/run/tokens/controller" || configured.Timeout != 3*time.Second || configured.Proxy == nil || configured.UserAgent != "agent-runtime-agent-spec-backfill-controller" {
+	if configured.Host != "https://kubernetes.example.test:6443" || configured.CAFile != "/var/run/certs/ca.crt" || configured.ServerName != "kubernetes.example.test" || configured.BearerTokenFile != "/var/run/tokens/controller" || configured.Timeout != 3*time.Second || configured.Proxy == nil || configured.UserAgent != "agent-runtime-agent-spec-backfill-controller" {
 		t.Fatalf("unexpected explicit REST configuration: %#v", configured)
 	}
 	proxy, err := configured.Proxy(&http.Request{})

@@ -523,7 +523,11 @@ func TestArtifactHTTPRouteStreamsAuthorizedRuntimeBytesWithVerifiedTrailer(t *te
 	if err != nil {
 		t.Fatalf("open artifact: %v", err)
 	}
-	defer stream.Body.Close()
+	defer func() {
+		if closeErr := stream.Body.Close(); closeErr != nil {
+			t.Errorf("close artifact stream: %v", closeErr)
+		}
+	}()
 	got, err := io.ReadAll(stream.Body)
 	if err != nil || string(got) != string(body) {
 		t.Fatalf("read streamed artifact = %q, %v", got, err)
@@ -546,7 +550,7 @@ func TestArtifactHTTPRouteRefusesAnIntegrityMismatchedStream(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open artifact: %v", err)
 	}
-	defer stream.Body.Close()
+	defer func() { _ = stream.Body.Close() }()
 	if _, err := io.ReadAll(stream.Body); err == nil {
 		t.Fatal("read integrity-mismatched artifact error = nil")
 	}
@@ -566,7 +570,7 @@ func TestArtifactHTTPRouteDoesNotSendAnOverlongProbeByte(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open artifact: %v", err)
 	}
-	defer stream.Body.Close()
+	defer func() { _ = stream.Body.Close() }()
 	got, err := io.ReadAll(stream.Body)
 	if err == nil || string(got) != "exact" {
 		t.Fatalf("read overlong Artifact stream = %q, %v; want declared bytes and integrity failure", got, err)

@@ -49,7 +49,7 @@ func RunOnce(ctx context.Context, config Config, lookup SecretLookup, source clo
 
 // RunOnceWithExecutor polls, verifies, receipts, durably records execution
 // intent, then delegates at most one lease-fenced host effect.
-func RunOnceWithExecutor(ctx context.Context, config Config, lookup SecretLookup, source clock.Clock, executor HostExecutor) error {
+func RunOnceWithExecutor(ctx context.Context, config Config, lookup SecretLookup, source clock.Clock, executor HostExecutor) (err error) {
 	if ctx == nil || lookup == nil || source == nil || executor == nil {
 		return errors.New("run sandbox reference host: context, secret lookup, clock and executor are required")
 	}
@@ -78,7 +78,11 @@ func RunOnceWithExecutor(ctx context.Context, config Config, lookup SecretLookup
 	if err != nil {
 		return err
 	}
-	defer journal.Close()
+	defer func() {
+		if closeErr := journal.Close(); closeErr != nil && err == nil {
+			err = errors.Wrap(closeErr, "close sandbox reference host journal")
+		}
+	}()
 	for _, pending := range journal.PendingStarts() {
 		if err := sendResult(ctx, client, config.controlURL, pending.Wire); err != nil {
 			return err

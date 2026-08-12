@@ -104,7 +104,7 @@ func TestServeAuthorizesBeforeReadingAndInspectsEveryRepresentation(t *testing.T
 				t.Fatalf("encoding = %q, want %q", got, test.wantEncoding)
 			}
 			response := callEndpoint(t, baseURL, "/decode", payload, "Bearer allowed")
-			defer response.Body.Close()
+			defer func() { _ = response.Body.Close() }()
 			if response.StatusCode != http.StatusOK {
 				body, _ := io.ReadAll(response.Body)
 				t.Fatalf("decode status = %d, want 200: %s", response.StatusCode, body)
@@ -125,7 +125,7 @@ func TestServeAuthorizesBeforeReadingAndInspectsEveryRepresentation(t *testing.T
 	}
 	before := store.getCalls()
 	denied := callEndpoint(t, baseURL, "/decode", remote, "Bearer denied")
-	defer denied.Body.Close()
+	defer func() { _ = denied.Body.Close() }()
 	if denied.StatusCode != http.StatusForbidden {
 		t.Fatalf("denied status = %d, want 403", denied.StatusCode)
 	}
@@ -170,7 +170,7 @@ func TestServeCancelsAndDoesNotExposeStoreDiagnostics(t *testing.T) {
 
 	response := callEndpoint(t, "http://"+listener.Addr().String(), "/decode", remote, "Bearer allowed")
 	body := mustRead(t, response.Body)
-	response.Body.Close()
+	_ = response.Body.Close()
 	if response.StatusCode != http.StatusBadRequest {
 		t.Fatalf("decode status = %d, want 400", response.StatusCode)
 	}
@@ -201,7 +201,7 @@ func TestServeBoundsUIRequestBodiesByTheDeclaredBlobPolicy(t *testing.T) {
 
 	response := callEndpoint(t, "http://"+listener.Addr().String(), "/decode", &commonpb.Payload{Metadata: map[string][]byte{converter.MetadataEncoding: []byte("json/plain")}, Data: bytes.Repeat([]byte("x"), 1024)}, "Bearer allowed")
 	body := mustRead(t, response.Body)
-	response.Body.Close()
+	_ = response.Body.Close()
 	if response.StatusCode != http.StatusBadRequest {
 		t.Fatalf("oversized status = %d, want 400", response.StatusCode)
 	}
@@ -252,7 +252,7 @@ func TestServeCompletesAnInFlightBoundedBlobReadDuringCancellation(t *testing.T)
 		response, err := payloadRequest("http://"+listener.Addr().String()+"/decode", remote, "Bearer allowed")
 		if err == nil {
 			body, readErr := io.ReadAll(response.Body)
-			response.Body.Close()
+			_ = response.Body.Close()
 			if readErr != nil {
 				err = readErr
 			} else if response.StatusCode != http.StatusBadRequest {

@@ -2,13 +2,14 @@ package firecrackerbootprobejournal
 
 import (
 	"errors"
-	"github.com/0x63616c/agent-runtime/internal/firecrackerbootprobev2"
-	"github.com/0x63616c/agent-runtime/sandbox"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/0x63616c/agent-runtime/internal/firecrackerbootprobev2"
+	"github.com/0x63616c/agent-runtime/sandbox"
 )
 
 func TestJournalRecoversIntentAndRefusesConcurrentHost(t *testing.T) {
@@ -24,7 +25,6 @@ func TestJournalRecoversIntentAndRefusesConcurrentHost(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer j.Close()
 	if _, err := Open(path); !errors.Is(err, ErrLocked) {
 		t.Fatalf("Open(second)=%v", err)
 	}
@@ -52,7 +52,11 @@ func TestJournalRecoversIntentAndRefusesConcurrentHost(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer recovered.Close()
+	defer func() {
+		if closeErr := recovered.Close(); closeErr != nil {
+			t.Errorf("close recovered journal: %v", closeErr)
+		}
+	}()
 	got, ok := recovered.LaunchIntent()
 	wantWire, wantErr := firecrackerbootprobev2.EncodeSession(session)
 	gotWire, gotErr := firecrackerbootprobev2.EncodeSession(got)

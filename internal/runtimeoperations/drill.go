@@ -253,7 +253,7 @@ func inspectAuditSink(ctx context.Context, config Config) (int, int, int64, erro
 		if err != nil {
 			return 0, err
 		}
-		defer response.Body.Close()
+		defer func() { _ = response.Body.Close() }()
 		_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, 4096))
 		return response.StatusCode, nil
 	}
@@ -279,7 +279,7 @@ func inspectAuditSink(ctx context.Context, config Config) (int, int, int64, erro
 	if err != nil {
 		return 0, 0, 0, fmt.Errorf("read configured audit-sink retention: %w", err)
 	}
-	defer response.Body.Close()
+	defer func() { _ = response.Body.Close() }()
 	if response.StatusCode < 200 || response.StatusCode > 299 {
 		return 0, 0, 0, errors.New("runtime operations drill: audit retention endpoint rejected the probe")
 	}
@@ -374,22 +374,28 @@ func WriteEvidence(path string, evidence Evidence) error {
 	if err != nil {
 		return fmt.Errorf("write operational evidence: %w", err)
 	}
-	defer file.Close()
 	if _, err := file.Write(append(data, '\n')); err != nil {
+		_ = file.Close()
 		return fmt.Errorf("write operational evidence: %w", err)
+	}
+	if err := file.Close(); err != nil {
+		return fmt.Errorf("close operational evidence: %w", err)
 	}
 	return nil
 }
 
 // ReadEvidence parses and validates a retained artifact without connecting to
 // any external system.
-func ReadEvidence(path string) (Evidence, error) {
+func ReadEvidence(path string) (evidence Evidence, err error) {
 	file, err := os.Open(path)
 	if err != nil {
 		return Evidence{}, err
 	}
-	defer file.Close()
-	var evidence Evidence
+	defer func() {
+		if closeErr := file.Close(); closeErr != nil && err == nil {
+			err = fmt.Errorf("close operational evidence: %w", closeErr)
+		}
+	}()
 	decoder := json.NewDecoder(io.LimitReader(file, 64*1024))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&evidence); err != nil {

@@ -1003,13 +1003,6 @@ func (policy classRetention) RetainClassUntil(class runtimestate.DataClass, now 
 	return policy.RetainUntil(now)
 }
 
-type fixedPlannerIDs struct{ next int }
-
-func (ids *fixedPlannerIDs) NextIdentifier(kind runtimestate.IdentifierKind) (string, error) {
-	ids.next++
-	return string(kind) + "_1234567890ABCDEF", nil
-}
-
 type uniquePlannerIDs struct{ next int }
 
 func (ids *uniquePlannerIDs) NextIdentifier(kind runtimestate.IdentifierKind) (string, error) {

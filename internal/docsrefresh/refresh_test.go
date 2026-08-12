@@ -138,7 +138,7 @@ var _ = Describe("refreshing public documentation", func() {
 
 		err := docsrefresh.ValidateGoSDKSourceList(context.Background(), manifest, fakeGoSDKSourceLister{files: []string{"sdk/go/doc.go", "sdk/go/new-public-file.go", "sdk/go/types.go"}})
 
-		Expect(err).To(MatchError(ContainSubstring("Go SDK source manifest differs from go list")))
+		Expect(err).To(MatchError(ContainSubstring("go SDK source manifest differs from go list")))
 	})
 
 	It("refuses an OpenAPI operation without a successful response before writing", func() {

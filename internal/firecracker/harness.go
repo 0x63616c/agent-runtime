@@ -434,7 +434,7 @@ func validObjectVersionID(value string) bool {
 		return false
 	}
 	for _, character := range value {
-		if !(character >= 'a' && character <= 'z' || character >= 'A' && character <= 'Z' || character >= '0' && character <= '9' || strings.ContainsRune("._~-", character)) {
+		if (character < 'a' || character > 'z') && (character < 'A' || character > 'Z') && (character < '0' || character > '9') && !strings.ContainsRune("._~-", character) {
 			return false
 		}
 	}
@@ -737,19 +737,26 @@ func validRootFSAttestation(attestation RootFSAttestation, rootFS, guestAgent Lo
 	return attestation.SchemaVersion == "agent-runtime.firecracker.rootfs-attestation/v1" && attestation.RootFSDigest == rootFS.Digest && attestation.RootFSSize == rootFS.SizeBytes && attestation.InitPath == "/sbin/init" && attestation.InitDigest == guestAgent.Digest && attestation.InitSize == guestAgent.SizeBytes && attestation.Platform == guestAgent.Platform && validFixturePlatform(attestation.Platform) && attestation.Static
 }
 
-func readVerifiedBundleMember(sourcePath, sourceID, member string, maximumSize uint64, bundlePolicy projectBuildBundlePolicy) ([]byte, error) {
+func readVerifiedBundleMember(sourcePath, sourceID, member string, maximumSize uint64, bundlePolicy projectBuildBundlePolicy) (contents []byte, err error) {
 	file, err := os.Open(sourcePath)
 	if err != nil {
 		return nil, fmt.Errorf("open staged bundle %s: %w", sourceID, err)
 	}
-	defer file.Close()
+	defer func() {
+		if closeErr := file.Close(); closeErr != nil && err == nil {
+			err = fmt.Errorf("close staged bundle %s: %w", sourceID, closeErr)
+		}
+	}()
 	reader, err := gzip.NewReader(file)
 	if err != nil {
 		return nil, fmt.Errorf("open gzip bundle %s: %w", sourceID, err)
 	}
-	defer reader.Close()
+	defer func() {
+		if closeErr := reader.Close(); closeErr != nil && err == nil {
+			err = fmt.Errorf("close gzip bundle %s: %w", sourceID, closeErr)
+		}
+	}()
 	tarReader := tar.NewReader(reader)
-	var contents []byte
 	var entries, declaredBytes uint64
 	seenMembers := make(map[string]struct{}, len(bundlePolicy.members))
 	for {
@@ -814,12 +821,17 @@ func stageFixtureSources(ctx context.Context, sources []LockedSource, fetcher Fi
 	return staged, nil
 }
 
-func stageFixtureArtifact(destination string, source LockedSource, artifact LockedArtifact, sourcePath string) error {
+func stageFixtureArtifact(destination string, source LockedSource, artifact LockedArtifact, sourcePath string) (err error) {
 	if source.Format == FixtureSourceFile {
 		file, err := os.Open(sourcePath)
 		if err != nil {
 			return fmt.Errorf("%w: open staged source %s: %v", ErrArtifactIntegrity, source.ID, err)
 		}
+		defer func() {
+			if closeErr := file.Close(); closeErr != nil && err == nil {
+				err = fmt.Errorf("%w: close staged source %s: %v", ErrArtifactIntegrity, source.ID, closeErr)
+			}
+		}()
 		if err := writeVerifiedFixture(destination, file, artifact.Digest, artifact.SizeBytes); err != nil {
 			return fmt.Errorf("%w: verify %s", ErrArtifactIntegrity, artifact.Name)
 		}
@@ -829,12 +841,20 @@ func stageFixtureArtifact(destination string, source LockedSource, artifact Lock
 	if err != nil {
 		return fmt.Errorf("%w: open staged bundle %s: %v", ErrArtifactIntegrity, source.ID, err)
 	}
-	defer file.Close()
+	defer func() {
+		if closeErr := file.Close(); closeErr != nil && err == nil {
+			err = fmt.Errorf("%w: close staged bundle %s: %v", ErrArtifactIntegrity, source.ID, closeErr)
+		}
+	}()
 	gzipReader, err := gzip.NewReader(file)
 	if err != nil {
 		return fmt.Errorf("%w: open gzip bundle %s: %v", ErrArtifactIntegrity, source.ID, err)
 	}
-	defer gzipReader.Close()
+	defer func() {
+		if closeErr := gzipReader.Close(); closeErr != nil && err == nil {
+			err = fmt.Errorf("%w: close gzip bundle %s: %v", ErrArtifactIntegrity, source.ID, closeErr)
+		}
+	}()
 	tarReader := tar.NewReader(gzipReader)
 	found := false
 	for {

@@ -37,7 +37,7 @@ func NewHTTPAuditExporter(endpoint string, client *http.Client) (*HTTPAuditExpor
 }
 
 // Export posts exactly one bounded redacted audit fact to the configured sink.
-func (exporter *HTTPAuditExporter) Export(ctx context.Context, fact runtimestate.AuditFactRecord) error {
+func (exporter *HTTPAuditExporter) Export(ctx context.Context, fact runtimestate.AuditFactRecord) (err error) {
 	if exporter == nil || exporter.client == nil || exporter.endpoint == "" || fact.Tenant == "" || fact.AuditFactID == "" || fact.OperationID == "" || fact.Kind == "" || fact.OccurredAt.IsZero() || fact.RetentionUntil.IsZero() {
 		return errors.New("export HTTP audit fact: complete committed fact and exporter are required")
 	}
@@ -54,7 +54,11 @@ func (exporter *HTTPAuditExporter) Export(ctx context.Context, fact runtimestate
 	if err != nil {
 		return fmt.Errorf("send HTTP audit fact: %w", err)
 	}
-	defer response.Body.Close()
+	defer func() {
+		if closeErr := response.Body.Close(); closeErr != nil && err == nil {
+			err = fmt.Errorf("close HTTP audit export response: %w", closeErr)
+		}
+	}()
 	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
 		return fmt.Errorf("send HTTP audit fact: sink returned %s", response.Status)
 	}

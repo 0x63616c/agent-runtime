@@ -78,7 +78,7 @@ func serve(vmID, fixtureVersion string, requests io.Reader, responses io.Writer,
 
 // serveGuestControl keeps the serial marker as boot evidence, then accepts
 // exactly one private guest-control connection before shutting down.
-func serveGuestControl(vmID, fixtureVersion string, serial io.Writer, listen func() (guestControlListener, error), shutdown func(context.Context) error) error {
+func serveGuestControl(vmID, fixtureVersion string, serial io.Writer, listen func() (guestControlListener, error), shutdown func(context.Context) error) (err error) {
 	if !validGuestIdentity(vmID) || !validGuestIdentity(fixtureVersion) || serial == nil || listen == nil || shutdown == nil {
 		return fmt.Errorf("VM ID, fixture version, serial output, listener, and controlled shutdown are required")
 	}
@@ -86,7 +86,11 @@ func serveGuestControl(vmID, fixtureVersion string, serial io.Writer, listen fun
 	if err != nil {
 		return fmt.Errorf("bind fixed guest control port: %w", err)
 	}
-	defer listener.Close()
+	defer func() {
+		if closeErr := listener.Close(); closeErr != nil && err == nil {
+			err = fmt.Errorf("close fixed guest control listener: %w", closeErr)
+		}
+	}()
 	if _, err := fmt.Fprintf(serial, "AGENT_RUNTIME_FC_SMOKE %s %s %s\n", vmID, fixtureVersion, protocolVersion); err != nil {
 		return fmt.Errorf("write serial marker: %w", err)
 	}
@@ -98,7 +102,11 @@ func serveGuestControl(vmID, fixtureVersion string, serial io.Writer, listen fun
 	if err != nil {
 		return fmt.Errorf("accept one guest control connection: %w", err)
 	}
-	defer connection.Close()
+	defer func() {
+		if closeErr := connection.Close(); closeErr != nil && err == nil {
+			err = fmt.Errorf("close guest control connection: %w", closeErr)
+		}
+	}()
 	if err := connection.SetDeadline(deadline); err != nil {
 		return fmt.Errorf("bound guest control connection deadline: %w", err)
 	}
@@ -160,7 +168,7 @@ func validControlToken(token string) bool {
 		return false
 	}
 	for _, character := range token {
-		if !(character >= 'a' && character <= 'z' || character >= 'A' && character <= 'Z' || character >= '0' && character <= '9' || character == '-' || character == '_' || character == '.') {
+		if (character < 'a' || character > 'z') && (character < 'A' || character > 'Z') && (character < '0' || character > '9') && character != '-' && character != '_' && character != '.' {
 			return false
 		}
 	}

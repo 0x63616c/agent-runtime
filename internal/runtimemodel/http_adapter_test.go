@@ -33,7 +33,7 @@ func TestHTTPAdapterNormalizesBoundedStreamAndReconcilesWithoutPOST(t *testing.T
 			t.Fatalf("reconcile method = %s, want GET", request.Method)
 		}
 		writer.Header().Set("Content-Type", "application/x-ndjson; charset=utf-8")
-		fmt.Fprint(writer, "{\"type\":\"delta\",\"delta\":\"normal \"}\n{\"type\":\"delta\",\"delta\":\"stream\"}\n{\"type\":\"completed\",\"input_tokens\":3,\"output_tokens\":2}\n")
+		_, _ = fmt.Fprint(writer, "{\"type\":\"delta\",\"delta\":\"normal \"}\n{\"type\":\"delta\",\"delta\":\"stream\"}\n{\"type\":\"completed\",\"input_tokens\":3,\"output_tokens\":2}\n")
 	}))
 	defer server.Close()
 	adapter, err := runtimemodel.NewHTTPAdapter(runtimemodel.HTTPAdapterConfig{Endpoint: server.URL + "/provider", Token: "model-token", HTTPClient: server.Client()})
@@ -60,7 +60,7 @@ func TestHTTPAdapterRejectsUnboundedAndNonterminalStreams(t *testing.T) {
 	} {
 		server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
 			writer.Header().Set("Content-Type", "application/x-ndjson")
-			fmt.Fprint(writer, stream)
+			_, _ = fmt.Fprint(writer, stream)
 		}))
 		adapter, err := runtimemodel.NewHTTPAdapter(runtimemodel.HTTPAdapterConfig{Endpoint: server.URL, Token: "model-token", HTTPClient: server.Client()})
 		if err != nil {

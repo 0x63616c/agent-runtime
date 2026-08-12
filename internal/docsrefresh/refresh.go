@@ -122,7 +122,7 @@ func ValidateGoSDKSourceList(ctx context.Context, manifest Manifest, lister GoSD
 		sort.Strings(declared)
 		sort.Strings(discovered)
 		if !equalStrings(declared, discovered) {
-			return errors.New("Go SDK source manifest differs from go list")
+			return errors.New("go SDK source manifest differs from go list")
 		}
 	}
 	return nil
@@ -228,11 +228,11 @@ func validateManifest(manifest Manifest) error {
 			}
 		case "go-sdk-symbol-index":
 			if !containsPath(artifact.Inputs, "sdk/go/doc.go") {
-				return fmt.Errorf("Go SDK symbol index %q must declare sdk/go/doc.go", artifact.Output)
+				return fmt.Errorf("go SDK symbol index %q must declare sdk/go/doc.go", artifact.Output)
 			}
 			for _, input := range artifact.Inputs {
 				if !strings.HasPrefix(input, "sdk/go/") || !strings.HasSuffix(input, ".go") {
-					return fmt.Errorf("Go SDK symbol index %q may declare only sdk/go Go sources", artifact.Output)
+					return fmt.Errorf("go SDK symbol index %q may declare only sdk/go Go sources", artifact.Output)
 				}
 			}
 		default:

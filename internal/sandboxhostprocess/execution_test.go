@@ -234,7 +234,11 @@ func TestConcurrentHostOwnersCannotExecuteOneJournalTwice(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer first.Close()
+	defer func() {
+		if closeErr := first.Close(); closeErr != nil {
+			t.Errorf("close first journal owner: %v", closeErr)
+		}
+	}()
 	if _, _, err := first.Accept(envelope, sandboxhostprotocol.Digest([]byte("envelope"))); err != nil {
 		t.Fatal(err)
 	}

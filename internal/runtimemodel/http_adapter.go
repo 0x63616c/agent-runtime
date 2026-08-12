@@ -79,7 +79,7 @@ func (adapter *HTTPAdapter) operationURL(operationID runtimestate.OperationID) s
 	return endpoint.String()
 }
 
-func (adapter *HTTPAdapter) exchange(ctx context.Context, method, endpoint string, body io.Reader) (Response, error) {
+func (adapter *HTTPAdapter) exchange(ctx context.Context, method, endpoint string, body io.Reader) (result Response, err error) {
 	if adapter == nil || adapter.endpoint == nil || adapter.client == nil {
 		return Response{}, errors.New("invoke normalized model stream: adapter is not configured")
 	}
@@ -96,7 +96,11 @@ func (adapter *HTTPAdapter) exchange(ctx context.Context, method, endpoint strin
 	if err != nil {
 		return Response{}, fmt.Errorf("send normalized model request: %w", err)
 	}
-	defer response.Body.Close()
+	defer func() {
+		if closeErr := response.Body.Close(); closeErr != nil && err == nil {
+			err = fmt.Errorf("close normalized model response: %w", closeErr)
+		}
+	}()
 	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
 		return Response{}, fmt.Errorf("normalized model response status %d", response.StatusCode)
 	}

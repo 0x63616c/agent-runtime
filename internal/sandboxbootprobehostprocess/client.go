@@ -4,10 +4,11 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"github.com/0x63616c/agent-runtime/internal/firecrackerbootprobev2"
-	"github.com/cockroachdb/errors"
 	"io"
 	"net/http"
+
+	"github.com/0x63616c/agent-runtime/internal/firecrackerbootprobev2"
+	"github.com/cockroachdb/errors"
 )
 
 const protocolVersion = "sandbox.host-control/v2/firecracker-boot-probe"
@@ -27,7 +28,7 @@ func Prepare(ctx context.Context, client *http.Client, origin, principal, operat
 	return request(ctx, client, origin+preparePath, prepareRequest{protocolVersion, principal, operationID, instanceID})
 }
 
-func request(ctx context.Context, client *http.Client, target string, body any) (firecrackerbootprobev2.Snapshot, error) {
+func request(ctx context.Context, client *http.Client, target string, body any) (snapshot firecrackerbootprobev2.Snapshot, err error) {
 	if ctx == nil || client == nil {
 		return firecrackerbootprobev2.Snapshot{}, errors.New("v2 boot-probe host request: context and client required")
 	}
@@ -44,7 +45,11 @@ func request(ctx context.Context, client *http.Client, target string, body any) 
 	if err != nil {
 		return firecrackerbootprobev2.Snapshot{}, err
 	}
-	defer response.Body.Close()
+	defer func() {
+		if closeErr := response.Body.Close(); closeErr != nil && err == nil {
+			err = errors.Wrap(closeErr, "close v2 boot-probe host response")
+		}
+	}()
 	reply, err := io.ReadAll(io.LimitReader(response.Body, 65537))
 	if err != nil {
 		return firecrackerbootprobev2.Snapshot{}, errors.New("v2 boot-probe host request: control response unreadable")

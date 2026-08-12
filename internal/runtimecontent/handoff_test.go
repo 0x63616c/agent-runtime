@@ -184,7 +184,11 @@ func TestArtifactReaderOpensAnAuthorizedArtifactWithoutBufferingIt(t *testing.T)
 	if err != nil {
 		t.Fatalf("open authorized artifact: %v", err)
 	}
-	defer stream.Body.Close()
+	defer func() {
+		if closeErr := stream.Body.Close(); closeErr != nil {
+			t.Errorf("close artifact stream: %v", closeErr)
+		}
+	}()
 	if stream.Reference != commitment.Reference || objects.opens != 1 || objects.gets != getsBeforeOpen {
 		t.Fatalf("stream = %#v opens=%d gets=%d, want authorized streaming metadata only", stream.Reference, objects.opens, objects.gets)
 	}
