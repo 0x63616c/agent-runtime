@@ -18,14 +18,15 @@ and named disposable-dependency integration evidence, but a production API
 credential/configuration rollout is operator work and is not inferred from the
 health-only Stack role.
 
-The `runtime-api` resource is likewise present only as desired-state wiring:
-its current GHCR digest is attested to source revision `a372977`, which predates
-the durable `agent-runtime-api` source and configuration in this repository.
-It must not be used as evidence for a current-source Stack E2E. Local Stack
-proofs may build an isolated image from the checked-out source, but the
-production desired-state pin remains explicitly deferred until that exact
-source revision is published, provenance-verified, and promoted by a reviewed
-Stack change.
+The checked-in Stack deliberately contains no `runtime-api` Deployment,
+Service, egress policy, ServiceAccount, or API-token Secret wiring. Its pinned
+GHCR digest is attested to source revision `a372977` and does not contain the
+durable `agent-runtime-api` executable or configuration in this repository.
+The source API and its disposable PostgreSQL/MinIO integration remain runnable,
+but they are not Stack deployment evidence. Reintroducing the production API
+requires a newly published, provenance-verified immutable image containing
+that executable, followed by a reviewed Stack change that adds the complete
+deployment and trust wiring together.
 
 Agent Runtime is self-hosted as explicit, separately deployable processes. An
 operator applies a reviewed typed Stack with `stackctl`; no runtime binary,

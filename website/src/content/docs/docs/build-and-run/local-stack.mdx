@@ -98,17 +98,17 @@ To rerun the containment proof locally against OrbStack and retain evidence:
 just two-stack-smoke local orbstack /absolute/path/to/two-stack-evidence.json
 ```
 
-## Inspect and connect
+## Inspect the Stack
 
 ```text
 just dev-status stack=research-a
-just dev-api stack=research-a
 ```
 
-`dev-api` is a foreground port-forward. It selects a local port and exits when
-you stop it; it does not create a hidden background daemon. Tilt exposes links
-for the API, orchestration, and codec runtime readiness endpoints and these
-docs.
+The checked-in Stack deliberately contains no `runtime-api` Service or
+port-forward command while its pinned image lacks the durable API executable.
+The source API remains runnable against disposable dependencies, but that is
+separate from this local Stack and does not imply a deployed public endpoint.
+Tilt exposes links for declared runtime-role readiness endpoints and these docs.
 
 ## Credentials and persistence
 

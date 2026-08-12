@@ -65,6 +65,11 @@ var _ = Describe("Self-hosted production Stack", func() {
 		Expect(string(manifests.JSON())).To(ContainSubstring(`"enableServiceLinks": false`))
 
 		resources := rendered.Resources()
+		for _, absent := range []stack.ResourceID{"runtime-api", "runtime-api-account", "runtime-api-secret", "runtime-api-service", "runtime-api-egress"} {
+			for _, resource := range resources {
+				Expect(resource.ID).NotTo(Equal(absent), "the pinned image does not contain agent-runtime-api; production desired state must defer it")
+			}
+		}
 		for _, role := range []stack.ResourceID{"api", "orchestration", "model", "tool", "blob-role", "codec", "sandbox-control", "sandbox-host"} {
 			resource := findResource(resources, role)
 			Expect(resource.Kubernetes.Replicas).To(BeNumerically(">", 0), role)
@@ -198,18 +203,10 @@ func normalizedProfile(resources []stack.Resource, namespace string, localFixtur
 			if localFixture && (resource.ID == "model-egress" || resource.ID == "tool-egress") {
 				resource.Kubernetes.Network.AllowedEgress = removeLocalDemoEgress(resource.Kubernetes.Network.AllowedEgress)
 			}
-			if resource.ID == "runtime-api" {
-				resource.Kubernetes.Replicas = 0
-				resource.Kubernetes.Compute = nil
-			}
 			for environmentIndex := range resource.Kubernetes.Environment {
 				environment := &resource.Kubernetes.Environment[environmentIndex]
 				if environment.Name == "BLOB_BUCKET" || environment.Name == "BLOB_TEMPORAL_BUCKET" {
 					environment.Value = "<namespace>"
-					continue
-				}
-				if environment.Name == "RUNTIME_API_CONFIG" {
-					environment.Value = "<profile-runtime-api-config>"
 					continue
 				}
 				if environment.Name != "RUNTIME_ROLE_CONFIG" {

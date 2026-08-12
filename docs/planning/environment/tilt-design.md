@@ -32,7 +32,6 @@ The finished repository exposes this small command surface:
 just dev                         # start this worktree's isolated Tilt stack
 just dev STACK=feature-x         # choose a readable, validated stack id
 just dev-status                  # show the selected namespace and endpoints
-just dev-api                     # foreground API port-forward on an OS-selected port
 just dev-down                    # delete only this stack's namespace
 just dev-preflight               # verify the local, non-secret prerequisites
 ```
@@ -148,12 +147,10 @@ localhost dashboard port, stores it with the stack state, and prints its
 URL. It retries the launch if another program wins the short allocation race.
 
 Application services have no fixed `k8s_resource(port_forwards=...)` mapping.
-`just dev-api` starts a foreground, stack-scoped `kubectl port-forward` with
-an omitted local port, lets `kubectl` choose a free port, and prints the URL.
-The forward dies when the command exits. This avoids invisible background
-processes and lets multiple stacks run simultaneously. Tilt's documented
-port-forward feature remains available for explicitly requested debugging, but
-is not the default public endpoint. See [Tilt service
+The checked-in Stack deliberately has no durable public API workload or
+port-forward command while its pinned production image lacks that executable.
+Tilt's documented port-forward feature remains available for explicitly
+requested debugging of declared role services. See [Tilt service
 endpoints](https://docs.tilt.dev/accessing_resource_endpoints.html).
 
 ## Development dependency boundary

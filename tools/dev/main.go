@@ -49,7 +49,7 @@ func main() {
 
 func run(ctx context.Context, arguments []string, output io.Writer) error {
 	if len(arguments) == 0 {
-		return fmt.Errorf("run local development command: render, secrets, preflight, up, reconcile, status, api, reset, or down is required")
+		return fmt.Errorf("run local development command: render, secrets, preflight, up, reconcile, status, reset, or down is required")
 	}
 	switch arguments[0] {
 	case "render":
@@ -109,12 +109,6 @@ func run(ctx context.Context, arguments []string, output io.Writer) error {
 			return err
 		}
 		return reset(ctx, stack, root, output)
-	case "api":
-		stack, root, err := parseStackAndRoot("api", arguments[1:])
-		if err != nil {
-			return err
-		}
-		return api(ctx, stack, root, output)
 	case "down":
 		stack, root, err := parseStackAndRoot("down", arguments[1:])
 		if err != nil {
@@ -550,10 +544,9 @@ func materializeSecretsForProfile(stackName, profile, root string, reader io.Rea
 		sandboxReference, sandboxFound := secretReferenceByID(references, "sandbox-state-secret")
 		blobReference, blobFound := secretReferenceByID(references, "blob-storage-secret")
 		orchestrationReference, orchestrationFound := secretReferenceByID(references, "orchestration-payload-blob-secret")
-		runtimeAPIReference, runtimeAPIFound := secretReferenceByID(references, "runtime-api-secret")
 		modelReference, modelFound := secretReferenceByID(references, "model-secret")
 		toolReference, toolFound := secretReferenceByID(references, "tool-broker-secret")
-		if !stateFound || !sandboxFound || !blobFound || !orchestrationFound || !runtimeAPIFound || !modelFound || !toolFound {
+		if !stateFound || !sandboxFound || !blobFound || !orchestrationFound || !modelFound || !toolFound {
 			return nil, fmt.Errorf("materialize local development secrets: reviewed Stack is missing required state credential references")
 		}
 		statePassword := state.Values[stateReference.name]["POSTGRES_PASSWORD"]
@@ -562,8 +555,6 @@ func materializeSecretsForProfile(stackName, profile, root string, reader io.Rea
 		state.Values[sandboxReference.name]["SANDBOX_STATE_DSN"] = stateDSN
 		state.Values[orchestrationReference.name]["ORCHESTRATION_PAYLOAD_BLOB_ACCESS_KEY"] = state.Values[blobReference.name]["MINIO_ROOT_USER"]
 		state.Values[orchestrationReference.name]["ORCHESTRATION_PAYLOAD_BLOB_SECRET_KEY"] = state.Values[blobReference.name]["MINIO_ROOT_PASSWORD"]
-		state.Values[runtimeAPIReference.name]["AR_RUNTIME_MINIO_ACCESS_KEY"] = state.Values[blobReference.name]["MINIO_ROOT_USER"]
-		state.Values[runtimeAPIReference.name]["AR_RUNTIME_MINIO_SECRET_KEY"] = state.Values[blobReference.name]["MINIO_ROOT_PASSWORD"]
 		if profile == "local" {
 			for _, reference := range []localSecretReference{modelReference, toolReference} {
 				state.Values[reference.name]["LOCAL_DEMO_STATE_DSN"] = state.Values[stateReference.name]["STATE_DATABASE_DSN"]
@@ -583,10 +574,9 @@ func materializeSecretsForProfile(stackName, profile, root string, reader io.Rea
 	sandboxReference, sandboxFound := secretReferenceByID(references, "sandbox-state-secret")
 	blobReference, blobFound := secretReferenceByID(references, "blob-storage-secret")
 	orchestrationReference, orchestrationFound := secretReferenceByID(references, "orchestration-payload-blob-secret")
-	runtimeAPIReference, runtimeAPIFound := secretReferenceByID(references, "runtime-api-secret")
 	modelReference, modelFound := secretReferenceByID(references, "model-secret")
 	toolReference, toolFound := secretReferenceByID(references, "tool-broker-secret")
-	if !stateFound || !sandboxFound || !blobFound || !orchestrationFound || !runtimeAPIFound || !modelFound || !toolFound {
+	if !stateFound || !sandboxFound || !blobFound || !orchestrationFound || !modelFound || !toolFound {
 		return nil, fmt.Errorf("materialize local development secrets: reviewed Stack is missing required credential references")
 	}
 	statePassword := state.Values[stateReference.name]["POSTGRES_PASSWORD"]
@@ -594,8 +584,6 @@ func materializeSecretsForProfile(stackName, profile, root string, reader io.Rea
 	state.Values[sandboxReference.name]["SANDBOX_STATE_DSN"] = state.Values[stateReference.name]["STATE_DATABASE_DSN"]
 	state.Values[orchestrationReference.name]["ORCHESTRATION_PAYLOAD_BLOB_ACCESS_KEY"] = state.Values[blobReference.name]["MINIO_ROOT_USER"]
 	state.Values[orchestrationReference.name]["ORCHESTRATION_PAYLOAD_BLOB_SECRET_KEY"] = state.Values[blobReference.name]["MINIO_ROOT_PASSWORD"]
-	state.Values[runtimeAPIReference.name]["AR_RUNTIME_MINIO_ACCESS_KEY"] = state.Values[blobReference.name]["MINIO_ROOT_USER"]
-	state.Values[runtimeAPIReference.name]["AR_RUNTIME_MINIO_SECRET_KEY"] = state.Values[blobReference.name]["MINIO_ROOT_PASSWORD"]
 	if profile == "local" {
 		for _, reference := range []localSecretReference{modelReference, toolReference} {
 			state.Values[reference.name]["LOCAL_DEMO_STATE_DSN"] = state.Values[stateReference.name]["STATE_DATABASE_DSN"]
@@ -915,29 +903,13 @@ func reset(ctx context.Context, stack, root string, output io.Writer) error {
 		return err
 	}
 	arguments := []string{"--kubeconfig", state.Kubeconfig, "--context", "orbstack", "--namespace", state.Namespace, "rollout", "restart"}
-	for _, role := range []string{"api", "runtime-api", "orchestration", "model", "tool", "blob-role", "codec", "sandbox-control", "sandbox-host"} {
+	for _, role := range []string{"api", "orchestration", "model", "tool", "blob-role", "codec", "sandbox-control", "sandbox-host"} {
 		arguments = append(arguments, "deployment/"+role)
 	}
 	command := exec.CommandContext(ctx, "kubectl", arguments...)
 	command.Dir, command.Stdout, command.Stderr = root, output, output
 	if err := command.Run(); err != nil {
 		return fmt.Errorf("reset only declared local Stack roles: %w", err)
-	}
-	return nil
-}
-
-func api(ctx context.Context, stack, root string, output io.Writer) error {
-	state, err := loadState(root, stack)
-	if err != nil {
-		return err
-	}
-	if err := verifyNamespace(ctx, state); err != nil {
-		return err
-	}
-	command := exec.CommandContext(ctx, "kubectl", "--kubeconfig", state.Kubeconfig, "--context", "orbstack", "--namespace", state.Namespace, "port-forward", "service/runtime-api", ":8088")
-	command.Dir, command.Stdout, command.Stderr = root, output, output
-	if err := command.Run(); err != nil {
-		return fmt.Errorf("forward only verified local Stack API: %w", err)
 	}
 	return nil
 }

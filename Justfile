@@ -66,10 +66,6 @@ dev-preflight stack="" kubeconfig="":
 dev-status stack="":
     go run ./tools/dev status --stack "{{stack}}" --root .
 
-# Opens a foreground OS-selected API forward. Ctrl-C closes only the forward.
-dev-api stack="":
-    go run ./tools/dev api --stack "{{stack}}" --root .
-
 # Restarts all eight declared local runtime-role Deployments after label/UID checks.
 dev-reset stack="":
     go run ./tools/dev reset --stack "{{stack}}" --root .

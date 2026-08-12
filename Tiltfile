@@ -53,7 +53,7 @@ stack_manifests = local('go run ./cmd/stackctl manifests --stack-file ' + stack_
 secret_manifests = local('go run ./tools/dev secrets --stack=' + stack + ' --profile=' + profile + ' --root=.', quiet=True)
 k8s_yaml([stack_manifests, secret_manifests])
 
-for workload in ['api', 'runtime-api', 'orchestration', 'model', 'tool', 'blob-role', 'codec', 'sandbox-control', 'sandbox-host', 'egress-proxy']:
+for workload in ['api', 'orchestration', 'model', 'tool', 'blob-role', 'codec', 'sandbox-control', 'sandbox-host', 'egress-proxy']:
     # Keep Tilt's incremental context aligned with every Dockerfile COPY.
     # Omitting a Go package here makes the CI-only context compile differently
     # from the sealed production context and fails only after deployment starts.

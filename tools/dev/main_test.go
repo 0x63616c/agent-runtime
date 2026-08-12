@@ -467,7 +467,6 @@ func TestMaterializeSecretsKeepsValuesPrivateAndStablePerStack(t *testing.T) {
 		"ar-safe-stack-sandbox-state-secret":              {"SANDBOX_STATE_DSN"},
 		"ar-safe-stack-sandbox-host-identity-secret":      {"SANDBOX_HOST_IDENTITY"},
 		"ar-safe-stack-temporal-db-secret":                {"POSTGRES_PASSWORD"},
-		"ar-safe-stack-runtime-api-secret":                {"AR_RUNTIME_MINIO_ACCESS_KEY", "AR_RUNTIME_MINIO_SECRET_KEY", "RUNTIME_API_ADMIN_TOKEN", "RUNTIME_API_DEVELOPER_TOKEN"},
 	}
 	if len(secrets.Items) != len(expectedSecretKeys) {
 		t.Fatalf("generated Secret count = %d, want %d", len(secrets.Items), len(expectedSecretKeys))
