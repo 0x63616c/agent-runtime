@@ -82,14 +82,15 @@ func serve(ctx context.Context, config Config, lookup SecretLookup, listener net
 	mux.Handle("/", handler)
 	server := &http.Server{Handler: mux, ReadHeaderTimeout: 5 * time.Second, IdleTimeout: 30 * time.Second, MaxHeaderBytes: 16 << 10}
 	result := make(chan error, 1)
-	started := make(chan struct{})
-	go func() {
-		close(started)
-		result <- server.Serve(listener)
-	}()
+	go func() { result <- server.Serve(listener) }()
 	if announceReady != nil {
 		gate := newReadinessGate(ctx, announceReady)
-		<-started
+		if err := probeReadiness(ctx, listener.Addr().String()); err != nil && ctx.Err() == nil {
+			gate.stop()
+			_ = server.Close()
+			<-result
+			return errors.Wrap(err, "serve runtime API process: confirm readiness")
+		}
 		gate.announce(listener.Addr().String())
 		defer gate.stop()
 	}
@@ -144,6 +145,22 @@ func (gate *readinessGate) announce(address string) {
 
 func (gate *readinessGate) stop() {
 	gate.stopWatch()
+}
+
+func probeReadiness(ctx context.Context, address string) error {
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://"+address+"/readyz", nil)
+	if err != nil {
+		return errors.Wrap(err, "construct readiness probe")
+	}
+	response, err := (&http.Client{}).Do(request)
+	if err != nil {
+		return errors.Wrap(err, "send readiness probe")
+	}
+	defer func() { _ = response.Body.Close() }()
+	if response.StatusCode != http.StatusOK {
+		return errors.New("readiness probe returned an unexpected status")
+	}
+	return nil
 }
 
 func composeRuntime(ctx context.Context, config Config, lookup SecretLookup, ids *cryptoIDs) (runtimeapi.Runtime, func(), error) {
