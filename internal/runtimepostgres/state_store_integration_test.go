@@ -114,6 +114,144 @@ func TestPostgresRuntimeStateStorePersistsASealedPlanAndRejectsItsStaleBase(t *t
 	}
 }
 
+func TestPostgresRuntimeStateStorePersistsConversationAppendReplayAndExpectedVersionConflict(t *testing.T) {
+	ctx := context.Background()
+	pool := openRuntimePool(t)
+	resetRuntimeV2(t, ctx, pool)
+	applyRuntimeMigrations(t, ctx, pool)
+
+	tenant, err := runtimecontent.ParseTenantID("conversation-state-store-tenant")
+	if err != nil {
+		t.Fatalf("parse tenant: %v", err)
+	}
+	principal, err := runtimecontent.ParsePrincipalID("conversation-state-store-user")
+	if err != nil {
+		t.Fatalf("parse principal: %v", err)
+	}
+	objects := &stateStoreObjects{values: map[string][]byte{}}
+	content, err := runtimecontent.New("conversation-state-store-content", objects)
+	if err != nil {
+		t.Fatalf("new content store: %v", err)
+	}
+	compiler, err := runtimestate.NewCompiler(content)
+	if err != nil {
+		t.Fatalf("new compiler: %v", err)
+	}
+	now := time.Date(2026, 8, 12, 1, 0, 0, 0, time.UTC)
+	timeSource := stateStoreClock{now: now}
+	planner, err := runtimestate.NewRuntimeStatePlanner(timeSource, &stateStoreIDs{})
+	if err != nil {
+		t.Fatalf("new planner: %v", err)
+	}
+	store, err := runtimepostgres.NewRuntimeStateStore(pool, timeSource)
+	if err != nil {
+		t.Fatalf("new PostgreSQL store: %v", err)
+	}
+
+	registrationBody, err := content.StageAgentSpecificationBody(ctx, tenant, runtimecontent.AgentSpecificationBody{Name: "conversation-state-store", ModelProfile: "balanced", Instructions: "conversation entries remain immutable references"})
+	if err != nil {
+		t.Fatalf("stage agent specification: %v", err)
+	}
+	adminScope := runtimestate.MutationScope{Tenant: tenant, Authority: runtimestate.AuthorityTenantAdministrator}
+	registration, err := compiler.CompileRegisterAgentRevision(runtimestate.RegisterAgentRevisionCommand{Scope: adminScope, IdempotencyKey: "conversation-register", Specification: registrationBody})
+	if err != nil {
+		t.Fatalf("compile registration: %v", err)
+	}
+	registrationBase, err := store.LoadRuntimeState(ctx, adminScope)
+	if err != nil {
+		t.Fatalf("load registration base: %v", err)
+	}
+	registrationPlan, err := planner.Plan(ctx, registrationBase, registration)
+	if err != nil {
+		t.Fatalf("plan registration: %v", err)
+	}
+	if err := store.PersistTransitionPlan(ctx, registrationPlan); err != nil {
+		t.Fatalf("persist registration: %v", err)
+	}
+
+	ownerScope := runtimestate.MutationScope{Tenant: tenant, Principal: principal, Authority: runtimestate.AuthoritySessionOwner}
+	createSession, err := compiler.CompileCreateSession(runtimestate.CreateSessionCommand{Scope: ownerScope, IdempotencyKey: "conversation-session", RevisionID: registrationPlan.Result().Revision.RevisionID})
+	if err != nil {
+		t.Fatalf("compile session: %v", err)
+	}
+	sessionBase, err := store.LoadRuntimeState(ctx, ownerScope)
+	if err != nil {
+		t.Fatalf("load session base: %v", err)
+	}
+	sessionPlan, err := planner.Plan(ctx, sessionBase, createSession)
+	if err != nil {
+		t.Fatalf("plan session: %v", err)
+	}
+	if err := store.PersistTransitionPlan(ctx, sessionPlan); err != nil {
+		t.Fatalf("persist session: %v", err)
+	}
+
+	workerScope := runtimestate.MutationScope{Tenant: tenant, Principal: principal, Authority: runtimestate.AuthorityRuntimeWorker}
+	entry, err := content.StageConversationEntry(ctx, tenant, []byte("immutable model context reference"))
+	if err != nil {
+		t.Fatalf("stage conversation entry: %v", err)
+	}
+	entryCommitment, err := content.ValidateConversationEntryHandoff(entry)
+	if err != nil {
+		t.Fatalf("validate staged conversation entry: %v", err)
+	}
+	appendCommand, err := compiler.CompileAppendConversation(runtimestate.AppendConversationCommand{Scope: workerScope, IdempotencyKey: "conversation-append-1", SessionID: sessionPlan.Result().Session.SessionID, ExpectedVersion: 0, Entry: entry})
+	if err != nil {
+		t.Fatalf("compile conversation append: %v", err)
+	}
+	appendBase, err := store.LoadRuntimeState(ctx, workerScope)
+	if err != nil {
+		t.Fatalf("load conversation base: %v", err)
+	}
+	appendPlan, err := planner.Plan(ctx, appendBase, appendCommand)
+	if err != nil {
+		t.Fatalf("plan conversation append: %v", err)
+	}
+	if got := appendPlan.Result().Conversation; got.Version != 1 || got.Reference != entryCommitment.Reference {
+		t.Fatalf("conversation append = %#v, want version 1 and staged immutable reference %#v", got, entryCommitment.Reference)
+	}
+	if err := store.PersistTransitionPlan(ctx, appendPlan); err != nil {
+		t.Fatalf("persist conversation append: %v", err)
+	}
+
+	loaded, err := store.LoadRuntimeState(ctx, workerScope)
+	if err != nil {
+		t.Fatalf("reload persisted conversation: %v", err)
+	}
+	if len(loaded.Conversations) != 1 || loaded.Conversations[0] != appendPlan.Result().Conversation {
+		t.Fatalf("reloaded conversations = %#v, want exactly %#v", loaded.Conversations, appendPlan.Result().Conversation)
+	}
+	replay, err := planner.Plan(ctx, loaded, appendCommand)
+	if err != nil {
+		t.Fatalf("plan exact conversation replay: %v", err)
+	}
+	if replay.Result().Conversation != appendPlan.Result().Conversation || !reflect.DeepEqual(replay.State(), loaded) {
+		t.Fatalf("conversation replay = %#v / %#v, want original result and unchanged durable state", replay.Result(), replay.State())
+	}
+	if err := store.PersistTransitionPlan(ctx, replay); err != nil {
+		t.Fatalf("persist exact conversation replay: %v", err)
+	}
+	afterReplay, err := store.LoadRuntimeState(ctx, workerScope)
+	if err != nil {
+		t.Fatalf("reload exact replay: %v", err)
+	}
+	if !reflect.DeepEqual(afterReplay, loaded) {
+		t.Fatalf("exact replay changed persisted state = %#v, want %#v", afterReplay, loaded)
+	}
+
+	competingEntry, err := content.StageConversationEntry(ctx, tenant, []byte("competing stale context"))
+	if err != nil {
+		t.Fatalf("stage stale conversation entry: %v", err)
+	}
+	stale, err := compiler.CompileAppendConversation(runtimestate.AppendConversationCommand{Scope: workerScope, IdempotencyKey: "conversation-append-stale", SessionID: sessionPlan.Result().Session.SessionID, ExpectedVersion: 0, Entry: competingEntry})
+	if err != nil {
+		t.Fatalf("compile stale conversation append: %v", err)
+	}
+	if _, err := planner.Plan(ctx, afterReplay, stale); !errors.Is(err, runtimestate.ErrConflict) {
+		t.Fatalf("stale persisted conversation append error = %v, want ErrConflict", err)
+	}
+}
+
 func TestPostgresTenantErasureDeletesOnlyAuthorizedStateReferencedContent(t *testing.T) {
 	ctx := context.Background()
 	pool := openRuntimePool(t)
@@ -583,30 +721,7 @@ type stateStoreIDs struct{ next int }
 func (ids *stateStoreIDs) NextIdentifier(kind runtimestate.IdentifierKind) (string, error) {
 	ids.next++
 	value := fmt.Sprintf("%016d", ids.next)
-	switch kind {
-	case runtimestate.IdentifierAgent:
-		return "agent_" + value, nil
-	case runtimestate.IdentifierRevision:
-		return "arev_" + value, nil
-	case runtimestate.IdentifierSession:
-		return "sess_" + value, nil
-	case runtimestate.IdentifierInput:
-		return "input_" + value, nil
-	case runtimestate.IdentifierTurn:
-		return "turn_" + value, nil
-	case runtimestate.IdentifierInvocation:
-		return "invoke_" + value, nil
-	case runtimestate.IdentifierEvent:
-		return "event_" + value, nil
-	case runtimestate.IdentifierCursor:
-		return "cursor_" + value, nil
-	case runtimestate.IdentifierAudit:
-		return "audit_" + value, nil
-	case runtimestate.IdentifierOutbox:
-		return "outbox_" + value, nil
-	default:
-		return "", fmt.Errorf("unknown identifier kind %q", kind)
-	}
+	return string(kind) + "_" + value, nil
 }
 
 type stateStoreObjects struct{ values map[string][]byte }
