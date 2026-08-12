@@ -45,6 +45,9 @@ typed `X-Request-ID`. Mutations require `Idempotency-Key`. Request and response
 JSON is strict and size-bounded. Cursor pagination is the current reconnect
 mechanism: connection loss affects the read only, and the caller resumes after
 the last accepted Cursor.
+Authenticated tenant and principal identities are canonical lower-case segments
+with digits, `-`, or `_` after the first character; malformed identities,
+including delimiters, are rejected before any runtime dispatch.
 
 ## Artifact streaming
 

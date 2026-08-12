@@ -78,6 +78,7 @@ func TestRuntimeAPIServerClosesSlowMutationBodyAtReadDeadline(t *testing.T) {
 	server := newHTTPServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		_, err := request.Body.Read(make([]byte, 1))
 		bodyRead <- err
+		writer.WriteHeader(http.StatusNoContent)
 	}))
 	server.ReadHeaderTimeout = 20 * time.Millisecond
 	server.ReadTimeout = 40 * time.Millisecond
@@ -96,13 +97,15 @@ func TestRuntimeAPIServerClosesSlowMutationBodyAtReadDeadline(t *testing.T) {
 	if _, err := connection.Write([]byte("POST / HTTP/1.1\r\nHost: runtime\r\nContent-Length: 1\r\n\r\n")); err != nil {
 		t.Fatalf("write headers: %v", err)
 	}
-	select {
-	case err := <-bodyRead:
-		if err == nil {
-			t.Fatal("slow request body read = nil, want read deadline failure")
-		}
-	case <-time.After(time.Second):
-		t.Fatal("slow request body read did not reach the configured deadline")
+	if err := connection.SetReadDeadline(time.Now().Add(time.Second)); err != nil {
+		t.Fatalf("set read deadline: %v", err)
+	}
+	response := make([]byte, 1)
+	if _, err := connection.Read(response); err != nil {
+		t.Fatalf("read timeout response: %v", err)
+	}
+	if err := <-bodyRead; err == nil {
+		t.Fatal("slow request body read = nil, want read deadline failure")
 	}
 	if err := server.Close(); err != nil {
 		t.Fatalf("close server: %v", err)

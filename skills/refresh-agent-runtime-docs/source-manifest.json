@@ -14,6 +14,7 @@
         "cmd/agent-runtime-api/main.go",
         "cmd/generate-runtime-openapi/main.go",
         "cmd/sandbox-control/main.go",
+        "internal/runtimeapi/server.go",
         "internal/runtimeapi/observation.go",
         "internal/runtimeapiprocess/run.go",
         "internal/runtimeapiprocess/observability.go",
