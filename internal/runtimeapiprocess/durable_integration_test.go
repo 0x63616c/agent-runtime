@@ -13,6 +13,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/0x63616c/agent-runtime/internal/runtimeapiprocess"
 	agentruntime "github.com/0x63616c/agent-runtime/sdk/go"
@@ -108,12 +109,26 @@ func TestRuntimeProcessAnnouncesReadinessOnlyAfterHealthRouteServes(t *testing.T
 			readiness <- nil
 		})
 	}()
-	if err := <-readiness; err != nil {
+	if err := awaitProcessReadiness(t, readiness, "readiness callback"); err != nil {
 		t.Fatalf("readiness callback observed unavailable route: %v", err)
 	}
 	cancel()
-	if err := <-done; err != nil {
+	if err := awaitProcessReadiness(t, done, "runtime process shutdown"); err != nil {
 		t.Fatalf("stop runtime process: %v", err)
+	}
+}
+
+func awaitProcessReadiness[T any](t *testing.T, value <-chan T, description string) T {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	select {
+	case received := <-value:
+		return received
+	case <-ctx.Done():
+		t.Fatalf("timed out waiting for %s: %v", description, ctx.Err())
+		var zero T
+		return zero
 	}
 }
 

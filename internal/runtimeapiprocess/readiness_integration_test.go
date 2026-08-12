@@ -28,17 +28,31 @@ func TestIntegrationProcessWithholdsReadinessUntilListenerAccepts(t *testing.T) 
 			return map[string]string{"ADMIN_TOKEN": "admin-token-0000"}[name], name == "ADMIN_TOKEN"
 		}, blocked, func(string) { announced <- struct{}{} })
 	}()
-	<-blocked.accepting
+	awaitReadiness(t, blocked.accepting, "listener accept attempt")
 	select {
 	case <-announced:
 		t.Fatal("readiness callback ran before the listener accepted the internal health probe")
 	default:
 	}
 	close(blocked.allow)
-	<-announced
+	awaitReadiness(t, announced, "readiness announcement")
 	cancel()
-	if err := <-done; err != nil {
+	if err := awaitReadiness(t, done, "runtime process shutdown"); err != nil {
 		t.Fatalf("stop runtime process: %v", err)
+	}
+}
+
+func awaitReadiness[T any](t *testing.T, value <-chan T, description string) T {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	select {
+	case received := <-value:
+		return received
+	case <-ctx.Done():
+		t.Fatalf("timed out waiting for %s: %v", description, ctx.Err())
+		var zero T
+		return zero
 	}
 }
 

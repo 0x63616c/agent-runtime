@@ -40,7 +40,8 @@ Mutations also require `Idempotency-Key`. JSON and bodies are strict and
 bounded. Observation reconnects by requesting the next page after the last
 accepted opaque Cursor; a disconnect does not imply cancellation.
 Authenticated tenant and principal identities are canonical lower-case segments
-with digits, `-`, or `_` after the first character. Malformed identities,
+beginning with a lower-case letter or digit, with `-` or `_` permitted after the
+first character. Malformed identities,
 including delimiters, are rejected before runtime dispatch.
 
 ## Artifact streaming
@@ -69,7 +70,7 @@ only the role and readiness state.
 The standalone process announces readiness only after strict configuration,
 credential lookup, and runtime composition succeed. Its readiness callback
 runs only once the listener is serving the health route and never after the
-process context is cancelled.
+process context is already cancelled.
 
 ## Run the current local role
 

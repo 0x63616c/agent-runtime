@@ -10,7 +10,7 @@ import (
 	"net"
 	"net/http"
 	"os"
-	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/0x63616c/agent-runtime/internal/runtime/kernel"
@@ -115,37 +115,46 @@ func serve(ctx context.Context, config Config, lookup SecretLookup, listener net
 }
 
 type readinessGate struct {
-	mu        sync.Mutex
-	ctx       context.Context
-	cancelled bool
-	announced bool
+	done      <-chan struct{}
+	state     atomic.Uint32
 	ready     func(string)
 	stopWatch func() bool
 }
 
 func newReadinessGate(ctx context.Context, ready func(string)) *readinessGate {
-	gate := &readinessGate{ctx: ctx, ready: ready}
-	gate.stopWatch = context.AfterFunc(ctx, func() {
-		gate.mu.Lock()
-		defer gate.mu.Unlock()
-		gate.cancelled = true
-	})
+	gate := &readinessGate{done: ctx.Done(), ready: ready}
+	gate.stopWatch = context.AfterFunc(ctx, func() { gate.state.CompareAndSwap(readinessPending, readinessCancelled) })
 	return gate
 }
 
 func (gate *readinessGate) announce(address string) {
-	gate.mu.Lock()
-	defer gate.mu.Unlock()
-	if gate.cancelled || gate.announced || gate.ctx.Err() != nil {
+	select {
+	case <-gate.done:
+		gate.state.CompareAndSwap(readinessPending, readinessCancelled)
+		return
+	default:
+	}
+	if !gate.state.CompareAndSwap(readinessPending, readinessAnnounced) {
 		return
 	}
-	gate.announced = true
+	select {
+	case <-gate.done:
+		gate.state.CompareAndSwap(readinessAnnounced, readinessCancelled)
+		return
+	default:
+	}
 	gate.ready(address)
 }
 
 func (gate *readinessGate) stop() {
 	gate.stopWatch()
 }
+
+const (
+	readinessPending uint32 = iota
+	readinessAnnounced
+	readinessCancelled
+)
 
 func probeReadiness(ctx context.Context, address string) error {
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://"+address+"/readyz", nil)
