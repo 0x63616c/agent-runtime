@@ -37,12 +37,15 @@ func Run(ctx context.Context, config Config, lookup SecretLookup, ready func(str
 		return errors.Wrap(err, "run runtime API process: listen")
 	}
 	defer func() { _ = listener.Close() }()
-	ready(listener.Addr().String())
-	return Serve(ctx, config, lookup, listener)
+	return serve(ctx, config, lookup, listener, ready)
 }
 
 // Serve runs the role on an already-owned listener so process tests need no timing guesses.
 func Serve(ctx context.Context, config Config, lookup SecretLookup, listener net.Listener) error {
+	return serve(ctx, config, lookup, listener, nil)
+}
+
+func serve(ctx context.Context, config Config, lookup SecretLookup, listener net.Listener, announceReady func(string)) error {
 	if ctx == nil || lookup == nil || listener == nil {
 		return errors.New("serve runtime API process: context, secret lookup, and listener are required")
 	}
@@ -76,7 +79,10 @@ func Serve(ctx context.Context, config Config, lookup SecretLookup, listener net
 	mux.HandleFunc("GET /healthz", ready)
 	mux.HandleFunc("GET /readyz", ready)
 	mux.Handle("/", handler)
-	server := &http.Server{Handler: mux, ReadHeaderTimeout: 5 * time.Second, IdleTimeout: 30 * time.Second, MaxHeaderBytes: 16 << 10}
+	server := newHTTPServer(mux)
+	if announceReady != nil && ctx.Err() == nil {
+		announceReady(listener.Addr().String())
+	}
 	result := make(chan error, 1)
 	go func() { result <- server.Serve(listener) }()
 	select {
@@ -96,6 +102,17 @@ func Serve(ctx context.Context, config Config, lookup SecretLookup, listener net
 			return nil
 		}
 		return errors.Wrap(err, "stop runtime API process")
+	}
+}
+
+func newHTTPServer(handler http.Handler) *http.Server {
+	return &http.Server{
+		Handler:           handler,
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       15 * time.Second,
+		WriteTimeout:      15 * time.Second,
+		IdleTimeout:       30 * time.Second,
+		MaxHeaderBytes:    16 << 10,
 	}
 }
 

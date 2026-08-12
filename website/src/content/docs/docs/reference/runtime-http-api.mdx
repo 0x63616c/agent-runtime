@@ -63,6 +63,11 @@ observation-only rather than a public mutation.
 
 `GET /healthz` and `GET /readyz` are deliberately unauthenticated and return
 only the role and readiness state.
+The standalone process announces readiness only after strict configuration,
+credential lookup, and runtime composition succeed. Its public server bounds
+headers to 5 seconds, request reads and response writes to 15 seconds, idle
+connections to 30 seconds, and headers to 16 KiB; this includes slow request
+bodies and slow Artifact consumers.
 
 ## Run the current local role
 

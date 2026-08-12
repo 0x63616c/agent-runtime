@@ -65,6 +65,11 @@ digest only when the caller reaches EOF; callers must always close the body.
 
 `GET /healthz` and `GET /readyz` are deliberately unauthenticated, contain only
 the role and readiness state, and expose no runtime resource data.
+The standalone process does not announce readiness until strict configuration,
+credential lookup, and its selected runtime composition have succeeded. Its
+public HTTP server bounds headers to 5 seconds, request reads and response
+writes to 15 seconds, idle connections to 30 seconds, and headers to 16 KiB;
+these limits include slow request bodies and slow Artifact consumers.
 
 ## Standalone local role
 
