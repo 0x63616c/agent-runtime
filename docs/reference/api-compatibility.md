@@ -11,6 +11,13 @@ emitted before the terminal Event when a producer outcome cannot be recovered,
 so callers can inspect the durable terminal state rather than treating a
 missing live stream segment as success.
 
+The drained-Session cancellation slice is also additive within v1. It adds the
+`POST /v1/sessions/{session_id}/cancel` route, the `SessionCanceller` SDK
+capability, and the `session.cancelled` and `session.failed` Event members. It
+does not widen `RuntimeClient`; existing implementations remain source
+compatible, while callers opt into cancellation by accepting the narrower
+capability interface or using the concrete `Client`.
+
 Removing or renaming a route, required field, ID format, failure/event value,
 Agent/Policy/Tool field, or changing its meaning is breaking. It requires the
 next permitted semantic-version boundary, a new compatibility baseline, and a
@@ -25,6 +32,7 @@ notes, and retain an external-consumer SDK check at release time. The checked
 release-consumer contract creates a temporary module with `GOWORK=off`, imports
 only `github.com/0x63616c/agent-runtime/sdk/go`, and typechecks the retained
 `RuntimeClient` plus additive `ArtifactStreamer` and `ToolCallInspector`
-capabilities. The same gate retains the OpenAPI vocabulary baseline. Until a
-version is published it checks the release candidate through a local module
-replacement; it does not claim that an immutable remote tag has been tested.
+and `SessionCanceller` capabilities. The same gate retains the OpenAPI
+vocabulary baseline. Until a version is published it checks the release
+candidate through a local module replacement; it does not claim that an
+immutable remote tag has been tested.

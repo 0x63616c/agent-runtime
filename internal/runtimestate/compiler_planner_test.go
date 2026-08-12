@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -144,6 +145,192 @@ func TestCompilerCreatesTheOnlyReceiptBoundMutationAndPlannerCreatesRevision(t *
 	}
 	if got := revisionPlan.Result(); got.Revision.Revision != 2 || got.Revision.AgentID != result.Revision.AgentID || revisionPlan.State().Sessions[0].RevisionID != result.Revision.RevisionID {
 		t.Fatalf("revision plan = %#v / %#v, want immutable revision and unchanged Session pin", got, revisionPlan.State().Sessions[0])
+	}
+}
+
+func TestPlannerSessionCancellationTransitionTableAndReplay(t *testing.T) {
+	now := time.Date(2026, 8, 12, 2, 0, 0, 0, time.UTC)
+	content, _, tenant, principal := testRuntimeContent(t)
+	compiler, err := runtimestate.NewCompiler(content)
+	if err != nil {
+		t.Fatalf("new compiler: %v", err)
+	}
+	planner, err := runtimestate.NewRuntimeStatePlanner(fixedPlannerClock{now: now}, &uniquePlannerIDs{})
+	if err != nil {
+		t.Fatalf("new planner: %v", err)
+	}
+	owner := ownerScope(tenant, principal)
+	sessionID := validSessionID(t)
+
+	for _, candidate := range []struct {
+		name    string
+		initial agentruntime.SessionState
+		want    agentruntime.SessionState
+		pending bool
+		err     error
+	}{
+		{name: "open becomes cancelled", initial: agentruntime.SessionOpen, want: agentruntime.SessionCancelled},
+		{name: "closing becomes cancelled", initial: agentruntime.SessionClosing, want: agentruntime.SessionCancelled},
+		{name: "open with admitted work is refused", initial: agentruntime.SessionOpen, pending: true, err: runtimestate.ErrConflict},
+		{name: "completed is terminal", initial: agentruntime.SessionCompleted, err: runtimestate.ErrConflict},
+		{name: "cancelled is terminal", initial: agentruntime.SessionCancelled, err: runtimestate.ErrConflict},
+		{name: "failed is terminal", initial: agentruntime.SessionFailed, err: runtimestate.ErrConflict},
+	} {
+		t.Run(candidate.name, func(t *testing.T) {
+			command, err := compiler.CompileCancelSession(runtimestate.CancelSessionCommand{Scope: owner, IdempotencyKey: "cancel-" + strings.ReplaceAll(candidate.name, " ", "-"), SessionID: sessionID})
+			if err != nil {
+				t.Fatalf("compile cancel Session: %v", err)
+			}
+			state := runtimestate.RuntimeState{Sessions: []runtimestate.SessionRecord{{Tenant: tenant, Principal: principal, SessionID: sessionID, State: candidate.initial, Version: 1, CreatedAt: now, UpdatedAt: now, RetainUntil: now.Add(time.Hour)}}}
+			if candidate.pending {
+				state.Turns = []runtimestate.TurnRecord{{Tenant: tenant, Principal: principal, SessionID: sessionID, TurnID: agentruntime.TurnID("turn_1234567890ABCDEF"), State: agentruntime.TurnRunning}}
+			}
+			plan, err := planner.Plan(context.Background(), state, command)
+			if !errors.Is(err, candidate.err) {
+				t.Fatalf("cancel from %q error = %v, want %v", candidate.initial, err, candidate.err)
+			}
+			if candidate.err != nil {
+				return
+			}
+			if plan.Result().Session.State != candidate.want || len(plan.Effects().Events) != 1 || plan.Effects().Events[0].Kind != agentruntime.EventSessionCancelled || !hasLifecyclePhases(plan.Effects(), "cancel_session", "attempted", "authorized", "committed", "terminal") {
+				t.Fatalf("cancel from %q plan = %#v / %#v", candidate.initial, plan.Result(), plan.Effects())
+			}
+			replay, err := planner.Plan(context.Background(), plan.State(), command)
+			if err != nil || replay.Result().Session != plan.Result().Session || !reflect.DeepEqual(replay.State(), plan.State()) {
+				t.Fatalf("cancel replay = %#v / %#v / %v, want original Session and unchanged state", replay.Result(), replay.State(), err)
+			}
+		})
+	}
+}
+
+func TestPlannerSessionCloseTransitionTableAndReplay(t *testing.T) {
+	now := time.Date(2026, 8, 12, 1, 55, 0, 0, time.UTC)
+	content, _, tenant, principal := testRuntimeContent(t)
+	compiler, err := runtimestate.NewCompiler(content)
+	if err != nil {
+		t.Fatalf("new compiler: %v", err)
+	}
+	planner, err := runtimestate.NewRuntimeStatePlanner(fixedPlannerClock{now: now}, &uniquePlannerIDs{})
+	if err != nil {
+		t.Fatalf("new planner: %v", err)
+	}
+	owner := ownerScope(tenant, principal)
+	sessionID := validSessionID(t)
+
+	for _, candidate := range []struct {
+		name    string
+		initial agentruntime.SessionState
+		pending bool
+		want    agentruntime.SessionState
+		events  []agentruntime.EventKind
+		err     error
+	}{
+		{name: "drained open completes", initial: agentruntime.SessionOpen, want: agentruntime.SessionCompleted, events: []agentruntime.EventKind{agentruntime.EventSessionClosing, agentruntime.EventSessionCompleted}},
+		{name: "open with admitted work closes", initial: agentruntime.SessionOpen, pending: true, want: agentruntime.SessionClosing, events: []agentruntime.EventKind{agentruntime.EventSessionClosing}},
+		{name: "closing rejects second close", initial: agentruntime.SessionClosing, err: runtimestate.ErrConflict},
+		{name: "completed is terminal", initial: agentruntime.SessionCompleted, err: runtimestate.ErrConflict},
+		{name: "cancelled is terminal", initial: agentruntime.SessionCancelled, err: runtimestate.ErrConflict},
+		{name: "failed is terminal", initial: agentruntime.SessionFailed, err: runtimestate.ErrConflict},
+	} {
+		t.Run(candidate.name, func(t *testing.T) {
+			command, err := compiler.CompileCloseSession(runtimestate.CloseSessionCommand{Scope: owner, IdempotencyKey: "close-" + strings.ReplaceAll(candidate.name, " ", "-"), SessionID: sessionID})
+			if err != nil {
+				t.Fatalf("compile close Session: %v", err)
+			}
+			state := runtimestate.RuntimeState{Sessions: []runtimestate.SessionRecord{{Tenant: tenant, Principal: principal, SessionID: sessionID, State: candidate.initial, Version: 1, CreatedAt: now, UpdatedAt: now, RetainUntil: now.Add(time.Hour)}}}
+			if candidate.pending {
+				state.Turns = []runtimestate.TurnRecord{{Tenant: tenant, Principal: principal, SessionID: sessionID, TurnID: agentruntime.TurnID("turn_1234567890ABCDEF"), State: agentruntime.TurnRunning}}
+			}
+			plan, err := planner.Plan(context.Background(), state, command)
+			if !errors.Is(err, candidate.err) {
+				t.Fatalf("close from %q error = %v, want %v", candidate.initial, err, candidate.err)
+			}
+			if candidate.err != nil {
+				return
+			}
+			if plan.Result().Session.State != candidate.want || len(plan.Effects().Events) != len(candidate.events) || !hasLifecyclePhases(plan.Effects(), "close_session", "attempted", "authorized", "committed", "terminal") {
+				t.Fatalf("close from %q plan = %#v / %#v", candidate.initial, plan.Result(), plan.Effects())
+			}
+			for index, kind := range candidate.events {
+				if plan.Effects().Events[index].Kind != kind {
+					t.Fatalf("close event %d = %q, want %q", index, plan.Effects().Events[index].Kind, kind)
+				}
+			}
+			replay, err := planner.Plan(context.Background(), plan.State(), command)
+			if err != nil || replay.Result().Session != plan.Result().Session || !reflect.DeepEqual(replay.State(), plan.State()) {
+				t.Fatalf("close replay = %#v / %#v / %v, want original Session and unchanged state", replay.Result(), replay.State(), err)
+			}
+		})
+	}
+}
+
+func TestPlannerSessionFailureTransitionTableAndReplay(t *testing.T) {
+	now := time.Date(2026, 8, 12, 2, 5, 0, 0, time.UTC)
+	content, _, tenant, principal := testRuntimeContent(t)
+	compiler, err := runtimestate.NewCompiler(content)
+	if err != nil {
+		t.Fatalf("new compiler: %v", err)
+	}
+	planner, err := runtimestate.NewRuntimeStatePlanner(fixedPlannerClock{now: now}, &uniquePlannerIDs{})
+	if err != nil {
+		t.Fatalf("new planner: %v", err)
+	}
+	worker := workerScope(tenant, principal)
+	sessionID := validSessionID(t)
+
+	for _, candidate := range []struct {
+		name    string
+		initial agentruntime.SessionState
+		want    agentruntime.SessionState
+		pending bool
+		err     error
+	}{
+		{name: "open becomes failed", initial: agentruntime.SessionOpen, want: agentruntime.SessionFailed},
+		{name: "closing becomes failed", initial: agentruntime.SessionClosing, want: agentruntime.SessionFailed},
+		{name: "open with admitted work is refused", initial: agentruntime.SessionOpen, pending: true, err: runtimestate.ErrConflict},
+		{name: "completed is terminal", initial: agentruntime.SessionCompleted, err: runtimestate.ErrConflict},
+		{name: "cancelled is terminal", initial: agentruntime.SessionCancelled, err: runtimestate.ErrConflict},
+		{name: "failed is terminal", initial: agentruntime.SessionFailed, err: runtimestate.ErrConflict},
+	} {
+		t.Run(candidate.name, func(t *testing.T) {
+			command, err := compiler.CompileFailSession(runtimestate.FailSessionCommand{Scope: worker, IdempotencyKey: "fail-" + strings.ReplaceAll(candidate.name, " ", "-"), SessionID: sessionID})
+			if err != nil {
+				t.Fatalf("compile fail Session: %v", err)
+			}
+			state := runtimestate.RuntimeState{Sessions: []runtimestate.SessionRecord{{Tenant: tenant, Principal: principal, SessionID: sessionID, State: candidate.initial, Version: 1, CreatedAt: now, UpdatedAt: now, RetainUntil: now.Add(time.Hour)}}}
+			if candidate.pending {
+				state.Turns = []runtimestate.TurnRecord{{Tenant: tenant, Principal: principal, SessionID: sessionID, TurnID: agentruntime.TurnID("turn_1234567890ABCDEF"), State: agentruntime.TurnRunning}}
+			}
+			plan, err := planner.Plan(context.Background(), state, command)
+			if !errors.Is(err, candidate.err) {
+				t.Fatalf("fail from %q error = %v, want %v", candidate.initial, err, candidate.err)
+			}
+			if candidate.err != nil {
+				return
+			}
+			if plan.Result().Session.State != candidate.want || len(plan.Effects().Events) != 1 || plan.Effects().Events[0].Kind != agentruntime.EventSessionFailed || !hasLifecyclePhases(plan.Effects(), "fail_session", "attempted", "authorized", "committed", "terminal") {
+				t.Fatalf("fail from %q plan = %#v / %#v", candidate.initial, plan.Result(), plan.Effects())
+			}
+			replay, err := planner.Plan(context.Background(), plan.State(), command)
+			if err != nil || replay.Result().Session != plan.Result().Session || !reflect.DeepEqual(replay.State(), plan.State()) {
+				t.Fatalf("failure replay = %#v / %#v / %v, want original Session and unchanged state", replay.Result(), replay.State(), err)
+			}
+		})
+	}
+}
+
+func TestCompilerReservesSessionTerminalAuthorities(t *testing.T) {
+	content, _, tenant, principal := testRuntimeContent(t)
+	compiler, err := runtimestate.NewCompiler(content)
+	if err != nil {
+		t.Fatalf("new compiler: %v", err)
+	}
+	sessionID := validSessionID(t)
+	if _, err := compiler.CompileCancelSession(runtimestate.CancelSessionCommand{Scope: workerScope(tenant, principal), IdempotencyKey: "wrong-worker-cancel", SessionID: sessionID}); err == nil {
+		t.Fatal("worker compiled caller-owned Session cancellation")
+	}
+	if _, err := compiler.CompileFailSession(runtimestate.FailSessionCommand{Scope: ownerScope(tenant, principal), IdempotencyKey: "wrong-owner-fail", SessionID: sessionID}); err == nil {
+		t.Fatal("caller compiled worker-owned Session failure")
 	}
 }
 

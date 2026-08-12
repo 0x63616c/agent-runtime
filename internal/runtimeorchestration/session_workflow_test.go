@@ -156,6 +156,8 @@ func TestSessionWorkflowExercisesEveryOwnedTerminalEffectRoute(t *testing.T) {
 		{name: "model producer gap terminal failure", kinds: []runtimeorchestration.CommandKind{runtimeorchestration.CommandInputAccepted, runtimeorchestration.CommandTurnFailed, runtimeorchestration.CommandSessionCompleted}},
 		{name: "explicit cancellation", kinds: []runtimeorchestration.CommandKind{runtimeorchestration.CommandInputAccepted, runtimeorchestration.CommandTurnCancelled, runtimeorchestration.CommandSessionCompleted}},
 		{name: "closing drain", kinds: []runtimeorchestration.CommandKind{runtimeorchestration.CommandInputAccepted, runtimeorchestration.CommandSessionClosing, runtimeorchestration.CommandSessionCompleted}},
+		{name: "terminal session cancellation", kinds: []runtimeorchestration.CommandKind{runtimeorchestration.CommandSessionCancelled}},
+		{name: "terminal session failure", kinds: []runtimeorchestration.CommandKind{runtimeorchestration.CommandSessionFailed}},
 	} {
 		t.Run(scenario.name, func(t *testing.T) {
 			var suite testsuite.WorkflowTestSuite

@@ -31,6 +31,7 @@ create immutable Agent revision
   -> succeed, fail, or explicitly cancel exactly once
   -> advance the next queued Turn
   -> close admission, drain, and complete
+  -> or terminally cancel a drained Session
 ```
 
 Input and result collections are deep-copied. Concurrent admission is atomic
@@ -52,10 +53,18 @@ stream with metadata authorized before content storage opens. It verifies the
 exact byte count and `Digest` trailer only at EOF; closing an unfinished body
 cancels observation without changing durable work.
 
+`SessionCanceller` is likewise additive. `Client.CancelSession` is an
+authenticated, idempotent command that moves an owner Session from `open` or
+`closing` to `cancelled` only after every accepted Turn is terminal. A
+runtime-owned failure is observable as the safe `failed` Session state and
+`session.failed` Product event; it is not exposed as a caller command.
+
 The standalone API role still uses explicitly labelled `memory-unsafe`
-storage. It does not prove restart durability. PostgreSQL/outbox authority,
-Temporal workflow execution, model/tool/approval execution, and live push
-streaming are independently tracked implementation paths. Artifact transfer
-has a bounded authorized HTTP/SDK path; lifecycle/retention and production
-rollout remain separate evidence requirements. No M5
-milestone requirement is complete on the strength of this slice alone.
+storage. It does not prove restart durability. The separate durable StateRuntime
+integration harness proves cancelled and failed projections, exact mutation
+replay, and recomposition through disposable PostgreSQL and MinIO; it is not a
+production rollout, provider, sandbox, or PITR claim. Temporal workflow
+execution, model/tool/approval execution, and live push streaming remain
+independently tracked paths. Artifact lifecycle/retention and production
+rollout remain separate evidence requirements. No M5 milestone is complete on
+the strength of this slice alone.

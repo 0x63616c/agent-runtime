@@ -781,6 +781,30 @@ func (command CloseSessionCommand) Owned() CloseSessionCommand {
 	return command
 }
 
+// CancelSessionCommand terminally cancels a drained open or closing Session.
+// It is distinct from Turn cancellation: callers must first settle or cancel
+// admitted Turns so cancellation cannot silently discard durable work.
+type CancelSessionCommand struct {
+	Scope          MutationScope
+	IdempotencyKey string
+	SessionID      agentruntime.SessionID
+}
+
+// Owned returns a value-owned Session cancellation command.
+func (command CancelSessionCommand) Owned() CancelSessionCommand { return command }
+
+// FailSessionCommand terminally marks a drained Session failed. Only the
+// runtime worker may report this safe lifecycle outcome; it carries no
+// provider or backend detail into durable state or the public projection.
+type FailSessionCommand struct {
+	Scope          MutationScope
+	IdempotencyKey string
+	SessionID      agentruntime.SessionID
+}
+
+// Owned returns a value-owned Session failure command.
+func (command FailSessionCommand) Owned() FailSessionCommand { return command }
+
 // RegisterAgentRevisionResult returns the committed immutable revision and its declared effects.
 type RegisterAgentRevisionResult struct {
 	Revision AgentRevisionRecord

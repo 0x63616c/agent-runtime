@@ -520,6 +520,48 @@ func (kernel *Kernel) CloseSession(ctx context.Context, scope Scope, request age
 	return result, err
 }
 
+// CancelSession terminally cancels an owner Session after accepted work drained.
+func (kernel *Kernel) CancelSession(ctx context.Context, scope Scope, request agentruntime.CancelSessionRequest) (agentruntime.Session, error) {
+	if err := kernel.validateScopeAndContext(ctx, scope); err != nil {
+		return agentruntime.Session{}, err
+	}
+	digest, err := canonicalDigest(request.SessionID)
+	if err != nil {
+		return agentruntime.Session{}, internalFailure("cancel session", err)
+	}
+	var result agentruntime.Session
+	err = kernel.store.Transact(ctx, scope, func(state *TenantState) error {
+		if record, ok := state.idempotency[request.IdempotencyKey]; ok {
+			if record.command != "cancel_session" || record.digest != digest {
+				return conflict("idempotency key conflicts with another mutation")
+			}
+			result = state.sessions[record.session].session
+			return nil
+		}
+		if err := validateIdempotencyKey(request.IdempotencyKey); err != nil {
+			return err
+		}
+		session, ok := state.sessions[request.SessionID]
+		if !ok {
+			return notFound("Session not found")
+		}
+		if session.session.State != agentruntime.SessionOpen && session.session.State != agentruntime.SessionClosing || activeTurnIndex(session) >= 0 || queuedTurnIndex(session) >= 0 {
+			return conflict("Session cannot enter cancelled state")
+		}
+		timestamp := kernel.now()
+		session.session.State = agentruntime.SessionCancelled
+		session.session.UpdatedAt = timestamp
+		if err := kernel.appendEvent(&session, agentruntime.EventSessionCancelled, "", ""); err != nil {
+			return err
+		}
+		state.sessions[request.SessionID] = session
+		state.idempotency[request.IdempotencyKey] = idempotencyRecord{command: "cancel_session", digest: digest, session: request.SessionID}
+		result = session.session
+		return nil
+	})
+	return result, err
+}
+
 // InspectSession returns an immutable runtime-owned view with no backend identifiers.
 func (kernel *Kernel) InspectSession(ctx context.Context, scope Scope, sessionID agentruntime.SessionID) (agentruntime.SessionView, error) {
 	if err := kernel.validateScopeAndContext(ctx, scope); err != nil {
@@ -803,6 +845,15 @@ func nextEventSequence(session sessionRecord) uint64 {
 func activeTurnIndex(session sessionRecord) int {
 	for index := range session.turns {
 		if session.turns[index].State == agentruntime.TurnRunning {
+			return index
+		}
+	}
+	return -1
+}
+
+func queuedTurnIndex(session sessionRecord) int {
+	for index := range session.turns {
+		if session.turns[index].State == agentruntime.TurnQueued {
 			return index
 		}
 	}

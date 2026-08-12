@@ -23,9 +23,13 @@ Failure vocabulary.
 
 The API creates and reads immutable Agent and Policy revisions, creates and inspects
 Sessions, idempotently submits Input, observes Turns and cursor-addressed
-Product events, explicitly cancels a Turn, and drain-closes a Session. Agent
-and Policy catalog operations require a tenant administrator. A Policy revision
-contains only a bounded named-Tool disposition (`denied` or
+Product events, explicitly cancels a Turn, cancels a drained Session, and
+drain-closes a Session. Session cancellation is an owner-authenticated,
+idempotent command; it refuses to discard active or queued Turns. The public
+`session.cancelled` and `session.failed` events report safe terminal state but
+carry no provider or backend detail. Agent and Policy catalog operations
+require a tenant administrator. A Policy revision contains only a bounded
+named-Tool disposition (`denied` or
 `requires_approval`) and a canonical digest; it is not a credential or an
 execution capability. Session access is scoped to
 the authenticated tenant and principal; absent and unauthorized objects share
@@ -51,6 +55,11 @@ The Go SDK keeps bounded `ReadArtifact` and adds a separate `ArtifactStreamer`
 capability implemented by `Client.OpenArtifact`. It intentionally does not
 widen `RuntimeClient`, preserving existing implementations. EOF verifies the
 exact size and digest; callers must close the body even after EOF.
+
+The concrete Go client implements the separate additive `SessionCanceller`
+capability. Its `CancelSession` method maps to
+`POST /v1/sessions/{session_id}/cancel`; runtime-owned failure remains
+observation-only rather than a public mutation.
 
 `GET /healthz` and `GET /readyz` are deliberately unauthenticated and return
 only the role and readiness state.

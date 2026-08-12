@@ -471,6 +471,21 @@ func (runtime *StateRuntime) CloseSession(ctx context.Context, identity Identity
 	return publicSession(plan.Result().Session), nil
 }
 
+// CancelSession durably marks a drained open or closing Session cancelled.
+func (runtime *StateRuntime) CancelSession(ctx context.Context, identity Identity, request agentruntime.CancelSessionRequest) (agentruntime.Session, error) {
+	scope, err := ownerScope(identity)
+	if err != nil {
+		return agentruntime.Session{}, err
+	}
+	plan, err := runtime.apply(ctx, scope, func() (runtimestate.CompiledMutation, error) {
+		return runtime.compiler.CompileCancelSession(runtimestate.CancelSessionCommand{Scope: scope, IdempotencyKey: request.IdempotencyKey, SessionID: request.SessionID})
+	})
+	if err != nil {
+		return agentruntime.Session{}, runtimeFailure("cancel Session", err)
+	}
+	return publicSession(plan.Result().Session), nil
+}
+
 func (runtime *StateRuntime) apply(ctx context.Context, scope runtimestate.MutationScope, compile func() (runtimestate.CompiledMutation, error)) (runtimestate.TransitionPlan, error) {
 	for attempt := 0; attempt < 3; attempt++ {
 		if err := contextError(ctx); err != nil {

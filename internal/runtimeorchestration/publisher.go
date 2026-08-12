@@ -204,7 +204,7 @@ func (publisher *Publisher) route(ctx context.Context, record runtimestate.Outbo
 	switch record.EventKind {
 	case agentruntime.EventSessionCreated:
 		return publisher.publisher.StartSession(ctx, start)
-	case agentruntime.EventInputAccepted, agentruntime.EventTurnCancelled, agentruntime.EventTurnSucceeded, agentruntime.EventTurnFailed, agentruntime.EventApprovalResolved, agentruntime.EventSandboxOperationFinalized, agentruntime.EventSessionClosing, agentruntime.EventSessionCompleted:
+	case agentruntime.EventInputAccepted, agentruntime.EventTurnCancelled, agentruntime.EventTurnSucceeded, agentruntime.EventTurnFailed, agentruntime.EventApprovalResolved, agentruntime.EventSandboxOperationFinalized, agentruntime.EventSessionClosing, agentruntime.EventSessionCompleted, agentruntime.EventSessionCancelled, agentruntime.EventSessionFailed:
 		return publisher.publisher.SignalSession(ctx, start, Command{Tenant: string(record.Tenant), OutboxID: string(record.OutboxID), SessionID: string(record.SessionID), Kind: commandKind(record.EventKind), Sequence: record.EventSequence})
 	default:
 		return nil
@@ -240,6 +240,10 @@ func commandKind(event agentruntime.EventKind) CommandKind {
 		return CommandSessionClosing
 	case agentruntime.EventSessionCompleted:
 		return CommandSessionCompleted
+	case agentruntime.EventSessionCancelled:
+		return CommandSessionCancelled
+	case agentruntime.EventSessionFailed:
+		return CommandSessionFailed
 	default:
 		return CommandInputAccepted
 	}

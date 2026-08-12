@@ -231,6 +231,7 @@ import (
 var (
     _ agentruntime.RuntimeClient = (*agentruntime.Client)(nil)
     _ agentruntime.ArtifactStreamer = (*agentruntime.Client)(nil)
+    _ agentruntime.SessionCanceller = (*agentruntime.Client)(nil)
     _ agentruntime.ToolCallInspector = (*agentruntime.Client)(nil)
 )
 
@@ -260,9 +261,15 @@ func TestPublicRuntimeContract(t *testing.T) {
 
 func inspectAdditiveContract(ctx context.Context, artifactID agentruntime.ArtifactID, sessionID agentruntime.SessionID, turnID agentruntime.TurnID) {
     var artifacts agentruntime.ArtifactStreamer
+    var sessions agentruntime.SessionCanceller
     var tools agentruntime.ToolCallInspector
     _ = artifacts
+    _ = sessions
     _ = tools
+    cancel := agentruntime.CancelSessionRequest{SessionID: sessionID, IdempotencyKey: "consumer-cancel-session-1"}
+    _ = cancel
+    _ = agentruntime.EventSessionCancelled
+    _ = agentruntime.EventSessionFailed
     page := agentruntime.ToolCallPage{}
     _ = page.Clone()
     var stream agentruntime.ArtifactStream

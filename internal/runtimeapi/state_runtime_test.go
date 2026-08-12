@@ -91,6 +91,48 @@ func TestStateRuntimeServesTheCompletePublicLifecycleThroughContentAndMemoryStat
 	}
 }
 
+func TestStateRuntimeHTTPAndSDKProjectCancelledSession(t *testing.T) {
+	runtime := newMemoryStateRuntime(t)
+	handler, err := runtimeapi.NewHandler(runtimeapi.Config{Runtime: runtime, Authenticator: staticAuth{identities: map[string]runtimeapi.Identity{
+		"admin-token-000000": {Tenant: "tenant-a", Principal: "admin", Admin: true},
+		"alice-token-000000": {Tenant: "tenant-a", Principal: "alice"},
+	}}, RequestIDs: &requestIDs{}})
+	if err != nil {
+		t.Fatalf("new handler: %v", err)
+	}
+	server := httptest.NewServer(handler)
+	defer server.Close()
+	ctx := context.Background()
+	admin := newStateRuntimeHTTPClient(t, server.URL, "admin-token-000000")
+	alice := newStateRuntimeHTTPClient(t, server.URL, "alice-token-000000")
+	agent, err := admin.CreateAgent(ctx, agentruntime.CreateAgentRequest{IdempotencyKey: "cancel-session-agent", Name: "assistant", ModelProfile: "balanced", Instructions: "safe"})
+	if err != nil {
+		t.Fatalf("create Agent: %v", err)
+	}
+	session, err := alice.CreateSession(ctx, agentruntime.CreateSessionRequest{IdempotencyKey: "cancel-session-create", AgentRevision: agent.RevisionID})
+	if err != nil {
+		t.Fatalf("create Session: %v", err)
+	}
+	cancelled, err := alice.CancelSession(ctx, agentruntime.CancelSessionRequest{SessionID: session.ID, IdempotencyKey: "cancel-session"})
+	if err != nil || cancelled.State != agentruntime.SessionCancelled {
+		t.Fatalf("cancel Session = %#v, %v", cancelled, err)
+	}
+	if replay, err := alice.CancelSession(ctx, agentruntime.CancelSessionRequest{SessionID: session.ID, IdempotencyKey: "cancel-session"}); err != nil || replay != cancelled {
+		t.Fatalf("cancel Session replay = %#v, %v; want %#v", replay, err, cancelled)
+	}
+	view, err := alice.InspectSession(ctx, session.ID)
+	if err != nil || view.Session.State != agentruntime.SessionCancelled {
+		t.Fatalf("inspect cancelled Session = %#v, %v", view, err)
+	}
+	page, err := alice.Events(ctx, session.ID, "", 10)
+	if err != nil || len(page.Events) != 2 || page.Events[1].Kind != agentruntime.EventSessionCancelled {
+		t.Fatalf("cancelled Session events = %#v, %v", page, err)
+	}
+	if _, err := alice.SendInput(ctx, agentruntime.SendInputRequest{SessionID: session.ID, IdempotencyKey: "cancelled-session-input", Parts: []agentruntime.ContentPart{{Kind: agentruntime.ContentText, Text: "must reject"}}}); !hasFailure(err, agentruntime.FailureConflict) {
+		t.Fatalf("input to cancelled Session error = %v, want conflict", err)
+	}
+}
+
 func TestStateRuntimeHTTPAndSDKRejectUnconfiguredProfilesAndProviderCredentialFields(t *testing.T) {
 	runtime := newMemoryStateRuntime(t)
 	handler, err := runtimeapi.NewHandler(runtimeapi.Config{Runtime: runtime, Authenticator: staticAuth{identities: map[string]runtimeapi.Identity{

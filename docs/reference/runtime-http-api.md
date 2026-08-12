@@ -2,14 +2,14 @@
 
 [`api/openapi/openapi.yaml`](../../api/openapi/openapi.yaml) is the canonical
 versioned public transport contract. Generated route constants used by the Go
-SDK and HTTP adapter are checked against its fourteen operations by `just check`.
+SDK and HTTP adapter are checked against its fifteen operations by `just check`.
 Neither surface exposes Temporal workflow IDs, task queues, payloads, database
 positions, or backend configuration.
 
 The implemented `/v1` routes create and read immutable Agent revisions, create
 and inspect Sessions, idempotently send Input, inspect Turns, page Product
-events after an opaque Cursor, explicitly cancel a Turn, and drain-close a
-Session, download caller-authorized immutable Artifacts, and inspect or decide
+events after an opaque Cursor, explicitly cancel a Turn, cancel a drained
+Session, and drain-close a Session, download caller-authorized immutable Artifacts, and inspect or decide
 owner-authorized Approvals. Approval decisions are idempotent and accept only
 `approved` or `denied`; an approved response does not expose any capability or
 credential material. Agent catalog operations require a tenant administrator. Sessions are

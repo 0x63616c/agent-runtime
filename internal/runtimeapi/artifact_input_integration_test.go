@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -207,6 +208,129 @@ func TestDurableStateRuntimeAuthorizesArtifactInputReferences(t *testing.T) {
 	}
 	if _, err := runtime.SendInput(ctx, bob, agentruntime.SendInputRequest{SessionID: bobSession.ID, IdempotencyKey: "artifact-input-cross-principal", Parts: []agentruntime.ContentPart{{Kind: agentruntime.ContentArtifact, Artifact: &download.Artifact}}}); !hasFailure(err, agentruntime.FailureNotFound) {
 		t.Fatalf("admit cross-principal durable Artifact Input error = %v, want safe not-found", err)
+	}
+}
+
+// TestDurableStateRuntimeProjectsTerminalSessionStates proves DOM-003 through
+// the disposable PostgreSQL RuntimeStateStore and public HTTP/SDK seam. The
+// caller-owned cancellation and worker-owned safe failure remain distinct,
+// replay their exact receipts without changing durable state, and recompose
+// into the same caller-safe Session projection.
+func TestDurableStateRuntimeProjectsTerminalSessionStates(t *testing.T) {
+	ctx := context.Background()
+	dsn := requiredArtifactInputEnvironment(t, "AR_RUNTIME_API_POSTGRES_DSN")
+	endpoint := requiredArtifactInputEnvironment(t, "AR_RUNTIME_API_MINIO_ENDPOINT")
+	access := requiredArtifactInputEnvironment(t, "AR_RUNTIME_API_MINIO_ACCESS_KEY")
+	secret := requiredArtifactInputEnvironment(t, "AR_RUNTIME_API_MINIO_SECRET_KEY")
+	bucket := requiredArtifactInputEnvironment(t, "AR_RUNTIME_API_MINIO_BUCKET")
+	minioClient, err := minio.New(endpoint, &minio.Options{Creds: credentials.NewStaticV4(access, secret, ""), Secure: false})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := minioClient.MakeBucket(ctx, bucket, minio.MakeBucketOptions{}); err != nil && minio.ToErrorResponse(err).Code != "BucketAlreadyOwnedByYou" {
+		t.Fatal(err)
+	}
+	content := durableArtifactInputContent(t, minioClient, bucket)
+	pool, err := pgxpool.New(ctx, dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	clockSource, err := clock.NewFake(time.Date(2026, 8, 12, 3, 0, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := runtimepostgres.NewRuntimeStateStore(pool, clockSource)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime, compiler, planner := newDurableArtifactInputRuntime(t, content, store, clockSource, &artifactInputIDs{})
+	admin := runtimeapi.Identity{Tenant: "terminal-session-postgres", Principal: "admin", Admin: true}
+	alice := runtimeapi.Identity{Tenant: "terminal-session-postgres", Principal: "alice"}
+	agent, err := runtime.CreateAgent(ctx, admin, agentruntime.CreateAgentRequest{IdempotencyKey: "terminal-session-agent", Name: "assistant", ModelProfile: "balanced", Instructions: "retain terminal Session states"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cancelledSession, err := runtime.CreateSession(ctx, alice, agentruntime.CreateSessionRequest{IdempotencyKey: "terminal-session-cancelled", AgentRevision: agent.RevisionID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler, err := runtimeapi.NewHandler(runtimeapi.Config{Runtime: runtime, Authenticator: staticAuth{identities: map[string]runtimeapi.Identity{"alice-token-000000": alice}}, RequestIDs: &requestIDs{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(handler)
+	defer server.Close()
+	credential, err := agentruntime.NewStaticBearerCredential("alice-token-000000")
+	if err != nil {
+		t.Fatal(err)
+	}
+	client, err := agentruntime.NewClient(agentruntime.ClientConfig{BaseURL: server.URL, HTTPClient: http.DefaultClient, Credentials: credential, RequestIDs: &requestIDs{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cancelled, err := client.CancelSession(ctx, agentruntime.CancelSessionRequest{SessionID: cancelledSession.ID, IdempotencyKey: "terminal-session-cancel"})
+	if err != nil || cancelled.State != agentruntime.SessionCancelled {
+		t.Fatalf("SDK cancel durable Session = %#v, %v", cancelled, err)
+	}
+
+	// Recompose from PostgreSQL before observing the projection and exact replay.
+	runtime, _, _ = newDurableArtifactInputRuntime(t, content, store, clockSource, &artifactInputIDs{next: 100})
+	view, err := runtime.InspectSession(ctx, alice, cancelledSession.ID)
+	if err != nil || view.Session.State != agentruntime.SessionCancelled {
+		t.Fatalf("recomposed cancelled Session = %#v, %v", view, err)
+	}
+	if replay, err := runtime.CancelSession(ctx, alice, agentruntime.CancelSessionRequest{SessionID: cancelledSession.ID, IdempotencyKey: "terminal-session-cancel"}); err != nil || replay != cancelled {
+		t.Fatalf("runtime cancel durable replay = %#v, %v; want %#v", replay, err, cancelled)
+	}
+
+	failedSession, err := runtime.CreateSession(ctx, alice, agentruntime.CreateSessionRequest{IdempotencyKey: "terminal-session-failed", AgentRevision: agent.RevisionID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tenant, err := runtimecontent.ParseTenantID("terminal-session-postgres")
+	if err != nil {
+		t.Fatal(err)
+	}
+	principal, err := runtimecontent.ParsePrincipalID("alice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	workerScope := runtimestate.MutationScope{Tenant: tenant, Principal: principal, Authority: runtimestate.AuthorityRuntimeWorker}
+	failure, err := compiler.CompileFailSession(runtimestate.FailSessionCommand{Scope: workerScope, IdempotencyKey: "terminal-session-fail", SessionID: failedSession.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	prior, err := store.LoadRuntimeState(ctx, workerScope)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan, err := planner.Plan(ctx, prior, failure)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.PersistTransitionPlan(ctx, plan); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := store.LoadRuntimeState(ctx, workerScope)
+	if err != nil {
+		t.Fatal(err)
+	}
+	replayPlan, err := planner.Plan(ctx, loaded, failure)
+	if err != nil || !reflect.DeepEqual(replayPlan.State(), loaded) || replayPlan.Result().Session != plan.Result().Session {
+		t.Fatalf("durable worker failure replay = %#v / %#v / %v", replayPlan.Result(), replayPlan.State(), err)
+	}
+	if err := store.PersistTransitionPlan(ctx, replayPlan); err != nil {
+		t.Fatal(err)
+	}
+	runtime, _, _ = newDurableArtifactInputRuntime(t, content, store, clockSource, &artifactInputIDs{next: 200})
+	view, err = runtime.InspectSession(ctx, alice, failedSession.ID)
+	if err != nil || view.Session.State != agentruntime.SessionFailed {
+		t.Fatalf("recomposed failed Session = %#v, %v", view, err)
+	}
+	page, err := runtime.Events(ctx, alice, failedSession.ID, "", 10)
+	if err != nil || len(page.Events) != 2 || page.Events[1].Kind != agentruntime.EventSessionFailed {
+		t.Fatalf("failed Session events = %#v, %v", page, err)
 	}
 }
 

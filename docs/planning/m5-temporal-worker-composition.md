@@ -31,10 +31,11 @@ limits.
 
 `session.created` starts a chain. `input.accepted`, `turn.cancelled`,
 `turn.succeeded`, `turn.failed`, `approval.resolved`,
-`sandbox_operation.finalized`, `session.closing`, and `session.completed` are
-rechecked signals; the final completed route ends the private workflow only
-after its durable outbox record is accepted. Other safe outbox events are
-acknowledged without inventing a new effect.
+`sandbox_operation.finalized`, `session.closing`, `session.completed`,
+`session.cancelled`, and `session.failed` are rechecked signals. The terminal
+completed, cancelled, or failed route ends the private workflow only after its
+durable outbox record is accepted. Other safe outbox events are acknowledged
+without inventing a new effect.
 
 The M5 activity performs only this reversible state-route verification. Its
 retry decision is deliberately closed and covered by

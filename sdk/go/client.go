@@ -68,6 +68,14 @@ type ArtifactStreamer interface {
 	OpenArtifact(context.Context, ArtifactID) (ArtifactStream, error)
 }
 
+// SessionCanceller is the additive public capability for caller-owned
+// cancellation of a drained Session. It remains separate from RuntimeClient
+// so existing v1 client implementations keep their source compatibility.
+type SessionCanceller interface {
+	// CancelSession terminally cancels a drained Session.
+	CancelSession(context.Context, CancelSessionRequest) (Session, error)
+}
+
 // ToolCallInspector is the additive public capability for owner-scoped Tool-call inspection.
 type ToolCallInspector interface {
 	// InspectToolCalls returns bounded safe Tool intent, approval, grant, and execution projections.
@@ -434,6 +442,12 @@ func (client *Client) CancelTurn(ctx context.Context, request CancelTurnRequest)
 func (client *Client) CloseSession(ctx context.Context, request CloseSessionRequest) (Session, error) {
 	path := replacePath(openAPIPathCloseSession, "session_id", request.SessionID.String())
 	return doJSON[Session](client, ctx, openAPIMethodCloseSession, path, request.IdempotencyKey, struct{}{})
+}
+
+// CancelSession terminally cancels a drained Session.
+func (client *Client) CancelSession(ctx context.Context, request CancelSessionRequest) (Session, error) {
+	path := replacePath(openAPIPathCancelSession, "session_id", request.SessionID.String())
+	return doJSON[Session](client, ctx, openAPIMethodCancelSession, path, request.IdempotencyKey, struct{}{})
 }
 
 func doJSON[Response any](client *Client, ctx context.Context, method, path, idempotencyKey string, body any) (Response, error) {

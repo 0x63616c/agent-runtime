@@ -55,5 +55,6 @@ func validPaths() map[string]map[string]openapicontract.Operation {
 		"/v1/sessions/{session_id}/events":                    {"get": {OperationID: "listEvents", Parameters: parameters, Responses: responses}},
 		"/v1/sessions/{session_id}/turns/{turn_id}/cancel":    {"post": {OperationID: "cancelTurn", Parameters: mutationParameters, RequestBody: requestBody, Responses: responses}},
 		"/v1/sessions/{session_id}/close":                     {"post": {OperationID: "closeSession", Parameters: mutationParameters, RequestBody: requestBody, Responses: responses}},
+		"/v1/sessions/{session_id}/cancel":                    {"post": {OperationID: "cancelSession", Parameters: mutationParameters, RequestBody: requestBody, Responses: responses}},
 	}
 }

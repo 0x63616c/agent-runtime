@@ -9,7 +9,7 @@ func TestEveryClosedMutationVocabularyHasDurableAuditLifecyclePhases(t *testing.
 		CommandRecordToolIntent, CommandRequestApproval, CommandDecideApproval,
 		CommandConsumeCapabilityGrant, CommandBeginToolExecution, CommandRecordToolOutcome,
 		CommandBeginInvocation, CommandRecordOutcome, CommandSettleTurn, CommandCancelTurn,
-		CommandCloseSession, CommandClaimOutbox, CommandAcknowledgeOutbox,
+		CommandCloseSession, CommandCancelSession, CommandFailSession, CommandClaimOutbox, CommandAcknowledgeOutbox,
 	}
 	for _, command := range commands {
 		phases := auditLifecycleKinds(command)
@@ -26,7 +26,7 @@ func TestEveryClosedMutationVocabularyHasDurableAuditLifecyclePhases(t *testing.
 			}
 		}
 	}
-	for _, command := range []CommandKind{CommandRecordToolOutcome, CommandRecordOutcome, CommandSettleTurn, CommandCancelTurn, CommandCloseSession} {
+	for _, command := range []CommandKind{CommandRecordToolOutcome, CommandRecordOutcome, CommandSettleTurn, CommandCancelTurn, CommandCloseSession, CommandCancelSession, CommandFailSession} {
 		if !containsAuditLifecycleKind(auditLifecycleKinds(command), string(command)+".terminal") {
 			t.Errorf("%s has no terminal phase", command)
 		}

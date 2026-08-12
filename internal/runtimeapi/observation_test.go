@@ -116,6 +116,7 @@ var _ = Describe("Runtime request observations", func() {
 			{http.MethodGet, "/v1/sessions/sess_1234567890ABCDEF/events", "list_events"},
 			{http.MethodPost, "/v1/sessions/sess_1234567890ABCDEF/turns/turn_1234567890ABCDEF/cancel", "cancel_turn"},
 			{http.MethodPost, "/v1/sessions/sess_1234567890ABCDEF/close", "close_session"},
+			{http.MethodPost, "/v1/sessions/sess_1234567890ABCDEF/cancel", "cancel_session"},
 			{http.MethodGet, "/v1/unknown", "unknown"},
 		} {
 			By(test.method + " " + test.path)

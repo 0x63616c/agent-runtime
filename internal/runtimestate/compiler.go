@@ -35,6 +35,8 @@ const (
 	CommandSettleTurn             CommandKind = "settle_turn"
 	CommandCancelTurn             CommandKind = "cancel_turn"
 	CommandCloseSession           CommandKind = "close_session"
+	CommandCancelSession          CommandKind = "cancel_session"
+	CommandFailSession            CommandKind = "fail_session"
 	CommandClaimOutbox            CommandKind = "claim_outbox"
 	CommandAcknowledgeOutbox      CommandKind = "acknowledge_outbox"
 )
@@ -267,6 +269,24 @@ func (compiler *Compiler) CompileCloseSession(command CloseSessionCommand) (Comp
 		return CompiledMutation{}, errors.New("compile close Session: invalid scope or target")
 	}
 	return compiler.compile(CommandCloseSession, command.Scope, command.IdempotencyKey, command, command)
+}
+
+// CompileCancelSession validates a principal-owned terminal cancellation after work has drained.
+func (compiler *Compiler) CompileCancelSession(command CancelSessionCommand) (CompiledMutation, error) {
+	command = command.Owned()
+	if err := validateScope(command.Scope, AuthoritySessionOwner, true); err != nil || validSession(command.SessionID) != nil {
+		return CompiledMutation{}, errors.New("compile cancel Session: invalid scope or target")
+	}
+	return compiler.compile(CommandCancelSession, command.Scope, command.IdempotencyKey, command, command)
+}
+
+// CompileFailSession validates a runtime-worker terminal failure after work has drained.
+func (compiler *Compiler) CompileFailSession(command FailSessionCommand) (CompiledMutation, error) {
+	command = command.Owned()
+	if err := validateScope(command.Scope, AuthorityRuntimeWorker, true); err != nil || validSession(command.SessionID) != nil {
+		return CompiledMutation{}, errors.New("compile fail Session: invalid scope or target")
+	}
+	return compiler.compile(CommandFailSession, command.Scope, command.IdempotencyKey, command, command)
 }
 
 // CompileClaimOutbox validates one publisher-authorized lease command.

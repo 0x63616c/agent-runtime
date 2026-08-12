@@ -52,9 +52,11 @@ This index is derived only from the declared public `sdk/go` source files. It li
 | `method` | `ArtifactStreamer.OpenArtifact` | OpenArtifact opens a caller-authorized Artifact without buffering it. |
 | `type` | `AuthorizationSink` | AuthorizationSink accepts one request-scoped bearer credential. |
 | `method` | `AuthorizationSink.SetBearerToken` | SetBearerToken accepts one request-scoped bearer credential. |
+| `type` | `CancelSessionRequest` | CancelSessionRequest terminally cancels a drained Session. |
 | `type` | `CancelTurnRequest` | CancelTurnRequest explicitly cancels one active or queued Turn. |
 | `type` | `CapabilityGrant` | CapabilityGrant is a caller-safe projection of bounded grant consumption. It deliberately omits capability bytes, policy digests, and grant identity. |
 | `type` | `Client` | Client is the concrete HTTP implementation of RuntimeClient. |
+| `method` | `Client.CancelSession` | CancelSession terminally cancels a drained Session. |
 | `method` | `Client.CancelTurn` | CancelTurn explicitly requests durable Turn cancellation. |
 | `method` | `Client.CloseSession` | CloseSession closes Input admission and drains accepted work. |
 | `method` | `Client.CreateAgent` | CreateAgent creates the first immutable Agent revision through the admin surface. |
@@ -109,9 +111,11 @@ This index is derived only from the declared public `sdk/go` source files. It li
 | `type` | `EventPage` | EventPage is one bounded replay page and its next opaque position. |
 | `const` | `EventProducerGap` | EventProducerGap reports that a producer outcome could not be recovered and the following terminal event is the durable finalization boundary. |
 | `const` | `EventSandboxOperationFinalized` | EventSandboxOperationFinalized reports that a sandbox-backed operation reached a durable terminal outcome. Backend handles remain private. |
+| `const` | `EventSessionCancelled` | EventSessionCancelled reports a terminal caller-requested Session cancellation. |
 | `const` | `EventSessionClosing` | EventSessionClosing reports that no new Input is accepted while queued work drains. |
 | `const` | `EventSessionCompleted` | EventSessionCompleted reports a terminal drained Session. |
 | `const` | `EventSessionCreated` | EventSessionCreated reports durable Session creation. |
+| `const` | `EventSessionFailed` | EventSessionFailed reports a terminal runtime-owned Session failure. |
 | `const` | `EventTurnCancelled` | EventTurnCancelled reports one terminal cancelled outcome. |
 | `const` | `EventTurnFailed` | EventTurnFailed reports one terminal safe Failure outcome. |
 | `const` | `EventTurnQueued` | EventTurnQueued reports a Turn ordered behind active work. |
@@ -191,6 +195,8 @@ This index is derived only from the declared public `sdk/go` source files. It li
 | `type` | `SendInputResult` | SendInputResult identifies both the accepted Input and its exactly-one Turn. |
 | `type` | `Session` | Session is an immutable caller snapshot of a durable Session. |
 | `const` | `SessionCancelled` | SessionCancelled ended through explicit cancellation. |
+| `type` | `SessionCanceller` | SessionCanceller is the additive public capability for caller-owned cancellation of a drained Session. It remains separate from RuntimeClient so existing v1 client implementations keep their source compatibility. |
+| `method` | `SessionCanceller.CancelSession` | CancelSession terminally cancels a drained Session. |
 | `const` | `SessionClosing` | SessionClosing drains already accepted Input and rejects new Input. |
 | `const` | `SessionCompleted` | SessionCompleted has drained its accepted work. |
 | `const` | `SessionFailed` | SessionFailed ended because the runtime could not safely continue. |

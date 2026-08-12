@@ -321,6 +321,10 @@ func (planner *RuntimeStatePlanner) Plan(ctx context.Context, prior RuntimeState
 		result, effects, err = planner.cancel(&state, mutation.mutation.receipt, command, now)
 	case CloseSessionCommand:
 		result, effects, err = planner.close(&state, mutation.mutation.receipt, command, now)
+	case CancelSessionCommand:
+		result, effects, err = planner.cancelSession(&state, mutation.mutation.receipt, command, now)
+	case FailSessionCommand:
+		result, effects, err = planner.failSession(&state, mutation.mutation.receipt, command, now)
 	case ClaimOutboxCommand:
 		result, effects, err = planner.claim(&state, mutation.mutation.receipt, command, now)
 	case AcknowledgeOutboxCommand:
@@ -896,6 +900,42 @@ func (planner *RuntimeStatePlanner) close(state *RuntimeState, binding ReceiptBi
 	}
 	return PlanResult{Session: session}, effects, nil
 }
+
+func (planner *RuntimeStatePlanner) cancelSession(state *RuntimeState, binding ReceiptBinding, command CancelSessionCommand, now time.Time) (PlanResult, EffectSet, error) {
+	index := findSession(state, binding.Scope, command.SessionID)
+	if index < 0 {
+		return PlanResult{}, EffectSet{}, ErrNotFoundOrDenied
+	}
+	session := state.Sessions[index]
+	if session.State != agentruntime.SessionOpen && session.State != agentruntime.SessionClosing || hasPending(state, session.SessionID) {
+		return PlanResult{}, EffectSet{}, ErrConflict
+	}
+	session.State, session.Version, session.UpdatedAt = agentruntime.SessionCancelled, session.Version+1, now
+	state.Sessions[index] = session
+	effects, err := planner.effects(state, binding, session, TurnRecord{}, InvocationRecord{}, []agentruntime.EventKind{agentruntime.EventSessionCancelled}, now)
+	if err != nil {
+		return PlanResult{}, EffectSet{}, err
+	}
+	return PlanResult{Session: session}, effects, nil
+}
+
+func (planner *RuntimeStatePlanner) failSession(state *RuntimeState, binding ReceiptBinding, command FailSessionCommand, now time.Time) (PlanResult, EffectSet, error) {
+	index := findSession(state, binding.Scope, command.SessionID)
+	if index < 0 {
+		return PlanResult{}, EffectSet{}, ErrNotFoundOrDenied
+	}
+	session := state.Sessions[index]
+	if session.State != agentruntime.SessionOpen && session.State != agentruntime.SessionClosing || hasPending(state, session.SessionID) {
+		return PlanResult{}, EffectSet{}, ErrConflict
+	}
+	session.State, session.Version, session.UpdatedAt = agentruntime.SessionFailed, session.Version+1, now
+	state.Sessions[index] = session
+	effects, err := planner.effects(state, binding, session, TurnRecord{}, InvocationRecord{}, []agentruntime.EventKind{agentruntime.EventSessionFailed}, now)
+	if err != nil {
+		return PlanResult{}, EffectSet{}, err
+	}
+	return PlanResult{Session: session}, effects, nil
+}
 func (planner *RuntimeStatePlanner) claim(state *RuntimeState, binding ReceiptBinding, command ClaimOutboxCommand, now time.Time) (PlanResult, EffectSet, error) {
 	index := findOutbox(state, binding.Scope.Tenant, command.OutboxID)
 	if index < 0 {
@@ -1042,7 +1082,7 @@ func auditLifecycleKinds(command CommandKind) []string {
 	prefix := string(command)
 	kinds := []string{prefix + ".attempted", prefix + ".authorized", prefix + ".committed"}
 	switch command {
-	case CommandRecordToolOutcome, CommandRecordOutcome, CommandSettleTurn, CommandCancelTurn, CommandCloseSession:
+	case CommandRecordToolOutcome, CommandRecordOutcome, CommandSettleTurn, CommandCancelTurn, CommandCloseSession, CommandCancelSession, CommandFailSession:
 		return append(kinds, prefix+".terminal")
 	case CommandClaimOutbox, CommandAcknowledgeOutbox:
 		return append(kinds, prefix+".reconciled")

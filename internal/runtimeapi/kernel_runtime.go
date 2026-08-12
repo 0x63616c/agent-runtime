@@ -104,6 +104,10 @@ func (runtime kernelRuntime) CloseSession(ctx context.Context, identity Identity
 	return runtime.kernel.CloseSession(ctx, principalScope(identity), request)
 }
 
+func (runtime kernelRuntime) CancelSession(ctx context.Context, identity Identity, request agentruntime.CancelSessionRequest) (agentruntime.Session, error) {
+	return runtime.kernel.CancelSession(ctx, principalScope(identity), request)
+}
+
 func tenantScope(identity Identity) kernel.Scope {
 	return scope("tenant", identity.Tenant)
 }

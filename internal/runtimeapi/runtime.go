@@ -25,4 +25,5 @@ type Runtime interface {
 	Events(context.Context, Identity, agentruntime.SessionID, agentruntime.Cursor, int) (agentruntime.EventPage, error)
 	CancelTurn(context.Context, Identity, agentruntime.CancelTurnRequest) (agentruntime.Turn, error)
 	CloseSession(context.Context, Identity, agentruntime.CloseSessionRequest) (agentruntime.Session, error)
+	CancelSession(context.Context, Identity, agentruntime.CancelSessionRequest) (agentruntime.Session, error)
 }

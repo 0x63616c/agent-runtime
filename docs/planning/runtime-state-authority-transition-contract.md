@@ -97,6 +97,8 @@ append-event, write-audit, or run-SQL operation.
 | `SettleTurn` | Turn is current/running; terminal result is valid, safe, and bound to the accepted invocation outcome or explicit non-model failure | records one terminal outcome, terminal event, audit/outbox fact, starts one queued Turn when present, and completes a drained closing Session |
 | `CancelTurn` | caller owns Session/Turn; Turn is running or queued | records one cancelled outcome, derives cancellation/audit/outbox effects, then promotes work or completes a drained closing Session |
 | `CloseSession` | caller owns an open Session | transitions to closing, emits `session.closing`, rejects future admission, and emits `session.completed` only after drain |
+| `CancelSession` | caller owns a drained open or closing Session | transitions to terminal `cancelled`, emits `session.cancelled`, and returns the exact prior result on idempotent replay; callers must settle or cancel accepted Turns first so no durable work is discarded |
+| `FailSession` | runtime worker owns a drained open or closing Session | transitions to terminal `failed`, emits `session.failed`, and returns the exact prior result on idempotent replay without persisting provider, backend, or sandbox detail |
 
 Idempotent replay precedes allocation of a new ID, sequence, Cursor, event,
 audit fact, or Outbox record. Reusing a key with another command kind, owner,
@@ -146,7 +148,10 @@ responses remain reference-only and bounded.
 | running Turn → durable invocation intent | new runtime operation/ordinal/fence within same Turn; intent event/audit/outbox precedes dispatch | DOM-007, DAT-004, DAT-006–007, DAT-012 |
 | invocation intent → outcome/recovery | exact operation replay only; unknown external effect reconciles or becomes explicit uncertain/gap outcome | DOM-005, DOM-007, DAT-004, DAT-012 |
 | running Turn → terminal | exactly one fenced outcome; cancellation/settlement loser observes prior; advance one queued Turn | DOM-005–006, API-008, DAT-012 |
-| open → closing → completed | no new Input after closing; complete only after drain | DOM-003, API-008 |
+| open → closing → completed | owner close rejects new Input; the drain transition completes only after every accepted Turn is terminal | DOM-003, API-008 |
+| open or closing → cancelled | owner-only `CancelSession`; only legal after drain, emits `session.cancelled`, then rejects every further Session mutation | DOM-003, API-008 |
+| open or closing → failed | worker-only `FailSession`; only legal after drain, emits `session.failed`, then rejects every further Session mutation | DOM-003 |
+| completed, cancelled, or failed → any Session state | terminal; close, cancel, failure, and new Input all conflict except exact idempotent replay | DOM-003 |
 | committed state mutation → declared effects | same transaction creates each command's required safe ordered event(s), append-only audit fact(s), and publication/reconciliation record(s) | DAT-003, DAT-006–007, DAT-011–012 |
 | Cursor read after retention | explicit Gap/current-inspection path, never Temporal offset or silent loss | API-007, DAT-003–005, DAT-011 |
 | cross-tenant/principal access | exact authorized scope or indistinguishable not-found/denied result | API-005, INV-ID-002–003 |

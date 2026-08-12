@@ -103,6 +103,7 @@ func CollectRoutes(paths map[string]map[string]Operation) ([]Route, error) {
 		"listEvents":        {Method: "GET", Path: "/v1/sessions/{session_id}/events", Status: "200"},
 		"cancelTurn":        {Method: "POST", Path: "/v1/sessions/{session_id}/turns/{turn_id}/cancel", Status: "200", Mutation: true},
 		"closeSession":      {Method: "POST", Path: "/v1/sessions/{session_id}/close", Status: "200", Mutation: true},
+		"cancelSession":     {Method: "POST", Path: "/v1/sessions/{session_id}/cancel", Status: "200", Mutation: true},
 	}
 	var routes []Route
 	for path, methods := range paths {

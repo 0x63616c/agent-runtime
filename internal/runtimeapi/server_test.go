@@ -612,6 +612,10 @@ func (runtime *recordingRuntime) CloseSession(context.Context, runtimeapi.Identi
 	return agentruntime.Session{}, nil
 }
 
+func (runtime *recordingRuntime) CancelSession(context.Context, runtimeapi.Identity, agentruntime.CancelSessionRequest) (agentruntime.Session, error) {
+	return agentruntime.Session{}, nil
+}
+
 func (auth staticAuth) Authenticate(ctx context.Context, token string) (runtimeapi.Identity, error) {
 	if err := ctx.Err(); err != nil {
 		return runtimeapi.Identity{}, err

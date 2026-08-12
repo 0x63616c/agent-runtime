@@ -542,6 +542,10 @@ const (
 	EventSessionClosing EventKind = "session.closing"
 	// EventSessionCompleted reports a terminal drained Session.
 	EventSessionCompleted EventKind = "session.completed"
+	// EventSessionCancelled reports a terminal caller-requested Session cancellation.
+	EventSessionCancelled EventKind = "session.cancelled"
+	// EventSessionFailed reports a terminal runtime-owned Session failure.
+	EventSessionFailed EventKind = "session.failed"
 )
 
 // Event is a bounded, ordered, caller-safe Product event.
@@ -579,6 +583,12 @@ type CancelTurnRequest struct {
 
 // CloseSessionRequest stops new admission and drains already accepted Input.
 type CloseSessionRequest struct {
+	SessionID      SessionID `json:"session_id"`
+	IdempotencyKey string    `json:"idempotency_key"`
+}
+
+// CancelSessionRequest terminally cancels a drained Session.
+type CancelSessionRequest struct {
 	SessionID      SessionID `json:"session_id"`
 	IdempotencyKey string    `json:"idempotency_key"`
 }

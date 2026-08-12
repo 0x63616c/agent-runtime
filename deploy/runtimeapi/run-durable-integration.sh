@@ -77,7 +77,7 @@ AR_RUNTIME_POSTGRES_DSN="$runtime_admin_dsn" \
   go test -race -tags=integration ./internal/runtimepostgres -count=1
 
 reset_runtime_schema
-go test -race -tags=integration ./internal/runtimeapi -run 'Test(DurableRuntimeUsesNonSuperApplicationLoginWithTenantRLS|DurableStateRuntimeAuthorizesArtifactInputReferences|DurablePostgresMinIOCollectorDeletesExpiredUnreferencedArtifact|DurablePostgresMinIOTenantErasurePreservesAnotherTenant)' -count=1
+go test -race -tags=integration ./internal/runtimeapi -run 'Test(DurableRuntimeUsesNonSuperApplicationLoginWithTenantRLS|DurableStateRuntimeAuthorizesArtifactInputReferences|DurableStateRuntimeProjectsTerminalSessionStates|DurablePostgresMinIOCollectorDeletesExpiredUnreferencedArtifact|DurablePostgresMinIOTenantErasurePreservesAnotherTenant)' -count=1
 
 reset_runtime_schema
 AR_RUNTIME_POSTGRES_DSN="$runtime_admin_dsn" \

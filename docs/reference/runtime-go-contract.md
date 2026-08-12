@@ -28,7 +28,8 @@ The package currently defines:
 - ordered bounded Product events, opaque replay cursors, and explicit Gap
   results requiring Session inspection;
 - requests for Agent creation/revision, Session creation, idempotent Input,
-  explicit Turn cancellation, and draining Session close; and
+  explicit Turn cancellation, and draining Session close; the concrete HTTP
+  Client additionally cancels a drained Session; and
 - the narrow `RuntimeClient` interface and its strict concrete HTTP `Client`.
 
 The additive `ArtifactStreamer` capability exposes a closable
@@ -37,12 +38,20 @@ authorized immutable Artifact metadata, reads without buffering the complete
 body, and verifies the declared byte count and HTTP `Digest` trailer at EOF.
 Closing before EOF cancels only the transfer observation.
 
+The additive `SessionCanceller` capability exposes `Client.CancelSession` for
+caller-owned cancellation after all accepted Turns have reached a terminal
+state. It does not widen `RuntimeClient`, so existing v1 implementations keep
+their source compatibility. Runtime-owned Session failure is not a caller API:
+it is visible only as the safe `failed` Session state and `session.failed`
+Product event.
+
 The deterministic internal kernel implements the first S2 transition slice
 through an atomic, context-aware repository port. It creates immutable Agent
 revisions, pins Sessions, compares canonical mutation content for idempotency,
 serializes concurrent Input into one active Turn plus an ordered queue, records
 one terminal outcome, advances queued work, cancels explicitly, drains closing
-Sessions, and reads cursor-addressed events. Its in-memory repository is a
+Sessions, terminally cancels a drained caller Session, and reads
+cursor-addressed events. Its in-memory repository is a
 deterministic test/composition adapter. It is not process-restart durability
 evidence and is not a production state authority.
 

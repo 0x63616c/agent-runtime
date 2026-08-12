@@ -87,6 +87,7 @@ func NewHandler(config Config) (http.Handler, error) {
 	mux.HandleFunc(openAPIMethodListEvents+" "+openAPIPathListEvents, server.events)
 	mux.HandleFunc(openAPIMethodCancelTurn+" "+openAPIPathCancelTurn, server.cancelTurn)
 	mux.HandleFunc(openAPIMethodCloseSession+" "+openAPIPathCloseSession, server.closeSession)
+	mux.HandleFunc(openAPIMethodCancelSession+" "+openAPIPathCancelSession, server.cancelSession)
 	mux.HandleFunc("/", server.notFound)
 	server.next = mux
 	return server, nil
@@ -510,6 +511,20 @@ func (server *server) closeSession(writer http.ResponseWriter, request *http.Req
 		return
 	}
 	result, callErr := server.runtime.CloseSession(request.Context(), contextValue.identity, agentruntime.CloseSessionRequest{SessionID: sessionID, IdempotencyKey: request.Header.Get("Idempotency-Key")})
+	server.writeResult(writer, contextValue.requestID, http.StatusOK, result, callErr)
+}
+
+func (server *server) cancelSession(writer http.ResponseWriter, request *http.Request) {
+	contextValue := request.Context().Value(requestContextKey{}).(requestContext)
+	sessionID, err := agentruntime.ParseSessionID(request.PathValue("session_id"))
+	var body struct{}
+	if err != nil || !server.decodeMutation(writer, request, contextValue.requestID, &body) {
+		if err != nil {
+			server.writeInvalid(writer, contextValue.requestID)
+		}
+		return
+	}
+	result, callErr := server.runtime.CancelSession(request.Context(), contextValue.identity, agentruntime.CancelSessionRequest{SessionID: sessionID, IdempotencyKey: request.Header.Get("Idempotency-Key")})
 	server.writeResult(writer, contextValue.requestID, http.StatusOK, result, callErr)
 }
 

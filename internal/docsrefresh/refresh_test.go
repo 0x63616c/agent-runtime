@@ -438,6 +438,7 @@ func validOpenAPIContract(infoVersion string) []byte {
 		{"listEvents", "get", "/v1/sessions/{session_id}/events", "200", false, false},
 		{"cancelTurn", "post", "/v1/sessions/{session_id}/turns/{turn_id}/cancel", "200", true, true},
 		{"closeSession", "post", "/v1/sessions/{session_id}/close", "200", true, true},
+		{"cancelSession", "post", "/v1/sessions/{session_id}/cancel", "200", true, true},
 	}
 	var paths strings.Builder
 	for index, operation := range operations {

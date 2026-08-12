@@ -194,6 +194,7 @@ var requestOperations = []struct {
 	{method: http.MethodGet, path: regexp.MustCompile(`^/v1/sessions/[^/]+/events$`), operation: "list_events"},
 	{method: http.MethodPost, path: regexp.MustCompile(`^/v1/sessions/[^/]+/turns/[^/]+/cancel$`), operation: "cancel_turn"},
 	{method: http.MethodPost, path: regexp.MustCompile(`^/v1/sessions/[^/]+/close$`), operation: "close_session"},
+	{method: http.MethodPost, path: regexp.MustCompile(`^/v1/sessions/[^/]+/cancel$`), operation: "cancel_session"},
 }
 
 func canonicalOperation(method, path string) string {

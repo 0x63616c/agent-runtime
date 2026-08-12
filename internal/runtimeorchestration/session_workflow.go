@@ -59,6 +59,10 @@ const (
 	CommandSessionClosing CommandKind = "session_closing"
 	// CommandSessionCompleted finalizes a drained Session workflow chain.
 	CommandSessionCompleted CommandKind = "session_completed"
+	// CommandSessionCancelled finalizes an explicitly cancelled Session workflow chain.
+	CommandSessionCancelled CommandKind = "session_cancelled"
+	// CommandSessionFailed finalizes a runtime-failed Session workflow chain.
+	CommandSessionFailed CommandKind = "session_failed"
 )
 
 // Command carries only public runtime IDs and ordered durable metadata; never content or backend handles.
@@ -225,7 +229,7 @@ func SessionWorkflow(ctx workflow.Context, input WorkflowInput) error {
 		}
 		input.NextSequence = command.Sequence
 		input.Dispatched++
-		if command.Kind == CommandSessionCompleted {
+		if command.Kind == CommandSessionCompleted || command.Kind == CommandSessionCancelled || command.Kind == CommandSessionFailed {
 			return nil
 		}
 		if input.Dispatched >= input.ContinueAfter {
@@ -260,9 +264,11 @@ func matchesCommand(event agentruntime.EventKind, command CommandKind) bool {
 		event == agentruntime.EventApprovalResolved && command == CommandApprovalResolved ||
 		event == agentruntime.EventSandboxOperationFinalized && command == CommandSandboxOperationFinalized ||
 		event == agentruntime.EventSessionClosing && command == CommandSessionClosing ||
-		event == agentruntime.EventSessionCompleted && command == CommandSessionCompleted
+		event == agentruntime.EventSessionCompleted && command == CommandSessionCompleted ||
+		event == agentruntime.EventSessionCancelled && command == CommandSessionCancelled ||
+		event == agentruntime.EventSessionFailed && command == CommandSessionFailed
 }
 
 func knownCommandKind(kind CommandKind) bool {
-	return kind == CommandInputAccepted || kind == CommandTurnCancelled || kind == CommandTurnSucceeded || kind == CommandTurnFailed || kind == CommandApprovalResolved || kind == CommandSandboxOperationFinalized || kind == CommandSessionClosing || kind == CommandSessionCompleted
+	return kind == CommandInputAccepted || kind == CommandTurnCancelled || kind == CommandTurnSucceeded || kind == CommandTurnFailed || kind == CommandApprovalResolved || kind == CommandSandboxOperationFinalized || kind == CommandSessionClosing || kind == CommandSessionCompleted || kind == CommandSessionCancelled || kind == CommandSessionFailed
 }
