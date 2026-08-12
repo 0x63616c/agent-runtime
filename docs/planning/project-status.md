@@ -3,7 +3,11 @@
 This is the one-page internal view of the project. It is for planning; it is
 not published in the documentation site and it is not a product claim.
 
-Snapshot: `main` at `791a783` on 2026-08-12.
+Snapshot: generated from the checked-in requirement and evidence ledgers.
+
+For the full browsable list, open
+[the requirements dashboard](requirements-dashboard.html). It has one row per
+requirement with filters for Done, In progress, and Not started.
 
 ## Read this first
 

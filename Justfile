@@ -56,6 +56,12 @@ docs-check:
     npm --prefix website run build
     npm --prefix website run check:routes
 
+requirements-dashboard:
+    node ./scripts/generate-project-dashboard.mjs
+
+requirements-dashboard-check:
+    node ./scripts/generate-project-dashboard.mjs --check
+
 # Starts one isolated declarative OrbStack environment. STACK is optional; an
 # omitted value derives a deterministic identity from this worktree.
 dev stack="" kubeconfig="" actor="local-development":
