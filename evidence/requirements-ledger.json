@@ -3,11 +3,19 @@
   "requirements": [
     {
       "id": "API-001",
-      "status": "not_started"
+      "status": "completed",
+      "evidence": [
+        {"revision": "77ca92ff30836d9847a0b7ee857f83d4eb2ce4bc", "utc_time": "2026-08-12T00:02:15Z", "proof_level": "integration", "command_id": "m5-public-api-contract-suite", "artifact_ref": "m5-public-api-77ca92f", "result": "passed"},
+        {"revision": "77ca92ff30836d9847a0b7ee857f83d4eb2ce4bc", "utc_time": "2026-08-12T00:02:15Z", "proof_level": "integration", "command_id": "m5-public-api-standalone-e2e", "artifact_ref": "m5-public-api-77ca92f", "result": "passed"},
+        {"revision": "77ca92ff30836d9847a0b7ee857f83d4eb2ce4bc", "utc_time": "2026-08-12T00:02:15Z", "proof_level": "integration", "command_id": "m5-public-api-durable-composition", "artifact_ref": "m5-public-api-77ca92f", "result": "passed"}
+      ]
     },
     {
       "id": "API-002",
-      "status": "not_started"
+      "status": "completed",
+      "evidence": [
+        {"revision": "77ca92ff30836d9847a0b7ee857f83d4eb2ce4bc", "utc_time": "2026-08-12T00:02:15Z", "proof_level": "contract", "command_id": "m5-public-api-contract-suite", "artifact_ref": "m5-public-api-77ca92f", "result": "passed"}
+      ]
     },
     {
       "id": "API-003",
@@ -15,39 +23,69 @@
     },
     {
       "id": "API-004",
-      "status": "not_started"
+      "status": "completed",
+      "evidence": [
+        {"revision": "77ca92ff30836d9847a0b7ee857f83d4eb2ce4bc", "utc_time": "2026-08-12T00:02:15Z", "proof_level": "integration", "command_id": "m5-public-api-contract-suite", "artifact_ref": "m5-public-api-77ca92f", "result": "passed"}
+      ]
     },
     {
       "id": "API-005",
-      "status": "not_started"
+      "status": "completed",
+      "evidence": [
+        {"revision": "77ca92ff30836d9847a0b7ee857f83d4eb2ce4bc", "utc_time": "2026-08-12T00:02:15Z", "proof_level": "integration", "command_id": "m5-public-api-contract-suite", "artifact_ref": "m5-public-api-77ca92f", "result": "passed"}
+      ]
     },
     {
       "id": "API-006",
-      "status": "not_started"
+      "status": "completed",
+      "evidence": [
+        {"revision": "77ca92ff30836d9847a0b7ee857f83d4eb2ce4bc", "utc_time": "2026-08-12T00:02:15Z", "proof_level": "contract", "command_id": "m5-public-api-decoder-fuzz", "artifact_ref": "m5-public-api-77ca92f", "result": "passed"},
+        {"revision": "77ca92ff30836d9847a0b7ee857f83d4eb2ce4bc", "utc_time": "2026-08-12T00:02:15Z", "proof_level": "contract", "command_id": "m5-public-api-contract-suite", "artifact_ref": "m5-public-api-77ca92f", "result": "passed"}
+      ]
     },
     {
       "id": "API-007",
-      "status": "not_started"
+      "status": "completed",
+      "evidence": [
+        {"revision": "77ca92ff30836d9847a0b7ee857f83d4eb2ce4bc", "utc_time": "2026-08-12T00:02:15Z", "proof_level": "integration", "command_id": "m5-public-api-contract-suite", "artifact_ref": "m5-public-api-77ca92f", "result": "passed"}
+      ]
     },
     {
       "id": "API-008",
-      "status": "not_started"
+      "status": "completed",
+      "evidence": [
+        {"revision": "77ca92ff30836d9847a0b7ee857f83d4eb2ce4bc", "utc_time": "2026-08-12T00:02:15Z", "proof_level": "integration", "command_id": "m5-public-api-contract-suite", "artifact_ref": "m5-public-api-77ca92f", "result": "passed"},
+        {"revision": "77ca92ff30836d9847a0b7ee857f83d4eb2ce4bc", "utc_time": "2026-08-12T00:02:15Z", "proof_level": "integration", "command_id": "m5-public-api-durable-composition", "artifact_ref": "m5-public-api-77ca92f", "result": "passed"}
+      ]
     },
     {
       "id": "API-009",
-      "status": "not_started"
+      "status": "completed",
+      "evidence": [
+        {"revision": "77ca92ff30836d9847a0b7ee857f83d4eb2ce4bc", "utc_time": "2026-08-12T00:02:15Z", "proof_level": "contract", "command_id": "m5-public-api-contract-suite", "artifact_ref": "m5-public-api-77ca92f", "result": "passed"}
+      ]
     },
     {
       "id": "API-010",
-      "status": "not_started"
+      "status": "completed",
+      "evidence": [
+        {"revision": "77ca92ff30836d9847a0b7ee857f83d4eb2ce4bc", "utc_time": "2026-08-12T00:02:15Z", "proof_level": "contract", "command_id": "m5-public-api-contract-suite", "artifact_ref": "m5-public-api-77ca92f", "result": "passed"}
+      ]
     },
     {
       "id": "API-011",
-      "status": "not_started"
+      "status": "completed",
+      "evidence": [
+        {"revision": "77ca92ff30836d9847a0b7ee857f83d4eb2ce4bc", "utc_time": "2026-08-12T00:02:15Z", "proof_level": "contract", "command_id": "m5-public-api-contract-suite", "artifact_ref": "m5-public-api-77ca92f", "result": "passed"}
+      ]
     },
     {
       "id": "API-012",
-      "status": "not_started"
+      "status": "completed",
+      "evidence": [
+        {"revision": "77ca92ff30836d9847a0b7ee857f83d4eb2ce4bc", "utc_time": "2026-08-12T00:02:15Z", "proof_level": "integration", "command_id": "m5-public-api-contract-suite", "artifact_ref": "m5-public-api-77ca92f", "result": "passed"},
+        {"revision": "77ca92ff30836d9847a0b7ee857f83d4eb2ce4bc", "utc_time": "2026-08-12T00:02:15Z", "proof_level": "integration", "command_id": "m5-public-api-durable-composition", "artifact_ref": "m5-public-api-77ca92f", "result": "passed"}
+      ]
     },
     {
       "id": "DAT-001",

@@ -1,0 +1,64 @@
+{
+  "version": 1,
+  "milestone": "M5 durable agent runtime",
+  "implementation_revision": "77ca92ff30836d9847a0b7ee857f83d4eb2ce4bc",
+  "utc_time": "2026-08-12T00:02:15Z",
+  "requirements": ["API-001", "API-002", "API-004", "API-005", "API-006", "API-007", "API-008", "API-009", "API-010", "API-011", "API-012"],
+  "commands": [
+    {
+      "id": "m5-public-api-contract-suite",
+      "command": "go test -race ./internal/runtimeapi ./sdk/go ./internal/openapicontract ./tests/architecture -count=1",
+      "result": "passed"
+    },
+    {
+      "id": "m5-public-api-standalone-e2e",
+      "command": "go test -race -tags=integration ./cmd/agent-runtime-api -count=1",
+      "result": "passed"
+    },
+    {
+      "id": "m5-public-api-decoder-fuzz",
+      "command": "go test ./internal/runtimeapi -run ^$ -fuzz ^FuzzPublicHTTPRejectsMalformedMutationBeforeDispatch$ -fuzztime=500x",
+      "result": "passed"
+    },
+    {
+      "id": "m5-public-api-durable-composition",
+      "command": "deploy/runtimeapi/run-durable-integration.sh",
+      "result": "passed"
+    },
+    {
+      "id": "m5-public-api-full-gate",
+      "command": "just check",
+      "result": "passed"
+    },
+    {
+      "id": "m5-public-api-docs-check",
+      "command": "just docs-check",
+      "result": "passed"
+    }
+  ],
+  "coverage": {
+    "API-001": "Public Go SDK calls real HTTP handlers for the Session lifecycle, inspection, Event cursoring, cancellation, close, Artifact reads, and Approval commands; the standalone binary and disposable PostgreSQL/MinIO/Temporal composition pass.",
+    "API-002": "The public SDK import graph and independent temporary consumer compile exclude implementation adapters and retain only runtime-owned public types and errors.",
+    "API-004": "Public HTTP/SDK lifecycle tests cover same-request replay, conflicting reuse, expiry, and scoped receipt lookup.",
+    "API-005": "Public HTTP/SDK authorization matrix checks authenticated same-tenant and cross-tenant non-enumerating denial across catalog and owner routes.",
+    "API-006": "Public request and Event limits, SDK response and Artifact limits, and malformed JSON fuzzing are bounded before runtime dispatch.",
+    "API-007": "Public HTTP/SDK Event tests cover ordered replay, duplicate-tolerant resume, and explicit Gap after compacted cursor history.",
+    "API-008": "A dropped public observation is replayed without cancelling accepted work; explicit cancellation and durable cancellation control are separately exercised.",
+    "API-009": "Raw authenticated Session inspection JSON contains no forbidden backend execution-ID field names.",
+    "API-010": "The public SDK refuses an unconfigured logical model profile; raw HTTP refuses a provider credential-shaped field without echoing it.",
+    "API-011": "The v1 OpenAPI compatibility baseline, generated route-table drift check, temporary GOWORK=off consumer compile, and migration policy are exercised.",
+    "API-012": "Public HTTP/SDK tests prove immutable Agent/Policy lifecycle and separate tenant-admin versus ordinary Session authority."
+  },
+  "documentation": [
+    "docs/reference/runtime-http-api.md",
+    "docs/reference/runtime-go-contract.md",
+    "docs/reference/api-compatibility.md",
+    "docs/engineering/go-compatibility.md"
+  ],
+  "limitations": [
+    "API-003 remains unpromoted because this artifact has no current-SHA documentation publication or HTTPS proof.",
+    "The temporary GOWORK=off consumer check uses the candidate module replacement; it is not an immutable remote release-tag or external-consumer proof.",
+    "The standalone and PostgreSQL/MinIO/Temporal dependencies are disposable integration fixtures, not protected production operations.",
+    "This evidence does not execute a live model provider, external sandbox command, Firecracker, or Linux KVM environment."
+  ]
+}

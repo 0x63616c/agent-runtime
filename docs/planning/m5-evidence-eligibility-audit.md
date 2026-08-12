@@ -3,6 +3,10 @@
 Initial mapping revision: `3d1e1c4ab5483d5ca3956ef03f19bfe4724782e3`.
 The `TMP-002` and `TMP-003` supplement is bound to
 `6197e7ec3854aaab1b0a57b78ddbd162c5020f1f`.
+The public API supplement for `API-001`, `API-002`, `API-004` through
+`API-012` is bound to `77ca92ff30836d9847a0b7ee857f83d4eb2ce4bc`.
+Its ledger reference `m5-public-api-77ca92f` resolves to
+[`m5-public-api-contract.json`](../../evidence/m5-public-api-contract.json).
 
 This audit maps each M5 requirement to the current implementation proof. It is
 not a completion claim: a row changes to `completed` only in the atomic bundle
@@ -27,18 +31,18 @@ The public-boundary supplement for `TMP-002` and `TMP-003` is
 | DOM-011 | authorized Artifact tests in StateRuntime and durable PostgreSQL/MinIO input/readback tests. | Defer to the state/data bundle. |
 | DOM-012 | `TestStateRuntimeHTTPAndSDKExposeProviderNeutralUsageAndSafeModelFailure`. | Defer to the public API bundle. |
 | DOM-013 | `TestStateRuntimeHTTPAndSDKExposeProviderNeutralUsageAndSafeModelFailure`; durable normalized model output integration. | Defer; no live-provider claim is needed or made. |
-| API-001 | HTTP/SDK matrix in `state_runtime_test.go` exercises Agent, Session, Input, inspection, Events, cancel, close, Artifact, and Approval routes. | Defer to a public-contract retained run. |
-| API-002 | SDK contract tests and import-graph/architecture guards; `docs/reference/runtime-go-contract.md`. | Defer to the public-contract retained run. |
-| API-003 | OpenAPI compatibility and generated route tests; generated HTTP and SDK reference inventory. | Defer pending a public-contract retained run and publication check. |
-| API-004 | `TestStateRuntimeHTTPAndSDKRejectExpiredMutationReceiptWithoutReplayingWork`. | Defer to the public-contract retained run. |
-| API-005 | `TestStateRuntimeHTTPAndSDKAuthorizationMatrixKeepsAdminAndOwnerScopesNonEnumerating`. | Defer to the public-contract retained run. |
-| API-006 | strict HTTP server and SDK boundary tests, including bounded Artifact streaming. | Defer to the public-contract retained run. |
-| API-007 | StateRuntime cursor/replay and explicit Gap contract tests. | Defer to the public-contract retained run. |
-| API-008 | explicit cancellation and drain tests plus workflow cancellation classification. | Defer to the public-contract retained run. |
-| API-009 | StateRuntime inspection matrix; backend IDs are excluded by public model tests. | Defer to the public-contract retained run. |
-| API-010 | compiler validation and public model-profile tests reject credentials and unconfigured profiles. | Defer to the public-contract retained run. |
-| API-011 | `internal/openapicontract` compatibility baseline and external-consumer compile test; migration guide. | Defer pending a release/publication check. |
-| API-012 | `TestStateRuntimeAdministratorsManageImmutablePolicyRevisions` and admin/non-admin HTTP/SDK matrix. | Defer to the public-contract retained run. |
+| API-001 | Public Go SDK/HTTP suite covers the listed Session, Input, inspection, Event, cancellation, close, Artifact, and Approval commands; standalone binary and disposable durable composition also pass. | Promoted with retained public-contract evidence. |
+| API-002 | SDK package import graph and independent temporary consumer compile reject Temporal, provider, sandbox, blob, database, and telemetry implementation dependencies. | Promoted with retained contract evidence. |
+| API-003 | OpenAPI compatibility and generated route tests plus generated references build locally. | Defer: no current-SHA documentation publication/HTTPS evidence is retained. |
+| API-004 | Public HTTP/SDK tests cover equal replay, conflicting reuse, expired receipts, and caller-scoped status lookup. | Promoted with retained public-contract evidence. |
+| API-005 | `TestStateRuntimeHTTPAndSDKAuthorizationMatrixKeepsAdminAndOwnerScopesNonEnumerating` covers authenticated same-tenant and cross-tenant denial across public routes. | Promoted with retained public-contract evidence. |
+| API-006 | Strict HTTP/SDK limits, Artifact stream limits, public request/event limit test, and 500-execution malformed-decoder fuzz run pass. | Promoted with retained contract evidence. |
+| API-007 | Public HTTP/SDK cursor tests cover replay, duplicate-tolerant resume, ordered pages, and explicit compacted-cursor Gap. | Promoted with retained public-contract evidence. |
+| API-008 | Public dropped-observation test retains durable work; explicit cancellation/drain and durable workflow cancellation tests pass. | Promoted with retained public/durable evidence. |
+| API-009 | Raw authenticated Session inspection response recursively rejects backend execution-ID field names. | Promoted with retained public-contract evidence. |
+| API-010 | Public SDK rejects an unconfigured model profile and raw HTTP rejects a provider credential-shaped field without echoing it. | Promoted with retained public-contract evidence. |
+| API-011 | Checked-in v1 compatibility baseline, generated route-table drift check, temporary `GOWORK=off` consumer compile, and migration policy pass. | Promoted as candidate-module compatibility evidence; no immutable release tag is claimed. |
+| API-012 | Immutable Agent/Policy revision lifecycle and admin/non-admin HTTP/SDK separation pass. | Promoted with retained public-contract evidence. |
 | DAT-001 | conversation expected-version/idempotency planner test. | Defer to the PostgreSQL state bundle. |
 | DAT-002 | Artifact authorization/integrity/streaming tests and durable MinIO input path. | Defer to the PostgreSQL state bundle. |
 | DAT-003 | ordered event/outbox planner and public cursor tests. | Defer to the PostgreSQL state bundle. |
