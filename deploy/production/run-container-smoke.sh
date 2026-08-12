@@ -10,6 +10,8 @@ smoke_image="${AGENT_RUNTIME_SMOKE_IMAGE:-agent-runtime-role-smoke:local}"
 repository_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 role_configs="$(go run "${repository_root}/cmd/stackctl" role-configs --stack-file "${repository_root}/deploy/production/stack.json" --profile production)"
 smoke_secret="$(od -An -N32 -tx1 /dev/urandom | tr -d ' \n')"
+runtime_api_admin_secret="$(od -An -N32 -tx1 /dev/urandom | tr -d ' \n')"
+runtime_api_developer_secret="$(od -An -N32 -tx1 /dev/urandom | tr -d ' \n')"
 
 export STATE_DATABASE_DSN="${smoke_secret}"
 export TEMPORAL_AUTH_TOKEN="${smoke_secret}"
@@ -44,6 +46,34 @@ run_role blob -e BLOB_STORAGE_CREDENTIAL
 run_role codec -e CODEC_BLOB_CREDENTIAL
 run_role sandbox-control -e SANDBOX_HOST_CA -e SANDBOX_STATE_DSN
 run_role sandbox-host -e SANDBOX_HOST_IDENTITY -e SANDBOX_CONTROL_TOKEN
+
+# The public HTTP server is a separately composed binary, not the generic
+# health-only `api` role. This proves its sealed-image entrypoint, strict
+# environment configuration, injected token validation, and live readiness;
+# it does not assert that the local image has been published or deployed.
+runtime_api_config='{"version":1,"listen_address":"0.0.0.0:8088","public_listen":true,"storage":{"mode":"memory-unsafe"},"model_profiles":["balanced"],"max_request_bytes":4194304,"principals":[{"tenant":"source-smoke","principal":"admin","admin":true,"bearer_token_environment":"RUNTIME_API_ADMIN_TOKEN"},{"tenant":"source-smoke","principal":"developer","admin":false,"bearer_token_environment":"RUNTIME_API_DEVELOPER_TOKEN"}]}'
+runtime_api_container="$(docker run --detach --rm --read-only --cap-drop ALL --security-opt no-new-privileges \
+  --publish 127.0.0.1::8088 \
+  -e RUNTIME_API_CONFIG="${runtime_api_config}" \
+  -e RUNTIME_API_ADMIN_TOKEN="${runtime_api_admin_secret}" -e RUNTIME_API_DEVELOPER_TOKEN="${runtime_api_developer_secret}" \
+  --entrypoint /agent-runtime-api "${smoke_image}" --config-env RUNTIME_API_CONFIG)"
+runtime_api_cleanup() { docker stop "${runtime_api_container}" >/dev/null 2>&1 || true; }
+trap runtime_api_cleanup EXIT
+runtime_api_port="$(docker port "${runtime_api_container}" 8088/tcp | awk -F: 'NR == 1 { print $2 }')"
+runtime_api_ready=false
+for attempt in $(seq 1 20); do
+  if curl --fail --silent --show-error "http://127.0.0.1:${runtime_api_port}/readyz" >/dev/null; then
+    runtime_api_ready=true
+    break
+  fi
+  sleep 1
+done
+if [[ "${runtime_api_ready}" != true ]]; then
+  docker logs "${runtime_api_container}" >&2 || true
+  exit 1
+fi
+runtime_api_cleanup
+trap - EXIT
 
 negative_count=0
 run_role_rejecting_foreign_credential() {

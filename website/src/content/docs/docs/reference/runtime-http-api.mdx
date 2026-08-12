@@ -87,6 +87,12 @@ HTTP listener only on loopback or behind an operator-owned protected transport
 boundary. `max_request_bytes` must be between 3 MiB and 16 MiB; the example
 uses 4 MiB.
 
+The container composition check may instead supply that strict document through
+`--config-env`; an all-interface listener requires explicit
+`"public_listen":true`. `--check` validates configuration, required
+environment-value presence, and bearer-token shape without opening a listener
+or contacting PostgreSQL or object storage.
+
 ## Optional request-completion logs
 
 The standalone role emits no public `/v1` API completion record by default. To

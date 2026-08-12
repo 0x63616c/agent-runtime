@@ -89,6 +89,11 @@ durable operator configuration instead selects `postgres` and explicitly names
 the PostgreSQL DSN and immutable-content endpoint, bucket, and credential
 environment keys; the integration harness exercises that process path against
 PostgreSQL and MinIO.
+The container composition check may instead supply that same strict document
+through `--config-env`; an all-interface listener requires the explicit
+`"public_listen":true` opt-in. `--check` validates configuration, required
+environment-value presence, and bearer-token shape without opening a listener
+or contacting PostgreSQL or object storage.
 `max_request_bytes` must be between 3 MiB and 16 MiB so every request allowed
 by the canonical content limits remains transport-admissible; the example uses
 4 MiB.

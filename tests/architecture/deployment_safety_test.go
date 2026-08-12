@@ -210,7 +210,7 @@ var _ = Describe("M1 deployment safety boundaries", func() {
 		// Tilt's restricted build context must include every local source tree
 		// copied by the production image, or CI deploys before discovering that
 		// the image cannot be built.
-		for _, required := range []string{"'internal'", "'temporalpayload'", "'sdk/go'"} {
+		for _, required := range []string{"'cmd/agent-runtime-api'", "'internal'", "'sandbox'", "'temporalpayload'", "'sdk/go'"} {
 			Expect(read("Tiltfile")).To(ContainSubstring(required))
 		}
 		Expect(read("Justfile")).To(ContainSubstring(`two-stack-smoke profile="local"`))
