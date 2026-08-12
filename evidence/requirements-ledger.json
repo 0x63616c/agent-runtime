@@ -422,7 +422,13 @@
     },
     {
       "id": "DOM-003",
-      "status": "not_started"
+      "status": "completed",
+      "evidence": [
+        {"revision": "2ee91a8560f0682d5a7423a0a1b3580d3a3512d3", "utc_time": "2026-08-12T01:14:32Z", "proof_level": "integration", "command_id": "m5-domain-session-states-durable", "artifact_ref": "m5-domain-session-states-2ee91a8", "result": "passed"},
+        {"revision": "2ee91a8560f0682d5a7423a0a1b3580d3a3512d3", "utc_time": "2026-08-12T01:14:32Z", "proof_level": "independent_review", "command_id": "m5-domain-session-states-spec-review", "artifact_ref": "m5-domain-session-states-2ee91a8", "result": "passed"},
+        {"revision": "2ee91a8560f0682d5a7423a0a1b3580d3a3512d3", "utc_time": "2026-08-12T01:14:32Z", "proof_level": "independent_review", "command_id": "m5-domain-session-states-standards-review", "artifact_ref": "m5-domain-session-states-2ee91a8", "result": "passed"},
+        {"revision": "2ee91a8560f0682d5a7423a0a1b3580d3a3512d3", "utc_time": "2026-08-12T01:14:32Z", "proof_level": "documentation", "command_id": "m5-domain-session-states-docs", "artifact_ref": "m5-domain-session-states-2ee91a8", "result": "passed"}
+      ]
     },
     {
       "id": "DOM-004",

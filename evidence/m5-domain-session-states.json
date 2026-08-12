@@ -1,0 +1,52 @@
+{
+  "version": 1,
+  "milestone": "M5 durable agent runtime",
+  "implementation_revision": "2ee91a8560f0682d5a7423a0a1b3580d3a3512d3",
+  "utc_time": "2026-08-12T01:14:32Z",
+  "requirements": [
+    "DOM-003"
+  ],
+  "commands": [
+    {
+      "id": "m5-domain-session-states-durable",
+      "command": "deploy/runtimeapi/run-durable-integration.sh",
+      "result": "passed"
+    },
+    {
+      "id": "m5-domain-session-states-full-gate",
+      "command": "just check",
+      "result": "passed"
+    },
+    {
+      "id": "m5-domain-session-states-docs",
+      "command": "just docs-check",
+      "result": "passed"
+    },
+    {
+      "id": "m5-domain-session-states-spec-review",
+      "command": "independent spec review of eb87849b95a5b8ca3bf9a85c059c40b5dec1c337...2ee91a8560f0682d5a7423a0a1b3580d3a3512d3",
+      "result": "passed"
+    },
+    {
+      "id": "m5-domain-session-states-standards-review",
+      "command": "independent standards review retained at github issue 23 comment 5260948594",
+      "result": "passed"
+    }
+  ],
+  "coverage": {
+    "DOM-003": "The state planner table exercises every explicit Session state: a drained open Session closes to completed or cancels, a Session with admitted work closes without completing, a drained closing Session cancels, and a runtime worker may fail a drained open or closing Session. Pending-work cancellation/failure and every transition from completed, cancelled, or failed conflict. Owner and worker authorities are mutually refused, exact receipts replay without another state/event/audit/outbox mutation, and the disposable PostgreSQL/MinIO harness proves caller cancellation through the public HTTP/Go SDK boundary plus worker failure, process recomposition, safe events, and exact durable replay. Private Temporal routing recognizes all three terminal Session events and ends only after the durable route is accepted. Independent spec and separately retained standards reviews found no issues."
+  },
+  "documentation": [
+    "docs/planning/runtime-state-authority-transition-contract.md",
+    "docs/reference/runtime-go-contract.md",
+    "docs/reference/runtime-http-api.md",
+    "docs/reference/api-compatibility.md",
+    "website/src/content/docs/docs/reference/runtime-go-contract.mdx",
+    "website/src/content/docs/docs/reference/runtime-http-api.mdx"
+  ],
+  "limitations": [
+    "The PostgreSQL, MinIO, HTTP, Go SDK, and private Temporal proof uses disposable integration dependencies; it is not a protected production deployment.",
+    "Runtime-owned Session failure is an internal worker command and a safe public state/event, not a caller mutation or provider-specific failure surface.",
+    "This evidence does not prove a supported live provider, deployed model-role credential source, external sandbox command, Firecracker or Linux KVM isolation, protected backup/restore or PITR, release tag, or production rollout."
+  ]
+}

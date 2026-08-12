@@ -11,6 +11,10 @@ The domain-model supplement for `DOM-001`, `DOM-002`, and `DOM-004` through
 `DOM-013` is bound to `3f40dab755cecfb0d8647fcf88731db2aa757f48`.
 Its ledger reference `m5-domain-model-3f40dab` resolves to
 [`m5-domain-model-contract.json`](../../evidence/m5-domain-model-contract.json).
+The terminal-Session supplement for `DOM-003` is bound to
+`2ee91a8560f0682d5a7423a0a1b3580d3a3512d3`. Its ledger reference
+`m5-domain-session-states-2ee91a8` resolves to
+[`m5-domain-session-states.json`](../../evidence/m5-domain-session-states.json).
 The data-authority supplement for `DAT-002` through `DAT-008` and `DAT-011`
 through `DAT-012` is bound to `4454bf9c5cbb1a7120508d6f84f14fd5be6d110f`.
 Its ledger reference `m5-data-authority-4454bf9` resolves to
@@ -32,7 +36,7 @@ The public-boundary supplement for `TMP-002` and `TMP-003` is
 | --- | --- | --- |
 | DOM-001 | Kernel immutable Agent revision/revision-pinned Session test plus state compiler/planner revision-registration test. | Promoted with retained domain evidence. |
 | DOM-002 | Kernel resolved-revision Session creation and later-revision pin-preservation test. | Promoted with retained domain evidence. |
-| DOM-003 | Current planner/kernel implement and test `open` → `closing` → `completed`; `cancelled` and `failed` Session enum values have no current transition implementation/evidence. | Defer: the all-Session-state acceptance table is not met. |
+| DOM-003 | State-planner transition tables cover `open`, `closing`, `completed`, `cancelled`, and `failed`, including pending-work and terminal refusals, exact replay, and owner/worker authority separation. The disposable PostgreSQL/MinIO harness proves public cancellation, worker failure, safe event projection, recomposition, and durable replay; private Temporal routing recognizes every terminal Session event. | Promoted with retained terminal-Session evidence; no provider, sandbox, protected-production, or PITR claim. |
 | DOM-004 | Kernel bounded/idempotent Input tests plus disposable PostgreSQL admission reference-only, concurrent, replay, and Artifact-authorization tests. | Promoted with retained domain evidence. |
 | DOM-005 | Kernel completion/cancellation race and planner one-winning-settlement tests. | Promoted with retained domain evidence. |
 | DOM-006 | Kernel 24-concurrent Input queue test plus disposable PostgreSQL concurrent distinct-admission test, now invoked by the durable harness. | Promoted with retained domain evidence. |
