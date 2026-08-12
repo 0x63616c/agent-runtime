@@ -49,7 +49,7 @@ const document = `<!doctype html>
     input { width: 100%; box-sizing: border-box; border: 1px solid #bfc6d7; border-radius: 8px; padding: 11px 12px; font: inherit; background: #fff; color: inherit; }
     .filters { display: flex; flex-wrap: wrap; gap: 8px; }
     .table-wrap { overflow-x: auto; border: 1px solid #d7dbe7; border-radius: 12px; background: #fff; }
-    table { width: 100%; min-width: 900px; border-collapse: collapse; }
+    table { width: 100%; min-width: 1120px; border-collapse: collapse; }
     th, td { padding: 13px 14px; vertical-align: top; border-bottom: 1px solid #e6e8ef; text-align: left; line-height: 1.45; }
     th { position: sticky; top: 0; background: #f0f3fa; z-index: 1; font-size: .84rem; letter-spacing: .03em; text-transform: uppercase; }
     tr:last-child td { border-bottom: 0; }
@@ -86,7 +86,7 @@ const document = `<!doctype html>
     </div>
     <div class="table-wrap">
       <table>
-        <thead><tr><th>Requirement</th><th>Current-main assessment</th><th>Why</th><th>Formal proof still required</th></tr></thead>
+        <thead><tr><th>Requirement</th><th>Exact requirement</th><th>Current-main assessment</th><th>Why</th><th>Formal proof still required</th></tr></thead>
         <tbody id="rows"></tbody>
       </table>
     </div>
@@ -104,10 +104,11 @@ const document = `<!doctype html>
       const term = search.value.trim().toLowerCase();
       const visible = requirements.filter(requirement => (selected === 'all' || requirement.assessment === selected) && JSON.stringify(requirement).toLowerCase().includes(term));
       rows.replaceChildren();
-      if (!visible.length) { const row = document.createElement('tr'); const item = document.createElement('td'); item.colSpan = 4; item.className = 'empty'; item.append(text('No requirements match this view.')); row.append(item); rows.append(row); return; }
+      if (!visible.length) { const row = document.createElement('tr'); const item = document.createElement('td'); item.colSpan = 5; item.className = 'empty'; item.append(text('No requirements match this view.')); row.append(item); rows.append(row); return; }
       for (const requirement of visible) {
         const row = document.createElement('tr');
         const identifier = document.createElement('td'); identifier.innerHTML = '<div class="id"></div><div class="area"></div>'; identifier.querySelector('.id').append(text(requirement.id)); identifier.querySelector('.area').append(text(requirement.area)); row.append(identifier);
+        cell(row, requirement.description);
         const state = document.createElement('td'); const badge = document.createElement('span'); badge.className = 'badge ' + requirement.assessment; badge.append(text(labels[requirement.assessment])); state.append(badge); row.append(state);
         cell(row, requirement.assessmentReason + ' Formal ledger: ' + (requirement.ledgerStatus === 'completed' ? 'completed' : requirement.ledgerStatus.replace('_', ' ')) + '.');
         cell(row, requirement.acceptance + ' Documentation: ' + requirement.documentation);
