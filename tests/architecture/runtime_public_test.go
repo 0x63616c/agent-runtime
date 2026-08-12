@@ -28,7 +28,7 @@ var _ = Describe("public Agent Runtime Go contract", func() {
 		}
 	})
 
-	It("rejects direct implementation imports from an external example fixture", func() {
+	It("rejects forbidden internal, Temporal, blob, sandbox, and test-route imports from an example fixture", func() {
 		fixture := filepath.Join("testdata", "example_forbidden_import.go")
 		imports, err := forbiddenExampleImports(fixture)
 		Expect(err).NotTo(HaveOccurred())
@@ -47,19 +47,41 @@ var _ = Describe("public Agent Runtime Go contract", func() {
 		Expect(imports).To(BeEmpty())
 	})
 
-	It("keeps Durable Chat on the public SDK and HTTP boundary", func() {
-		root, err := filepath.Abs(filepath.Join("..", "..", "examples", "durable-chat"))
+	It("keeps every shipped example on the public SDK and HTTP boundary", func() {
+		for _, example := range []string{
+			"durable-chat",
+			"workspace-agent",
+			"research-dossier",
+		} {
+			files := shippedExampleFiles(example)
+			Expect(files).NotTo(BeEmpty(), example)
+			for _, file := range files {
+				imports, importErr := forbiddenExampleImports(file)
+				Expect(importErr).NotTo(HaveOccurred(), file)
+				Expect(imports).To(BeEmpty(), file)
+			}
+		}
+	})
+
+	It("scans nested example packages for forbidden imports", func() {
+		example := GinkgoT().TempDir()
+		Expect(os.Mkdir(filepath.Join(example, "nested"), 0o700)).To(Succeed())
+		writeConsumerFile(example, "nested/forbidden.go", "package nested\n\nimport _ \"go.temporal.io/sdk/client\"\n")
+		files, err := exampleGoFiles(example)
 		Expect(err).NotTo(HaveOccurred())
-		files, err := filepath.Glob(filepath.Join(root, "*.go"))
+		Expect(files).To(HaveLen(1))
+		imports, err := forbiddenExampleImports(files[0])
 		Expect(err).NotTo(HaveOccurred())
-		commandFiles, err := filepath.Glob(filepath.Join(root, "cmd", "durable-chat", "*.go"))
-		Expect(err).NotTo(HaveOccurred())
-		files = append(files, commandFiles...)
-		Expect(files).NotTo(BeEmpty())
-		for _, file := range files {
-			imports, importErr := forbiddenExampleImports(file)
-			Expect(importErr).NotTo(HaveOccurred(), file)
-			Expect(imports).To(BeEmpty(), file)
+		Expect(imports).To(ConsistOf("go.temporal.io/sdk/client"))
+	})
+
+	It("keeps the Research Dossier public integration observation free of Temporal workflow inspection", func() {
+		proof := read("internal/runtimeapiprocess/research_dossier_integration_test.go")
+		for _, forbidden := range []string{
+			"DescribeWorkflowExecution",
+			"runtime-session-research-dossier-e2e-",
+		} {
+			Expect(proof).NotTo(ContainSubstring(forbidden), forbidden)
 		}
 	})
 
@@ -316,4 +338,28 @@ func forbiddenExampleImports(path string) ([]string, error) {
 	}
 	sort.Strings(imports)
 	return imports, nil
+}
+
+func shippedExampleFiles(example string) []string {
+	root, err := filepath.Abs(filepath.Join("..", "..", "examples", example))
+	Expect(err).NotTo(HaveOccurred())
+	files, err := exampleGoFiles(root)
+	Expect(err).NotTo(HaveOccurred())
+	return files
+}
+
+func exampleGoFiles(root string) ([]string, error) {
+	var files []string
+	err := filepath.WalkDir(root, func(path string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if entry.IsDir() || filepath.Ext(path) != ".go" {
+			return nil
+		}
+		files = append(files, path)
+		return nil
+	})
+	sort.Strings(files)
+	return files, err
 }

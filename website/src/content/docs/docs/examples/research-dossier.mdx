@@ -76,14 +76,16 @@ dossier remain in the Session's caller-authorized Artifact index after a public
 API process restart. Retention, erasure, and object GC remain runtime operator
 policies; a download is not an indefinite retention guarantee.
 
-The M8 integration suite uses a dedicated disposable `research-dossier-e2e`
-tenant with PostgreSQL, MinIO, and a real Temporal development server. It
-proves a public dossier Session is represented by a Temporal workflow, three
-distinct ordered research Tool calls each produce a separately retained cited
-Artifact (including a final result larger than 512 KiB) only after durable
-owner Approval, and cursor/artifact recovery works after an API restart midway
-through the run. The disposable tenant is created by the gate and removed with
-its disposable dependencies; it is not a shared local demo identity. Run the
-proof with `deploy/runtimeapi/run-durable-integration.sh`. This is local
-integration evidence, not a claim of an internet research provider or
-production subscription support.
+The source tree contains a disposable M8 integration harness with PostgreSQL,
+MinIO, and a private Temporal development server. It exercises the application
+through its public HTTP/SDK contract: ordered research Inputs, caller-owned
+Approval, retained cited Artifacts (including a final result larger than 512
+KiB), and cursor/artifact recovery after an API restart. The loopback
+application neither receives Temporal configuration nor observes workflow IDs.
+
+This is not current EX-003 acceptance evidence. The requirements ledger defers
+the required local-Stack Research Dossier proof until the long
+research/blob/citation/resume/download path is rerun with an attested current
+runtime API image; a source-built substitute is not promoted. The disposable
+tenant is not a shared local demo identity, internet research provider, or
+production subscription proof.

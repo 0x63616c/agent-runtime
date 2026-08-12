@@ -106,9 +106,6 @@ func TestResearchDossierRecoversLongRunningToolResearchThroughThePublicContract(
 	}}
 	orchestration := startM8Orchestration(t, ctx, orchestrationConfig)
 	defer orchestration.stop()
-	if err := assertM8TemporalSession(ctx, temporalServer.FrontendHostPort(), session.ID); err != nil {
-		t.Fatalf("public dossier Session has no durable Temporal workflow: %v", err)
-	}
 
 	pool, err := pgxpool.New(ctx, workerDSN)
 	if err != nil {
@@ -426,16 +423,6 @@ func startM8Orchestration(t *testing.T, parent context.Context, config runtimeor
 			}
 		})
 	}}
-}
-
-func assertM8TemporalSession(ctx context.Context, endpoint string, sessionID agentruntime.SessionID) error {
-	client, err := client.Dial(client.Options{HostPort: endpoint, Namespace: "research-dossier-e2e", ConnectionOptions: client.ConnectionOptions{TLSDisabled: true}})
-	if err != nil {
-		return err
-	}
-	defer client.Close()
-	_, err = client.DescribeWorkflowExecution(ctx, "runtime-session-research-dossier-e2e-"+sessionID.String(), "")
-	return err
 }
 
 func startResearchDossierWeb(t *testing.T, ctx context.Context, runtimeURL, token string) (string, func()) {
