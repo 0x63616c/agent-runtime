@@ -89,7 +89,10 @@
     },
     {
       "id": "DAT-001",
-      "status": "not_started"
+      "status": "completed",
+      "evidence": [
+        {"revision": "1ae636bfc1b3e5f9ac9d650c7b5021b3b93aec9c", "utc_time": "2026-08-12T00:42:09Z", "proof_level": "integration", "command_id": "m5-data-conversation-durable-composition", "artifact_ref": "m5-data-conversation-1ae636b", "result": "passed"}
+      ]
     },
     {
       "id": "DAT-002",

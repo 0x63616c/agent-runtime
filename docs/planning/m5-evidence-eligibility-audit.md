@@ -15,6 +15,10 @@ The data-authority supplement for `DAT-002` through `DAT-008` and `DAT-011`
 through `DAT-012` is bound to `4454bf9c5cbb1a7120508d6f84f14fd5be6d110f`.
 Its ledger reference `m5-data-authority-4454bf9` resolves to
 [`m5-data-authority-contract.json`](../../evidence/m5-data-authority-contract.json).
+The conversation durability supplement for `DAT-001` is bound to
+`1ae636bfc1b3e5f9ac9d650c7b5021b3b93aec9c`. Its ledger reference
+`m5-data-conversation-1ae636b` resolves to
+[`m5-data-conversation-contract.json`](../../evidence/m5-data-conversation-contract.json).
 
 This audit maps each M5 requirement to the current implementation proof. It is
 not a completion claim: a row changes to `completed` only in the atomic bundle
@@ -51,7 +55,7 @@ The public-boundary supplement for `TMP-002` and `TMP-003` is
 | API-010 | Public SDK rejects an unconfigured model profile and raw HTTP rejects a provider credential-shaped field without echoing it. | Promoted with retained public-contract evidence. |
 | API-011 | Checked-in v1 compatibility baseline, generated route-table drift check, temporary `GOWORK=off` consumer compile, and migration policy pass. | Promoted as candidate-module compatibility evidence; no immutable release tag is claimed. |
 | API-012 | Immutable Agent/Policy revision lifecycle and admin/non-admin HTTP/SDK separation pass. | Promoted with retained public-contract evidence. |
-| DAT-001 | Conversation expected-version/idempotency/replay is planner-only. | Defer: add a Conversation-specific persisted PostgreSQL replay/conflict test. |
+| DAT-001 | Disposable PostgreSQL `RuntimeStateStore` persists an Agent revision and Session, then appends and reloads an immutable Conversation reference; exact replay leaves durable semantic state unchanged and a stale expected-version append conflicts. | Promoted with retained conversation durability evidence. |
 | DAT-002 | Artifact authorization/integrity/streaming tests and disposable PostgreSQL/MinIO input/readback path. | Promoted with retained data-authority evidence. |
 | DAT-003 | ordered event/outbox planner, public cursor, producer-loss and publisher-recovery tests. | Promoted with retained data-authority evidence. |
 | DAT-004 | durable producer-gap and PostgreSQL/Temporal publisher acknowledgement-loss/process-recovery integrations. | Promoted with retained data-authority evidence. |

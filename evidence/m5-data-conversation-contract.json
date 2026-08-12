@@ -1,0 +1,37 @@
+{
+  "version": 1,
+  "milestone": "M5 durable agent runtime",
+  "implementation_revision": "1ae636bfc1b3e5f9ac9d650c7b5021b3b93aec9c",
+  "utc_time": "2026-08-12T00:42:09Z",
+  "requirements": ["DAT-001"],
+  "commands": [
+    {
+      "id": "m5-data-conversation-durable-composition",
+      "command": "deploy/runtimeapi/run-durable-integration.sh",
+      "result": "passed"
+    },
+    {
+      "id": "m5-data-conversation-full-gate",
+      "command": "just check",
+      "result": "passed"
+    },
+    {
+      "id": "m5-data-conversation-docs-check",
+      "command": "just docs-check",
+      "result": "passed"
+    }
+  ],
+  "coverage": {
+    "DAT-001": "The disposable PostgreSQL RuntimeStateStore test persists an Agent revision and owned Session through sealed transition plans, stages one immutable Conversation content handoff, appends its exact reference under expected version zero, and reloads exactly that record. Replanning and persisting the same idempotency operation returns the original Conversation and leaves the reloaded semantic RuntimeState unchanged. A separately staged entry with the stale expected version conflicts after reload."
+  },
+  "documentation": [
+    "docs/reference/data-lifecycle.md",
+    "docs/reference/runtime-go-contract.md",
+    "docs/architecture/system.md"
+  ],
+  "limitations": [
+    "This is a disposable PostgreSQL integration proof, not a protected production database, retention operation, or PITR drill.",
+    "The proof is Conversation-specific and uses the RuntimeStateStore load/plan/persist path; it does not substitute a generic snapshot fixture.",
+    "This evidence does not prove a live model provider, deployed model-role credential source, external sandbox command, Firecracker, Linux KVM, release tag, or external consumer."
+  ]
+}
