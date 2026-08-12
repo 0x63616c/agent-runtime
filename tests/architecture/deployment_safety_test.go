@@ -209,6 +209,7 @@ var _ = Describe("M1 deployment safety boundaries", func() {
 		Expect(read("Tiltfile")).To(ContainSubstring("default_registry(ci_registry_host, host_from_cluster=ci_registry_host_from_cluster)"))
 		Expect(read("Tiltfile")).To(ContainSubstring("ci_settings(readiness_timeout=ci_readiness_timeout)"))
 		Expect(read("Tiltfile")).To(ContainSubstring("ci_readiness_timeout = '12m' if profile == 'ci' else '10m'"))
+		Expect(read("Tiltfile")).To(ContainSubstring("if profile == 'local':\n    local_resource('stack-reconcile'"))
 		// Tilt's restricted build context must include every local source tree
 		// copied by the production image, or CI deploys before discovering that
 		// the image cannot be built.
