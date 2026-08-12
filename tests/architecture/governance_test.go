@@ -97,16 +97,10 @@ var _ = Describe("binding governance", func() {
 		for _, required := range required {
 			Expect(workflow).To(ContainSubstring(required))
 		}
-		for _, dependency := range []string{
-			"internal/runtimeorchestration/**",
-			"internal/runtimepostgres/**",
-			"internal/runtimestate/**",
-			"internal/runtimecontent/**",
-			"internal/temporalpayloadruntime/**",
-			"temporalpayload/**",
-		} {
-			Expect(workflow).To(ContainSubstring(dependency))
-		}
+		// The image is revision-addressed, so a fragile partial path allowlist
+		// cannot safely decide which main commits need an image publication.
+		Expect(workflow).NotTo(ContainSubstring("    paths:"))
+		Expect(workflow).NotTo(ContainSubstring("    paths-ignore:"))
 		Expect(workflow).NotTo(ContainSubstring("pull_request:"))
 
 		contextIgnore := read(".dockerignore")
