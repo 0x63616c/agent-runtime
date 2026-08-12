@@ -95,6 +95,29 @@ func TestCheckRequiresEveryDeclaredEnvironmentValueWithoutStartingThePublicListe
 	}
 }
 
+func TestCheckValidatesConfiguredRequestObservabilityKey(t *testing.T) {
+	observed := strings.Replace(validConfig, `"principals": [`, `"observability":{"identity_correlation_key_environment":"OBSERVABILITY_CORRELATION_KEY"}, "principals": [`, 1)
+	config, err := runtimeapiprocess.Parse(strings.NewReader(observed))
+	if err != nil {
+		t.Fatalf("Parse(observed): %v", err)
+	}
+	values := map[string]string{
+		"ADMIN_TOKEN": "admin-token-0000",
+		"USER_TOKEN":  "user-token-00000",
+	}
+	if err := runtimeapiprocess.Check(config, mapLookup(values)); err == nil {
+		t.Fatal("Check(missing observability key) error = nil")
+	}
+	values["OBSERVABILITY_CORRELATION_KEY"] = "short"
+	if err := runtimeapiprocess.Check(config, mapLookup(values)); err == nil {
+		t.Fatal("Check(short observability key) error = nil")
+	}
+	values["OBSERVABILITY_CORRELATION_KEY"] = "observability-correlation-key-0000"
+	if err := runtimeapiprocess.Check(config, mapLookup(values)); err != nil {
+		t.Fatalf("Check(valid observability key): %v", err)
+	}
+}
+
 func TestRunnableRoleServesPublicSDKWithoutInternalTypes(t *testing.T) {
 	config, err := runtimeapiprocess.Parse(strings.NewReader(validConfig))
 	if err != nil {

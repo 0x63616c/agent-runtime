@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/json"
+	"io"
 	"log/slog"
 	"net"
 	"net/http"
@@ -47,6 +48,9 @@ func Check(config Config, lookup SecretLookup) error {
 		return errors.New("check runtime API process: secret lookup is required")
 	}
 	if _, err := newAuthenticator(config, lookup); err != nil {
+		return errors.Wrap(err, "check runtime API process")
+	}
+	if _, err := requestObservability(config, lookup, slog.New(slog.NewJSONHandler(io.Discard, nil))); err != nil {
 		return errors.Wrap(err, "check runtime API process")
 	}
 	if config.storage.mode != "postgres" {
