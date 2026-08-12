@@ -662,10 +662,12 @@ type localSecretMetadata struct {
 
 func localSecretControllerMetadata(stackName, profile, root string) (localSecretMetadata, error) {
 	labels := map[string]string{"app.kubernetes.io/part-of": "agent-runtime", "agent-runtime.dev/stack": stackName, "agent-runtime.dev/profile": profile}
-	if profile != "local" {
+	capabilityPath := bootstrapCapabilityPath(root, stackName)
+	if profile == "ci" {
+		capabilityPath = filepath.Join(root, ".runtime", "dev", stackName+".ci.bootstrap.json")
+	} else if profile != "local" {
 		return localSecretMetadata{labels: labels}, nil
 	}
-	capabilityPath := bootstrapCapabilityPath(root, stackName)
 	if _, err := os.Stat(capabilityPath); os.IsNotExist(err) {
 		return localSecretMetadata{labels: labels}, nil
 	} else if err != nil {
@@ -675,7 +677,7 @@ func localSecretControllerMetadata(stackName, profile, root string) (localSecret
 	if err != nil {
 		return localSecretMetadata{}, fmt.Errorf("read local Stack bootstrap capability for generated Secrets: %w", err)
 	}
-	if authority.Stack != stackName || authority.Profile != stack.ProfileLocal || authority.Namespace != profileNamespace(stackName, profile) || authority.NamespaceUID == "" || authority.RenderDigest == "" {
+	if authority.Stack != stackName || authority.Profile != stack.Profile(profile) || authority.Namespace != profileNamespace(stackName, profile) || authority.NamespaceUID == "" || authority.RenderDigest == "" {
 		return localSecretMetadata{}, fmt.Errorf("read local Stack bootstrap capability for generated Secrets: capability does not match the rendered local Stack")
 	}
 	labels["agent-runtime.dev/external-controller"] = "local-generated"

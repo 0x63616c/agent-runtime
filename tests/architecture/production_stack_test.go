@@ -3,9 +3,12 @@ package architecture_test
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 
 	"github.com/0x63616c/agent-runtime/internal/roles"
@@ -15,6 +18,33 @@ import (
 )
 
 var _ = Describe("Self-hosted production Stack", func() {
+	It("binds every declared database migration to its checked-in artifact bytes", func() {
+		file, err := os.Open("../../deploy/production/stack.json")
+		Expect(err).NotTo(HaveOccurred())
+		spec, err := stack.Parse(file)
+		Expect(file.Close()).To(Succeed())
+		Expect(err).NotTo(HaveOccurred())
+		rendered, err := stack.Render(spec, stack.ProfileProduction)
+		Expect(err).NotTo(HaveOccurred())
+
+		for _, resource := range rendered.Resources() {
+			if resource.Database == nil {
+				continue
+			}
+			for _, migration := range resource.Database.Migrations {
+				for artifact, declaredDigest := range map[string]string{
+					migration.UpgradeArtifact:  migration.UpgradeDigest,
+					migration.RollbackArtifact: migration.RollbackDigest,
+				} {
+					contents, readErr := os.ReadFile(filepath.Join("../../deploy/production", artifact))
+					Expect(readErr).NotTo(HaveOccurred(), "%s migration %d artifact %s", resource.ID, migration.Version, artifact)
+					actualDigest := fmt.Sprintf("sha256:%x", sha256.Sum256(contents))
+					Expect(declaredDigest).To(Equal(actualDigest), "%s migration %d artifact %s", resource.ID, migration.Version, artifact)
+				}
+			}
+		}
+	})
+
 	It("derives disposable profiles from production with only identity, lifecycle, and test-secret differences", func() {
 		file, err := os.Open("../../deploy/production/stack.json")
 		Expect(err).NotTo(HaveOccurred())

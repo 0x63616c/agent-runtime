@@ -554,6 +554,29 @@ func TestMaterializeSecretsKeepsValuesPrivateAndStablePerStack(t *testing.T) {
 
 func TestMaterializeCISecretsUsesTheCIProfileIdentity(t *testing.T) {
 	root := t.TempDir()
+	document, err := renderStack("ci-stack", "ci", localFixtureScenarioWorkspaceApprovalReset)
+	if err != nil {
+		t.Fatalf("render CI stack: %v", err)
+	}
+	spec, err := stack.Parse(bytes.NewReader(document))
+	if err != nil {
+		t.Fatalf("parse CI stack: %v", err)
+	}
+	rendered, err := stack.Render(spec, stack.ProfileCI)
+	if err != nil {
+		t.Fatalf("render CI profile: %v", err)
+	}
+	authority := stack.BootstrapAuthority{
+		Stack: "ci-stack", Profile: stack.ProfileCI, Namespace: "ar-ci-ci-stack",
+		NamespaceUID: "uid-ci-stack", RenderDigest: rendered.Digest(), Nonce: "private-ci-bootstrap-nonce",
+	}
+	capabilityPath := filepath.Join(root, ".runtime", "dev", "ci-stack.ci.bootstrap.json")
+	if err := os.MkdirAll(filepath.Dir(capabilityPath), 0o700); err != nil {
+		t.Fatalf("create CI capability directory: %v", err)
+	}
+	if err := stack.WriteBootstrapAuthority(capabilityPath, authority); err != nil {
+		t.Fatalf("write CI bootstrap capability: %v", err)
+	}
 	manifest, err := materializeSecretsForProfile("ci-stack", "ci", root, strings.NewReader(strings.Repeat("c", 4096)))
 	if err != nil {
 		t.Fatalf("materialize CI secrets: %v", err)
@@ -563,6 +586,11 @@ func TestMaterializeCISecretsUsesTheCIProfileIdentity(t *testing.T) {
 	}
 	if !bytes.Contains(manifest, []byte(`"name":"ar-ci-ci-stack-state-db-secret"`)) {
 		t.Fatalf("CI Secret manifest does not use CI reference identity: %s", manifest)
+	}
+	if !bytes.Contains(manifest, []byte(`"agent-runtime.dev/external-controller":"local-generated"`)) ||
+		!bytes.Contains(manifest, []byte(`"agent-runtime.dev/bootstrap-uid":"uid-ci-stack"`)) ||
+		!bytes.Contains(manifest, []byte(`"agent-runtime.dev/render-digest":"`+rendered.Digest()+`"`)) {
+		t.Fatalf("CI Secret manifest is not bound to its reviewed bootstrap authority: %s", manifest)
 	}
 	if _, err := os.Stat(filepath.Join(root, ".runtime", "dev", "ci-stack.ci.secrets.json")); err != nil {
 		t.Fatalf("stat profile-scoped CI secret state: %v", err)
