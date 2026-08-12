@@ -590,7 +590,9 @@ func (server *server) writeFailure(writer http.ResponseWriter, requestID agentru
 }
 
 func validIdentity(identity Identity) bool {
-	return identity.Tenant != "" && len(identity.Tenant) <= 128 && identity.Principal != "" && len(identity.Principal) <= 128
+	_, tenantErr := runtimecontent.ParseTenantID(identity.Tenant)
+	_, principalErr := runtimecontent.ParsePrincipalID(identity.Principal)
+	return tenantErr == nil && principalErr == nil
 }
 
 func validBearerCredential(token string) bool {

@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"sync"
 	"time"
 
 	"github.com/0x63616c/agent-runtime/internal/runtime/kernel"
@@ -37,12 +38,15 @@ func Run(ctx context.Context, config Config, lookup SecretLookup, ready func(str
 		return errors.Wrap(err, "run runtime API process: listen")
 	}
 	defer func() { _ = listener.Close() }()
-	ready(listener.Addr().String())
-	return Serve(ctx, config, lookup, listener)
+	return serve(ctx, config, lookup, listener, ready)
 }
 
 // Serve runs the role on an already-owned listener so process tests need no timing guesses.
 func Serve(ctx context.Context, config Config, lookup SecretLookup, listener net.Listener) error {
+	return serve(ctx, config, lookup, listener, nil)
+}
+
+func serve(ctx context.Context, config Config, lookup SecretLookup, listener net.Listener, announceReady func(string)) error {
 	if ctx == nil || lookup == nil || listener == nil {
 		return errors.New("serve runtime API process: context, secret lookup, and listener are required")
 	}
@@ -79,6 +83,17 @@ func Serve(ctx context.Context, config Config, lookup SecretLookup, listener net
 	server := &http.Server{Handler: mux, ReadHeaderTimeout: 5 * time.Second, IdleTimeout: 30 * time.Second, MaxHeaderBytes: 16 << 10}
 	result := make(chan error, 1)
 	go func() { result <- server.Serve(listener) }()
+	if announceReady != nil {
+		gate := newReadinessGate(ctx, announceReady)
+		if err := probeReadiness(ctx, listener.Addr().String()); err != nil && ctx.Err() == nil {
+			gate.stop()
+			_ = server.Close()
+			<-result
+			return errors.Wrap(err, "serve runtime API process: confirm readiness")
+		}
+		gate.announce(listener.Addr().String())
+		defer gate.stop()
+	}
 	select {
 	case err := <-result:
 		if err == nil || errors.Is(err, http.ErrServerClosed) {
@@ -97,6 +112,55 @@ func Serve(ctx context.Context, config Config, lookup SecretLookup, listener net
 		}
 		return errors.Wrap(err, "stop runtime API process")
 	}
+}
+
+type readinessGate struct {
+	mu        sync.Mutex
+	ctx       context.Context
+	cancelled bool
+	announced bool
+	ready     func(string)
+	stopWatch func() bool
+}
+
+func newReadinessGate(ctx context.Context, ready func(string)) *readinessGate {
+	gate := &readinessGate{ctx: ctx, ready: ready}
+	gate.stopWatch = context.AfterFunc(ctx, func() {
+		gate.mu.Lock()
+		defer gate.mu.Unlock()
+		gate.cancelled = true
+	})
+	return gate
+}
+
+func (gate *readinessGate) announce(address string) {
+	gate.mu.Lock()
+	defer gate.mu.Unlock()
+	if gate.cancelled || gate.announced || gate.ctx.Err() != nil {
+		return
+	}
+	gate.announced = true
+	gate.ready(address)
+}
+
+func (gate *readinessGate) stop() {
+	gate.stopWatch()
+}
+
+func probeReadiness(ctx context.Context, address string) error {
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://"+address+"/readyz", nil)
+	if err != nil {
+		return errors.Wrap(err, "construct readiness probe")
+	}
+	response, err := (&http.Client{}).Do(request)
+	if err != nil {
+		return errors.Wrap(err, "send readiness probe")
+	}
+	defer func() { _ = response.Body.Close() }()
+	if response.StatusCode != http.StatusOK {
+		return errors.New("readiness probe returned an unexpected status")
+	}
+	return nil
 }
 
 func composeRuntime(ctx context.Context, config Config, lookup SecretLookup, ids *cryptoIDs) (runtimeapi.Runtime, func(), error) {

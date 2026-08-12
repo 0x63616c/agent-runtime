@@ -282,6 +282,32 @@ var _ = Describe("Public runtime HTTP boundary", func() {
 		Expect(runtime.createAgentContext.Value(marker)).To(Equal("preserved"))
 	})
 
+	It("rejects authenticated identities that could collide at the principal scope boundary", func() {
+		for _, identity := range []runtimeapi.Identity{
+			{Tenant: "tenant-a", Principal: "alice\x00bob", Admin: true},
+			{Tenant: "tenant-a\x00alice", Principal: "bob", Admin: true},
+		} {
+			runtime := &recordingRuntime{}
+			handler, err := runtimeapi.NewHandler(runtimeapi.Config{
+				Runtime:       runtime,
+				Authenticator: staticAuth{identities: map[string]runtimeapi.Identity{"colliding-token-000": identity}},
+				RequestIDs:    &requestIDs{},
+			})
+			Expect(err).NotTo(HaveOccurred())
+			request := httptest.NewRequest(http.MethodPost, "/v1/admin/agents", strings.NewReader(`{"name":"assistant","model_profile":"balanced","instructions":"safe"}`))
+			request.Header.Set("Authorization", "Bearer colliding-token-000")
+			request.Header.Set("Content-Type", "application/json")
+			request.Header.Set("Idempotency-Key", "colliding-identity")
+			request.Header.Set("X-Request-ID", "req_0000000000000001")
+			response := httptest.NewRecorder()
+
+			handler.ServeHTTP(response, request)
+
+			Expect(response.Code).To(Equal(http.StatusUnauthorized))
+			Expect(runtime.createAgentCalls).To(BeZero())
+		}
+	})
+
 	It("requires an explicit runtime without a memory fallback", func() {
 		_, err := runtimeapi.NewHandler(runtimeapi.Config{
 			Authenticator: staticAuth{identities: map[string]runtimeapi.Identity{"alice-token-000000": {Tenant: "tenant-a", Principal: "alice"}}},

@@ -54,6 +54,14 @@ func TestConfigurationIsStrictAndRequiresExplicitUnsafeMemoryStorage(t *testing.
 	if _, err := runtimeapiprocess.Parse(strings.NewReader(nullObserved)); err == nil {
 		t.Fatal("Parse(null observability) error = nil")
 	}
+	for _, invalid := range []string{
+		strings.Replace(validConfig, `"tenant":"local"`, `"tenant":"local\u0000admin"`, 1),
+		strings.Replace(validConfig, `"principal":"admin"`, `"principal":"admin\u0000user"`, 1),
+	} {
+		if _, err := runtimeapiprocess.Parse(strings.NewReader(invalid)); err == nil {
+			t.Fatal("Parse(noncanonical principal identity) error = nil")
+		}
+	}
 }
 
 func TestConfigurationAcceptsOnlyCompleteDurablePostgresAndMinIOStorage(t *testing.T) {

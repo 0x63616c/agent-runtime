@@ -39,6 +39,9 @@ All `/v1` requests use bearer authentication and typed `X-Request-ID` correlatio
 Mutations also require `Idempotency-Key`. JSON and bodies are strict and
 bounded. Observation reconnects by requesting the next page after the last
 accepted opaque Cursor; a disconnect does not imply cancellation.
+Authenticated tenant and principal identities are canonical lower-case segments
+with digits, `-`, or `_` after the first character. Malformed identities,
+including delimiters, are rejected before runtime dispatch.
 
 ## Artifact streaming
 
@@ -63,6 +66,10 @@ observation-only rather than a public mutation.
 
 `GET /healthz` and `GET /readyz` are deliberately unauthenticated and return
 only the role and readiness state.
+The standalone process announces readiness only after strict configuration,
+credential lookup, and runtime composition succeed. Its readiness callback
+runs only once the listener is serving the health route and never after the
+process context is cancelled.
 
 ## Run the current local role
 
