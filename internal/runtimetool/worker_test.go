@@ -1209,6 +1209,10 @@ type sandboxClient struct {
 	submittedID, waitedID, gotID sandbox.OperationID
 }
 
+func (client *sandboxClient) Capabilities(context.Context) (sandbox.CapabilitySnapshot, error) {
+	return sandbox.CapabilitySnapshot{}, nil
+}
+
 func (client *sandboxClient) Submit(_ context.Context, request sandbox.OperationRequest) (sandbox.OperationRef, error) {
 	client.submits++
 	client.submittedID = request.ID
