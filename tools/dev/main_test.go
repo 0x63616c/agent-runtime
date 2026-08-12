@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/0x63616c/agent-runtime/internal/roles"
+	"github.com/0x63616c/agent-runtime/internal/runtimeapiprocess"
 	"github.com/0x63616c/agent-runtime/internal/stack"
 )
 
@@ -152,7 +153,7 @@ func TestTwoLocalStackInstancesKeepTopologyStateAndSecretsIsolated(t *testing.T)
 	}
 }
 
-func TestLocalStackProjectsTheReviewedEightRoleTopology(t *testing.T) {
+func TestLocalStackProjectsGenericRolesAndPublicAPIComposition(t *testing.T) {
 	document, err := renderStack("role-proof", "local")
 	if err != nil {
 		t.Fatalf("render stack: %v", err)
@@ -238,6 +239,33 @@ func TestLocalStackProjectsTheReviewedEightRoleTopology(t *testing.T) {
 	if len(seenAccounts) != 8 {
 		t.Fatalf("runtime role ServiceAccounts = %d, want 8", len(seenAccounts))
 	}
+	publicAPI := renderedResource(t, rendered.Resources(), "runtime-api")
+	if got := publicAPI.Kubernetes.Command; len(got) != 1 || got[0] != "/agent-runtime-api" {
+		t.Fatalf("public API command = %v, want /agent-runtime-api", got)
+	}
+	if got := publicAPI.Kubernetes.Arguments; len(got) != 2 || got[0] != "--config-env" || got[1] != "RUNTIME_API_CONFIG" {
+		t.Fatalf("public API arguments = %v, want config environment", got)
+	}
+	var publicConfig string
+	for _, environment := range publicAPI.Kubernetes.Environment {
+		if environment.Name == "RUNTIME_API_CONFIG" {
+			publicConfig = environment.Value
+		}
+	}
+	if _, err := runtimeapiprocess.Parse(strings.NewReader(publicConfig)); err != nil {
+		t.Fatalf("public API configuration: %v", err)
+	}
+	publicCredentials := make([]string, 0, len(publicAPI.Kubernetes.SecretEnvironment))
+	for _, environment := range publicAPI.Kubernetes.SecretEnvironment {
+		publicCredentials = append(publicCredentials, environment.Name)
+	}
+	if got, want := strings.Join(publicCredentials, ","), "STATE_DATABASE_DSN,AR_RUNTIME_MINIO_ACCESS_KEY,AR_RUNTIME_MINIO_SECRET_KEY,RUNTIME_API_ADMIN_TOKEN,RUNTIME_API_DEVELOPER_TOKEN"; got != want {
+		t.Fatalf("public API credentials = %s, want %s", got, want)
+	}
+	publicPolicy := renderedResource(t, rendered.Resources(), "runtime-api-egress")
+	if publicPolicy.Kubernetes == nil || publicPolicy.Kubernetes.Network == nil || !publicPolicy.Kubernetes.Network.DefaultDeny || publicPolicy.Kubernetes.Network.Subject != "runtime-api" || strings.Join(resourceIDs(publicPolicy.Kubernetes.Network.AllowedEgress), ",") != "blob,state" {
+		t.Fatalf("public API must have a default-deny state/blob-only egress policy: %+v", publicPolicy.Kubernetes)
+	}
 	for _, database := range []stack.ResourceID{"state", "temporal-state"} {
 		resource := renderedResource(t, rendered.Resources(), database)
 		if resource.Kubernetes == nil || resource.Kubernetes.Kind != "Deployment" || resource.Kubernetes.ServiceAccount == "" {
@@ -300,6 +328,7 @@ func TestMaterializeSecretsKeepsValuesPrivateAndStablePerStack(t *testing.T) {
 		"ar-safe-stack-tool-broker-secret":           {"TOOL_BROKER_TOKEN"},
 		"ar-safe-stack-sandbox-control-secret":       {"SANDBOX_CONTROL_TOKEN"},
 		"ar-safe-stack-blob-storage-secret":          {"BLOB_STORAGE_CREDENTIAL", "MINIO_ROOT_PASSWORD", "MINIO_ROOT_USER"},
+		"ar-safe-stack-runtime-api-secret":           {"AR_RUNTIME_MINIO_ACCESS_KEY", "AR_RUNTIME_MINIO_SECRET_KEY", "RUNTIME_API_ADMIN_TOKEN", "RUNTIME_API_DEVELOPER_TOKEN"},
 		"ar-safe-stack-codec-blob-secret":            {"CODEC_BLOB_CREDENTIAL"},
 		"ar-safe-stack-sandbox-host-ca-secret":       {"SANDBOX_HOST_CA"},
 		"ar-safe-stack-sandbox-state-secret":         {"SANDBOX_STATE_DSN"},
@@ -309,7 +338,9 @@ func TestMaterializeSecretsKeepsValuesPrivateAndStablePerStack(t *testing.T) {
 	if len(secrets.Items) != len(expectedSecretKeys) {
 		t.Fatalf("generated Secret count = %d, want %d", len(secrets.Items), len(expectedSecretKeys))
 	}
+	valuesByName := make(map[string]map[string]string, len(secrets.Items))
 	for _, secret := range secrets.Items {
+		valuesByName[secret.Metadata.Name] = secret.StringData
 		expected, found := expectedSecretKeys[secret.Metadata.Name]
 		if !found {
 			t.Fatalf("unexpected generated Secret %q", secret.Metadata.Name)
@@ -323,6 +354,9 @@ func TestMaterializeSecretsKeepsValuesPrivateAndStablePerStack(t *testing.T) {
 		if strings.Join(actual, ",") != strings.Join(expected, ",") {
 			t.Fatalf("generated Secret %s keys = %v, want %v", secret.Metadata.Name, actual, expected)
 		}
+	}
+	if valuesByName["ar-safe-stack-runtime-api-secret"]["AR_RUNTIME_MINIO_ACCESS_KEY"] != valuesByName["ar-safe-stack-blob-storage-secret"]["MINIO_ROOT_USER"] || valuesByName["ar-safe-stack-runtime-api-secret"]["AR_RUNTIME_MINIO_SECRET_KEY"] != valuesByName["ar-safe-stack-blob-storage-secret"]["MINIO_ROOT_PASSWORD"] {
+		t.Fatal("runtime API storage credentials must be derived from the declared local blob Secret")
 	}
 	path := filepath.Join(root, ".runtime", "dev", "safe-stack.secrets.json")
 	info, err := os.Stat(path)

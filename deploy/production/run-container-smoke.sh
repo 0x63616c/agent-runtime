@@ -10,6 +10,8 @@ smoke_image="${AGENT_RUNTIME_SMOKE_IMAGE:-agent-runtime-role-smoke:local}"
 repository_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 role_configs="$(go run "${repository_root}/cmd/stackctl" role-configs --stack-file "${repository_root}/deploy/production/stack.json" --profile production)"
 smoke_secret="$(od -An -N32 -tx1 /dev/urandom | tr -d ' \n')"
+runtime_api_admin_secret="$(od -An -N32 -tx1 /dev/urandom | tr -d ' \n')"
+runtime_api_developer_secret="$(od -An -N32 -tx1 /dev/urandom | tr -d ' \n')"
 
 export STATE_DATABASE_DSN="${smoke_secret}"
 export TEMPORAL_AUTH_TOKEN="${smoke_secret}"
@@ -44,6 +46,16 @@ run_role blob -e BLOB_STORAGE_CREDENTIAL
 run_role codec -e CODEC_BLOB_CREDENTIAL
 run_role sandbox-control -e SANDBOX_HOST_CA -e SANDBOX_STATE_DSN
 run_role sandbox-host -e SANDBOX_HOST_IDENTITY -e SANDBOX_CONTROL_TOKEN
+
+# The public HTTP server is deliberately not the generic health-only `api`
+# role. Its image entrypoint, strict durable configuration, and five declared
+# credentials are checked in one least-privilege container invocation.
+runtime_api_config="$(jq -cer '.profiles.production.resources[] | select(.id == "runtime-api") | .kubernetes.environment[] | select(.name == "RUNTIME_API_CONFIG") | .value' "${repository_root}/deploy/production/stack.json")"
+docker run --rm --read-only --cap-drop ALL --security-opt no-new-privileges \
+  -e RUNTIME_API_CONFIG="${runtime_api_config}" \
+  -e STATE_DATABASE_DSN -e AR_RUNTIME_MINIO_ACCESS_KEY="${smoke_secret}" -e AR_RUNTIME_MINIO_SECRET_KEY="${smoke_secret}" \
+  -e RUNTIME_API_ADMIN_TOKEN="${runtime_api_admin_secret}" -e RUNTIME_API_DEVELOPER_TOKEN="${runtime_api_developer_secret}" \
+  --entrypoint /agent-runtime-api "${smoke_image}" --config-env RUNTIME_API_CONFIG --check
 
 negative_count=0
 run_role_rejecting_foreign_credential() {

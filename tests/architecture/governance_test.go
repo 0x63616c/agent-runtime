@@ -98,11 +98,10 @@ var _ = Describe("binding governance", func() {
 			Expect(workflow).To(ContainSubstring(required))
 		}
 		for _, dependency := range []string{
-			"internal/runtimeorchestration/**",
-			"internal/runtimepostgres/**",
-			"internal/runtimestate/**",
-			"internal/runtimecontent/**",
-			"internal/temporalpayloadruntime/**",
+			"cmd/agent-runtime-api/**",
+			"internal/**",
+			"sandbox/**",
+			"sdk/**",
 			"temporalpayload/**",
 		} {
 			Expect(workflow).To(ContainSubstring(dependency))
@@ -114,12 +113,18 @@ var _ = Describe("binding governance", func() {
 			Expect(contextIgnore).To(ContainSubstring(excluded))
 		}
 		Expect(contextIgnore).To(ContainSubstring("!temporalpayload/**"))
-		Expect(contextIgnore).To(ContainSubstring("!sdk/go/**"))
+		Expect(contextIgnore).To(ContainSubstring("!cmd/agent-runtime-api/**"))
+		Expect(contextIgnore).To(ContainSubstring("!internal/**"))
+		Expect(contextIgnore).To(ContainSubstring("!sandbox/**"))
+		Expect(contextIgnore).To(ContainSubstring("!sdk/**"))
 		dockerfile := read("deploy/production/Dockerfile")
 		for _, required := range []string{
 			"COPY internal ./internal",
+			"COPY sandbox ./sandbox",
 			"COPY temporalpayload ./temporalpayload",
-			"COPY sdk/go ./sdk/go",
+			"COPY sdk ./sdk",
+			"COPY cmd/agent-runtime-api ./cmd/agent-runtime-api",
+			"/out/agent-runtime-api ./cmd/agent-runtime-api",
 			"go build -mod=readonly",
 		} {
 			Expect(dockerfile).To(ContainSubstring(required))

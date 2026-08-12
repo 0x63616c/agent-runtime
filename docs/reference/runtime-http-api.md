@@ -88,7 +88,12 @@ is lost on process exit and it is suitable only for local transport work. A
 durable operator configuration instead selects `postgres` and explicitly names
 the PostgreSQL DSN and immutable-content endpoint, bucket, and credential
 environment keys; the integration harness exercises that process path against
-PostgreSQL and MinIO.
+PostgreSQL and MinIO. An all-interface listener additionally requires explicit
+`"public_listen":true`; the reviewed Stack uses that opt-in only for its
+`runtime-api` Pod and exposes it through the declared Service.
+`--config-env RUNTIME_API_CONFIG --check` validates the strict document and
+every referenced API/storage credential without binding a listener or
+contacting infrastructure.
 `max_request_bytes` must be between 3 MiB and 16 MiB so every request allowed
 by the canonical content limits remains transport-admissible; the example uses
 4 MiB.

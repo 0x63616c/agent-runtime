@@ -2,8 +2,9 @@
 
 Status: M1 typed contract, Kubernetes manifest projection, audited operator
 boundary, and isolated local Tilt application are implemented. The local path
-is a health-only composition proof, not a claim that the public runtime API,
-workflows, examples, or Firecracker isolation are complete.
+now composes the separately runnable public `runtime-api` server alongside the
+generic health-only roles, but this is not a claim of a published production
+image, live rollout, workflows, examples, or Firecracker isolation.
 
 `internal/stack` is the sole typed desired-state contract for operator-owned
 infrastructure. It is intentionally private to the repository composition and
@@ -135,7 +136,8 @@ stack-scoped development image references, and applies the resulting typed
 manifest through Tilt. It does not retain a second three-role resource source.
 Each invocation uses the explicit OrbStack context, an `ar-<stack>` namespace,
 and an OS-selected Tilt dashboard port; it never writes the current kubeconfig
-context. `just dev-reset` addresses the eight declared runtime-role Deployments
+context. `just dev-reset` addresses the eight generic runtime-role Deployments
+and the separately declared `runtime-api` Deployment only
 only after the stored namespace identity and containment labels are verified.
 
 ## Disposable NetworkPolicy harness

@@ -9,13 +9,16 @@ The M1 local environment is runnable on macOS with an already-running OrbStack
 Kubernetes cluster. It starts one disposable namespace containing dedicated
 runtime and Temporal PostgreSQL storage, Temporal primary/visibility database
 declarations, MinIO-compatible blob storage, telemetry, and all eight
-trust-scoped runtime roles: API, orchestration, model, tool, blob, codec,
-sandbox control, and sandbox host. Each role uses the actual `cmd/runtime`
-binary and its one checked operator configuration. Tilt groups their logs and
+trust-scoped generic runtime roles: API, orchestration, model, tool, blob,
+codec, sandbox control, and sandbox host. It also declares the separate
+`runtime-api` Deployment, which runs the actual `cmd/agent-runtime-api` public
+`/v1` server with its own PostgreSQL/content credentials, ServiceAccount,
+Service, and default-deny state/blob egress policy. Tilt groups their logs and
 rebuilds stack-scoped copies of the production composition image. This proves
-binary build, configuration validation, secret-reference injection, readiness,
-and lifecycle—not the complete public Agent Runtime API, Temporal payload codec
-behavior, or any example app.
+source composition, binary build, configuration validation, secret-reference
+injection, readiness, and lifecycle—not that an image has been published, an
+operator has rolled it out, or that workflows, Temporal payload codec behavior,
+or any example app are complete.
 
 Main CI invokes the same two-Stack isolation harness against a checksum-pinned,
 disposable k3d/K3s cluster using the typed `ci` profile. Its twelve-minute
@@ -115,7 +118,8 @@ just dev-reset stack=research-a
 just dev-down stack=research-a
 ```
 
-`dev-reset` restarts only the eight declared runtime-role Deployments.
+`dev-reset` restarts the eight generic runtime-role Deployments and the
+separately declared public `runtime-api` Deployment.
 Before reset or teardown, the launcher re-reads the target Namespace and
 requires its UID plus Agent Runtime, Stack, and local-profile labels to match.
 It refuses a missing, relabelled, or foreign namespace. It never targets

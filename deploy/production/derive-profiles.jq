@@ -26,6 +26,17 @@ def role_config_namespace($namespace):
       else . end))
   else . end;
 
+def runtime_api_config_namespace($namespace):
+  if .kubernetes then
+    .kubernetes.environment |= ((. // []) | map(
+      if .name == "RUNTIME_API_CONFIG" then
+        .value |= (fromjson |
+          .storage.content.endpoint = ("blob." + $namespace + ".svc:9000") |
+          .storage.content.bucket = $namespace |
+          tojson)
+      else . end))
+  else . end;
+
 def dns_capability:
   if .kind == "kubernetes" and .kubernetes.kind == "NetworkPolicy" and ((.kubernetes.network.allowed_egress | length) > 0) then
     .kubernetes.network.allow_dns = true
@@ -36,6 +47,7 @@ def dns_capability:
 def profile_resource($namespace; $profile):
   lifecycle($profile) |
   role_config_namespace($namespace) |
+  runtime_api_config_namespace($namespace) |
   dns_capability |
   if .kind == "secret_reference" then
     .secret_reference.provider = (if $profile == "production" then "external-secrets" else "local-generated" end) |

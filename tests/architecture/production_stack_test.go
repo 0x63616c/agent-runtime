@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/0x63616c/agent-runtime/internal/roles"
+	"github.com/0x63616c/agent-runtime/internal/runtimeapiprocess"
 	"github.com/0x63616c/agent-runtime/internal/stack"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -125,6 +126,34 @@ var _ = Describe("Self-hosted production Stack", func() {
 		}
 		Expect(expectedRoleConfigs).To(HaveLen(8))
 
+		// The generic health-only api role remains a distinct trust-scoped
+		// process. The public HTTP contract is served by the separately composed
+		// agent-runtime-api binary with only its own persistence and credential
+		// authority.
+		publicAPI := findResource(resources, "runtime-api")
+		Expect(publicAPI.Kubernetes.Command).To(ConsistOf("/agent-runtime-api"))
+		Expect(publicAPI.Kubernetes.Arguments).To(ConsistOf("--config-env", "RUNTIME_API_CONFIG"))
+		Expect(publicAPI.Kubernetes.ServiceAccount).To(Equal("runtime-api-account"))
+		Expect(publicAPI.Kubernetes.Ports).To(ConsistOf(stack.Port{Name: "http", Number: 8088, Protocol: "TCP"}))
+		publicAPIConfig, found := environmentValue(publicAPI, "RUNTIME_API_CONFIG")
+		Expect(found).To(BeTrue())
+		_, err = runtimeapiprocess.Parse(strings.NewReader(publicAPIConfig))
+		Expect(err).NotTo(HaveOccurred())
+		Expect(secretEnvironmentNames(publicAPI)).To(ConsistOf(
+			"STATE_DATABASE_DSN",
+			"AR_RUNTIME_MINIO_ACCESS_KEY",
+			"AR_RUNTIME_MINIO_SECRET_KEY",
+			"RUNTIME_API_ADMIN_TOKEN",
+			"RUNTIME_API_DEVELOPER_TOKEN",
+		))
+		Expect(findResource(resources, "runtime-api-service").Kubernetes.Selector).To(Equal(stack.ResourceID("runtime-api")))
+		publicAPINetwork := findResource(resources, "runtime-api-egress").Kubernetes.Network
+		Expect(publicAPINetwork).NotTo(BeNil())
+		Expect(publicAPINetwork.DefaultDeny).To(BeTrue())
+		Expect(publicAPINetwork.Subject).To(Equal(stack.ResourceID("runtime-api")))
+		Expect(publicAPINetwork.AllowedEgress).To(ConsistOf(stack.ResourceID("state"), stack.ResourceID("blob")))
+		Expect(publicAPINetwork.AllowDNS).To(BeTrue())
+
 		controlService := findResource(resources, "sandbox-control-service")
 		Expect(controlService.Kubernetes.Ports).To(ConsistOf(stack.Port{Name: "http", Number: 8086, Protocol: "TCP"}))
 		for _, role := range []stack.ResourceID{"tool", "sandbox-host"} {
@@ -176,6 +205,15 @@ func normalizedProfile(resources []stack.Resource, namespace string) []byte {
 		if resource.Kubernetes != nil {
 			for environmentIndex := range resource.Kubernetes.Environment {
 				environment := &resource.Kubernetes.Environment[environmentIndex]
+				if environment.Name == "RUNTIME_API_CONFIG" {
+					var document any
+					Expect(json.Unmarshal([]byte(environment.Value), &document)).To(Succeed())
+					document = normalizeNamespaceStrings(document, namespace)
+					encoded, err := json.Marshal(document)
+					Expect(err).NotTo(HaveOccurred())
+					environment.Value = string(encoded)
+					continue
+				}
 				if environment.Name != "RUNTIME_ROLE_CONFIG" {
 					continue
 				}

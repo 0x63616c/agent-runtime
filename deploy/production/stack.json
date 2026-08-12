@@ -2428,6 +2428,207 @@
           }
         },
         {
+          "id": "runtime-api-secret",
+          "kind": "secret_reference",
+          "owner": "security-operator",
+          "scope": "namespace",
+          "dependencies": [],
+          "retention": {
+            "policy": "ephemeral",
+            "days": 0
+          },
+          "backup_restore_owner": "none",
+          "delete_behavior": "delete",
+          "external_controller": true,
+          "secret_reference": {
+            "provider": "local-generated",
+            "reference": "ar-agent-runtime-runtime-api-secret",
+            "version": "v1",
+            "keys": [
+              "AR_RUNTIME_MINIO_ACCESS_KEY",
+              "AR_RUNTIME_MINIO_SECRET_KEY",
+              "RUNTIME_API_ADMIN_TOKEN",
+              "RUNTIME_API_DEVELOPER_TOKEN"
+            ]
+          }
+        },
+        {
+          "id": "runtime-api-account",
+          "kind": "kubernetes",
+          "owner": "platform-operator",
+          "scope": "namespace",
+          "dependencies": [],
+          "retention": {
+            "policy": "ephemeral",
+            "days": 0
+          },
+          "backup_restore_owner": "none",
+          "delete_behavior": "delete",
+          "external_controller": false,
+          "kubernetes": {
+            "api_version": "v1",
+            "kind": "ServiceAccount",
+            "name": "runtime-api-account",
+            "environment": []
+          }
+        },
+        {
+          "id": "runtime-api",
+          "kind": "kubernetes",
+          "owner": "runtime-operator",
+          "scope": "namespace",
+          "dependencies": [
+            "runtime-api-account",
+            "runtime-api-secret",
+            "state-db-secret",
+            "runtime-database",
+            "blob-prefix"
+          ],
+          "retention": {
+            "policy": "ephemeral",
+            "days": 0
+          },
+          "backup_restore_owner": "none",
+          "delete_behavior": "delete",
+          "external_controller": false,
+          "kubernetes": {
+            "api_version": "apps/v1",
+            "kind": "Deployment",
+            "name": "runtime-api",
+            "replicas": 2,
+            "image": "ghcr.io/0x63616c/agent-runtime@sha256:7c60d4d6078da20db1f3c4e19cec03d033f9a37e4f7ec98fe5b1858f806ee1b3",
+            "service_account": "runtime-api-account",
+            "command": [
+              "/agent-runtime-api"
+            ],
+            "arguments": [
+              "--config-env",
+              "RUNTIME_API_CONFIG"
+            ],
+            "environment": [
+              {
+                "name": "RUNTIME_API_CONFIG",
+                "value": "{\"version\":1,\"listen_address\":\"0.0.0.0:8088\",\"storage\":{\"mode\":\"postgres\",\"database_dsn_environment\":\"STATE_DATABASE_DSN\",\"content\":{\"endpoint\":\"blob.ar-agent-runtime.svc:9000\",\"access_key_environment\":\"AR_RUNTIME_MINIO_ACCESS_KEY\",\"secret_key_environment\":\"AR_RUNTIME_MINIO_SECRET_KEY\",\"bucket\":\"ar-agent-runtime\"}},\"model_profiles\":[\"balanced\"],\"max_request_bytes\":4194304,\"principals\":[{\"tenant\":\"production\",\"principal\":\"admin\",\"admin\":true,\"bearer_token_environment\":\"RUNTIME_API_ADMIN_TOKEN\"},{\"tenant\":\"production\",\"principal\":\"developer\",\"admin\":false,\"bearer_token_environment\":\"RUNTIME_API_DEVELOPER_TOKEN\"}],\"public_listen\":true}"
+              }
+            ],
+            "secret_environment": [
+              {
+                "name": "STATE_DATABASE_DSN",
+                "secret": "state-db-secret",
+                "key": "STATE_DATABASE_DSN"
+              },
+              {
+                "name": "AR_RUNTIME_MINIO_ACCESS_KEY",
+                "secret": "runtime-api-secret",
+                "key": "AR_RUNTIME_MINIO_ACCESS_KEY"
+              },
+              {
+                "name": "AR_RUNTIME_MINIO_SECRET_KEY",
+                "secret": "runtime-api-secret",
+                "key": "AR_RUNTIME_MINIO_SECRET_KEY"
+              },
+              {
+                "name": "RUNTIME_API_ADMIN_TOKEN",
+                "secret": "runtime-api-secret",
+                "key": "RUNTIME_API_ADMIN_TOKEN"
+              },
+              {
+                "name": "RUNTIME_API_DEVELOPER_TOKEN",
+                "secret": "runtime-api-secret",
+                "key": "RUNTIME_API_DEVELOPER_TOKEN"
+              }
+            ],
+            "readiness": {
+              "command": [
+                "/agent-runtime-api",
+                "--config-env",
+                "RUNTIME_API_CONFIG",
+                "--check"
+              ],
+              "initial_delay_seconds": 1,
+              "period_seconds": 5,
+              "failure_threshold": 12
+            },
+            "ports": [
+              {
+                "name": "http",
+                "number": 8088,
+                "protocol": "TCP"
+              }
+            ],
+            "compute": {
+              "request_milli_cpu": 250,
+              "limit_milli_cpu": 1000,
+              "request_memory_bytes": 268435456,
+              "limit_memory_bytes": 1073741824
+            },
+            "storage": []
+          }
+        },
+        {
+          "id": "runtime-api-service",
+          "kind": "kubernetes",
+          "owner": "platform-operator",
+          "scope": "namespace",
+          "dependencies": [
+            "runtime-api"
+          ],
+          "retention": {
+            "policy": "ephemeral",
+            "days": 0
+          },
+          "backup_restore_owner": "none",
+          "delete_behavior": "delete",
+          "external_controller": false,
+          "kubernetes": {
+            "api_version": "v1",
+            "kind": "Service",
+            "name": "runtime-api",
+            "selector": "runtime-api",
+            "ports": [
+              {
+                "name": "http",
+                "number": 8088,
+                "protocol": "TCP"
+              }
+            ],
+            "environment": []
+          }
+        },
+        {
+          "id": "runtime-api-egress",
+          "kind": "kubernetes",
+          "owner": "security-operator",
+          "scope": "namespace",
+          "dependencies": [
+            "runtime-api",
+            "state",
+            "blob"
+          ],
+          "retention": {
+            "policy": "ephemeral",
+            "days": 0
+          },
+          "backup_restore_owner": "none",
+          "delete_behavior": "delete",
+          "external_controller": false,
+          "kubernetes": {
+            "api_version": "networking.k8s.io/v1",
+            "kind": "NetworkPolicy",
+            "name": "runtime-api-egress",
+            "network": {
+              "default_deny": true,
+              "subject": "runtime-api",
+              "allowed_egress": [
+                "state",
+                "blob"
+              ],
+              "allow_dns": true
+            },
+            "environment": []
+          }
+        },
+        {
           "id": "temporal-db-secret",
           "kind": "secret_reference",
           "owner": "security-operator",
@@ -5265,6 +5466,207 @@
           }
         },
         {
+          "id": "runtime-api-secret",
+          "kind": "secret_reference",
+          "owner": "security-operator",
+          "scope": "namespace",
+          "dependencies": [],
+          "retention": {
+            "policy": "ephemeral",
+            "days": 0
+          },
+          "backup_restore_owner": "none",
+          "delete_behavior": "delete",
+          "external_controller": true,
+          "secret_reference": {
+            "provider": "local-generated",
+            "reference": "ar-ci-agent-runtime-runtime-api-secret",
+            "version": "v1",
+            "keys": [
+              "AR_RUNTIME_MINIO_ACCESS_KEY",
+              "AR_RUNTIME_MINIO_SECRET_KEY",
+              "RUNTIME_API_ADMIN_TOKEN",
+              "RUNTIME_API_DEVELOPER_TOKEN"
+            ]
+          }
+        },
+        {
+          "id": "runtime-api-account",
+          "kind": "kubernetes",
+          "owner": "platform-operator",
+          "scope": "namespace",
+          "dependencies": [],
+          "retention": {
+            "policy": "ephemeral",
+            "days": 0
+          },
+          "backup_restore_owner": "none",
+          "delete_behavior": "delete",
+          "external_controller": false,
+          "kubernetes": {
+            "api_version": "v1",
+            "kind": "ServiceAccount",
+            "name": "runtime-api-account",
+            "environment": []
+          }
+        },
+        {
+          "id": "runtime-api",
+          "kind": "kubernetes",
+          "owner": "runtime-operator",
+          "scope": "namespace",
+          "dependencies": [
+            "runtime-api-account",
+            "runtime-api-secret",
+            "state-db-secret",
+            "runtime-database",
+            "blob-prefix"
+          ],
+          "retention": {
+            "policy": "ephemeral",
+            "days": 0
+          },
+          "backup_restore_owner": "none",
+          "delete_behavior": "delete",
+          "external_controller": false,
+          "kubernetes": {
+            "api_version": "apps/v1",
+            "kind": "Deployment",
+            "name": "runtime-api",
+            "replicas": 2,
+            "image": "ghcr.io/0x63616c/agent-runtime@sha256:7c60d4d6078da20db1f3c4e19cec03d033f9a37e4f7ec98fe5b1858f806ee1b3",
+            "service_account": "runtime-api-account",
+            "command": [
+              "/agent-runtime-api"
+            ],
+            "arguments": [
+              "--config-env",
+              "RUNTIME_API_CONFIG"
+            ],
+            "environment": [
+              {
+                "name": "RUNTIME_API_CONFIG",
+                "value": "{\"version\":1,\"listen_address\":\"0.0.0.0:8088\",\"storage\":{\"mode\":\"postgres\",\"database_dsn_environment\":\"STATE_DATABASE_DSN\",\"content\":{\"endpoint\":\"blob.ar-ci-agent-runtime.svc:9000\",\"access_key_environment\":\"AR_RUNTIME_MINIO_ACCESS_KEY\",\"secret_key_environment\":\"AR_RUNTIME_MINIO_SECRET_KEY\",\"bucket\":\"ar-ci-agent-runtime\"}},\"model_profiles\":[\"balanced\"],\"max_request_bytes\":4194304,\"principals\":[{\"tenant\":\"production\",\"principal\":\"admin\",\"admin\":true,\"bearer_token_environment\":\"RUNTIME_API_ADMIN_TOKEN\"},{\"tenant\":\"production\",\"principal\":\"developer\",\"admin\":false,\"bearer_token_environment\":\"RUNTIME_API_DEVELOPER_TOKEN\"}],\"public_listen\":true}"
+              }
+            ],
+            "secret_environment": [
+              {
+                "name": "STATE_DATABASE_DSN",
+                "secret": "state-db-secret",
+                "key": "STATE_DATABASE_DSN"
+              },
+              {
+                "name": "AR_RUNTIME_MINIO_ACCESS_KEY",
+                "secret": "runtime-api-secret",
+                "key": "AR_RUNTIME_MINIO_ACCESS_KEY"
+              },
+              {
+                "name": "AR_RUNTIME_MINIO_SECRET_KEY",
+                "secret": "runtime-api-secret",
+                "key": "AR_RUNTIME_MINIO_SECRET_KEY"
+              },
+              {
+                "name": "RUNTIME_API_ADMIN_TOKEN",
+                "secret": "runtime-api-secret",
+                "key": "RUNTIME_API_ADMIN_TOKEN"
+              },
+              {
+                "name": "RUNTIME_API_DEVELOPER_TOKEN",
+                "secret": "runtime-api-secret",
+                "key": "RUNTIME_API_DEVELOPER_TOKEN"
+              }
+            ],
+            "readiness": {
+              "command": [
+                "/agent-runtime-api",
+                "--config-env",
+                "RUNTIME_API_CONFIG",
+                "--check"
+              ],
+              "initial_delay_seconds": 1,
+              "period_seconds": 5,
+              "failure_threshold": 12
+            },
+            "ports": [
+              {
+                "name": "http",
+                "number": 8088,
+                "protocol": "TCP"
+              }
+            ],
+            "compute": {
+              "request_milli_cpu": 250,
+              "limit_milli_cpu": 1000,
+              "request_memory_bytes": 268435456,
+              "limit_memory_bytes": 1073741824
+            },
+            "storage": []
+          }
+        },
+        {
+          "id": "runtime-api-service",
+          "kind": "kubernetes",
+          "owner": "platform-operator",
+          "scope": "namespace",
+          "dependencies": [
+            "runtime-api"
+          ],
+          "retention": {
+            "policy": "ephemeral",
+            "days": 0
+          },
+          "backup_restore_owner": "none",
+          "delete_behavior": "delete",
+          "external_controller": false,
+          "kubernetes": {
+            "api_version": "v1",
+            "kind": "Service",
+            "name": "runtime-api",
+            "selector": "runtime-api",
+            "ports": [
+              {
+                "name": "http",
+                "number": 8088,
+                "protocol": "TCP"
+              }
+            ],
+            "environment": []
+          }
+        },
+        {
+          "id": "runtime-api-egress",
+          "kind": "kubernetes",
+          "owner": "security-operator",
+          "scope": "namespace",
+          "dependencies": [
+            "runtime-api",
+            "state",
+            "blob"
+          ],
+          "retention": {
+            "policy": "ephemeral",
+            "days": 0
+          },
+          "backup_restore_owner": "none",
+          "delete_behavior": "delete",
+          "external_controller": false,
+          "kubernetes": {
+            "api_version": "networking.k8s.io/v1",
+            "kind": "NetworkPolicy",
+            "name": "runtime-api-egress",
+            "network": {
+              "default_deny": true,
+              "subject": "runtime-api",
+              "allowed_egress": [
+                "state",
+                "blob"
+              ],
+              "allow_dns": true
+            },
+            "environment": []
+          }
+        },
+        {
           "id": "temporal-db-secret",
           "kind": "secret_reference",
           "owner": "security-operator",
@@ -8099,6 +8501,207 @@
             "collector_service": "telemetry-service",
             "port_name": "http",
             "retention_days": 30
+          }
+        },
+        {
+          "id": "runtime-api-secret",
+          "kind": "secret_reference",
+          "owner": "security-operator",
+          "scope": "namespace",
+          "dependencies": [],
+          "retention": {
+            "policy": "external",
+            "days": 0
+          },
+          "backup_restore_owner": "platform-operator",
+          "delete_behavior": "retain",
+          "external_controller": true,
+          "secret_reference": {
+            "provider": "external-secrets",
+            "reference": "agent-runtime-runtime-api-secret",
+            "version": "v1",
+            "keys": [
+              "AR_RUNTIME_MINIO_ACCESS_KEY",
+              "AR_RUNTIME_MINIO_SECRET_KEY",
+              "RUNTIME_API_ADMIN_TOKEN",
+              "RUNTIME_API_DEVELOPER_TOKEN"
+            ]
+          }
+        },
+        {
+          "id": "runtime-api-account",
+          "kind": "kubernetes",
+          "owner": "platform-operator",
+          "scope": "namespace",
+          "dependencies": [],
+          "retention": {
+            "policy": "persistent",
+            "days": 30
+          },
+          "backup_restore_owner": "platform-operator",
+          "delete_behavior": "retain",
+          "external_controller": false,
+          "kubernetes": {
+            "api_version": "v1",
+            "kind": "ServiceAccount",
+            "name": "runtime-api-account",
+            "environment": []
+          }
+        },
+        {
+          "id": "runtime-api",
+          "kind": "kubernetes",
+          "owner": "runtime-operator",
+          "scope": "namespace",
+          "dependencies": [
+            "runtime-api-account",
+            "runtime-api-secret",
+            "state-db-secret",
+            "runtime-database",
+            "blob-prefix"
+          ],
+          "retention": {
+            "policy": "persistent",
+            "days": 30
+          },
+          "backup_restore_owner": "platform-operator",
+          "delete_behavior": "retain",
+          "external_controller": false,
+          "kubernetes": {
+            "api_version": "apps/v1",
+            "kind": "Deployment",
+            "name": "runtime-api",
+            "replicas": 2,
+            "image": "ghcr.io/0x63616c/agent-runtime@sha256:7c60d4d6078da20db1f3c4e19cec03d033f9a37e4f7ec98fe5b1858f806ee1b3",
+            "service_account": "runtime-api-account",
+            "command": [
+              "/agent-runtime-api"
+            ],
+            "arguments": [
+              "--config-env",
+              "RUNTIME_API_CONFIG"
+            ],
+            "environment": [
+              {
+                "name": "RUNTIME_API_CONFIG",
+                "value": "{\"version\":1,\"listen_address\":\"0.0.0.0:8088\",\"storage\":{\"mode\":\"postgres\",\"database_dsn_environment\":\"STATE_DATABASE_DSN\",\"content\":{\"endpoint\":\"blob.agent-runtime.svc:9000\",\"access_key_environment\":\"AR_RUNTIME_MINIO_ACCESS_KEY\",\"secret_key_environment\":\"AR_RUNTIME_MINIO_SECRET_KEY\",\"bucket\":\"agent-runtime\"}},\"model_profiles\":[\"balanced\"],\"max_request_bytes\":4194304,\"principals\":[{\"tenant\":\"production\",\"principal\":\"admin\",\"admin\":true,\"bearer_token_environment\":\"RUNTIME_API_ADMIN_TOKEN\"},{\"tenant\":\"production\",\"principal\":\"developer\",\"admin\":false,\"bearer_token_environment\":\"RUNTIME_API_DEVELOPER_TOKEN\"}],\"public_listen\":true}"
+              }
+            ],
+            "secret_environment": [
+              {
+                "name": "STATE_DATABASE_DSN",
+                "secret": "state-db-secret",
+                "key": "STATE_DATABASE_DSN"
+              },
+              {
+                "name": "AR_RUNTIME_MINIO_ACCESS_KEY",
+                "secret": "runtime-api-secret",
+                "key": "AR_RUNTIME_MINIO_ACCESS_KEY"
+              },
+              {
+                "name": "AR_RUNTIME_MINIO_SECRET_KEY",
+                "secret": "runtime-api-secret",
+                "key": "AR_RUNTIME_MINIO_SECRET_KEY"
+              },
+              {
+                "name": "RUNTIME_API_ADMIN_TOKEN",
+                "secret": "runtime-api-secret",
+                "key": "RUNTIME_API_ADMIN_TOKEN"
+              },
+              {
+                "name": "RUNTIME_API_DEVELOPER_TOKEN",
+                "secret": "runtime-api-secret",
+                "key": "RUNTIME_API_DEVELOPER_TOKEN"
+              }
+            ],
+            "readiness": {
+              "command": [
+                "/agent-runtime-api",
+                "--config-env",
+                "RUNTIME_API_CONFIG",
+                "--check"
+              ],
+              "initial_delay_seconds": 1,
+              "period_seconds": 5,
+              "failure_threshold": 12
+            },
+            "ports": [
+              {
+                "name": "http",
+                "number": 8088,
+                "protocol": "TCP"
+              }
+            ],
+            "compute": {
+              "request_milli_cpu": 250,
+              "limit_milli_cpu": 1000,
+              "request_memory_bytes": 268435456,
+              "limit_memory_bytes": 1073741824
+            },
+            "storage": []
+          }
+        },
+        {
+          "id": "runtime-api-service",
+          "kind": "kubernetes",
+          "owner": "platform-operator",
+          "scope": "namespace",
+          "dependencies": [
+            "runtime-api"
+          ],
+          "retention": {
+            "policy": "persistent",
+            "days": 30
+          },
+          "backup_restore_owner": "platform-operator",
+          "delete_behavior": "retain",
+          "external_controller": false,
+          "kubernetes": {
+            "api_version": "v1",
+            "kind": "Service",
+            "name": "runtime-api",
+            "selector": "runtime-api",
+            "ports": [
+              {
+                "name": "http",
+                "number": 8088,
+                "protocol": "TCP"
+              }
+            ],
+            "environment": []
+          }
+        },
+        {
+          "id": "runtime-api-egress",
+          "kind": "kubernetes",
+          "owner": "security-operator",
+          "scope": "namespace",
+          "dependencies": [
+            "runtime-api",
+            "state",
+            "blob"
+          ],
+          "retention": {
+            "policy": "persistent",
+            "days": 30
+          },
+          "backup_restore_owner": "platform-operator",
+          "delete_behavior": "retain",
+          "external_controller": false,
+          "kubernetes": {
+            "api_version": "networking.k8s.io/v1",
+            "kind": "NetworkPolicy",
+            "name": "runtime-api-egress",
+            "network": {
+              "default_deny": true,
+              "subject": "runtime-api",
+              "allowed_egress": [
+                "state",
+                "blob"
+              ],
+              "allow_dns": true
+            },
+            "environment": []
           }
         },
         {
