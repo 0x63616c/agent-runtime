@@ -297,6 +297,59 @@ func TestPlannerPromotesQueuedTurnAfterOneWinningSettlement(t *testing.T) {
 	}
 }
 
+func TestPlannerRetriesModelInvocationWithinOneRunningTurn(t *testing.T) {
+	now := time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC)
+	content, _, tenant, principal := testRuntimeContent(t)
+	compiler, err := runtimestate.NewCompiler(content)
+	if err != nil {
+		t.Fatalf("new compiler: %v", err)
+	}
+	planner, err := runtimestate.NewRuntimeStatePlanner(fixedPlannerClock{now: now}, &uniquePlannerIDs{})
+	if err != nil {
+		t.Fatalf("new planner: %v", err)
+	}
+	sessionID, turnID := validSessionID(t), agentruntime.TurnID("turn_1234567890ABCDEF")
+	state := runtimestate.RuntimeState{
+		Sessions: []runtimestate.SessionRecord{{Tenant: tenant, Principal: principal, SessionID: sessionID, State: agentruntime.SessionOpen, Version: 1, CreatedAt: now, UpdatedAt: now, RetainUntil: now.Add(time.Hour)}},
+		Turns:    []runtimestate.TurnRecord{{Tenant: tenant, Principal: principal, SessionID: sessionID, TurnID: turnID, State: agentruntime.TurnRunning, Version: 1, RetentionUntil: now.Add(time.Hour)}},
+	}
+	beginFirst, err := compiler.CompileBeginInvocationAttempt(runtimestate.BeginInvocationAttemptCommand{Scope: workerScope(tenant, principal), IdempotencyKey: "retry-first", SessionID: sessionID, TurnID: turnID, OperationID: "model-operation-1", ExpectedSessionVersion: state.Sessions[0].Version, ExpectedTurnVersion: state.Turns[0].Version})
+	if err != nil {
+		t.Fatalf("compile first invocation: %v", err)
+	}
+	firstPlan, err := planner.Plan(context.Background(), state, beginFirst)
+	if err != nil {
+		t.Fatalf("plan first invocation: %v", err)
+	}
+	state = firstPlan.State()
+	first := firstPlan.Result().Invocation
+	failure := &agentruntime.Failure{Code: agentruntime.FailureUnavailable, Message: "model temporarily unavailable", Retryable: true}
+	recordFirst, err := compiler.CompileRecordInvocationOutcome(runtimestate.RecordInvocationOutcomeCommand{Scope: workerScope(tenant, principal), IdempotencyKey: "retry-first-outcome", SessionID: sessionID, TurnID: turnID, OperationID: first.OperationID, Ordinal: first.Ordinal, Fence: first.Fence, Outcome: runtimestate.InvocationFailed, Failure: failure, ExpectedSessionVersion: state.Sessions[0].Version, ExpectedTurnVersion: state.Turns[0].Version})
+	if err != nil {
+		t.Fatalf("compile retryable outcome: %v", err)
+	}
+	failedPlan, err := planner.Plan(context.Background(), state, recordFirst)
+	if err != nil {
+		t.Fatalf("plan retryable outcome: %v", err)
+	}
+	state = failedPlan.State()
+	if state.Turns[0].State != agentruntime.TurnRunning || len(state.Invocations) != 1 || state.Invocations[0].State != runtimestate.InvocationFailed {
+		t.Fatalf("retryable first attempt state = %#v / %#v, want one failed attempt and a running Turn", state.Invocations, state.Turns)
+	}
+	beginSecond, err := compiler.CompileBeginInvocationAttempt(runtimestate.BeginInvocationAttemptCommand{Scope: workerScope(tenant, principal), IdempotencyKey: "retry-second", SessionID: sessionID, TurnID: turnID, OperationID: "model-operation-2", ExpectedSessionVersion: state.Sessions[0].Version, ExpectedTurnVersion: state.Turns[0].Version, ExpectedFence: first.Fence})
+	if err != nil {
+		t.Fatalf("compile retry invocation: %v", err)
+	}
+	secondPlan, err := planner.Plan(context.Background(), state, beginSecond)
+	if err != nil {
+		t.Fatalf("plan retry invocation: %v", err)
+	}
+	second := secondPlan.Result().Invocation
+	if len(secondPlan.State().Turns) != 1 || secondPlan.State().Turns[0].State != agentruntime.TurnRunning || len(secondPlan.State().Invocations) != 2 || second.TurnID != turnID || second.Ordinal != first.Ordinal+1 || second.Fence != first.Fence+1 || second.State != runtimestate.InvocationIntent {
+		t.Fatalf("retry invocation = %#v state=%#v, want second fenced attempt on the same running Turn", second, secondPlan.State())
+	}
+}
+
 func TestPlannerCancelsQueuedWorkClosesAfterDrainAndFencesOutboxLeases(t *testing.T) {
 	now := time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC)
 	content, _, tenant, principal := testRuntimeContent(t)
