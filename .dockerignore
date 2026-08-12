@@ -13,6 +13,11 @@
 !internal/roles/**
 !internal/egressproxy/
 !internal/egressproxy/**
+!temporalpayload/
+!temporalpayload/**
+!sdk/
+!sdk/go/
+!sdk/go/**
 !deploy/
 !deploy/production/
 !deploy/production/Dockerfile

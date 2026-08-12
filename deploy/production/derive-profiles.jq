@@ -80,6 +80,9 @@ def profile_resource($namespace; $profile):
   elif .id == "temporal-egress" then
     .dependencies = ["temporal","temporal-state"] |
     .kubernetes.network.allowed_egress = ["temporal-state"]
+  elif .id == "orchestration-egress" then
+    .dependencies = ["orchestration","state","telemetry","temporal"] |
+    .kubernetes.network.allowed_egress = ["state","telemetry","temporal"]
   else . end;
 
 def common($id; $kind; $owner; $profile; $body):

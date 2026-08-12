@@ -10,8 +10,13 @@ COPY go.mod go.sum ./
 RUN go mod download
 COPY cmd/runtime ./cmd/runtime
 COPY cmd/egress-proxy ./cmd/egress-proxy
-COPY internal/roles ./internal/roles
-COPY internal/egressproxy ./internal/egressproxy
+# Keep the build context sealed by .dockerignore, while retaining every
+# in-repository package reachable from the reviewed runtime composition root.
+# This prevents a new trust-scoped runtime role from compiling locally but
+# disappearing from the production image build context.
+COPY internal ./internal
+COPY temporalpayload ./temporalpayload
+COPY sdk/go ./sdk/go
 RUN go mod verify
 RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -mod=readonly -trimpath -ldflags='-s -w' -o /out/runtime ./cmd/runtime
 RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -mod=readonly -trimpath -ldflags='-s -w' -o /out/egress-proxy ./cmd/egress-proxy

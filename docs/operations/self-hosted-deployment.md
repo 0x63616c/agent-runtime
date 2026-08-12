@@ -1,12 +1,15 @@
 # Self-hosted deployment contract
 
 Status: the v1 declarative role-composition and configuration-validation slice,
-M5 state-backed public API process, and private Session Temporal worker are
-implemented. A signed, digest-pinned production role image is published to
-GHCR. Model/tool/approval execution and Firecracker host-agent production
-operation remain later milestones. Do not treat a rendered reference Stack or
-published role image as a completed production rollout; live
-Kubernetes/Temporal/blob evidence is retained separately.
+M5 state-backed public API process, and private Session Temporal worker source
+are implemented. The checked-in Stack deliberately keeps the already-attested
+GHCR image on its pre-worker `orchestration` health composition until the
+current source revision is published and attested; it does not misrepresent an
+older digest as an `orchestration-codec` worker image. Model/tool/approval
+execution and Firecracker host-agent production operation remain later
+milestones. Do not treat a rendered reference Stack or published role image as
+a completed production rollout; live Kubernetes/Temporal/blob evidence is
+retained separately.
 
 The checked-in Stack's `runtime serve --role api` deployment remains the
 health-only role-composition fixture. The separately runnable
@@ -41,7 +44,7 @@ credentials would destroy the trust boundary.
 | --- | --- | --- | --- |
 | `api` | state, telemetry | none in this early composition slice | Temporal, model, tool, blob, sandbox secrets |
 | `orchestration` | state, telemetry, Temporal | `STATE_DATABASE_DSN`, `TEMPORAL_AUTH_TOKEN` | Model, tool, blob, sandbox-host secrets |
-| `orchestration-codec` | state metadata, telemetry, Temporal, dedicated temporal-payload bucket/prefix and task queue; optional HTTPS audit sink | `STATE_DATABASE_DSN`, `TEMPORAL_AUTH_TOKEN`, `ORCHESTRATION_PAYLOAD_BLOB_ACCESS_KEY`, `ORCHESTRATION_PAYLOAD_BLOB_SECRET_KEY` | Public/API credentials, runtime-content bucket/prefix, model, tool, sandbox-host secrets |
+| `orchestration-codec` | state metadata, telemetry, Temporal, dedicated temporal-payload bucket/prefix and task queue; optional HTTPS audit sink | `STATE_DATABASE_DSN`, `TEMPORAL_AUTH_TOKEN`, `ORCHESTRATION_PAYLOAD_BLOB_ACCESS_KEY`, `ORCHESTRATION_PAYLOAD_BLOB_SECRET_KEY` | Public/API credentials, runtime-content bucket/prefix, model, tool, sandbox-host secrets. This source role is not selected by the current Stack image pin until its current-SHA image is published and attested. |
 | `model` | conversation, egress proxy, model, telemetry | `CONVERSATION_ACCESS_TOKEN`, `MODEL_API_KEY` | Temporal, state DB, tool, storage, host secrets |
 | `tool` | sandbox control, telemetry, tool broker | `SANDBOX_CONTROL_TOKEN`, `TOOL_BROKER_TOKEN` | Temporal, model, state DB, blob credentials |
 | `blob` | storage, telemetry | `BLOB_STORAGE_CREDENTIAL` | Temporal, model, tool and sandbox credentials |
@@ -224,16 +227,19 @@ RUNTIME_ROLE_CONFIG="$(go run ./cmd/stackctl role-configs \
   --stack-file deploy/production/stack.json --profile production |
   jq -c '.orchestration')" \
 go run ./cmd/runtime serve --config-env RUNTIME_ROLE_CONFIG \
-  --role orchestration-codec --check
+  --role orchestration --check
 ```
 
 The command verifies strict schema, the role allowlist, endpoint shape,
 namespace, and presence of only the declared credentials. It makes no
-infrastructure mutation. Without `--check`, `orchestration-codec` starts the
-M5 private worker after startup codec compatibility succeeds; other roles in
-this slice serve health and readiness only. Its S3 policy must be separately
-restricted to the declared temporal-payload bucket/prefix and must not include
-runtime-content.
+infrastructure mutation. The currently pinned reference image serves this
+generic health/readiness role only. Before scheduling `orchestration-codec`,
+the production-image workflow must publish and attest the exact source SHA,
+the operator must verify its provenance and revision label, and a separate
+reviewed Stack change must pin that new immutable digest together with the
+codec role configuration and its dedicated payload credential. Its S3 policy
+must be separately restricted to the declared temporal-payload bucket/prefix
+and must not include runtime-content.
 
 `deploy/production/stack.json` is the checked-in typed reference Stack. Its
 role/Secret/replica/ingress/NetworkPolicy/migration topology is parsed and
@@ -243,8 +249,10 @@ attested GHCR image by digest; PostgreSQL, Temporal, MinIO, telemetry, and the
 migration runner are separately pinned third-party workloads. The publisher
 never changes the Stack, and Stack-only promotions do not rebuild an image:
 the operator verifies the source revision label and GitHub provenance for an
-immutable digest, then makes a reviewed Stack revision that pins it. Never
-hand-convert this desired state into untracked manifests.
+immutable digest, then makes a reviewed Stack revision that pins it. The
+current reference digest predates the codec worker and therefore remains on
+the generic role until that publish-and-pin handoff occurs. Never hand-convert
+this desired state into untracked manifests.
 
 The committed main-CI workflow is configured to create a disposable k3d `v5.9.0` cluster with the multi-architecture
 K3s image pinned as

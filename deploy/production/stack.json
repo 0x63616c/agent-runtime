@@ -202,29 +202,6 @@
           }
         },
         {
-          "id": "orchestration-payload-blob-secret",
-          "kind": "secret_reference",
-          "owner": "security-operator",
-          "scope": "namespace",
-          "dependencies": [],
-          "retention": {
-            "policy": "ephemeral",
-            "days": 0
-          },
-          "backup_restore_owner": "none",
-          "delete_behavior": "delete",
-          "external_controller": true,
-          "secret_reference": {
-            "provider": "local-generated",
-            "reference": "ar-agent-runtime-orchestration-payload-blob-secret",
-            "version": "v1",
-            "keys": [
-              "ORCHESTRATION_PAYLOAD_BLOB_ACCESS_KEY",
-              "ORCHESTRATION_PAYLOAD_BLOB_SECRET_KEY"
-            ]
-          }
-        },
-        {
           "id": "codec-blob-secret",
           "kind": "secret_reference",
           "owner": "security-operator",
@@ -667,9 +644,7 @@
           "dependencies": [
             "orchestration-account",
             "state-db-secret",
-            "temporal-auth-secret",
-            "orchestration-payload-blob-secret",
-            "blob-service"
+            "temporal-auth-secret"
           ],
           "retention": {
             "policy": "ephemeral",
@@ -692,12 +667,12 @@
               "--config-env",
               "RUNTIME_ROLE_CONFIG",
               "--role",
-              "orchestration-codec"
+              "orchestration"
             ],
             "environment": [
               {
                 "name": "RUNTIME_ROLE_CONFIG",
-                "value": "{\"version\":1,\"role\":\"orchestration-codec\",\"namespace\":\"ar-agent-runtime\",\"listen_address\":\"0.0.0.0:8081\",\"dependencies\":[{\"name\":\"state\",\"endpoint\":\"postgres://state.ar-agent-runtime.svc:5432/agent_runtime\",\"secret_environment\":\"STATE_DATABASE_DSN\"},{\"name\":\"telemetry\",\"endpoint\":\"http://telemetry.ar-agent-runtime.svc:4318\"},{\"name\":\"temporal\",\"endpoint\":\"temporal.ar-agent-runtime.svc:7233\",\"secret_environment\":\"TEMPORAL_AUTH_TOKEN\"},{\"name\":\"payload-blob\",\"endpoint\":\"http://blob.ar-agent-runtime.svc:9000\",\"secret_environment\":\"ORCHESTRATION_PAYLOAD_BLOB_ACCESS_KEY\"},{\"name\":\"payload-blob-secret\",\"endpoint\":\"http://blob.ar-agent-runtime.svc:9000\",\"secret_environment\":\"ORCHESTRATION_PAYLOAD_BLOB_SECRET_KEY\"}],\"worker\":{\"task_queue\":\"ar-agent-runtime-session-v1\",\"payload_blob_endpoint\":\"http://blob.ar-agent-runtime.svc:9000\",\"payload_blob_bucket\":\"ar-agent-runtime-temporal-payload\",\"payload_blob_prefix\":\"temporal-payload\",\"payload_access_key_environment\":\"ORCHESTRATION_PAYLOAD_BLOB_ACCESS_KEY\",\"payload_secret_key_environment\":\"ORCHESTRATION_PAYLOAD_BLOB_SECRET_KEY\"}}"
+                "value": "{\"version\":1,\"role\":\"orchestration\",\"namespace\":\"ar-agent-runtime\",\"listen_address\":\"0.0.0.0:8081\",\"dependencies\":[{\"name\":\"state\",\"endpoint\":\"postgres://state.ar-agent-runtime.svc:5432/agent_runtime\",\"secret_environment\":\"STATE_DATABASE_DSN\"},{\"name\":\"telemetry\",\"endpoint\":\"http://telemetry.ar-agent-runtime.svc:4318\"},{\"name\":\"temporal\",\"endpoint\":\"temporal.ar-agent-runtime.svc:7233\",\"secret_environment\":\"TEMPORAL_AUTH_TOKEN\"}]}"
               }
             ],
             "secret_environment": [
@@ -710,16 +685,6 @@
                 "name": "TEMPORAL_AUTH_TOKEN",
                 "secret": "temporal-auth-secret",
                 "key": "TEMPORAL_AUTH_TOKEN"
-              },
-              {
-                "name": "ORCHESTRATION_PAYLOAD_BLOB_ACCESS_KEY",
-                "secret": "orchestration-payload-blob-secret",
-                "key": "ORCHESTRATION_PAYLOAD_BLOB_ACCESS_KEY"
-              },
-              {
-                "name": "ORCHESTRATION_PAYLOAD_BLOB_SECRET_KEY",
-                "secret": "orchestration-payload-blob-secret",
-                "key": "ORCHESTRATION_PAYLOAD_BLOB_SECRET_KEY"
               }
             ],
             "readiness": {
@@ -728,7 +693,7 @@
                 "--config-env",
                 "RUNTIME_ROLE_CONFIG",
                 "--role",
-                "orchestration-codec",
+                "orchestration",
                 "--check"
               ],
               "initial_delay_seconds": 1,
@@ -1930,8 +1895,7 @@
             "orchestration",
             "state",
             "telemetry",
-            "temporal",
-            "blob"
+            "temporal"
           ],
           "retention": {
             "policy": "ephemeral",
@@ -1950,8 +1914,7 @@
               "allowed_egress": [
                 "state",
                 "telemetry",
-                "temporal",
-                "blob"
+                "temporal"
               ],
               "allow_dns": true
             },
@@ -3076,29 +3039,6 @@
           }
         },
         {
-          "id": "orchestration-payload-blob-secret",
-          "kind": "secret_reference",
-          "owner": "security-operator",
-          "scope": "namespace",
-          "dependencies": [],
-          "retention": {
-            "policy": "ephemeral",
-            "days": 0
-          },
-          "backup_restore_owner": "none",
-          "delete_behavior": "delete",
-          "external_controller": true,
-          "secret_reference": {
-            "provider": "local-generated",
-            "reference": "ar-ci-agent-runtime-orchestration-payload-blob-secret",
-            "version": "v1",
-            "keys": [
-              "ORCHESTRATION_PAYLOAD_BLOB_ACCESS_KEY",
-              "ORCHESTRATION_PAYLOAD_BLOB_SECRET_KEY"
-            ]
-          }
-        },
-        {
           "id": "codec-blob-secret",
           "kind": "secret_reference",
           "owner": "security-operator",
@@ -3541,9 +3481,7 @@
           "dependencies": [
             "orchestration-account",
             "state-db-secret",
-            "temporal-auth-secret",
-            "orchestration-payload-blob-secret",
-            "blob-service"
+            "temporal-auth-secret"
           ],
           "retention": {
             "policy": "ephemeral",
@@ -3566,12 +3504,12 @@
               "--config-env",
               "RUNTIME_ROLE_CONFIG",
               "--role",
-              "orchestration-codec"
+              "orchestration"
             ],
             "environment": [
               {
                 "name": "RUNTIME_ROLE_CONFIG",
-                "value": "{\"version\":1,\"role\":\"orchestration-codec\",\"namespace\":\"ar-ci-agent-runtime\",\"listen_address\":\"0.0.0.0:8081\",\"dependencies\":[{\"name\":\"state\",\"endpoint\":\"postgres://state.ar-ci-agent-runtime.svc:5432/agent_runtime\",\"secret_environment\":\"STATE_DATABASE_DSN\"},{\"name\":\"telemetry\",\"endpoint\":\"http://telemetry.ar-ci-agent-runtime.svc:4318\"},{\"name\":\"temporal\",\"endpoint\":\"temporal.ar-ci-agent-runtime.svc:7233\",\"secret_environment\":\"TEMPORAL_AUTH_TOKEN\"},{\"name\":\"payload-blob\",\"endpoint\":\"http://blob.ar-ci-agent-runtime.svc:9000\",\"secret_environment\":\"ORCHESTRATION_PAYLOAD_BLOB_ACCESS_KEY\"},{\"name\":\"payload-blob-secret\",\"endpoint\":\"http://blob.ar-ci-agent-runtime.svc:9000\",\"secret_environment\":\"ORCHESTRATION_PAYLOAD_BLOB_SECRET_KEY\"}],\"worker\":{\"task_queue\":\"ar-ci-agent-runtime-session-v1\",\"payload_blob_endpoint\":\"http://blob.ar-ci-agent-runtime.svc:9000\",\"payload_blob_bucket\":\"ar-ci-agent-runtime-temporal-payload\",\"payload_blob_prefix\":\"temporal-payload\",\"payload_access_key_environment\":\"ORCHESTRATION_PAYLOAD_BLOB_ACCESS_KEY\",\"payload_secret_key_environment\":\"ORCHESTRATION_PAYLOAD_BLOB_SECRET_KEY\"}}"
+                "value": "{\"version\":1,\"role\":\"orchestration\",\"namespace\":\"ar-ci-agent-runtime\",\"listen_address\":\"0.0.0.0:8081\",\"dependencies\":[{\"name\":\"state\",\"endpoint\":\"postgres://state.ar-ci-agent-runtime.svc:5432/agent_runtime\",\"secret_environment\":\"STATE_DATABASE_DSN\"},{\"name\":\"telemetry\",\"endpoint\":\"http://telemetry.ar-ci-agent-runtime.svc:4318\"},{\"name\":\"temporal\",\"endpoint\":\"temporal.ar-ci-agent-runtime.svc:7233\",\"secret_environment\":\"TEMPORAL_AUTH_TOKEN\"}]}"
               }
             ],
             "secret_environment": [
@@ -3584,16 +3522,6 @@
                 "name": "TEMPORAL_AUTH_TOKEN",
                 "secret": "temporal-auth-secret",
                 "key": "TEMPORAL_AUTH_TOKEN"
-              },
-              {
-                "name": "ORCHESTRATION_PAYLOAD_BLOB_ACCESS_KEY",
-                "secret": "orchestration-payload-blob-secret",
-                "key": "ORCHESTRATION_PAYLOAD_BLOB_ACCESS_KEY"
-              },
-              {
-                "name": "ORCHESTRATION_PAYLOAD_BLOB_SECRET_KEY",
-                "secret": "orchestration-payload-blob-secret",
-                "key": "ORCHESTRATION_PAYLOAD_BLOB_SECRET_KEY"
               }
             ],
             "readiness": {
@@ -3602,7 +3530,7 @@
                 "--config-env",
                 "RUNTIME_ROLE_CONFIG",
                 "--role",
-                "orchestration-codec",
+                "orchestration",
                 "--check"
               ],
               "initial_delay_seconds": 1,
@@ -4804,8 +4732,7 @@
             "orchestration",
             "state",
             "telemetry",
-            "temporal",
-            "blob"
+            "temporal"
           ],
           "retention": {
             "policy": "ephemeral",
@@ -4824,8 +4751,7 @@
               "allowed_egress": [
                 "state",
                 "telemetry",
-                "temporal",
-                "blob"
+                "temporal"
               ],
               "allow_dns": true
             },
@@ -5950,29 +5876,6 @@
           }
         },
         {
-          "id": "orchestration-payload-blob-secret",
-          "kind": "secret_reference",
-          "owner": "security-operator",
-          "scope": "namespace",
-          "dependencies": [],
-          "retention": {
-            "policy": "external",
-            "days": 0
-          },
-          "backup_restore_owner": "platform-operator",
-          "delete_behavior": "retain",
-          "external_controller": true,
-          "secret_reference": {
-            "provider": "external-secrets",
-            "reference": "agent-runtime-orchestration-payload-blob-secret",
-            "version": "v1",
-            "keys": [
-              "ORCHESTRATION_PAYLOAD_BLOB_ACCESS_KEY",
-              "ORCHESTRATION_PAYLOAD_BLOB_SECRET_KEY"
-            ]
-          }
-        },
-        {
           "id": "codec-blob-secret",
           "kind": "secret_reference",
           "owner": "security-operator",
@@ -6415,9 +6318,7 @@
           "dependencies": [
             "orchestration-account",
             "state-db-secret",
-            "temporal-auth-secret",
-            "orchestration-payload-blob-secret",
-            "blob-service"
+            "temporal-auth-secret"
           ],
           "retention": {
             "policy": "persistent",
@@ -6440,12 +6341,12 @@
               "--config-env",
               "RUNTIME_ROLE_CONFIG",
               "--role",
-              "orchestration-codec"
+              "orchestration"
             ],
             "environment": [
               {
                 "name": "RUNTIME_ROLE_CONFIG",
-                "value": "{\"version\":1,\"role\":\"orchestration-codec\",\"namespace\":\"agent-runtime\",\"listen_address\":\"0.0.0.0:8081\",\"dependencies\":[{\"name\":\"state\",\"endpoint\":\"postgres://state.agent-runtime.svc:5432/agent_runtime\",\"secret_environment\":\"STATE_DATABASE_DSN\"},{\"name\":\"telemetry\",\"endpoint\":\"http://telemetry.agent-runtime.svc:4318\"},{\"name\":\"temporal\",\"endpoint\":\"temporal.agent-runtime.svc:7233\",\"secret_environment\":\"TEMPORAL_AUTH_TOKEN\"},{\"name\":\"payload-blob\",\"endpoint\":\"http://blob.agent-runtime.svc:9000\",\"secret_environment\":\"ORCHESTRATION_PAYLOAD_BLOB_ACCESS_KEY\"},{\"name\":\"payload-blob-secret\",\"endpoint\":\"http://blob.agent-runtime.svc:9000\",\"secret_environment\":\"ORCHESTRATION_PAYLOAD_BLOB_SECRET_KEY\"}],\"worker\":{\"task_queue\":\"agent-runtime-session-v1\",\"payload_blob_endpoint\":\"http://blob.agent-runtime.svc:9000\",\"payload_blob_bucket\":\"agent-runtime-temporal-payload\",\"payload_blob_prefix\":\"temporal-payload\",\"payload_access_key_environment\":\"ORCHESTRATION_PAYLOAD_BLOB_ACCESS_KEY\",\"payload_secret_key_environment\":\"ORCHESTRATION_PAYLOAD_BLOB_SECRET_KEY\"}}"
+                "value": "{\"version\":1,\"role\":\"orchestration\",\"namespace\":\"agent-runtime\",\"listen_address\":\"0.0.0.0:8081\",\"dependencies\":[{\"name\":\"state\",\"endpoint\":\"postgres://state.agent-runtime.svc:5432/agent_runtime\",\"secret_environment\":\"STATE_DATABASE_DSN\"},{\"name\":\"telemetry\",\"endpoint\":\"http://telemetry.agent-runtime.svc:4318\"},{\"name\":\"temporal\",\"endpoint\":\"temporal.agent-runtime.svc:7233\",\"secret_environment\":\"TEMPORAL_AUTH_TOKEN\"}]}"
               }
             ],
             "secret_environment": [
@@ -6458,16 +6359,6 @@
                 "name": "TEMPORAL_AUTH_TOKEN",
                 "secret": "temporal-auth-secret",
                 "key": "TEMPORAL_AUTH_TOKEN"
-              },
-              {
-                "name": "ORCHESTRATION_PAYLOAD_BLOB_ACCESS_KEY",
-                "secret": "orchestration-payload-blob-secret",
-                "key": "ORCHESTRATION_PAYLOAD_BLOB_ACCESS_KEY"
-              },
-              {
-                "name": "ORCHESTRATION_PAYLOAD_BLOB_SECRET_KEY",
-                "secret": "orchestration-payload-blob-secret",
-                "key": "ORCHESTRATION_PAYLOAD_BLOB_SECRET_KEY"
               }
             ],
             "readiness": {
@@ -6476,7 +6367,7 @@
                 "--config-env",
                 "RUNTIME_ROLE_CONFIG",
                 "--role",
-                "orchestration-codec",
+                "orchestration",
                 "--check"
               ],
               "initial_delay_seconds": 1,
@@ -7678,8 +7569,7 @@
             "orchestration",
             "state",
             "telemetry",
-            "temporal",
-            "blob"
+            "temporal"
           ],
           "retention": {
             "policy": "persistent",
@@ -7698,8 +7588,7 @@
               "allowed_egress": [
                 "state",
                 "telemetry",
-                "temporal",
-                "blob"
+                "temporal"
               ],
               "allow_dns": true
             },

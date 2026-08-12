@@ -113,12 +113,25 @@ var _ = Describe("binding governance", func() {
 		for _, excluded := range []string{"deploy/", "docs/", "website/", "evidence/"} {
 			Expect(contextIgnore).To(ContainSubstring(excluded))
 		}
+		Expect(contextIgnore).To(ContainSubstring("!temporalpayload/**"))
+		Expect(contextIgnore).To(ContainSubstring("!sdk/go/**"))
+		dockerfile := read("deploy/production/Dockerfile")
+		for _, required := range []string{
+			"COPY internal ./internal",
+			"COPY temporalpayload ./temporalpayload",
+			"COPY sdk/go ./sdk/go",
+			"go build -mod=readonly",
+		} {
+			Expect(dockerfile).To(ContainSubstring(required))
+		}
 	})
 
-	It("keeps the documented Stack role check aligned with its canonical role document", func() {
+	It("keeps the documented Stack image and role handoff reviewable", func() {
 		document := read("docs/operations/self-hosted-deployment.md")
 		Expect(document).To(ContainSubstring("jq -c '.orchestration')"))
-		Expect(document).To(ContainSubstring("--role orchestration-codec --check"))
+		Expect(document).To(ContainSubstring("--role orchestration --check"))
+		Expect(document).To(ContainSubstring("publish and attest the exact source SHA"))
+		Expect(document).To(ContainSubstring("reviewed Stack change must pin that new immutable digest"))
 	})
 })
 
