@@ -96,7 +96,14 @@ func TestRuntimeProcessAnnouncesReadinessOnlyAfterHealthRouteServes(t *testing.T
 	done := make(chan error, 1)
 	go func() {
 		done <- runtimeapiprocess.Run(ctx, config, mapLookup(map[string]string{"ADMIN_TOKEN": "admin-token-0000"}), func(address string) {
-			response, err := http.Get("http://" + address + "/readyz") // #nosec G107 -- address is the process-owned loopback listener.
+			probeContext, cancelProbe := context.WithTimeout(ctx, 5*time.Second)
+			defer cancelProbe()
+			request, err := http.NewRequestWithContext(probeContext, http.MethodGet, "http://"+address+"/readyz", nil) // #nosec G107 -- address is the process-owned loopback listener.
+			if err != nil {
+				readiness <- err
+				return
+			}
+			response, err := http.DefaultClient.Do(request)
 			if err != nil {
 				readiness <- err
 				return
