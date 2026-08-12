@@ -284,17 +284,31 @@ func TestDurableBrokeredToolLifecyclePersistsApprovalAndFinalization(t *testing.
 			t.Fatalf("durable audit lacks %q: %#v", kind, state.Audit)
 		}
 	}
-	if len(state.Artifacts) != 1 || state.Artifacts[0].Reference.SizeBytes > 8<<20 {
-		t.Fatalf("durable tool output artifact = %#v", state.Artifacts)
+	var initialResult *runtimecontent.Reference
+	for _, execution := range state.ToolExecutions {
+		if execution.ToolCallID == admission.ToolCallID {
+			initialResult = execution.Result
+			break
+		}
 	}
-	download, err := publicRuntime.ReadArtifact(ctx, runtimeapi.Identity{Tenant: string(tenant), Principal: string(principal)}, state.Artifacts[0].ArtifactID)
+	var initialArtifact *runtimestate.ArtifactRecord
+	for index := range state.Artifacts {
+		if initialResult != nil && state.Artifacts[index].Reference == *initialResult {
+			initialArtifact = &state.Artifacts[index]
+			break
+		}
+	}
+	if len(state.Artifacts) != 2 || initialArtifact == nil || initialArtifact.Reference.SizeBytes > 8<<20 {
+		t.Fatalf("durable tool output artifacts = %#v", state.Artifacts)
+	}
+	download, err := publicRuntime.ReadArtifact(ctx, runtimeapi.Identity{Tenant: string(tenant), Principal: string(principal)}, initialArtifact.ArtifactID)
 	if err != nil || strings.Contains(string(download.Body), "integration-output-secret") || !strings.Contains(string(download.Body), "[REDACTED]") {
 		t.Fatalf("durable redacted output = %#v, %v", download, err)
 	}
 	// Read the exact object through the configured MinIO client as well as the
 	// owner-authorized API. This makes the redaction claim about persisted
 	// bytes, not merely about a projection returned by StateRuntime.
-	artifactKey := string(tenant) + "/tool-durable-integration/v1/sha256/" + strings.TrimPrefix(state.Artifacts[0].Reference.Digest, "sha256:")
+	artifactKey := string(tenant) + "/tool-durable-integration/v1/sha256/" + strings.TrimPrefix(initialArtifact.Reference.Digest, "sha256:")
 	storedArtifact, err := minioClient.GetObject(ctx, bucket, artifactKey, minio.GetObjectOptions{})
 	if err != nil {
 		t.Fatal(err)
@@ -307,7 +321,7 @@ func TestDurableBrokeredToolLifecyclePersistsApprovalAndFinalization(t *testing.
 	// The public Tool projection carries only the immutable Artifact reference;
 	// the companion Product event announces finalization without copying output.
 	toolPage, err := publicRuntime.InspectToolCalls(ctx, runtimeapi.Identity{Tenant: string(tenant), Principal: string(principal)}, session, turn)
-	if err != nil || len(toolPage.Calls) != 1 || toolPage.Calls[0].Execution == nil || toolPage.Calls[0].Execution.Result == nil || toolPage.Calls[0].Execution.Result.ID != state.Artifacts[0].ArtifactID || toolPage.Calls[0].Execution.Result.SHA256 != strings.TrimPrefix(state.Artifacts[0].Reference.Digest, "sha256:") {
+	if err != nil || len(toolPage.Calls) != 1 || toolPage.Calls[0].Execution == nil || toolPage.Calls[0].Execution.Result == nil || toolPage.Calls[0].Execution.Result.ID != initialArtifact.ArtifactID || toolPage.Calls[0].Execution.Result.SHA256 != strings.TrimPrefix(initialArtifact.Reference.Digest, "sha256:") {
 		t.Fatalf("public durable tool result reference = %#v, %v", toolPage, err)
 	}
 	eventPage, err := publicRuntime.Events(ctx, runtimeapi.Identity{Tenant: string(tenant), Principal: string(principal)}, session, "", 128)
@@ -370,7 +384,7 @@ func TestDurableBrokeredToolLifecyclePersistsApprovalAndFinalization(t *testing.
 			break
 		}
 	}
-	if oversizedAdapter.executes != 1 || oversizedExecution.State != runtimestate.ToolExecutionFailed || oversizedExecution.Result != nil || oversizedExecution.Failure == nil || oversizedExecution.Failure.Message != "tool output exceeds the safe retention limit" || len(state.Artifacts) != 1 {
+	if oversizedAdapter.executes != 1 || oversizedExecution.State != runtimestate.ToolExecutionFailed || oversizedExecution.Result != nil || oversizedExecution.Failure == nil || oversizedExecution.Failure.Message != "tool output exceeds the safe retention limit" || len(state.Artifacts) != 2 {
 		t.Fatalf("oversized durable tool outcome retained output: execution=%#v artifacts=%#v calls=%d", oversizedExecution, state.Artifacts, oversizedAdapter.executes)
 	}
 	objectsAfterOversized := durableMinIOObjectBodies(t, ctx, minioClient, bucket, string(tenant)+"/")
@@ -496,6 +510,7 @@ func TestDurableBrokeredToolLifecyclePersistsApprovalAndFinalization(t *testing.
 	if err != nil || !durableToolExecutionSucceeded(state.ToolExecutions, recovery.ToolCallID) || adapter.executes != 1 || adapter.reconciles != 1 || !durableHasAuditToolCall(state.Audit, recovery.ToolCallID, "record_tool_execution_outcome.terminal") {
 		t.Fatalf("recovered durable execution = executions=%#v calls=%d/%d audit=%#v err=%v", state.ToolExecutions, adapter.executes, adapter.reconciles, state.Audit, err)
 	}
+	executionsBeforeTerminalGrantChecks := len(state.ToolExecutions)
 	// A second brokered approval proves that a grant is checked by the durable
 	// worker immediately before dispatch: advancing past its exact expiry
 	// produces no external adapter call and no execution intent.
@@ -526,7 +541,7 @@ func TestDurableBrokeredToolLifecyclePersistsApprovalAndFinalization(t *testing.
 		t.Fatal(err)
 	}
 	state, err = store.LoadRuntimeState(ctx, workerScope)
-	if err != nil || len(state.ToolExecutions) != 3 || adapter.executes != 1 || adapter.reconciles != 1 || !durableHasAuditKind(state.Audit, "capability_grant.expired") {
+	if err != nil || len(state.ToolExecutions) != executionsBeforeTerminalGrantChecks || adapter.executes != 1 || adapter.reconciles != 1 || !durableHasAuditKind(state.Audit, "capability_grant.expired") {
 		t.Fatalf("expired durable grant = executions=%#v calls=%d/%d audit=%#v err=%v", state.ToolExecutions, adapter.executes, adapter.reconciles, state.Audit, err)
 	}
 	// Owner revocation before the worker records an execution intent is also a
@@ -584,7 +599,7 @@ func TestDurableBrokeredToolLifecyclePersistsApprovalAndFinalization(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(state.ToolExecutions) != 3 || adapter.executes != 1 || adapter.reconciles != 1 || !durableGrantRevokedWithoutUse(state.Grants, revoked.ToolCallID) || !durableHasAuditKind(state.Audit, "capability_grant.revoked") || !durableHasAuditKind(state.Audit, "revoke_capability_grant.terminal") {
+	if len(state.ToolExecutions) != executionsBeforeTerminalGrantChecks || adapter.executes != 1 || adapter.reconciles != 1 || !durableGrantRevokedWithoutUse(state.Grants, revoked.ToolCallID) || !durableHasAuditKind(state.Audit, "capability_grant.revoked") || !durableHasAuditKind(state.Audit, "revoke_capability_grant.terminal") {
 		t.Fatalf("revoked durable grant dispatched or lost terminal audit: executions=%#v calls=%d/%d grants=%#v audit=%#v", state.ToolExecutions, adapter.executes, adapter.reconciles, state.Grants, state.Audit)
 	}
 	// Cancellation reaches the same worker through the public owner API.  It
@@ -624,7 +639,7 @@ func TestDurableBrokeredToolLifecyclePersistsApprovalAndFinalization(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(state.ToolExecutions) != 3 || adapter.executes != 1 || adapter.reconciles != 1 || durableHasGrant(state.Grants, cancelled.ToolCallID) || !durableHasAuditToolCall(state.Audit, cancelled.ToolCallID, "approval.cancelled") || !durableHasAuditKind(state.Audit, "cancel_turn.terminal") {
+	if len(state.ToolExecutions) != executionsBeforeTerminalGrantChecks || adapter.executes != 1 || adapter.reconciles != 1 || durableHasGrant(state.Grants, cancelled.ToolCallID) || !durableHasAuditToolCall(state.Audit, cancelled.ToolCallID, "approval.cancelled") || !durableHasAuditKind(state.Audit, "cancel_turn.terminal") {
 		t.Fatalf("cancelled durable turn dispatched or lost terminal audit: executions=%#v calls=%d/%d grants=%#v audit=%#v", state.ToolExecutions, adapter.executes, adapter.reconciles, state.Grants, state.Audit)
 	}
 	// A conscious owner denial is a terminal approval resolution, distinct from
@@ -684,7 +699,7 @@ func TestDurableBrokeredToolLifecyclePersistsApprovalAndFinalization(t *testing.
 		t.Fatalf("durable denied tool admission = %v, want denied", err)
 	}
 	state, err = store.LoadRuntimeState(ctx, workerScope)
-	if err != nil || len(state.ToolExecutions) != 3 || adapter.executes != 1 || adapter.reconciles != 1 || durableHasToolIntent(state.ToolIntents, "tcall_1234567890ABCDEK") {
+	if err != nil || len(state.ToolExecutions) != executionsBeforeTerminalGrantChecks || adapter.executes != 1 || adapter.reconciles != 1 || durableHasToolIntent(state.ToolIntents, "tcall_1234567890ABCDEK") {
 		t.Fatalf("denied durable admission retained authority or dispatched: executions=%#v calls=%d intents=%#v err=%v", state.ToolExecutions, adapter.executes, state.ToolIntents, err)
 	}
 	unknownDescriptor, err := content.StageToolActionDescriptor(ctx, tenant, descriptorBytes)
@@ -695,7 +710,7 @@ func TestDurableBrokeredToolLifecyclePersistsApprovalAndFinalization(t *testing.
 		t.Fatalf("durable unavailable-policy admission = %v, want denied", err)
 	}
 	state, err = store.LoadRuntimeState(ctx, workerScope)
-	if err != nil || len(state.ToolExecutions) != 3 || adapter.executes != 1 || adapter.reconciles != 1 || durableHasToolIntent(state.ToolIntents, "tcall_1234567890ABCDEL") {
+	if err != nil || len(state.ToolExecutions) != executionsBeforeTerminalGrantChecks || adapter.executes != 1 || adapter.reconciles != 1 || durableHasToolIntent(state.ToolIntents, "tcall_1234567890ABCDEL") {
 		t.Fatalf("unavailable-policy durable admission retained authority or dispatched: executions=%#v calls=%d intents=%#v err=%v", state.ToolExecutions, adapter.executes, state.ToolIntents, err)
 	}
 	lateSessionMutation, err := compiler.CompileCreateSession(runtimestate.CreateSessionCommand{Scope: ownerScope, IdempotencyKey: "durable-tool-late-session", RevisionID: registered.Result().Revision.RevisionID})
