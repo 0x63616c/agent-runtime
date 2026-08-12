@@ -42,6 +42,7 @@ const (
 	CommandCancelSession          CommandKind = "cancel_session"
 	CommandFailSession            CommandKind = "fail_session"
 	CommandClaimOutbox            CommandKind = "claim_outbox"
+	CommandRenewOutbox            CommandKind = "renew_outbox"
 	CommandAcknowledgeOutbox      CommandKind = "acknowledge_outbox"
 )
 
@@ -156,7 +157,7 @@ func (compiler *Compiler) CompileAdmitInput(command AdmitInputCommand) (Compiled
 // Session/Turn.  A public caller cannot forge a digest or choose another owner.
 func (compiler *Compiler) CompileRegisterArtifact(command RegisterArtifactCommand) (CompiledMutation, error) {
 	command = command.Owned()
-	if err := validateScope(command.Scope, AuthorityRuntimeWorker, true); err != nil || validSession(command.SessionID) != nil || validTurn(command.TurnID) != nil {
+	if err := validateScope(command.Scope, AuthorityRuntimeWorker, true); err != nil || validSession(command.SessionID) != nil || validTurn(command.TurnID) != nil || !validOutboxLeaseFence(command.LeaseFence) {
 		return CompiledMutation{}, errors.New("compile register Artifact: invalid scope or target")
 	}
 	commitment, err := compiler.content.ValidateArtifactHandoff(command.Artifact)
@@ -271,7 +272,7 @@ func (compiler *Compiler) CompileBeginToolExecution(command BeginToolExecutionCo
 func (compiler *Compiler) CompileRecordToolExecutionOutcome(command RecordToolExecutionOutcomeCommand) (CompiledMutation, error) {
 	command = command.Owned()
 	valid := command.Outcome == ToolExecutionSucceeded && command.Result != nil && command.Failure == nil && validReference(*command.Result) || (command.Outcome == ToolExecutionFailed || command.Outcome == ToolExecutionUncertain) && command.Result == nil && validFailure(command.Failure)
-	if err := validateWorkerCommand(command.Scope, command.SessionID, command.TurnID, command.OperationID); err != nil || !validOpaque(command.ToolCallID, 128) || !valid {
+	if err := validateWorkerCommand(command.Scope, command.SessionID, command.TurnID, command.OperationID); err != nil || !validOpaque(command.ToolCallID, 128) || !valid || !validOutboxLeaseFence(command.LeaseFence) {
 		return CompiledMutation{}, errors.New("compile tool execution outcome: invalid command")
 	}
 	return compiler.compile(CommandRecordToolOutcome, command.Scope, command.IdempotencyKey, command, command)
@@ -298,10 +299,14 @@ func (compiler *Compiler) CompileRecordInvocationOutcome(command RecordInvocatio
 // CompileSettleTurn validates one fenced terminal settlement command.
 func (compiler *Compiler) CompileSettleTurn(command SettleTurnCommand) (CompiledMutation, error) {
 	command = command.Owned()
-	if err := validateScope(command.Scope, AuthorityRuntimeWorker, true); err != nil || validSession(command.SessionID) != nil || validTurn(command.TurnID) != nil || command.ExpectedSessionVersion == 0 || command.ExpectedTurnVersion == 0 || !validTerminal(command.Outcome) {
+	if err := validateScope(command.Scope, AuthorityRuntimeWorker, true); err != nil || validSession(command.SessionID) != nil || validTurn(command.TurnID) != nil || command.ExpectedSessionVersion == 0 || command.ExpectedTurnVersion == 0 || !validTerminal(command.Outcome) || !validOutboxLeaseFence(command.LeaseFence) {
 		return CompiledMutation{}, errors.New("compile settle Turn: invalid outcome or fence")
 	}
 	return compiler.compile(CommandSettleTurn, command.Scope, command.IdempotencyKey, command, command)
+}
+
+func validOutboxLeaseFence(fence *OutboxLeaseFence) bool {
+	return fence == nil || validOpaque(string(fence.OutboxID), 128) && fence.ExpectedVersion > 0 && validOpaque(fence.Claimer, 128)
 }
 
 // CompileCancelTurn validates a principal-owned cancellation command.
@@ -347,6 +352,15 @@ func (compiler *Compiler) CompileClaimOutbox(command ClaimOutboxCommand) (Compil
 		return CompiledMutation{}, errors.New("compile claim Outbox: invalid lease")
 	}
 	return compiler.compile(CommandClaimOutbox, command.Scope, command.IdempotencyKey, command, command)
+}
+
+// CompileRenewOutbox validates one owner-fenced extension of an active Outbox lease.
+func (compiler *Compiler) CompileRenewOutbox(command RenewOutboxCommand) (CompiledMutation, error) {
+	command = command.Owned()
+	if err := validateScope(command.Scope, AuthorityOutboxPublisher, false); err != nil || !validOpaque(string(command.OutboxID), 128) || command.ExpectedVersion == 0 || !validOpaque(command.Claimer, 128) || command.ClaimUntil.IsZero() {
+		return CompiledMutation{}, errors.New("compile renew Outbox: invalid lease")
+	}
+	return compiler.compile(CommandRenewOutbox, command.Scope, command.IdempotencyKey, command, command)
 }
 
 // CompileAcknowledgeOutbox validates one publisher-authorized exact lease acknowledgement.

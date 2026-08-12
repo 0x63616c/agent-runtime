@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/0x63616c/agent-runtime/internal/clock"
@@ -236,6 +237,7 @@ func (plan TransitionPlan) Validate() error {
 
 // RuntimeStatePlanner deterministically interprets compiler-sealed mutations over metadata-only state.
 type RuntimeStatePlanner struct {
+	mu        sync.Mutex
 	clock     clock.Clock
 	ids       IdentifierSource
 	retention RetentionPolicy
@@ -260,10 +262,15 @@ func NewRuntimeStatePlanner(source clock.Clock, ids IdentifierSource, options ..
 
 // Plan returns the complete atomic replacement for a compiler-sealed command.
 func (planner *RuntimeStatePlanner) Plan(ctx context.Context, prior RuntimeState, mutation CompiledMutation) (TransitionPlan, error) {
+	if planner == nil {
+		return TransitionPlan{}, ErrIntegrity
+	}
+	planner.mu.Lock()
+	defer planner.mu.Unlock()
 	if err := ctx.Err(); err != nil {
 		return TransitionPlan{}, err
 	}
-	if planner == nil || planner.clock == nil || planner.ids == nil || planner.retention == nil || mutation.mutation.kind == "" || mutation.mutation.receipt.Command != mutation.mutation.kind {
+	if planner.clock == nil || planner.ids == nil || planner.retention == nil || mutation.mutation.kind == "" || mutation.mutation.receipt.Command != mutation.mutation.kind {
 		return TransitionPlan{}, ErrIntegrity
 	}
 	now := normalizeTime(planner.clock.Now())
@@ -335,6 +342,8 @@ func (planner *RuntimeStatePlanner) Plan(ctx context.Context, prior RuntimeState
 		result, effects, err = planner.failSession(&state, mutation.mutation.receipt, command, now)
 	case ClaimOutboxCommand:
 		result, effects, err = planner.claim(&state, mutation.mutation.receipt, command, now)
+	case RenewOutboxCommand:
+		result, effects, err = planner.renew(&state, mutation.mutation.receipt, command, now)
 	case AcknowledgeOutboxCommand:
 		result, effects, err = planner.acknowledge(&state, mutation.mutation.receipt, command, now)
 	default:
@@ -517,6 +526,9 @@ func (planner *RuntimeStatePlanner) admit(state *RuntimeState, binding ReceiptBi
 
 func (planner *RuntimeStatePlanner) registerArtifact(state *RuntimeState, binding ReceiptBinding, compiled compiledArtifact, now time.Time) (PlanResult, EffectSet, error) {
 	command := compiled.command
+	if !outboxLeaseFenceCurrent(*state, binding.Scope.Tenant, command.LeaseFence, now) {
+		return PlanResult{}, EffectSet{}, ErrConflict
+	}
 	if findTurn(state, binding.Scope, command.SessionID, command.TurnID) < 0 {
 		return PlanResult{}, EffectSet{}, ErrNotFoundOrDenied
 	}
@@ -852,6 +864,9 @@ func (planner *RuntimeStatePlanner) beginToolExecution(state *RuntimeState, bind
 }
 
 func (planner *RuntimeStatePlanner) recordToolExecutionOutcome(state *RuntimeState, binding ReceiptBinding, c RecordToolExecutionOutcomeCommand, now time.Time) (PlanResult, EffectSet, error) {
+	if !outboxLeaseFenceCurrent(*state, binding.Scope.Tenant, c.LeaseFence, now) {
+		return PlanResult{}, EffectSet{}, ErrConflict
+	}
 	sessionIndex := findSession(state, binding.Scope, c.SessionID)
 	turnIndex := findTurn(state, binding.Scope, c.SessionID, c.TurnID)
 	if sessionIndex < 0 || turnIndex < 0 {
@@ -971,6 +986,9 @@ func (planner *RuntimeStatePlanner) recordOutcome(state *RuntimeState, binding R
 }
 
 func (planner *RuntimeStatePlanner) settle(state *RuntimeState, binding ReceiptBinding, command SettleTurnCommand, now time.Time, cancelled bool) (PlanResult, EffectSet, error) {
+	if !outboxLeaseFenceCurrent(*state, binding.Scope.Tenant, command.LeaseFence, now) {
+		return PlanResult{}, EffectSet{}, ErrConflict
+	}
 	sessionIndex := findSession(state, binding.Scope, command.SessionID)
 	turnIndex := findTurn(state, binding.Scope, command.SessionID, command.TurnID)
 	if sessionIndex < 0 || turnIndex < 0 {
@@ -1204,6 +1222,36 @@ func (planner *RuntimeStatePlanner) claim(state *RuntimeState, binding ReceiptBi
 	effects, err := planner.auditOnly(state, binding, "outbox.claimed", record.SessionID, record.TurnID, now)
 	return PlanResult{Outbox: record}, effects, err
 }
+
+func outboxLeaseFenceCurrent(state RuntimeState, tenant runtimecontent.TenantID, fence *OutboxLeaseFence, now time.Time) bool {
+	if fence == nil {
+		return true
+	}
+	for _, record := range state.Outbox {
+		if record.Tenant == tenant && record.OutboxID == fence.OutboxID {
+			return record.Version == fence.ExpectedVersion && record.State == OutboxClaimed && record.ClaimedBy == fence.Claimer && record.ClaimUntil != nil && record.ClaimUntil.After(now)
+		}
+	}
+	return false
+}
+
+func (planner *RuntimeStatePlanner) renew(state *RuntimeState, binding ReceiptBinding, command RenewOutboxCommand, now time.Time) (PlanResult, EffectSet, error) {
+	index := findOutbox(state, binding.Scope.Tenant, command.OutboxID)
+	if index < 0 {
+		return PlanResult{}, EffectSet{}, ErrNotFoundOrDenied
+	}
+	record := state.Outbox[index]
+	if record.Version != command.ExpectedVersion || record.State != OutboxClaimed || record.ClaimedBy != command.Claimer || record.ClaimUntil == nil || !record.ClaimUntil.After(now) || !command.ClaimUntil.After(*record.ClaimUntil) {
+		return PlanResult{}, EffectSet{}, ErrConflict
+	}
+	record.ClaimUntil, record.Version = &command.ClaimUntil, record.Version+1
+	state.Outbox[index] = record
+	if record.Aggregate == "audit_fact" {
+		return PlanResult{Outbox: record}, EffectSet{}, nil
+	}
+	effects, err := planner.auditOnly(state, binding, "outbox.renewed", record.SessionID, record.TurnID, now)
+	return PlanResult{Outbox: record}, effects, err
+}
 func (planner *RuntimeStatePlanner) acknowledge(state *RuntimeState, binding ReceiptBinding, command AcknowledgeOutboxCommand, now time.Time) (PlanResult, EffectSet, error) {
 	index := findOutbox(state, binding.Scope.Tenant, command.OutboxID)
 	if index < 0 {
@@ -1331,7 +1379,7 @@ func auditLifecycleKinds(command CommandKind) []string {
 	switch command {
 	case CommandRecordToolOutcome, CommandRecordOutcome, CommandSettleTurn, CommandCancelTurn, CommandCloseSession, CommandCancelSession, CommandFailSession, CommandRevokeCapabilityGrant, CommandExpireCapabilityGrant:
 		return append(kinds, prefix+".terminal")
-	case CommandClaimOutbox, CommandAcknowledgeOutbox:
+	case CommandClaimOutbox, CommandRenewOutbox, CommandAcknowledgeOutbox:
 		return append(kinds, prefix+".reconciled")
 	default:
 		return kinds

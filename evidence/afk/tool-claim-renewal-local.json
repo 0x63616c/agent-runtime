@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "records": [
+    {
+      "event": "local_check",
+      "requirement_ids": ["TOL-006"],
+      "seams": ["S5"],
+      "documentation": ["docs/reference/data-lifecycle.md"],
+      "revision": "working-tree",
+      "source_ref": "local",
+      "utc_time": "2026-08-12T06:02:00Z",
+      "proof_level": "integration",
+      "command_id": "tool-claim-renewal-durable-gates",
+      "artifact_ref": "tool-claim-renewal-d3c70ad",
+      "result": "passed",
+      "limitations": ["local-disposable-postgres-minio-not-main-ci-or-external-provider-proof"]
+    }
+  ]
+}

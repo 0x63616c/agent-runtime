@@ -98,7 +98,7 @@ func TestSandboxAdapterExecutesThroughControlProcess(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, _, _, _ = createToolExecutionWithDescriptor(t, ctx, content, compiler, store, tenant, principal, now, descriptor)
-	worker, err := runtimetool.NewWorker(runtimetool.Config{Store: store, Tenants: store, Compiler: compiler, Planner: planner, Clock: source, Content: content, Adapter: adapter, Claimer: "tool-worker"})
+	worker, err := runtimetool.NewWorker(runtimetool.Config{Store: store, Tenants: store, Compiler: compiler, Planner: planner, Clock: source, Content: content, Adapter: adapter, Claimer: "tool-worker", LeaseScheduler: newInertLeaseScheduler()})
 	if err != nil {
 		t.Fatal(err)
 	}

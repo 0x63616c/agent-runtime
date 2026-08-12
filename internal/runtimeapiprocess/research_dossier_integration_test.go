@@ -141,7 +141,7 @@ func TestResearchDossierRecoversLongRunningToolResearchThroughThePublicContract(
 		t.Fatal(err)
 	}
 	toolAdapter := &m8ResearchTool{}
-	tool, err := runtimetool.NewWorker(runtimetool.Config{Store: store, Tenants: store, Compiler: compiler, Planner: planner, Clock: clockSource, Content: content, Adapter: toolAdapter, Claimer: "m8-research-tool"})
+	tool, err := runtimetool.NewWorker(runtimetool.Config{Store: store, Tenants: store, Compiler: compiler, Planner: planner, Clock: clockSource, Content: content, Adapter: toolAdapter, Claimer: "m8-research-tool", LeaseScheduler: runtimetool.NewRealtimeLeaseScheduler()})
 	if err != nil {
 		t.Fatal(err)
 	}

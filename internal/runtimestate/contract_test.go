@@ -43,13 +43,13 @@ func TestOutboxRecoveryCarriesTheExactFencedInvocationRoute(t *testing.T) {
 }
 
 func TestOutboxMutationsDoNotExposeCallerForgedRequestDigests(t *testing.T) {
-	for _, command := range []reflect.Type{reflect.TypeOf(runtimestate.ClaimOutboxCommand{}), reflect.TypeOf(runtimestate.AcknowledgeOutboxCommand{})} {
+	for _, command := range []reflect.Type{reflect.TypeOf(runtimestate.ClaimOutboxCommand{}), reflect.TypeOf(runtimestate.RenewOutboxCommand{}), reflect.TypeOf(runtimestate.AcknowledgeOutboxCommand{})} {
 		if _, found := command.FieldByName("RequestDigest"); found {
 			t.Fatalf("%s exposes a caller-forgeable request digest", command)
 		}
 	}
 	store := reflect.TypeOf((*runtimestate.RuntimeStateStore)(nil)).Elem()
-	for _, methodName := range []string{"ClaimOutbox", "AcknowledgeOutbox"} {
+	for _, methodName := range []string{"ClaimOutbox", "RenewOutbox", "AcknowledgeOutbox"} {
 		if _, ok := store.MethodByName(methodName); ok {
 			t.Fatalf("%s lets an adapter accept a raw command", methodName)
 		}
@@ -151,6 +151,7 @@ func TestEveryMutationCommandOffersOwnedNormalization(t *testing.T) {
 		reflect.TypeOf(runtimestate.CancelTurnCommand{}),
 		reflect.TypeOf(runtimestate.CloseSessionCommand{}),
 		reflect.TypeOf(runtimestate.ClaimOutboxCommand{}),
+		reflect.TypeOf(runtimestate.RenewOutboxCommand{}),
 		reflect.TypeOf(runtimestate.AcknowledgeOutboxCommand{}),
 	} {
 		method, ok := command.MethodByName("Owned")
@@ -166,7 +167,7 @@ func TestScopeAndIdempotencyKeyAreExplicitButReceiptDigestIsCompilerOnly(t *test
 		reflect.TypeOf(runtimestate.AdmitInputCommand{}), reflect.TypeOf(runtimestate.BeginInvocationAttemptCommand{}),
 		reflect.TypeOf(runtimestate.RecordInvocationOutcomeCommand{}), reflect.TypeOf(runtimestate.SettleTurnCommand{}),
 		reflect.TypeOf(runtimestate.CancelTurnCommand{}), reflect.TypeOf(runtimestate.CloseSessionCommand{}),
-		reflect.TypeOf(runtimestate.ClaimOutboxCommand{}), reflect.TypeOf(runtimestate.AcknowledgeOutboxCommand{}),
+		reflect.TypeOf(runtimestate.ClaimOutboxCommand{}), reflect.TypeOf(runtimestate.RenewOutboxCommand{}), reflect.TypeOf(runtimestate.AcknowledgeOutboxCommand{}),
 	} {
 		if _, found := command.FieldByName("Scope"); !found {
 			t.Fatalf("%s lacks authenticated scope", command)

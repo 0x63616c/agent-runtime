@@ -14,6 +14,7 @@ import (
 	"os"
 	"runtime"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -185,7 +186,7 @@ func TestDurableBrokeredToolLifecyclePersistsApprovalAndFinalization(t *testing.
 		t.Fatalf("exhausted durable grant created execution before dispatch = grants=%#v executions=%#v err=%v", state.Grants, state.ToolExecutions, err)
 	}
 	adapter := newDurableToolAdapter()
-	worker, err := runtimetool.NewWorker(runtimetool.Config{Store: store, Tenants: store, Compiler: compiler, Planner: planner, Clock: source, Content: content, Adapter: adapter, Claimer: "durable-tool-worker"})
+	worker, err := runtimetool.NewWorker(runtimetool.Config{Store: store, Tenants: store, Compiler: compiler, Planner: planner, Clock: source, Content: content, Adapter: adapter, Claimer: "durable-tool-worker", LeaseScheduler: newInertLeaseScheduler()})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -203,6 +204,72 @@ func TestDurableBrokeredToolLifecyclePersistsApprovalAndFinalization(t *testing.
 	}
 	if len(state.ToolExecutions) != 1 || state.ToolExecutions[0].State != runtimestate.ToolExecutionSucceeded || len(state.Grants) != 1 || state.Grants[0].Uses != 1 || adapter.executes != 1 || adapter.reconciles != 0 {
 		t.Fatalf("durable execution = %#v", state.ToolExecutions)
+	}
+	// A live worker can take longer than the fixed ten-second crash-recovery
+	// lease. Its claim must be renewed and fenced through finalization so a
+	// competing PostgreSQL worker cannot reclaim the exact operation midway.
+	slowSessionMutation, err := compiler.CompileCreateSession(runtimestate.CreateSessionCommand{Scope: ownerScope, IdempotencyKey: "durable-tool-slow-session", RevisionID: registered.Result().Revision.RevisionID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	slowSession := apply(slowSessionMutation).Result().Session.SessionID
+	slowInput, err := content.StageInputEnvelope(ctx, tenant, []agentruntime.ContentPart{{Kind: agentruntime.ContentText, Text: "hold a healthy tool action beyond its original lease"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	slowInputMutation, err := compiler.CompileAdmitInput(runtimestate.AdmitInputCommand{Scope: ownerScope, IdempotencyKey: "durable-tool-slow-input", SessionID: slowSession, Input: slowInput})
+	if err != nil {
+		t.Fatal(err)
+	}
+	slowTurn := apply(slowInputMutation).Result().Turn.TurnID
+	slowDescriptor, err := content.StageToolActionDescriptor(ctx, tenant, descriptorBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	slowAdmission, err := broker.Admit(ctx, runtimetool.AdmissionRequest{Tenant: tenant, Principal: principal, SessionID: slowSession, TurnID: slowTurn, ToolCallID: "tcall_1234567890ABCDEZ", ApprovalID: "appr_1234567890ABCDEZ", PolicyName: "durable-tool-policy", PolicyRevision: 1, ToolName: "sandbox", ActionDigest: digest, CapabilityDigest: digest, Action: agentruntime.ApprovalAction{Verb: "write", Target: "workspace-service"}, MaximumUses: 1, ExpiresAt: source.Now().Add(time.Hour), Descriptor: slowDescriptor, IdempotencyKey: "durable-tool-slow-admission"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := publicRuntime.DecideApproval(ctx, runtimeapi.Identity{Tenant: string(tenant), Principal: string(principal)}, agentruntime.DecideApprovalRequest{ApprovalID: slowAdmission.ApprovalID, Decision: agentruntime.ApprovalApproved, IdempotencyKey: "durable-tool-slow-approve"}); err != nil {
+		t.Fatal(err)
+	}
+	slowAdapter := newBlockingDurableToolAdapter()
+	renewal := newManualLeaseScheduler()
+	liveWorker, err := runtimetool.NewWorker(runtimetool.Config{Store: store, Tenants: store, Compiler: compiler, Planner: planner, Clock: source, Content: content, Adapter: slowAdapter, Claimer: "durable-live-tool-worker", LeaseRenewalInterval: time.Millisecond, LeaseScheduler: renewal})
+	if err != nil {
+		t.Fatal(err)
+	}
+	competingWorker, err := runtimetool.NewWorker(runtimetool.Config{Store: store, Tenants: store, Compiler: compiler, Planner: planner, Clock: source, Content: content, Adapter: slowAdapter, Claimer: "durable-competing-tool-worker", LeaseRenewalInterval: time.Millisecond, LeaseScheduler: newInertLeaseScheduler()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	liveDone := make(chan error, 1)
+	go func() { liveDone <- liveWorker.ScanOnce(ctx) }()
+	<-slowAdapter.started
+	if err := source.Advance(6 * time.Second); err != nil {
+		t.Fatal(err)
+	}
+	renewal.Tick()
+	durableToolRenewalIsCurrent(t, ctx, store, tenant, slowAdmission.ToolCallID, "durable-live-tool-worker", source)
+	if err := source.Advance(5 * time.Second); err != nil {
+		t.Fatal(err)
+	}
+	if err := competingWorker.ScanOnce(ctx); err != nil {
+		t.Fatalf("durable competing worker scan: %v", err)
+	}
+	if executes, reconciles := slowAdapter.calls(); executes != 1 || reconciles != 0 {
+		t.Fatalf("durable competing worker touched live tool: %d/%d", executes, reconciles)
+	}
+	close(slowAdapter.release)
+	if err := <-liveDone; err != nil {
+		t.Fatalf("durable live worker completion: %v", err)
+	}
+	state, err = store.LoadRuntimeState(ctx, workerScope)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if executes, reconciles := slowAdapter.calls(); executes != 1 || reconciles != 0 || !durableToolExecutionSucceeded(state.ToolExecutions, slowAdmission.ToolCallID) {
+		t.Fatalf("durable renewed tool execution = calls %d/%d executions %#v", executes, reconciles, state.ToolExecutions)
 	}
 	// The durable records contain only bounded metadata; authorization and
 	// execution lifecycles are append-only audit facts, never raw tool output.
@@ -285,7 +352,7 @@ func TestDurableBrokeredToolLifecyclePersistsApprovalAndFinalization(t *testing.
 		t.Fatal(err)
 	}
 	oversizedAdapter := newOversizedDurableToolAdapter()
-	oversizedWorker, err := runtimetool.NewWorker(runtimetool.Config{Store: store, Tenants: store, Compiler: compiler, Planner: planner, Clock: source, Content: content, Adapter: oversizedAdapter, Claimer: "durable-tool-oversized-worker"})
+	oversizedWorker, err := runtimetool.NewWorker(runtimetool.Config{Store: store, Tenants: store, Compiler: compiler, Planner: planner, Clock: source, Content: content, Adapter: oversizedAdapter, Claimer: "durable-tool-oversized-worker", LeaseScheduler: newInertLeaseScheduler()})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -723,7 +790,7 @@ func TestDurableBrokeredToolLifecyclePersistsApprovalAndFinalization(t *testing.
 		t.Fatal(err)
 	}
 	acceptedAdapter := newAcceptedThenLostDurableToolAdapter()
-	initialWorker, err := runtimetool.NewWorker(runtimetool.Config{Store: store, Tenants: store, Compiler: compiler, Planner: planner, Clock: source, Content: content, Adapter: acceptedAdapter, Claimer: "durable-tool-lost-after-acceptance-worker"})
+	initialWorker, err := runtimetool.NewWorker(runtimetool.Config{Store: store, Tenants: store, Compiler: compiler, Planner: planner, Clock: source, Content: content, Adapter: acceptedAdapter, Claimer: "durable-tool-lost-after-acceptance-worker", LeaseScheduler: newInertLeaseScheduler()})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -770,7 +837,7 @@ func TestDurableBrokeredToolLifecyclePersistsApprovalAndFinalization(t *testing.
 		t.Fatal(err)
 	}
 	uncertainAdapter := newUncertainDurableToolAdapter()
-	uncertainWorker, err := runtimetool.NewWorker(runtimetool.Config{Store: store, Tenants: store, Compiler: compiler, Planner: planner, Clock: source, Content: content, Adapter: uncertainAdapter, Claimer: "durable-tool-uncertain-recovery-worker"})
+	uncertainWorker, err := runtimetool.NewWorker(runtimetool.Config{Store: store, Tenants: store, Compiler: compiler, Planner: planner, Clock: source, Content: content, Adapter: uncertainAdapter, Claimer: "durable-tool-uncertain-recovery-worker", LeaseScheduler: newInertLeaseScheduler()})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1131,6 +1198,58 @@ type durableToolIDs struct{ next uint64 }
 func (ids *durableToolIDs) NextIdentifier(kind runtimestate.IdentifierKind) (string, error) {
 	ids.next++
 	return fmt.Sprintf("%s_%016d", kind, ids.next), nil
+}
+
+func durableToolRenewalIsCurrent(t *testing.T, ctx context.Context, store runtimestate.RuntimeStateStore, tenant runtimecontent.TenantID, toolCallID, claimer string, source *clock.Fake) {
+	t.Helper()
+	page, err := store.ReadOutbox(ctx, runtimestate.OutboxQuery{Scope: runtimestate.MutationScope{Tenant: tenant, Authority: runtimestate.AuthorityOutboxPublisher}, Limit: 4096})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, record := range page.Records {
+		if record.ToolCallID == toolCallID && record.ClaimedBy == claimer && record.ClaimUntil != nil && record.ClaimUntil.After(source.Now()) && record.Version > 2 {
+			return
+		}
+	}
+	t.Fatalf("durable live claim was not renewed for %s", toolCallID)
+}
+
+type blockingDurableToolAdapter struct {
+	mu                   sync.Mutex
+	executes, reconciles int
+	started              chan struct{}
+	release              chan struct{}
+	startOnce            sync.Once
+}
+
+func newBlockingDurableToolAdapter() *blockingDurableToolAdapter {
+	return &blockingDurableToolAdapter{started: make(chan struct{}), release: make(chan struct{})}
+}
+
+func (adapter *blockingDurableToolAdapter) ExternalEffectContract() runtimetool.ExternalEffectContract {
+	return runtimetool.ExternalEffectContract{IdempotencyKey: "operation_id", Reconciles: true}
+}
+
+func (adapter *blockingDurableToolAdapter) Execute(context.Context, runtimetool.Request) (runtimetool.Response, error) {
+	adapter.mu.Lock()
+	adapter.executes++
+	adapter.mu.Unlock()
+	adapter.startOnce.Do(func() { close(adapter.started) })
+	<-adapter.release
+	return runtimetool.Response{Output: []byte("durable slow but healthy result")}, nil
+}
+
+func (adapter *blockingDurableToolAdapter) Reconcile(context.Context, runtimetool.Request) (runtimetool.Response, error) {
+	adapter.mu.Lock()
+	defer adapter.mu.Unlock()
+	adapter.reconciles++
+	return runtimetool.Response{Output: []byte("unexpected durable reconcile")}, nil
+}
+
+func (adapter *blockingDurableToolAdapter) calls() (int, int) {
+	adapter.mu.Lock()
+	defer adapter.mu.Unlock()
+	return adapter.executes, adapter.reconciles
 }
 
 // durableToolAdapter is the disposable external-effect seam for this

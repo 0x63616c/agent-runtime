@@ -9,7 +9,7 @@ func TestEveryClosedMutationVocabularyHasDurableAuditLifecyclePhases(t *testing.
 		CommandRecordToolIntent, CommandRequestApproval, CommandDecideApproval, CommandRevokeCapabilityGrant, CommandExpireCapabilityGrant, CommandDenyToolAdmission,
 		CommandConsumeCapabilityGrant, CommandBeginToolExecution, CommandRecordToolOutcome,
 		CommandBeginInvocation, CommandRecordOutcome, CommandSettleTurn, CommandCancelTurn,
-		CommandCloseSession, CommandCancelSession, CommandFailSession, CommandClaimOutbox, CommandAcknowledgeOutbox,
+		CommandCloseSession, CommandCancelSession, CommandFailSession, CommandClaimOutbox, CommandRenewOutbox, CommandAcknowledgeOutbox,
 	}
 	for _, command := range commands {
 		phases := auditLifecycleKinds(command)
@@ -31,7 +31,7 @@ func TestEveryClosedMutationVocabularyHasDurableAuditLifecyclePhases(t *testing.
 			t.Errorf("%s has no terminal phase", command)
 		}
 	}
-	for _, command := range []CommandKind{CommandClaimOutbox, CommandAcknowledgeOutbox} {
+	for _, command := range []CommandKind{CommandClaimOutbox, CommandRenewOutbox, CommandAcknowledgeOutbox} {
 		if !containsAuditLifecycleKind(auditLifecycleKinds(command), string(command)+".reconciled") {
 			t.Errorf("%s has no reconciled phase", command)
 		}

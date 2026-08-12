@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -107,7 +108,7 @@ func TestWorkerFinalizesAuthorizedToolActionsAndReconcilesLostClaims(t *testing.
 				}
 			}
 			adapter := &recordingAdapter{response: runtimetool.Response{Output: []byte("sandbox operation completed")}}
-			worker, err := runtimetool.NewWorker(runtimetool.Config{Store: store, Tenants: store, Compiler: compiler, Planner: planner, Clock: source, Content: content, Adapter: adapter, Claimer: "tool-worker"})
+			worker, err := runtimetool.NewWorker(runtimetool.Config{Store: store, Tenants: store, Compiler: compiler, Planner: planner, Clock: source, Content: content, Adapter: adapter, Claimer: "tool-worker", LeaseScheduler: newInertLeaseScheduler()})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -174,6 +175,134 @@ func TestWorkerFinalizesAuthorizedToolActionsAndReconcilesLostClaims(t *testing.
 	}
 }
 
+// TestWorkerRenewsTheWholeClaimWhileAnAdapterIsStillExecuting proves that a
+// live execution is not recoverable merely because its original ten-second
+// crash-recovery lease elapses. The competing worker sees the renewed fence
+// and therefore cannot either submit the operation or reconcile it.
+func TestWorkerRenewsTheWholeClaimWhileAnAdapterIsStillExecuting(t *testing.T) {
+	ctx := context.Background()
+	now := time.Date(2026, 8, 11, 14, 0, 0, 0, time.UTC)
+	content, err := runtimecontent.New("runtime-content", &toolObjects{values: map[string][]byte{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tenant, _ := runtimecontent.ParseTenantID("tenant-a")
+	principal, _ := runtimecontent.ParsePrincipalID("principal-a")
+	compiler, _ := runtimestate.NewCompiler(content)
+	source, _ := clock.NewFake(now)
+	planner, _ := runtimestate.NewRuntimeStatePlanner(source, &toolIDs{})
+	store, _ := runtimestate.NewMemoryRuntimeStateStore(planner)
+	_, _, _, _ = createToolExecution(t, ctx, content, compiler, store, tenant, principal, now)
+
+	adapter := newBlockingToolAdapter()
+	renewal := newManualLeaseScheduler()
+	first, err := runtimetool.NewWorker(runtimetool.Config{Store: store, Tenants: store, Compiler: compiler, Planner: planner, Clock: source, Content: content, Adapter: adapter, Claimer: "live-tool-worker", LeaseRenewalInterval: time.Millisecond, LeaseScheduler: renewal})
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := runtimetool.NewWorker(runtimetool.Config{Store: store, Tenants: store, Compiler: compiler, Planner: planner, Clock: source, Content: content, Adapter: adapter, Claimer: "competing-tool-worker", LeaseRenewalInterval: time.Millisecond, LeaseScheduler: newInertLeaseScheduler()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstDone := make(chan error, 1)
+	go func() { firstDone <- first.ScanOnce(ctx) }()
+	<-adapter.started
+	if err := source.Advance(6 * time.Second); err != nil {
+		t.Fatal(err)
+	}
+	renewal.Tick()
+	record := toolOutbox(t, ctx, store, tenant)
+	if record.ClaimedBy != "live-tool-worker" || record.ClaimUntil == nil || !record.ClaimUntil.After(source.Now()) || record.Version <= 2 {
+		t.Fatalf("live claim was not renewed: %#v", record)
+	}
+	if err := source.Advance(5 * time.Second); err != nil {
+		t.Fatal(err)
+	}
+	if err := second.ScanOnce(ctx); err != nil {
+		t.Fatalf("competing worker scan: %v", err)
+	}
+	if executes, reconciles := adapter.calls(); executes != 1 || reconciles != 0 {
+		t.Fatalf("competing worker touched live operation: execute=%d reconcile=%d", executes, reconciles)
+	}
+	close(adapter.release)
+	if err := <-firstDone; err != nil {
+		t.Fatalf("live worker completion: %v", err)
+	}
+	state, err := store.LoadRuntimeState(ctx, runtimestate.MutationScope{Tenant: tenant, Authority: runtimestate.AuthorityRuntimeWorker})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if executes, reconciles := adapter.calls(); executes != 1 || reconciles != 0 || len(state.ToolExecutions) != 1 || state.ToolExecutions[0].State != runtimestate.ToolExecutionSucceeded {
+		t.Fatalf("renewed live execution = calls %d/%d state %#v", executes, reconciles, state.ToolExecutions)
+	}
+	if record := toolOutbox(t, ctx, store, tenant); record.State != runtimestate.OutboxPublished {
+		t.Fatalf("renewed live claim was not safely acknowledged: %#v", record)
+	}
+}
+
+// TestWorkerRetriesAClaimFencedTerminalWriteAfterRenewal proves renewal and
+// artifact finalization may race on a whole-state snapshot without allowing a
+// stale terminal outcome or a competing worker dispatch.
+func TestWorkerRetriesAClaimFencedTerminalWriteAfterRenewal(t *testing.T) {
+	ctx := context.Background()
+	now := time.Date(2026, 8, 11, 15, 0, 0, 0, time.UTC)
+	content, _ := runtimecontent.New("runtime-content", &toolObjects{values: map[string][]byte{}})
+	tenant, _ := runtimecontent.ParseTenantID("tenant-a")
+	principal, _ := runtimecontent.ParsePrincipalID("principal-a")
+	compiler, _ := runtimestate.NewCompiler(content)
+	source, _ := clock.NewFake(now)
+	planner, _ := runtimestate.NewRuntimeStatePlanner(source, &toolIDs{})
+	memory, _ := runtimestate.NewMemoryRuntimeStateStore(planner)
+	_, _, _, _ = createToolExecution(t, ctx, content, compiler, memory, tenant, principal, now)
+	store := newArtifactBlockingStore(memory)
+	renewal := newManualLeaseScheduler()
+	adapter := &recordingAdapter{response: runtimetool.Response{Output: []byte("renew while finalizing")}}
+	live, err := runtimetool.NewWorker(runtimetool.Config{Store: store, Tenants: store, Compiler: compiler, Planner: planner, Clock: source, Content: content, Adapter: adapter, Claimer: "same-stable-claimer", LeaseRenewalInterval: time.Millisecond, LeaseScheduler: renewal})
+	if err != nil {
+		t.Fatal(err)
+	}
+	competing, err := runtimetool.NewWorker(runtimetool.Config{Store: store, Tenants: store, Compiler: compiler, Planner: planner, Clock: source, Content: content, Adapter: adapter, Claimer: "competing-worker", LeaseScheduler: newInertLeaseScheduler()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- live.ScanOnce(ctx) }()
+	<-store.artifactPersistEntered
+	if err := source.Advance(6 * time.Second); err != nil {
+		t.Fatal(err)
+	}
+	store.blockRenewPersist = true
+	renewalDone := make(chan struct{})
+	go func() {
+		renewal.Tick()
+		close(renewalDone)
+	}()
+	<-store.renewPersistEntered
+	close(store.releaseArtifactPersist)
+	<-store.artifactPersisted
+	close(store.releaseRenewPersist)
+	<-renewalDone
+	if err := source.Advance(5 * time.Second); err != nil {
+		t.Fatal(err)
+	}
+	if err := competing.ScanOnce(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if adapter.executes != 1 || adapter.reconciles != 0 {
+		t.Fatalf("competing worker dispatched while fenced terminal write was blocked: %d/%d", adapter.executes, adapter.reconciles)
+	}
+	if err := <-done; err != nil {
+		t.Fatalf("claim-fenced terminal retry: %v", err)
+	}
+	state, err := memory.LoadRuntimeState(ctx, runtimestate.MutationScope{Tenant: tenant, Authority: runtimestate.AuthorityRuntimeWorker})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if adapter.executes != 1 || adapter.reconciles != 0 || len(state.ToolExecutions) != 1 || state.ToolExecutions[0].State != runtimestate.ToolExecutionSucceeded || toolOutbox(t, ctx, memory, tenant).State != runtimestate.OutboxPublished {
+		t.Fatalf("claim-fenced terminal retry state = calls %d/%d executions %#v outbox %#v", adapter.executes, adapter.reconciles, state.ToolExecutions, toolOutbox(t, ctx, memory, tenant))
+	}
+}
+
 func TestWorkerConsumesApprovedGrantAndResumesAfterConsumeBeforeIntent(t *testing.T) {
 	for _, test := range []struct {
 		name             string
@@ -207,7 +336,7 @@ func TestWorkerConsumesApprovedGrantAndResumesAfterConsumeBeforeIntent(t *testin
 				}
 			}
 			adapter := &recordingAdapter{response: runtimetool.Response{Output: []byte("one bounded result")}}
-			worker, err := runtimetool.NewWorker(runtimetool.Config{Store: store, Tenants: store, Compiler: compiler, Planner: planner, Clock: source, Content: content, Adapter: adapter, Claimer: "tool-worker"})
+			worker, err := runtimetool.NewWorker(runtimetool.Config{Store: store, Tenants: store, Compiler: compiler, Planner: planner, Clock: source, Content: content, Adapter: adapter, Claimer: "tool-worker", LeaseScheduler: newInertLeaseScheduler()})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -249,7 +378,7 @@ func TestWorkerRefusesOversizedToolOutputBeforeDurablePersistence(t *testing.T) 
 	store, _ := runtimestate.NewMemoryRuntimeStateStore(planner)
 	_, _, _, _ = createToolExecution(t, ctx, content, compiler, store, tenant, principal, now)
 	adapter := &recordingAdapter{response: runtimetool.Response{Output: bytes.Repeat([]byte("x"), 8<<20+1)}}
-	worker, err := runtimetool.NewWorker(runtimetool.Config{Store: store, Tenants: store, Compiler: compiler, Planner: planner, Clock: source, Content: content, Adapter: adapter, Claimer: "tool-worker"})
+	worker, err := runtimetool.NewWorker(runtimetool.Config{Store: store, Tenants: store, Compiler: compiler, Planner: planner, Clock: source, Content: content, Adapter: adapter, Claimer: "tool-worker", LeaseScheduler: newInertLeaseScheduler()})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -277,7 +406,7 @@ func TestWorkerRedactsCredentialShapedOutputBeforeArtifactPersistence(t *testing
 	planner, _ := runtimestate.NewRuntimeStatePlanner(source, &toolIDs{})
 	store, _ := runtimestate.NewMemoryRuntimeStateStore(planner)
 	createToolExecution(t, ctx, content, compiler, store, tenant, principal, now)
-	worker, err := runtimetool.NewWorker(runtimetool.Config{Store: store, Tenants: store, Compiler: compiler, Planner: planner, Clock: source, Content: content, Adapter: &recordingAdapter{response: runtimetool.Response{Output: []byte("token=real-secret password:another")}}, Claimer: "tool-worker"})
+	worker, err := runtimetool.NewWorker(runtimetool.Config{Store: store, Tenants: store, Compiler: compiler, Planner: planner, Clock: source, Content: content, Adapter: &recordingAdapter{response: runtimetool.Response{Output: []byte("token=real-secret password:another")}}, Claimer: "tool-worker", LeaseScheduler: newInertLeaseScheduler()})
 	if err != nil || worker.ScanOnce(ctx) != nil {
 		t.Fatalf("finalize redacted output: %v", err)
 	}
@@ -349,7 +478,7 @@ func TestWorkerNeverDispatchesExpiredOrCancelledApprovedGrants(t *testing.T) {
 			approved := createApprovedToolGrant(t, ctx, content, compiler, store, tenant, principal, now)
 			test.prepare(t, compiler, store, source, approved)
 			adapter := &recordingAdapter{response: runtimetool.Response{Output: []byte("must not execute")}}
-			worker, err := runtimetool.NewWorker(runtimetool.Config{Store: store, Tenants: store, Compiler: compiler, Planner: planner, Clock: source, Content: content, Adapter: adapter, Claimer: "tool-worker"})
+			worker, err := runtimetool.NewWorker(runtimetool.Config{Store: store, Tenants: store, Compiler: compiler, Planner: planner, Clock: source, Content: content, Adapter: adapter, Claimer: "tool-worker", LeaseScheduler: newInertLeaseScheduler()})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -401,7 +530,7 @@ func TestOwnerRevocationIsDurableIdempotentAndTerminalBeforeExecution(t *testing
 		t.Fatalf("revoked state = grants=%#v executions=%#v audit=%#v", state.Grants, state.ToolExecutions, state.Audit)
 	}
 	adapter := &recordingAdapter{response: runtimetool.Response{Output: []byte("must not execute")}}
-	worker, err := runtimetool.NewWorker(runtimetool.Config{Store: store, Tenants: store, Compiler: compiler, Planner: planner, Clock: source, Content: content, Adapter: adapter, Claimer: "tool-worker"})
+	worker, err := runtimetool.NewWorker(runtimetool.Config{Store: store, Tenants: store, Compiler: compiler, Planner: planner, Clock: source, Content: content, Adapter: adapter, Claimer: "tool-worker", LeaseScheduler: newInertLeaseScheduler()})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -464,7 +593,7 @@ func TestToolFinalizationPublishesAStateRecheckedTemporalRoute(t *testing.T) {
 	planner, _ := runtimestate.NewRuntimeStatePlanner(source, &toolIDs{})
 	store, _ := runtimestate.NewMemoryRuntimeStateStore(planner)
 	_, _, execution, _ := createToolExecution(t, ctx, content, compiler, store, tenant, principal, now)
-	worker, err := runtimetool.NewWorker(runtimetool.Config{Store: store, Tenants: store, Compiler: compiler, Planner: planner, Clock: source, Content: content, Adapter: &recordingAdapter{response: runtimetool.Response{Output: []byte("complete")}}, Claimer: "tool-worker"})
+	worker, err := runtimetool.NewWorker(runtimetool.Config{Store: store, Tenants: store, Compiler: compiler, Planner: planner, Clock: source, Content: content, Adapter: &recordingAdapter{response: runtimetool.Response{Output: []byte("complete")}}, Claimer: "tool-worker", LeaseScheduler: newInertLeaseScheduler()})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -541,7 +670,7 @@ func TestSandboxAdapterUsesOnlyVerifiedDescriptorAndReconcilesWithoutResubmit(t 
 			if test.recoverLostClaim {
 				expireToolOutboxClaim(t, ctx, compiler, store, source, tenant, now, "lost-sandbox-claim")
 			}
-			worker, err := runtimetool.NewWorker(runtimetool.Config{Store: store, Tenants: store, Compiler: compiler, Planner: planner, Clock: source, Content: content, Adapter: adapter, Claimer: "tool-worker"})
+			worker, err := runtimetool.NewWorker(runtimetool.Config{Store: store, Tenants: store, Compiler: compiler, Planner: planner, Clock: source, Content: content, Adapter: adapter, Claimer: "tool-worker", LeaseScheduler: newInertLeaseScheduler()})
 			if err != nil || worker.ScanOnce(ctx) != nil || client.submits != test.wantSubmits || client.waits != test.wantWaits || client.gets != test.wantGets {
 				t.Fatalf("brokered sandbox calls submit=%d wait=%d get=%d err=%v", client.submits, client.waits, client.gets, err)
 			}
@@ -653,7 +782,7 @@ func TestMCPAdapterExecutesOnlyThroughWorkerAndReconcilesWithoutResubmit(t *test
 			if test.recoverLostClaim {
 				expireToolOutboxClaim(t, ctx, compiler, store, source, tenant, now, "lost-mcp-claim")
 			}
-			worker, err := runtimetool.NewWorker(runtimetool.Config{Store: store, Tenants: store, Compiler: compiler, Planner: planner, Clock: source, Content: content, Adapter: adapter, Claimer: "tool-worker"})
+			worker, err := runtimetool.NewWorker(runtimetool.Config{Store: store, Tenants: store, Compiler: compiler, Planner: planner, Clock: source, Content: content, Adapter: adapter, Claimer: "tool-worker", LeaseScheduler: newInertLeaseScheduler()})
 			if err != nil || worker.ScanOnce(ctx) != nil || effectCalls != test.wantEffect || statusCalls != test.wantStatusCall {
 				t.Fatalf("brokered MCP calls effect=%d status=%d err=%v", effectCalls, statusCalls, err)
 			}
@@ -739,7 +868,7 @@ func TestBuiltinAdapterReconcilesLostWorkerClaimWithoutResubmitting(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	worker, err := runtimetool.NewWorker(runtimetool.Config{Store: store, Tenants: store, Compiler: compiler, Planner: planner, Clock: source, Content: content, Adapter: adapter, Claimer: "tool-worker"})
+	worker, err := runtimetool.NewWorker(runtimetool.Config{Store: store, Tenants: store, Compiler: compiler, Planner: planner, Clock: source, Content: content, Adapter: adapter, Claimer: "tool-worker", LeaseScheduler: newInertLeaseScheduler()})
 	if err != nil || worker.ScanOnce(ctx) != nil {
 		t.Fatalf("recover builtin claim: %v", err)
 	}
@@ -895,6 +1024,126 @@ type recordingAdapter struct {
 	response             runtimetool.Response
 	executes, reconciles int
 	last                 runtimetool.Request
+}
+
+type artifactBlockingStore struct {
+	runtimestate.RuntimeStateStore
+	artifactPersistEntered   chan struct{}
+	releaseArtifactPersist   chan struct{}
+	artifactPersisted        chan struct{}
+	artifactPersistBlockOnce sync.Once
+	blockRenewPersist        bool
+	renewPersistEntered      chan struct{}
+	releaseRenewPersist      chan struct{}
+	renewPersistBlockOnce    sync.Once
+}
+
+func newArtifactBlockingStore(store runtimestate.RuntimeStateStore) *artifactBlockingStore {
+	return &artifactBlockingStore{RuntimeStateStore: store, artifactPersistEntered: make(chan struct{}), releaseArtifactPersist: make(chan struct{}), artifactPersisted: make(chan struct{}), renewPersistEntered: make(chan struct{}), releaseRenewPersist: make(chan struct{})}
+}
+
+func (store *artifactBlockingStore) PersistTransitionPlan(ctx context.Context, plan runtimestate.TransitionPlan) error {
+	if plan.Result().Artifact.ArtifactID != "" {
+		store.artifactPersistBlockOnce.Do(func() {
+			close(store.artifactPersistEntered)
+			<-store.releaseArtifactPersist
+		})
+		err := store.RuntimeStateStore.PersistTransitionPlan(ctx, plan)
+		close(store.artifactPersisted)
+		return err
+	}
+	if store.blockRenewPersist && plan.Result().Outbox.State == runtimestate.OutboxClaimed {
+		store.renewPersistBlockOnce.Do(func() {
+			close(store.renewPersistEntered)
+			<-store.releaseRenewPersist
+		})
+	}
+	return store.RuntimeStateStore.PersistTransitionPlan(ctx, plan)
+}
+
+func (store *artifactBlockingStore) ListOutboxTenants(ctx context.Context) ([]runtimecontent.TenantID, error) {
+	return store.RuntimeStateStore.(runtimestate.OutboxTenantSource).ListOutboxTenants(ctx)
+}
+
+type blockingToolAdapter struct {
+	mu                   sync.Mutex
+	executes, reconciles int
+	started              chan struct{}
+	release              chan struct{}
+	startOnce            sync.Once
+}
+
+type manualLeaseScheduler struct {
+	ticks   chan time.Time
+	handled chan struct{}
+}
+
+type inertLeaseScheduler struct{ ticks chan time.Time }
+
+func newInertLeaseScheduler() *inertLeaseScheduler {
+	return &inertLeaseScheduler{ticks: make(chan time.Time)}
+}
+
+func (scheduler *inertLeaseScheduler) NewLeaseTicker(time.Duration) runtimetool.LeaseTicker {
+	return inertLeaseTicker{ticks: scheduler.ticks}
+}
+
+type inertLeaseTicker struct{ ticks <-chan time.Time }
+
+func (ticker inertLeaseTicker) C() <-chan time.Time { return ticker.ticks }
+func (inertLeaseTicker) Stop()                      {}
+func (inertLeaseTicker) Handled()                   {}
+
+func newManualLeaseScheduler() *manualLeaseScheduler {
+	return &manualLeaseScheduler{ticks: make(chan time.Time), handled: make(chan struct{})}
+}
+
+func (scheduler *manualLeaseScheduler) NewLeaseTicker(time.Duration) runtimetool.LeaseTicker {
+	return manualLeaseTicker{source: scheduler.ticks, handled: scheduler.handled}
+}
+
+func (scheduler *manualLeaseScheduler) Tick() {
+	scheduler.ticks <- time.Time{}
+	<-scheduler.handled
+}
+
+type manualLeaseTicker struct {
+	source  <-chan time.Time
+	handled chan<- struct{}
+}
+
+func (ticker manualLeaseTicker) C() <-chan time.Time { return ticker.source }
+func (manualLeaseTicker) Stop()                      {}
+func (ticker manualLeaseTicker) Handled()            { ticker.handled <- struct{}{} }
+
+func newBlockingToolAdapter() *blockingToolAdapter {
+	return &blockingToolAdapter{started: make(chan struct{}), release: make(chan struct{})}
+}
+
+func (adapter *blockingToolAdapter) ExternalEffectContract() runtimetool.ExternalEffectContract {
+	return runtimetool.ExternalEffectContract{IdempotencyKey: "operation_id", Reconciles: true}
+}
+
+func (adapter *blockingToolAdapter) Execute(context.Context, runtimetool.Request) (runtimetool.Response, error) {
+	adapter.mu.Lock()
+	adapter.executes++
+	adapter.mu.Unlock()
+	adapter.startOnce.Do(func() { close(adapter.started) })
+	<-adapter.release
+	return runtimetool.Response{Output: []byte("slow but healthy result")}, nil
+}
+
+func (adapter *blockingToolAdapter) Reconcile(context.Context, runtimetool.Request) (runtimetool.Response, error) {
+	adapter.mu.Lock()
+	defer adapter.mu.Unlock()
+	adapter.reconciles++
+	return runtimetool.Response{Output: []byte("unexpected reconcile")}, nil
+}
+
+func (adapter *blockingToolAdapter) calls() (int, int) {
+	adapter.mu.Lock()
+	defer adapter.mu.Unlock()
+	return adapter.executes, adapter.reconciles
 }
 
 func (adapter *recordingAdapter) ExternalEffectContract() runtimetool.ExternalEffectContract {

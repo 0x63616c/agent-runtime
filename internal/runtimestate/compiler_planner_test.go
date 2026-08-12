@@ -677,11 +677,39 @@ func TestPlannerCancelsQueuedWorkClosesAfterDrainAndFencesOutboxLeases(t *testin
 	if claimed.State != runtimestate.OutboxClaimed || claimed.Version != work.Version+1 {
 		t.Fatalf("claimed Outbox = %#v", claimed)
 	}
-	ack, err := compiler.CompileAcknowledgeOutbox(runtimestate.AcknowledgeOutboxCommand{Scope: runtimestate.MutationScope{Tenant: tenant, Authority: runtimestate.AuthorityOutboxPublisher}, IdempotencyKey: "ack", OutboxID: claimed.OutboxID, ExpectedVersion: claimed.Version, Claimer: "publisher-a", PublishedAt: now})
+	// Renewal is not acquisition: it requires the current exact owner and
+	// version, and it may only move the same lease fence forward.
+	wrongOwner, err := compiler.CompileRenewOutbox(runtimestate.RenewOutboxCommand{Scope: runtimestate.MutationScope{Tenant: tenant, Authority: runtimestate.AuthorityOutboxPublisher}, IdempotencyKey: "renew-wrong-owner", OutboxID: claimed.OutboxID, ExpectedVersion: claimed.Version, Claimer: "publisher-b", ClaimUntil: claimUntil.Add(time.Minute)})
+	if err != nil {
+		t.Fatalf("compile wrong-owner renewal: %v", err)
+	}
+	if _, err := planner.Plan(context.Background(), claimPlan.State(), wrongOwner); !errors.Is(err, runtimestate.ErrConflict) {
+		t.Fatalf("wrong owner renewal = %v, want conflict", err)
+	}
+	staleVersion, err := compiler.CompileRenewOutbox(runtimestate.RenewOutboxCommand{Scope: runtimestate.MutationScope{Tenant: tenant, Authority: runtimestate.AuthorityOutboxPublisher}, IdempotencyKey: "renew-stale-version", OutboxID: claimed.OutboxID, ExpectedVersion: work.Version, Claimer: "publisher-a", ClaimUntil: claimUntil.Add(time.Minute)})
+	if err != nil {
+		t.Fatalf("compile stale renewal: %v", err)
+	}
+	if _, err := planner.Plan(context.Background(), claimPlan.State(), staleVersion); !errors.Is(err, runtimestate.ErrConflict) {
+		t.Fatalf("stale renewal = %v, want conflict", err)
+	}
+	renew, err := compiler.CompileRenewOutbox(runtimestate.RenewOutboxCommand{Scope: runtimestate.MutationScope{Tenant: tenant, Authority: runtimestate.AuthorityOutboxPublisher}, IdempotencyKey: "renew", OutboxID: claimed.OutboxID, ExpectedVersion: claimed.Version, Claimer: "publisher-a", ClaimUntil: claimUntil.Add(time.Minute)})
+	if err != nil {
+		t.Fatalf("compile renewal: %v", err)
+	}
+	renewPlan, err := planner.Plan(context.Background(), claimPlan.State(), renew)
+	if err != nil {
+		t.Fatalf("plan renewal: %v", err)
+	}
+	renewed := renewPlan.Result().Outbox
+	if renewed.Version != claimed.Version+1 || renewed.ClaimUntil == nil || !renewed.ClaimUntil.Equal(claimUntil.Add(time.Minute)) {
+		t.Fatalf("renewed Outbox = %#v", renewed)
+	}
+	ack, err := compiler.CompileAcknowledgeOutbox(runtimestate.AcknowledgeOutboxCommand{Scope: runtimestate.MutationScope{Tenant: tenant, Authority: runtimestate.AuthorityOutboxPublisher}, IdempotencyKey: "ack", OutboxID: renewed.OutboxID, ExpectedVersion: renewed.Version, Claimer: "publisher-a", PublishedAt: now})
 	if err != nil {
 		t.Fatalf("compile acknowledgement: %v", err)
 	}
-	ackPlan, err := planner.Plan(context.Background(), claimPlan.State(), ack)
+	ackPlan, err := planner.Plan(context.Background(), renewPlan.State(), ack)
 	if err != nil {
 		t.Fatalf("plan acknowledgement: %v", err)
 	}

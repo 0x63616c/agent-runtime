@@ -583,10 +583,14 @@ type RegisterArtifactCommand struct {
 	SessionID      agentruntime.SessionID
 	TurnID         agentruntime.TurnID
 	Artifact       runtimecontent.ContentHandoff
+	LeaseFence     *OutboxLeaseFence
 }
 
 // Owned returns a value-owned artifact command.
-func (command RegisterArtifactCommand) Owned() RegisterArtifactCommand { return command }
+func (command RegisterArtifactCommand) Owned() RegisterArtifactCommand {
+	command.LeaseFence = command.LeaseFence.Clone()
+	return command
+}
 
 // AppendConversationCommand appends one immutable entry under expected-version
 // concurrency. It is worker-owned because providers/tools, not public clients,
@@ -734,6 +738,7 @@ type RecordToolExecutionOutcomeCommand struct {
 	Outcome        ToolExecutionState
 	Result         *runtimecontent.Reference
 	Failure        *agentruntime.Failure
+	LeaseFence     *OutboxLeaseFence
 }
 
 // Owned returns a value-owned tool execution outcome command.
@@ -743,6 +748,7 @@ func (command RecordToolExecutionOutcomeCommand) Owned() RecordToolExecutionOutc
 		value := *command.Result
 		command.Result = &value
 	}
+	command.LeaseFence = command.LeaseFence.Clone()
 	return command
 }
 
@@ -824,12 +830,31 @@ type SettleTurnCommand struct {
 	ExpectedSessionVersion uint64
 	ExpectedTurnVersion    uint64
 	Outcome                TerminalOutcome
+	LeaseFence             *OutboxLeaseFence
 }
 
 // Owned returns a value-owned command and terminal outcome.
 func (command SettleTurnCommand) Owned() SettleTurnCommand {
 	command.Outcome = command.Outcome.Owned()
+	command.LeaseFence = command.LeaseFence.Clone()
 	return command
+}
+
+// OutboxLeaseFence binds a worker terminal mutation to one exact live durable
+// Outbox claim. It prevents a stale claimant from finalizing after recovery.
+type OutboxLeaseFence struct {
+	OutboxID        OutboxID
+	ExpectedVersion uint64
+	Claimer         string
+}
+
+// Clone returns an independent lease fence.
+func (fence *OutboxLeaseFence) Clone() *OutboxLeaseFence {
+	if fence == nil {
+		return nil
+	}
+	value := *fence
+	return &value
 }
 
 // CancelTurnCommand terminally cancels a running or queued Turn.
@@ -1221,6 +1246,23 @@ type ClaimOutboxCommand struct {
 
 // Owned returns a value-owned command with a UTC-normalized claim expiry.
 func (command ClaimOutboxCommand) Owned() ClaimOutboxCommand {
+	command.ClaimUntil = normalizeTime(command.ClaimUntil)
+	return command
+}
+
+// RenewOutboxCommand atomically extends one exact currently-owned Outbox lease.
+// It cannot acquire an expired or another worker's claim.
+type RenewOutboxCommand struct {
+	Scope           MutationScope
+	IdempotencyKey  string
+	OutboxID        OutboxID
+	ExpectedVersion uint64
+	Claimer         string
+	ClaimUntil      time.Time
+}
+
+// Owned returns a value-owned command with a UTC-normalized renewal expiry.
+func (command RenewOutboxCommand) Owned() RenewOutboxCommand {
 	command.ClaimUntil = normalizeTime(command.ClaimUntil)
 	return command
 }

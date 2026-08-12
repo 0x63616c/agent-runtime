@@ -102,7 +102,7 @@ func Run(ctx context.Context, role roles.Config, lookup Lookup) error {
 		}
 		scan = worker.ScanOnce
 	case roles.RoleTool:
-		worker, createErr := runtimetool.NewWorker(runtimetool.Config{Store: state, Tenants: state, Compiler: compiler, Planner: planner, Clock: systemClock{}, Content: content, Adapter: toolFixture{}, Claimer: "local-demo-tool"})
+		worker, createErr := runtimetool.NewWorker(runtimetool.Config{Store: state, Tenants: state, Compiler: compiler, Planner: planner, Clock: systemClock{}, Content: content, Adapter: toolFixture{}, Claimer: "local-demo-tool", LeaseScheduler: runtimetool.NewRealtimeLeaseScheduler()})
 		if createErr != nil {
 			return createErr
 		}
