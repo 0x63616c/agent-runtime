@@ -27,6 +27,10 @@ type Request struct {
 	SessionID   agentruntime.SessionID
 	TurnID      agentruntime.TurnID
 	OperationID runtimestate.OperationID
+	// CreatedAt is the durable invocation creation time. Adapters use it only
+	// for deterministic response values that must remain identical during
+	// recovery; it is not the current wall clock.
+	CreatedAt time.Time
 }
 
 // Response is one normalized model outcome. A successful response is stored
@@ -166,7 +170,7 @@ func (worker *Worker) process(ctx context.Context, record runtimestate.OutboxRec
 	if invocation.State != runtimestate.InvocationIntent {
 		return nil
 	}
-	request := Request{Tenant: record.Tenant, SessionID: record.SessionID, TurnID: record.TurnID, OperationID: record.OperationID}
+	request := Request{Tenant: record.Tenant, SessionID: record.SessionID, TurnID: record.TurnID, OperationID: record.OperationID, CreatedAt: invocation.CreatedAt}
 	var response Response
 	if recovering {
 		response, err = worker.adapter.Reconcile(ctx, request)

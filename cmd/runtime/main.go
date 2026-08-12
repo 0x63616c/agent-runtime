@@ -95,17 +95,19 @@ func run(ctx context.Context, arguments []string, lookup func(string) (string, b
 		return serveCodecWorker(ctx, config, plan, listener, lookup)
 	}
 	if worker := config.LocalDemoWorker(); worker != nil && worker.Enabled {
-		return serveLocalDemoWorker(ctx, config, plan, listener, lookup)
+		return serveLocalDemoWorker(ctx, config, plan, listener, lookup, logger)
 	}
 	return roles.Serve(ctx, plan, listener)
 }
 
-func serveLocalDemoWorker(ctx context.Context, config roles.Config, plan roles.Plan, listener net.Listener, lookup func(string) (string, bool)) error {
+func serveLocalDemoWorker(ctx context.Context, config roles.Config, plan roles.Plan, listener net.Listener, lookup func(string) (string, bool), logger *slog.Logger) error {
 	roleContext, cancel := context.WithCancel(ctx)
 	defer cancel()
 	results := make(chan error, 2)
 	go func() { results <- roles.Serve(roleContext, plan, listener) }()
-	go func() { results <- localdemoworker.Run(roleContext, config, lookup) }()
+	go func() {
+		results <- localdemoworker.Run(roleContext, config, lookup, logger.With("component", "local-demo-worker"))
+	}()
 	err := <-results
 	cancel()
 	if err != nil {

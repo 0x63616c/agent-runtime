@@ -7,7 +7,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"fmt"
-	"log"
+	"log/slog"
 	"time"
 
 	"github.com/0x63616c/agent-runtime/internal/clock"
@@ -27,11 +27,23 @@ import (
 // Lookup reads one explicitly injected process environment value.
 type Lookup func(string) (string, bool)
 
+// Wait blocks until the next local worker scan. It is injected so recovery
+// tests can drive an explicit scan boundary without sleeping on wall-clock
+// time.
+type Wait func(context.Context, time.Duration) error
+
 // Run drains durable model or tool outbox work through the declared local
 // fixture. It is only reachable after roles.Parse has accepted local-demo-v1.
-func Run(ctx context.Context, role roles.Config, lookup Lookup) error {
+func Run(ctx context.Context, role roles.Config, lookup Lookup, logger *slog.Logger) error {
+	return run(ctx, role, lookup, systemClock{}, waitForInterval, logger)
+}
+
+func run(ctx context.Context, role roles.Config, lookup Lookup, source clock.Clock, wait Wait, logger *slog.Logger) error {
 	if ctx == nil || lookup == nil || role.LocalDemoWorker() == nil || !role.LocalDemoWorker().Enabled {
 		return errors.New("run local demo worker: context, lookup, and declared local demo capability are required")
+	}
+	if source == nil || wait == nil || logger == nil {
+		return errors.New("run local demo worker: clock, wait, and logger are required")
 	}
 	declaration := role.LocalDemoWorker()
 	if declaration.Fixture != "workspace-approval-v1" {
@@ -61,7 +73,7 @@ func Run(ctx context.Context, role roles.Config, lookup Lookup) error {
 	if err := pool.Ping(ctx); err != nil {
 		return errors.Wrap(err, "run local demo worker: ping PostgreSQL")
 	}
-	state, err := runtimepostgres.NewRuntimeStateStore(pool, systemClock{})
+	state, err := runtimepostgres.NewRuntimeStateStore(pool, source)
 	if err != nil {
 		return err
 	}
@@ -85,24 +97,24 @@ func Run(ctx context.Context, role roles.Config, lookup Lookup) error {
 	if err != nil {
 		return err
 	}
-	planner, err := runtimestate.NewRuntimeStatePlanner(systemClock{}, randomIDs{})
+	planner, err := runtimestate.NewRuntimeStatePlanner(source, randomIDs{})
 	if err != nil {
 		return err
 	}
 	var scan func(context.Context) error
 	switch role.Role() {
 	case roles.RoleModel:
-		broker, brokerErr := runtimetool.NewBroker(runtimetool.BrokerConfig{Store: state, Compiler: compiler, Planner: planner, Clock: systemClock{}})
+		broker, brokerErr := runtimetool.NewBroker(runtimetool.BrokerConfig{Store: state, Compiler: compiler, Planner: planner, Clock: source})
 		if brokerErr != nil {
 			return brokerErr
 		}
-		worker, createErr := runtimemodel.NewWorker(runtimemodel.WorkerConfig{Store: state, Tenants: state, Compiler: compiler, Planner: planner, Clock: systemClock{}, Content: content, Adapter: modelFixture{approvalTTL: approvalTTL}, Broker: broker, Claimer: "local-demo-model"})
+		worker, createErr := runtimemodel.NewWorker(runtimemodel.WorkerConfig{Store: state, Tenants: state, Compiler: compiler, Planner: planner, Clock: source, Content: content, Adapter: modelFixture{approvalTTL: approvalTTL}, Broker: broker, Claimer: "local-demo-model"})
 		if createErr != nil {
 			return createErr
 		}
 		scan = worker.ScanOnce
 	case roles.RoleTool:
-		worker, createErr := runtimetool.NewWorker(runtimetool.Config{Store: state, Tenants: state, Compiler: compiler, Planner: planner, Clock: systemClock{}, Content: content, Adapter: toolFixture{}, Claimer: "local-demo-tool", LeaseScheduler: runtimetool.NewRealtimeLeaseScheduler()})
+		worker, createErr := runtimetool.NewWorker(runtimetool.Config{Store: state, Tenants: state, Compiler: compiler, Planner: planner, Clock: source, Content: content, Adapter: toolFixture{}, Claimer: "local-demo-tool", LeaseScheduler: runtimetool.NewRealtimeLeaseScheduler()})
 		if createErr != nil {
 			return createErr
 		}
@@ -110,20 +122,23 @@ func Run(ctx context.Context, role roles.Config, lookup Lookup) error {
 	default:
 		return errors.New("run local demo worker: role is not model or tool")
 	}
-	return scanLoop(ctx, scan, 100*time.Millisecond)
+	return scanLoop(ctx, scan, 100*time.Millisecond, wait, logger)
 }
 
 // scanLoop retries only the StateRuntime's typed transient unavailable signal.
 // Invalid fixture configuration, lost authority, and every other worker error
 // stay visible rather than silently turning a broken demo into a healthy role.
-func scanLoop(ctx context.Context, scan func(context.Context) error, interval time.Duration) error {
+func scanLoop(ctx context.Context, scan func(context.Context) error, interval time.Duration, wait Wait, logger *slog.Logger) error {
+	if ctx == nil || scan == nil || wait == nil || logger == nil || interval <= 0 {
+		return errors.New("run local demo worker: scan, wait, logger, and positive interval are required")
+	}
 	for {
 		if err := scan(ctx); err != nil {
 			if errors.Is(err, runtimestate.ErrUnavailable) {
-				// Worker errors are already capability-sanitized. Retain the
-				// operation stage for local restart diagnosis, never credentials,
-				// object paths, descriptors, or provider responses.
-				log.Printf("local demo worker transient unavailable: %v", err)
+				// This correlation-only record intentionally excludes the returned
+				// error: even a future adapter must not turn local diagnostics into
+				// a credential, descriptor, or provider-response disclosure path.
+				logger.Warn("local demo worker transient unavailable", "reason", "state_unavailable")
 			} else {
 				if errors.Is(err, context.Canceled) {
 					return nil
@@ -131,20 +146,29 @@ func scanLoop(ctx context.Context, scan func(context.Context) error, interval ti
 				return errors.Wrap(err, "run local demo worker: scan")
 			}
 		}
-		// A child deadline makes the poll interval explicit while preserving the
-		// caller's cancellation authority. The normal local deadline is merely
-		// the next scan boundary; it is not a worker failure.
-		wait, cancel := context.WithTimeout(ctx, interval)
-		<-wait.Done()
-		waitErr := wait.Err()
-		cancel()
+		if err := wait(ctx, interval); err != nil {
+			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) && ctx.Err() != nil {
+				return nil
+			}
+			// The production wait owns a child deadline for the next scan
+			// boundary. A live parent context means that deadline is the normal
+			// successful tick, not a worker failure.
+			if errors.Is(err, context.DeadlineExceeded) {
+				continue
+			}
+			return errors.Wrap(err, "run local demo worker: wait to scan")
+		}
 		if ctx.Err() != nil {
 			return nil
 		}
-		if !errors.Is(waitErr, context.DeadlineExceeded) {
-			return errors.Wrap(waitErr, "run local demo worker: wait to scan")
-		}
 	}
+}
+
+func waitForInterval(ctx context.Context, interval time.Duration) error {
+	wait, cancel := context.WithTimeout(ctx, interval)
+	defer cancel()
+	<-wait.Done()
+	return wait.Err()
 }
 
 type systemClock struct{}
@@ -170,13 +194,22 @@ func (randomIDs) NextIdentifier(kind runtimestate.IdentifierKind) (string, error
 // local demo owner must create its matching policy through the public admin
 // contract. It never receives Agent configuration, raw Input, credentials, or
 // a sandbox capability, so it cannot infer or perform workspace work.
-type modelFixture struct{ approvalTTL time.Duration }
-
-func (fixture modelFixture) Invoke(_ context.Context, request runtimemodel.Request) (runtimemodel.Response, error) {
-	return fixtureModelResponseWithTTL(request, fixture.approvalTTL), nil
+type modelFixture struct {
+	approvalTTL time.Duration
 }
-func (fixture modelFixture) Reconcile(_ context.Context, request runtimemodel.Request) (runtimemodel.Response, error) {
-	return fixtureModelResponseWithTTL(request, fixture.approvalTTL), nil
+
+func (fixture modelFixture) Invoke(ctx context.Context, request runtimemodel.Request) (runtimemodel.Response, error) {
+	return fixture.response(ctx, request)
+}
+func (fixture modelFixture) Reconcile(ctx context.Context, request runtimemodel.Request) (runtimemodel.Response, error) {
+	return fixture.response(ctx, request)
+}
+
+func (fixture modelFixture) response(_ context.Context, request runtimemodel.Request) (runtimemodel.Response, error) {
+	if request.OperationID == "" || request.CreatedAt.IsZero() {
+		return runtimemodel.Response{}, errors.New("local demo model fixture: operation identity and durable creation time are required")
+	}
+	return fixtureModelResponseWithTTLAt(request, fixture.approvalTTL, request.CreatedAt), nil
 }
 
 func approvalTTLForScenario(scenario roles.LocalDemoFixtureScenario) (time.Duration, error) {
@@ -190,11 +223,7 @@ func approvalTTLForScenario(scenario roles.LocalDemoFixtureScenario) (time.Durat
 	}
 }
 
-func fixtureModelResponse(request runtimemodel.Request) runtimemodel.Response {
-	return fixtureModelResponseWithTTL(request, 10*time.Minute)
-}
-
-func fixtureModelResponseWithTTL(request runtimemodel.Request, approvalTTL time.Duration) runtimemodel.Response {
+func fixtureModelResponseWithTTLAt(request runtimemodel.Request, approvalTTL time.Duration, now time.Time) runtimemodel.Response {
 	sum := sha256.Sum256([]byte(request.OperationID))
 	identity := fmt.Sprintf("%x", sum[:])
 	// Public Approval IDs have an exact sixteen-character opaque payload.
@@ -214,7 +243,7 @@ func fixtureModelResponseWithTTL(request runtimemodel.Request, approvalTTL time.
 		// service or a Firecracker sandbox.
 		Action:      agentruntime.ApprovalAction{Verb: "write", Target: "workspace-service"},
 		MaximumUses: 1,
-		ExpiresAt:   time.Now().UTC().Add(approvalTTL),
+		ExpiresAt:   now.UTC().Add(approvalTTL),
 		Descriptor:  descriptor,
 	}}
 }
