@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "observed_at_utc": "2026-08-12T08:14:22Z",
+  "proof_level": "integration",
+  "revision": "b15a3e02e663b49478811a6109e7732ede37b18e",
+  "scope": "TOL-004 candidate-bound authorization and execution audit lifecycle on disposable PostgreSQL and MinIO.",
+  "commands": ["./deploy/runtimeapi/run-durable-integration.sh"],
+  "exit_status": 0,
+  "result": "passed",
+  "observations": {"audit": "The durable lifecycle validates correlated append-only authorization, grant-consumption, execution-intent, terminal-outcome, and grant-terminal audit facts.", "limitations": "This is state/audit integration, not a public browser, protected sandbox, Firecracker, Linux/KVM, or Stack claim."},
+  "redaction": "No secret values, IDs, descriptors, inputs, artifact bodies, database credentials, or endpoints are retained."
+}

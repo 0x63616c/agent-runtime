@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "observed_at_utc": "2026-08-12T08:14:22Z",
+  "proof_level": "unit",
+  "revision": "b15a3e02e663b49478811a6109e7732ede37b18e",
+  "scope": "TOL-002 candidate-bound brokered builtin, sandbox-control, and MCP adapter contract tests. The sandbox control client is a non-production test seam only.",
+  "commands": ["go test -race ./internal/runtimetool -run 'Test(BuiltinAdapterRefusesAnUnsafeExternalEffectContract|MCPAdapterRefusesDirectDispatchAndUnsafeExternalEffectContract|SandboxAdapterRefusesDirectDispatchBeforeControlTransport|SandboxAdapterUsesOnlyVerifiedDescriptorAndReconcilesWithoutResubmit|MCPAdapterExecutesOnlyThroughWorkerAndReconcilesWithoutResubmit|BuiltinAdapterReconcilesLostWorkerClaimWithoutResubmitting)$' -count=1"],
+  "exit_status": 0,
+  "result": "passed",
+  "observations": {"broker_boundary": "Builtin, MCP, and sandbox-control adapters reject unsafe direct paths and retain worker-owned operation-ID recovery.", "limitations": "No networked MCP provider, protected sandbox, Firecracker, Linux/KVM, Workspace application, or Stack is exercised."},
+  "redaction": "No descriptors, capability values, credentials, endpoints, requests, responses, or external-effect payloads are retained."
+}

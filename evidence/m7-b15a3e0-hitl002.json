@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "observed_at_utc": "2026-08-12T08:14:22Z",
+  "proof_level": "integration",
+  "revision": "b15a3e02e663b49478811a6109e7732ede37b18e",
+  "scope": "HITL-002 candidate-bound safe Approval projection and durable public-process linkage on disposable PostgreSQL/MinIO.",
+  "commands": ["./deploy/runtimeapi/run-durable-integration.sh"],
+  "exit_status": 0,
+  "result": "passed",
+  "observations": {"safe_projection": "The public approval lifecycle preserves its caller-safe bounded linkage and state across restart without exposing private tool descriptors or capability values.", "limitations": "This does not prove a browser, Stack, Workspace service, protected sandbox, Firecracker, or Linux/KVM path."},
+  "redaction": "No IDs, tokens, descriptors, capability values, credentials, DSNs, or endpoints are retained."
+}

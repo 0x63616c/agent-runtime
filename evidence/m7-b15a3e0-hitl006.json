@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "observed_at_utc": "2026-08-12T08:14:22Z",
+  "proof_level": "integration",
+  "revision": "b15a3e02e663b49478811a6109e7732ede37b18e",
+  "scope": "HITL-006 candidate-bound Workspace Agent public-client process proof on disposable PostgreSQL and MinIO.",
+  "commands": ["./deploy/runtimeapi/run-durable-integration.sh"],
+  "exit_status": 0,
+  "result": "passed",
+  "observations": {"public_clients": "Shipped web and terminal client paths cover owner decision/replay/cancel/expiry, terminal denial, non-owner isolation, and restart/reconnect through the public contract.", "limitations": "Broker seeding is private setup; this does not prove a deployed Stack image, Workspace sandbox, Firecracker, or Linux/KVM."},
+  "redaction": "No IDs, tokens, descriptors, grants, credentials, DSNs, object-store credentials, inputs, or endpoints are retained."
+}

@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "observed_at_utc": "2026-08-12T08:14:22Z",
+  "proof_level": "integration",
+  "revision": "b15a3e02e663b49478811a6109e7732ede37b18e",
+  "scope": "TOL-003 candidate-bound durable grant lifecycle on disposable PostgreSQL and MinIO using an injected clock and declared adapter seam.",
+  "commands": ["./deploy/runtimeapi/run-durable-integration.sh"],
+  "exit_status": 0,
+  "result": "passed",
+  "observations": {"terminal_authority": "Single-use exhaustion, expiry, revocation, cancellation, denial, and unavailable-policy paths retain terminal state without a new adapter dispatch.", "limitations": "The adapter is not a Workspace service, protected sandbox, Firecracker, Linux/KVM, or EX-002 proof."},
+  "redaction": "No DSNs, credentials, grant IDs, operation IDs, descriptors, inputs, artifact bodies, or endpoints are retained."
+}

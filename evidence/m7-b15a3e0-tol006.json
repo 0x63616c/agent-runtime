@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "observed_at_utc": "2026-08-12T08:14:22Z",
+  "proof_level": "integration",
+  "revision": "b15a3e02e663b49478811a6109e7732ede37b18e",
+  "scope": "TOL-006 candidate-bound external-effect uncertainty/recovery lifecycle on disposable PostgreSQL and MinIO.",
+  "commands": ["./deploy/runtimeapi/run-durable-integration.sh"],
+  "exit_status": 0,
+  "result": "passed",
+  "observations": {"uncertain_effect": "The durable fixture preserves the worker-owned operation identity and reconciles a lost observation into a safe uncertain terminal state rather than resubmitting an external effect.", "limitations": "This is not an external provider, protected sandbox, Firecracker, Linux/KVM, or Stack attestation."},
+  "redaction": "No operation IDs, inputs, descriptors, credentials, endpoints, or artifact bodies are retained."
+}

@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "observed_at_utc": "2026-08-12T08:14:22Z",
+  "proof_level": "integration",
+  "revision": "b15a3e02e663b49478811a6109e7732ede37b18e",
+  "scope": "TOL-005 candidate-bound bounded/redacted Tool result retention on disposable PostgreSQL and MinIO.",
+  "commands": ["./deploy/runtimeapi/run-durable-integration.sh"],
+  "exit_status": 0,
+  "result": "passed",
+  "observations": {"safe_output": "A bounded redacted Artifact remains readable through the authorized public route while oversized output reaches a terminal failure without a retained Artifact/object or public raw value.", "limitations": "This fixture proof does not exercise a protected sandbox, provider, browser, Stack, Firecracker, or Linux/KVM."},
+  "redaction": "No artifact body, raw output, secret-shaped value, IDs, DSNs, credentials, or endpoints are retained."
+}

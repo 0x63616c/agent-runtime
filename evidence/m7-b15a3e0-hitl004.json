@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "observed_at_utc": "2026-08-12T08:14:22Z",
+  "proof_level": "integration",
+  "revision": "b15a3e02e663b49478811a6109e7732ede37b18e",
+  "scope": "HITL-004 candidate-bound Approval terminal event/audit lifecycle on disposable PostgreSQL and MinIO.",
+  "commands": ["./deploy/runtimeapi/run-durable-integration.sh"],
+  "exit_status": 0,
+  "result": "passed",
+  "observations": {"terminal_observation": "Approval, denial, expiry, cancellation, and post-approval finalization retain safe Product events with independent durable audit/outbox correlations.", "limitations": "This is not an HTTP browser, Workspace service, Stack, protected sandbox, Firecracker, or Linux/KVM claim."},
+  "redaction": "No IDs, credentials, descriptors, inputs, artifact bodies, DSNs, or endpoints are retained."
+}

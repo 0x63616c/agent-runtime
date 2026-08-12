@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "observed_at_utc": "2026-08-12T08:14:22Z",
+  "proof_level": "integration",
+  "revision": "b15a3e02e663b49478811a6109e7732ede37b18e",
+  "scope": "HITL-001 candidate-bound pending-Approval lifecycle using the disposable PostgreSQL/MinIO and private Temporal test services.",
+  "commands": ["./deploy/runtimeapi/run-durable-integration.sh"],
+  "exit_status": 0,
+  "result": "passed",
+  "observations": {"pending_phase": "A waiting Approval keeps its Turn non-terminal without starting a model invocation and remains observable across the public runtime-process restart path.", "limitations": "Broker setup is private test setup; no model provider, Workspace service, browser, Stack, protected sandbox, Firecracker, or Linux/KVM is claimed."},
+  "redaction": "No IDs, tokens, descriptors, grants, DSNs, object-store credentials, inputs, or endpoints are retained."
+}
