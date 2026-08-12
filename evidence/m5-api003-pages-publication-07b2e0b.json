@@ -1,0 +1,87 @@
+{
+  "version": 1,
+  "milestone": "M5 durable agent runtime",
+  "implementation_revision": "07b2e0bd75c49cf8f651c3324a3ed0acebece5db",
+  "utc_time": "2026-08-12T03:03:30Z",
+  "requirements": ["API-003"],
+  "commands": [
+    {
+      "id": "m5-api003-pages-publication",
+      "command": "GitHub Actions documentation-pages run 31558322457, deployment 5862311459, and bounded HTTPS reads of the generated reference routes",
+      "result": "passed"
+    },
+    {
+      "id": "m5-api003-current-openapi-contract-suite",
+      "command": "go test -race ./internal/runtimeapi ./sdk/go ./internal/openapicontract ./tests/architecture -count=1",
+      "result": "passed"
+    }
+  ],
+  "publication": {
+    "workflow": {
+      "name": "documentation-pages",
+      "run_id": 31558322457,
+      "url": "https://github.com/0x63616c/agent-runtime/actions/runs/31558322457",
+      "head_sha": "07b2e0bd75c49cf8f651c3324a3ed0acebece5db",
+      "head_branch": "main",
+      "conclusion": "success",
+      "build_job": "93995189029",
+      "deploy_job": "93995342859"
+    },
+    "deployment": {
+      "id": 5862311459,
+      "environment": "github-pages",
+      "state": "success",
+      "environment_url": "https://0x63616c.github.io/agent-runtime/"
+    },
+    "pages": {
+      "build_type": "workflow",
+      "public": true,
+      "https_enforced": true
+    }
+  },
+  "generated_reference": {
+    "source_manifest": "skills/refresh-agent-runtime-docs/source-manifest.json",
+    "renderer_version": "source-inventory/v1",
+    "openapi": {
+      "path": "api/openapi/openapi.yaml",
+      "sha256": "747fb859a38d625b393a8ff2d7c20332d0778fa793524607eee7283bf27382fd",
+      "published_inventory_url": "https://0x63616c.github.io/agent-runtime/docs/reference/generated/source-inventory/"
+    },
+    "sdk_route_table": {
+      "path": "sdk/go/openapi_routes_gen.go",
+      "sha256": "e07e65fef101b483d270acdc564e1c9770b875489867109519debb27aba4bb88",
+      "published_inventory_url": "https://0x63616c.github.io/agent-runtime/docs/reference/generated/source-inventory/"
+    },
+    "published_pages": [
+      {
+        "url": "https://0x63616c.github.io/agent-runtime/docs/reference/generated/http-operations/",
+        "status": 200,
+        "required_marker": "HTTP operation index"
+      },
+      {
+        "url": "https://0x63616c.github.io/agent-runtime/docs/reference/generated/go-sdk-symbols/",
+        "status": 200,
+        "required_marker": "Go SDK symbol index"
+      },
+      {
+        "url": "https://0x63616c.github.io/agent-runtime/docs/reference/generated/source-inventory/",
+        "status": 200,
+        "required_markers": [
+          "api/openapi/openapi.yaml",
+          "747fb859a38d625b393a8ff2d7c20332d0778fa793524607eee7283bf27382fd",
+          "sdk/go/openapi_routes_gen.go",
+          "e07e65fef101b483d270acdc564e1c9770b875489867109519debb27aba4bb88"
+        ]
+      }
+    ]
+  },
+  "coverage": {
+    "API-003": "The API-003 contract suite ran against the exact current-main source whose OpenAPI document and generated SDK route table carry the recorded hashes. That same SHA was built and deployed by GitHub Pages, and bounded live HTTPS reads confirm publication of the generated HTTP operation, Go SDK symbol, and source-inventory reference pages with those hashes."
+  },
+  "limitations": [
+    "The published material is the generated reference pages; this record does not claim raw OpenAPI-document hosting.",
+    "This is not immutable release-tag or external-consumer evidence.",
+    "This evidence does not execute a model provider, sandbox command, Firecracker, Linux KVM environment, protected operations, or PITR drill."
+  ],
+  "redaction": "The record retains only immutable repository revisions, public GitHub identifiers and URLs, fixed source hashes, HTTP status values, and bounded page markers."
+}

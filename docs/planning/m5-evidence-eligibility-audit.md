@@ -11,6 +11,10 @@ The public API supplement for `API-001`, `API-002`, `API-004` through
 `API-012` is bound to `77ca92ff30836d9847a0b7ee857f83d4eb2ce4bc`.
 Its ledger reference `m5-public-api-77ca92f` resolves to
 [`m5-public-api-contract.json`](../../evidence/m5-public-api-contract.json).
+The API-003 publication supplement is bound to
+`07b2e0bd75c49cf8f651c3324a3ed0acebece5db`. Its ledger reference
+`m5-api003-pages-07b2e0b` resolves to
+[`m5-api003-pages-publication-07b2e0b.json`](../../evidence/m5-api003-pages-publication-07b2e0b.json).
 The domain-model supplement for `DOM-001`, `DOM-002`, and `DOM-004` through
 `DOM-013` is bound to `3f40dab755cecfb0d8647fcf88731db2aa757f48`.
 Its ledger reference `m5-domain-model-3f40dab` resolves to
@@ -53,7 +57,7 @@ The public-boundary supplement for `TMP-002` and `TMP-003` is
 | DOM-013 | Provider-neutral unknown-preserving public usage test plus durable normalized model-output integration. | Promoted without a live-provider claim. |
 | API-001 | Public Go SDK/HTTP suite covers the listed Session, Input, inspection, Event, cancellation, close, Artifact, and Approval commands; standalone binary and disposable durable composition also pass. | Promoted with retained public-contract evidence. |
 | API-002 | SDK package import graph and independent temporary consumer compile reject Temporal, provider, sandbox, blob, database, and telemetry implementation dependencies. | Promoted with retained contract evidence. |
-| API-003 | OpenAPI compatibility and generated route tests plus generated references build locally. | Defer: no current-SHA documentation publication/HTTPS evidence is retained. |
+| API-003 | The retained API-003 contract suite checks the current `main` OpenAPI authority against the HTTP and Go SDK routes. The source inventory records the OpenAPI and generated SDK route-table hashes checked by that suite. Current `main` SHA `07b2e0b` passed Pages run `31558322457`; deployment `5862311459` succeeded, and bounded HTTPS reads returned the generated HTTP operation, Go SDK symbol, and source-inventory pages with those same hashes. | Promoted with same-SHA contract and Pages publication evidence. This publishes generated reference pages only; it does not claim raw OpenAPI hosting, a release tag, external-consumer verification, provider execution, sandbox execution, Firecracker/KVM, protected operations, or PITR. |
 | API-004 | Public HTTP/SDK tests cover equal replay, conflicting reuse, expired receipts, and caller-scoped status lookup. | Promoted with retained public-contract evidence. |
 | API-005 | `TestStateRuntimeHTTPAndSDKAuthorizationMatrixKeepsAdminAndOwnerScopesNonEnumerating` covers authenticated same-tenant and cross-tenant denial across public routes. | Promoted with retained public-contract evidence. |
 | API-006 | Strict HTTP/SDK limits, Artifact stream limits, public request/event limit test, and 500-execution malformed-decoder fuzz run pass. | Promoted with retained contract evidence. |

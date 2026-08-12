@@ -19,7 +19,11 @@
     },
     {
       "id": "API-003",
-      "status": "not_started"
+      "status": "completed",
+      "evidence": [
+        {"revision": "07b2e0bd75c49cf8f651c3324a3ed0acebece5db", "utc_time": "2026-08-12T03:03:30Z", "proof_level": "contract", "command_id": "m5-api003-current-openapi-contract-suite", "artifact_ref": "m5-api003-pages-07b2e0b", "result": "passed"},
+        {"revision": "07b2e0bd75c49cf8f651c3324a3ed0acebece5db", "utc_time": "2026-08-12T03:00:06Z", "proof_level": "documentation", "command_id": "m5-api003-pages-publication", "artifact_ref": "m5-api003-pages-07b2e0b", "result": "passed"}
+      ]
     },
     {
       "id": "API-004",

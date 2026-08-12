@@ -56,7 +56,7 @@
     "docs/engineering/go-compatibility.md"
   ],
   "limitations": [
-    "API-003 remains unpromoted because this artifact has no current-SHA documentation publication or HTTPS proof.",
+    "This artifact's local generated-reference check is supplemented by the current-main Pages publication and HTTPS proof in m5-api003-pages-07b2e0b; it does not itself establish documentation publication.",
     "The temporary GOWORK=off consumer check uses the candidate module replacement; it is not an immutable remote release-tag or external-consumer proof.",
     "The standalone and PostgreSQL/MinIO/Temporal dependencies are disposable integration fixtures, not protected production operations.",
     "This evidence does not execute a live model provider, external sandbox command, Firecracker, or Linux KVM environment."
