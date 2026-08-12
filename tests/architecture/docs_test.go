@@ -49,8 +49,8 @@ var _ = Describe("public documentation foundation", func() {
 			Expect(config).To(ContainSubstring(required))
 		}
 		startHere := read("website/src/content/docs/docs/start-here/index.mdx")
-		Expect(startHere).To(ContainSubstring(":::caution[Implementation status]"))
-		Expect(startHere).NotTo(ContainSubstring(":::caution Implementation status"))
+		Expect(startHere).To(ContainSubstring(":::caution[Current boundary]"))
+		Expect(startHere).NotTo(ContainSubstring(":::caution Current boundary"))
 		routes := read("website/route-manifest.json")
 		checker := read("website/scripts/check-routes.mjs")
 		link := read("website/src/components/DocLink.astro")
@@ -164,7 +164,7 @@ var _ = Describe("public documentation foundation", func() {
 			HaveField("Inputs", []string{"api/openapi/openapi.yaml"}),
 			HaveField("Kind", "openapi-operation-index"),
 		)))
-		Expect(page).To(ContainSubstring("# HTTP operation index"))
+		Expect(page).NotTo(ContainSubstring("# HTTP operation index"))
 		Expect(page).To(ContainSubstring("`createSession`"))
 	})
 

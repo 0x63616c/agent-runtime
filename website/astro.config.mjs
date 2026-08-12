@@ -28,6 +28,7 @@ export default defineConfig({
       ],
       sidebar: [
         {label: 'Start here', items: [{label: 'Foundation', slug: 'docs/start-here'}]},
+        {label: 'Tutorials', items: [{label: 'Build a durable chat', slug: 'docs/tutorials/durable-chat'}]},
         {
           label: 'Build and run',
           items: [
@@ -35,7 +36,13 @@ export default defineConfig({
             {label: 'Isolated local Stack', slug: 'docs/build-and-run/local-stack'},
           ],
         },
-        {label: 'Concepts', items: [{label: 'Runtime language', slug: 'docs/concepts/runtime-language'}]},
+        {
+          label: 'Concepts',
+          items: [
+            {label: 'Runtime language', slug: 'docs/concepts/runtime-language'},
+            {label: 'Code overview', slug: 'docs/concepts/code-overview'},
+          ],
+        },
         {
           label: 'Reference',
           items: [
@@ -51,7 +58,6 @@ export default defineConfig({
               items: [
                 {label: 'HTTP operations', slug: 'docs/reference/generated/http-operations'},
                 {label: 'Go SDK symbols', slug: 'docs/reference/generated/go-sdk-symbols'},
-                {label: 'Source inventory', slug: 'docs/reference/generated/source-inventory'},
               ],
             },
           ],

@@ -3,9 +3,7 @@ title: Isolated local Stack
 description: Launch and remove a disposable full local infrastructure Stack on OrbStack.
 ---
 
-# Isolated local Stack
-
-The M1 local environment is runnable on macOS with an already-running OrbStack
+The local environment is runnable on macOS with an already-running OrbStack
 Kubernetes cluster. It starts one disposable namespace containing dedicated
 runtime and Temporal PostgreSQL storage, Temporal primary/visibility database
 declarations, MinIO-compatible blob storage, telemetry, and all eight
@@ -153,4 +151,4 @@ This is local container/Kubernetes infrastructure, not Firecracker evidence or
 hostile-tenant sandbox isolation. A compile-tested public Go contract and
 deterministic in-memory Agent kernel now exist, but their HTTP, PostgreSQL, and
 Temporal production adapters—and all three examples—remain separate
-implementation milestones.
+implementation work.

@@ -1,0 +1,58 @@
+---
+title: Code overview
+description: A map of the packages that make up Agent Runtime.
+---
+
+import DocLink from '../../../../components/DocLink.astro';
+
+Agent Runtime is organised around a narrow public boundary and explicit
+runtime-owned adapters.
+
+## Start at the public boundary
+
+| Area | Location | Responsibility |
+| --- | --- | --- |
+| HTTP contract | `api/openapi/openapi.yaml` | Versioned `/v1` routes and schemas. |
+| Go SDK | `sdk/go` | Public client types, transport, and additive capabilities. |
+| API server | `internal/runtimeapi` | Authentication, strict request handling, and public responses. |
+| API process | `cmd/agent-runtime-api`, `internal/runtimeapiprocess` | Configuration and standalone role composition. |
+
+## Follow a request
+
+```text
+SDK or HTTP client
+  → runtimeapi
+  → runtime kernel and state planner
+  → orchestration publisher
+  → model/tool/content adapters
+  → ordered events and artifacts
+```
+
+The runtime model lives in `internal/runtimestate`,
+`internal/runtimeorchestration`, and `internal/runtimemodel`. PostgreSQL and
+content-store adapters live behind those boundaries in `internal/runtimepostgres`
+and `internal/runtimecontent`.
+
+## Tool and sandbox boundaries
+
+`internal/runtimetool` brokers an approved, durable tool action before an
+adapter can cause an external effect. `sandbox` contains the public sandbox
+contract; `internal/sandboxcontrol` and `internal/sandboxhostprocess` own the
+private control and host protocols. `internal/firecracker` composes an
+isolation profile only when the host can prove the required capability.
+
+## Applications and deployment
+
+`examples/durable-chat`, `examples/workspace-agent`, and
+`examples/research-dossier` are applications built through the public SDK.
+`deploy/production/stack.json`, `Tiltfile`, and `tools/dev` compose the local
+and deployment-facing runtime roles. The local Stack intentionally keeps each
+role's credentials and namespace identity separate.
+
+## A productive reading order
+
+1. Read the <DocLink href="/docs/concepts/runtime-language">runtime language</DocLink> and the OpenAPI contract.
+2. Run the <DocLink href="/docs/tutorials/durable-chat">Durable Chat tutorial</DocLink>.
+3. Trace `internal/runtimeapi/server.go` into the runtime-state and
+   orchestration packages.
+4. Read the example applications before changing the public SDK.

@@ -1,75 +1,61 @@
 # Agent Runtime
 
-Agent Runtime is a Go monorepo for a durable, session-based agent platform.
-Public documentation is available at
-[0x63616c.github.io/agent-runtime](https://0x63616c.github.io/agent-runtime/).
-M0 and the M2 payload milestone are complete. M1 declarative infrastructure
-and M3 sandbox-control work are active. The repository now exposes a runnable
-isolated Tilt infrastructure foundation and the reusable `temporalpayload`
-package, but it does not yet expose the public agent runtime service, working
-examples, production runtime image composition, or verified Firecracker
-isolation.
+Agent Runtime is a Go platform for durable, session-based agents. It gives an
+application a stable public API for versioned Agents and Policies, Sessions,
+Turns, ordered Events, approvals, artifacts, and governed tools—while keeping
+the orchestration and infrastructure boundaries explicit.
 
-The first M5 slice now publishes the Temporal-free Go contract at
-`github.com/0x63616c/agent-runtime/sdk/go` plus a deterministic internal kernel
-for immutable Agent revisions, revision-pinned Sessions, idempotent Input,
-serialized Turns, cancellation, and cursor-addressed Product events. The
-contract compiles from an independent module. It is not yet backed by the
-public HTTP service, PostgreSQL, or Temporal orchestration.
+The repository includes:
 
-The current Tilt foundation projects the reviewed typed local Stack into eight
-health-only trust-scoped role images—API, orchestration, model, tool, blob,
-codec, sandbox control, and sandbox host—with per-role identities and exact
-credential references. It proves isolated infrastructure, image builds,
-readiness, reset, and teardown; it is not yet the public Agent Runtime. See the
-[local Stack guide](website/src/content/docs/docs/build-and-run/local-stack.mdx) for the exact
-boundary.
+- a versioned HTTP API and Go SDK;
+- a deterministic runtime kernel and durable orchestration seams;
+- Durable Chat, Workspace Agent, and Research Dossier examples;
+- a local Kubernetes Stack with isolated API, orchestration, model, tool,
+  blob, codec, sandbox-control, and sandbox-host roles;
+- sandbox contracts that fail closed when an isolation capability is not
+  actually available.
 
-## Verification
+Read the [public documentation](https://0x63616c.github.io/agent-runtime/),
+start with the [tutorial](website/src/content/docs/docs/tutorials/durable-chat.mdx),
+or use the [code overview](website/src/content/docs/docs/concepts/code-overview.mdx)
+to navigate the repository.
 
-The supported incremental repository check is:
+## Verify a change
 
 ```sh
 just check
 ```
 
-It requires `just` 1.58.0 (pinned in `.tool-versions`) and runs module
-verification, the Go race suite, vet, an AST-based real-time-wait check, and
-schema/completeness validation for the generated 183-row
-[catalog](evidence/requirements-catalog.json) and
-[ledger](evidence/requirements-ledger.json). `check` proves the evidence
-register is structurally honest; it does not turn non-green rows into passes.
+This runs module verification, the Go race suite, vet, generated-contract
+checks, and architecture tests. Documentation changes should also run:
 
-`just verify` is the binding milestone/release completion gate. It reruns
-`check`, emits the complete 183-row status/evidence report, and currently fails
-because requirements are `in_progress` or `not_started`, with no immutable
-main-CI or complete acceptance evidence. `just completion-check` is an alias.
-This is expected until the full release ledger is green; it does not reopen a
-previously completed milestone.
+```sh
+just docs-check
+```
 
-## Configuration and status evidence
+## Run the local API and example
 
-Process configuration is constructed explicitly through `runtimeconfig`; domain
-packages do not read environment variables. Diagnostics, JSON, formatting and
-structured logs redact notifier credentials. The only accepted status topic is
-`https://ntfy.sh/0x63616c-ai-agant` (spelling intentional).
+```sh
+export AGENT_RUNTIME_ADMIN_TOKEN='replace-with-at-least-16-bytes'
+export AGENT_RUNTIME_DEVELOPER_TOKEN='replace-with-at-least-16-bytes'
+go run ./cmd/agent-runtime-api --config "$PWD/deploy/runtimeapi/api.example.json"
+```
 
-The milestone implementation accepts a complete canonical catalog before it
-builds a weighted estimate, retains evidence before notifier delivery, records
-failures as retryable classified codes, and transports only the ADR-defined
-structured payload. It provides a deterministic fake notifier for tests and a
-fixed-topic ntfy transport for completion operations. The retained M0 record
-preceded successful delivery; later milestone owners use the same pipeline only
-after their complete evidence gates are green.
+In another terminal:
+
+```sh
+go run ./examples/durable-chat/cmd/durable-chat \
+  --mode=web \
+  --runtime-url=http://127.0.0.1:8088
+```
+
+The example listens only on loopback and keeps the runtime bearer token out of
+the browser. The supplied API configuration uses in-memory storage for local
+exploration; it is not a production deployment configuration.
 
 ## Compatibility
 
-The repository publishes one root module,
-`github.com/0x63616c/agent-runtime`, and currently requires Go 1.26 or newer.
-Contributor and delivery policy is in [CONTRIBUTING.md](CONTRIBUTING.md); the
-[Go compatibility](docs/engineering/go-compatibility.md) and
-[generated ownership](docs/engineering/generated-ownership.md) policies state
-the current boundaries.
-All public packages share one semver release train. Compatibility, deprecation,
-generated API ownership, and clean external-consumer verification remain
-release requirements and are not yet release guarantees.
+The root module is `github.com/0x63616c/agent-runtime` and requires Go 1.26 or
+newer. Public API and generated-source ownership policies are documented in
+[CONTRIBUTING.md](CONTRIBUTING.md) and
+[docs/engineering/go-compatibility.md](docs/engineering/go-compatibility.md).

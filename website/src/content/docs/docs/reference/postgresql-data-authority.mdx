@@ -3,8 +3,6 @@ title: PostgreSQL data-authority foundation
 description: The declared runtime schema and the durability work it does not yet prove.
 ---
 
-# PostgreSQL data-authority foundation
-
 The versioned production Stack declares PostgreSQL as the Agent Runtime v1
 metadata, cursor, audit, and outbox authority. The reviewed runtime migrations
 create the normalized storage foundation for tenants, immutable Agent revision
@@ -47,7 +45,7 @@ integration tests execute the artifacts and prove the declared constraints.
 
 ## Internal admission adapter (not the public API)
 
-M5 currently contains an internal first-admission adapter used only by direct
+The repository contains an internal first-admission adapter used only by direct
 application composition and real PostgreSQL integration tests. It accepts an
 already-authorized, pre-existing Session; validates each Artifact reference
 against that owner's exact state-recorded ID, digest, media type, and size
@@ -69,7 +67,7 @@ authorization plane. The outbox is transactionally recorded only: publication,
 retry/reconciliation, and restart recovery are not responsibilities of this
 first-admission adapter.
 
-Separate private M5 integration evidence exercises two recovery paths against
+Separate private integration evidence exercises two recovery paths against
 disposable PostgreSQL, MinIO, and Temporal dependencies. The outbox publisher
 reclaims a lease when its acknowledgement is lost only after Temporal accepts
 the same route. The model-effect worker recreates its PostgreSQL composition
@@ -90,7 +88,7 @@ The currently runnable public API remains explicitly configured with
 `memory-unsafe` storage. The internal adapter does not by itself prove public
 durable API composition, safe Artifact transfer/streaming, complete event
 expiry, audit publication recovery, production blob authorization, production
-tenant erasure/backup/PITR, or provider streaming. No M5 requirement is
+tenant erasure/backup/PITR, or provider streaming. No production requirement is
 complete on the strength of this schema and first-admission slice.
 
 :::

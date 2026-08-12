@@ -3,8 +3,6 @@ title: Research Dossier
 description: Run the public-contract research application and recover retained artifacts.
 ---
 
-# Research Dossier
-
 Research Dossier is a loopback web and terminal application over the public
 Agent Runtime Go SDK. It does not import Temporal, PostgreSQL, MinIO, a model
 provider, a Tool adapter, or a sandbox package. Its only runtime operations are
@@ -76,7 +74,7 @@ dossier remain in the Session's caller-authorized Artifact index after a public
 API process restart. Retention, erasure, and object GC remain runtime operator
 policies; a download is not an indefinite retention guarantee.
 
-The source tree contains a disposable M8 integration harness with PostgreSQL,
+The source tree contains a disposable integration harness with PostgreSQL,
 MinIO, and a private Temporal development server. It exercises the application
 through its public HTTP/SDK contract: ordered research Inputs, caller-owned
 Approval, retained cited Artifacts (including a final result larger than 512

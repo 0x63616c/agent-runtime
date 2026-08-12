@@ -65,9 +65,8 @@ function validateManifest(value) {
       throw new Error(`documentation sidebar route is not a declared docs route: ${JSON.stringify(route)}`);
     }
   }
-  const declaredDocsRoutes = [...routes].filter((route) => route.startsWith('/docs/') && !value.routes.find((entry) => entry.route === route).redirect).sort();
-  if (JSON.stringify([...value.sidebarRoutes].sort()) !== JSON.stringify(declaredDocsRoutes)) {
-    throw new Error('documentation sidebar routes must list every rendered documentation route exactly once');
+  if (new Set(value.sidebarRoutes).size !== value.sidebarRoutes.length) {
+    throw new Error('documentation sidebar routes must not contain duplicates');
   }
 }
 

@@ -1,11 +1,9 @@
 ---
 title: Sandbox-control ledger
-description: Implemented PostgreSQL durability, enrolled host routing, and M3 recovery boundaries.
+description: Implemented PostgreSQL durability, enrolled host routing, and recovery boundaries.
 ---
 
-# Sandbox-control ledger
-
-The M3 implementation now includes a PostgreSQL-backed operation ledger behind
+The implementation includes a PostgreSQL-backed operation ledger behind
 the same durable-store contract as its deterministic memory fixture. This is a
 private control-plane component; public callers continue to use Principal-bound
 Sandbox Operations rather than database or Temporal identifiers.
@@ -39,12 +37,12 @@ recognizable direct secret material such as bearer tokens, provider key
 prefixes, and PEM private keys. This boundary does not claim that arbitrary
 strings can be proven secret-free.
 
-:::caution Partial M3 evidence
+:::caution[Partial sandbox evidence]
 
 This proves durable public operation acceptance and the reference host-control
 protocol, not the complete sandbox service. Resource queries, output/artifact
 content storage, real guest execution, and Linux/KVM isolation are absent. No
-M3 requirement is promoted without retained evidence and independent review.
+Sandbox capability claims require retained evidence and independent review.
 
 :::
 

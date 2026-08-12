@@ -5,16 +5,12 @@ description: Which generated public references exist today.
 
 import DocLink from '../../../../components/DocLink.astro';
 
-# Reference status
-
-The completed M0 foundation publishes the deterministic
-<DocLink href="/docs/reference/generated/source-inventory">source inventory</DocLink>, and current M3 work adds a
-compile-tested Go declaration for the `sandbox` control contract. The
+The compile-tested `sandbox` control contract describes the public surface. The
 contract declares principal-scoped idempotent Operations, immutable Effective
 Specs, typed process results, bounded output replay, finite limits, and safe
 image-admission metadata.
 
-The M4 local developer adapter is explicitly constructed through
+The local developer adapter is explicitly constructed through
 `NewLocalUnsafeClient` with the literal `local-unsafe` acknowledgement. It does
 not execute commands or read ambient process state. It only accepts a
 caller-provided convenience environment after removing credential, proxy, and
@@ -31,20 +27,18 @@ from every profile fact. A create or restore Operation binds that digest, and a
 reconnect under a changed profile fails closed. These are unit/orchestration
 contracts, not a claim of process-restart durability or Firecracker isolation.
 
-This is not yet a public HTTP/OpenAPI service, durable database implementation,
-or sandbox host backend. `NewClient` validates explicit client configuration
-but reports unavailable until a control transport is composed. The deterministic
-in-memory fixture is unit/conformance evidence only; it does not claim process
-restart durability, Firecracker enforcement, or tenant isolation.
+The deterministic in-memory fixture is unit/conformance evidence only; it does
+not claim process-restart durability, Firecracker enforcement, or tenant
+isolation.
 
-The completed M2 milestone provides the implementation-tested public
+The public
 <DocLink href="/docs/reference/temporal-payloads">Temporal payload reference</DocLink>. Its local converter
 compares complete wire representations before keeping normal, zstd, or
 immutable blob-reference payloads. The Temporal UI handler reuses that chain
 only for inspection; workers retain no remote-codec dependency. This is a
 library slice, not yet a deployed runtime role or production blob deployment.
 
-The active M5 work now provides a Temporal-free public
+The runtime provides a Temporal-free public
 <DocLink href="/docs/reference/runtime-go-contract">Go contract and deterministic kernel</DocLink>. It defines
 typed IDs, immutable revision/session snapshots, idempotent bounded Input,
 serialized Turn state, explicit cancellation, and ordered cursor replay. The

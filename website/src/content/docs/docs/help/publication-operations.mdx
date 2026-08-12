@@ -3,8 +3,6 @@ title: Publication operations
 description: Reproducible deployment, search, accessibility, and rollback policy.
 ---
 
-# Publication operations
-
 ## Version and toolchain
 
 The site uses one current version until the first compatible public release.
@@ -40,9 +38,9 @@ deployment job receives `pages: write` and `id-token: write`, and it targets the
 protected `github-pages` environment. Every docs-affecting push to `main`
 uploads and deploys the immutable artifact; a manually dispatched run also
 deploys only when it targets `main`. The Pages source is GitHub Actions and the
-M0 project-site deployment has been verified publicly. #34 still owns the final
-accessibility, search, navigation, and rollback evidence. Main CI cannot
-deploy.
+project-site deployment has been verified publicly. Accessibility, search,
+navigation, and rollback verification remain part of the release checklist.
+Main CI cannot deploy.
 
 GitHub retains deployments and their immutable source revisions. A rollback is
 a reviewed revert or an explicit redeployment of a previously verified

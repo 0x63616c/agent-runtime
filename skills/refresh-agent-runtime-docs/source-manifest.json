@@ -104,7 +104,7 @@
         "website/tsconfig.json"
       ],
       "artifactKind": "source-inventory",
-      "publicStatus": "Current public-contract source inventory; milestone acceptance remains evidence-gated"
+      "publicStatus": "Current public-contract source inventory; source inclusion is not a runtime availability claim"
     },
     {
       "output": "website/src/content/docs/docs/reference/generated/http-operations.mdx",

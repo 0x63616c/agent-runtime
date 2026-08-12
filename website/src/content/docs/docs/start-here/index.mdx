@@ -5,27 +5,21 @@ description: What Agent Runtime is, what exists today, and where to go next.
 
 import DocLink from '../../../../components/DocLink.astro';
 
-# Agent Runtime
-
 Agent Runtime is being built as one Go monorepo for durable, session-based
 agents. Its intended boundary includes versioned Agents, Sessions, Turns,
 streamed Events, approvals, artifacts, governed tools, provider adapters,
 Temporal orchestration, and optional sandboxes.
 
-:::caution[Implementation status]
-M0 and the M2 reusable Temporal payload-library milestone are complete.
-Declarative infrastructure and the sandbox control contract are under
-implementation. The repository now ships a runnable isolated Tilt
-infrastructure Stack with trust-scoped API/orchestration/codec runtime roles,
-and the first Temporal-free public Go contract plus deterministic Agent kernel.
-It does not yet ship the HTTP transport, PostgreSQL runtime authority, private
-Temporal orchestration, three examples, production payload deployment, or
-verified Firecracker isolation. See the <DocLink href="/docs/reference/runtime-go-contract">runtime Go contract</DocLink>
-and <DocLink href="/docs/build-and-run/local-stack">local Stack guide</DocLink> for the exact current
-boundaries.
+:::caution[Current boundary]
+The repository ships a public HTTP API and Go SDK, local example applications,
+and an isolated local Stack. The supplied standalone API uses explicitly
+labelled in-memory storage for exploration. Verified Firecracker isolation and
+production deployment remain separate operator-owned capabilities. See the
+<DocLink href="/docs/reference/runtime-go-contract">runtime Go contract</DocLink> and
+<DocLink href="/docs/build-and-run/local-stack">local Stack guide</DocLink> for the
+exact boundaries.
 :::
 
 Start with <DocLink href="/docs/concepts/runtime-language">the domain language</DocLink>, then read
-<DocLink href="/docs/security/verified-boundaries">the verified safety boundary</DocLink>. The
-<DocLink href="/docs/reference/generated/source-inventory">source inventory</DocLink> records the
-declared inputs behind this documentation snapshot.
+<DocLink href="/docs/security/verified-boundaries">the verified safety boundary</DocLink>, and then
+work through the <DocLink href="/docs/tutorials/durable-chat">Durable Chat tutorial</DocLink>.

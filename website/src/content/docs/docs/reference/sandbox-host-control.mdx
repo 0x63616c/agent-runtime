@@ -1,15 +1,13 @@
 ---
 title: Sandbox host control
-description: Private enrolled-host trust, fencing, recovery, and honest M3 limits.
+description: Private enrolled-host trust, fencing, recovery, and honest capability limits.
 ---
-
-# Sandbox host control
 
 Agent Runtime keeps host topology out of its public Go and HTTP contracts. A
 distinct private `sandbox.host-control/v1` listener routes already-authorized,
 immutable Sandbox Operations to durably enrolled hosts.
 
-Implemented M3 behavior includes:
+Implemented behavior includes:
 
 - TLS 1.3 mutual authentication against exact enrolled certificate generation;
 - overlapping certificate rotation followed by per-generation revocation;
@@ -38,7 +36,7 @@ hardware-attestation verification.
 The reference host performs no guest or VM execution. This proves the durable
 protocol, not hostile-tenant isolation, cgroups, network policy, mounts, image
 admission, Jailer, KVM, or Firecracker. TLS provides transport confidentiality;
-there is no additional application-layer envelope encryption in M3. Stored
+there is no additional application-layer envelope encryption in this protocol. Stored
 attestation outcomes do not prove the Linux/KVM trust boundary.
 
 Repository references:

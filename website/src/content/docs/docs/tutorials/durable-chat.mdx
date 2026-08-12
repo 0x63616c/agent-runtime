@@ -1,0 +1,56 @@
+---
+title: Build a durable chat
+description: Run the public API and connect the Durable Chat example.
+---
+
+This tutorial runs a local Agent Runtime API and connects the Durable Chat
+example through the public Go SDK. The API configuration uses in-memory
+storage, so it is for exploration rather than durable deployment.
+
+## Start the API
+
+From the repository root, set two local credentials and run the API:
+
+```sh
+export AGENT_RUNTIME_ADMIN_TOKEN='replace-with-at-least-16-bytes'
+export AGENT_RUNTIME_DEVELOPER_TOKEN='replace-with-at-least-16-bytes'
+go run ./cmd/agent-runtime-api --config "$PWD/deploy/runtimeapi/api.example.json"
+```
+
+The API listens at `http://127.0.0.1:8088`. `GET /healthz` and `GET /readyz`
+confirm that the process is serving.
+
+## Open Durable Chat
+
+In a second terminal, run the loopback web UI:
+
+```sh
+go run ./examples/durable-chat/cmd/durable-chat \
+  --mode=web \
+  --runtime-url=http://127.0.0.1:8088
+```
+
+Open the printed `http://127.0.0.1:8090` address. Create a Session, send an
+input, and watch its ordered events. The browser never receives the runtime
+bearer token: the local UI owns the SDK client and accepts browser requests
+only from its own loopback origin.
+
+## Try the terminal instead
+
+Stop the web UI or use another terminal and run:
+
+```sh
+go run ./examples/durable-chat/cmd/durable-chat \
+  --mode=terminal \
+  --runtime-url=http://127.0.0.1:8088
+```
+
+Use `new <agent-revision>` to start a Session, then `send`, `resume`,
+`events`, and `cancel` to explore the client workflow.
+
+## What this demonstrates
+
+The example uses only the public HTTP/SDK surface. It creates or resumes a
+Session, submits idempotent input, reconnects to cursor-addressed events, and
+issues explicit cancellation. Model-provider execution and sandboxed Workspace
+execution are intentionally separate operator-owned capabilities.
