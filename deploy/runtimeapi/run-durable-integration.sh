@@ -80,6 +80,10 @@ reset_runtime_schema
 go test -race -tags=integration ./internal/runtimeapi -run 'Test(DurableRuntimeUsesNonSuperApplicationLoginWithTenantRLS|DurableStateRuntimeAuthorizesArtifactInputReferences|DurablePostgresMinIOCollectorDeletesExpiredUnreferencedArtifact|DurablePostgresMinIOTenantErasurePreservesAnotherTenant)' -count=1
 
 reset_runtime_schema
+AR_RUNTIME_POSTGRES_DSN="$runtime_admin_dsn" \
+  go test -race -tags=integration ./internal/runtimeadmission -run 'Test(PostgresAdmissionStoresOnlyReferencesAndSerializesDistinctInputs|PostgresAdmissionRefusesUnauthorizedArtifactReferencesBeforeStaging)' -count=1
+
+reset_runtime_schema
 go test -race -tags=integration ./internal/runtimeapiprocess -run 'TestDurablePostgresMinIOAPIProcessSurvivesRestart' -count=1
 
 reset_runtime_schema
