@@ -18,6 +18,13 @@ It uses only the public Go SDK/HTTP contract to create/resume Sessions, queue
 input, reconnect events by cursor, inspect state, and cancel Turns. Its web
 server owns the local SDK bearer so the browser never receives it.
 
+All three loopback example web UIs protect their browser mutations with an
+ephemeral per-process CSRF token, exact same-HTTP-Origin validation, and a
+bounded form body. Reload the loopback page to obtain a current form; posting
+from another origin, omitting the token, or exceeding the form bound is refused
+before the public SDK is called. Each UI process also assigns request IDs
+safely when concurrent browser requests arrive.
+
 The example is not a Codex subscription canary. The official production
 subscription Model surface remains blocked, so no example may label its model
 path subscription-verified until the protected live canary is retained.

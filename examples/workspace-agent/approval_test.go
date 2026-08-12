@@ -3,7 +3,10 @@ package workspaceagent
 import (
 	"bytes"
 	"context"
+	"net/http"
 	"net/http/httptest"
+	"net/url"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -58,6 +61,77 @@ func TestWorkspaceApprovalWebAndTerminalStayPublicAndBlocked(t *testing.T) {
 	if !strings.Contains(output.String(), approval.ID.String()) || !strings.Contains(output.String(), "unavailable") {
 		t.Fatalf("terminal output = %q", output.String())
 	}
+}
+
+func TestWorkspaceApprovalWebRejectsHostileOriginWithoutMutating(t *testing.T) {
+	approval := agentruntime.Approval{ID: "appr_1234567890ABCDEF", SessionID: "sess_1234567890ABCDEF", TurnID: "turn_1234567890ABCDEF", ToolCallID: "tcall_1234567890ABCDEF", State: agentruntime.ApprovalPending, Action: &agentruntime.ApprovalAction{Verb: "write", Target: "workspace-service"}, ExpiresAt: time.Date(2026, 8, 11, 20, 0, 0, 0, time.UTC)}
+	client := &approvalClient{approval: approval}
+	inbox, err := NewInbox(client)
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler, err := NewWebHandler(inbox)
+	if err != nil {
+		t.Fatal(err)
+	}
+	csrf := workspaceWebCSRFToken(t, handler)
+	for _, test := range []struct {
+		name string
+		path string
+	}{
+		{name: "approve", path: "/approvals/appr_1234567890ABCDEF/approve"},
+		{name: "deny", path: "/approvals/appr_1234567890ABCDEF/deny"},
+		{name: "cancel", path: "/approvals/appr_1234567890ABCDEF/cancel"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			response := httptest.NewRecorder()
+			request := httptest.NewRequest(http.MethodPost, "http://trusted.example"+test.path, strings.NewReader(url.Values{"csrf": {csrf}, "key": {"hostile key"}}.Encode()))
+			request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+			request.Header.Set("Origin", "http://evil.example")
+			handler.ServeHTTP(response, request)
+			if response.Code != http.StatusForbidden {
+				t.Fatalf("hostile mutation status = %d", response.Code)
+			}
+			if client.decision.IdempotencyKey != "" || client.cancel.IdempotencyKey != "" {
+				t.Fatalf("hostile mutation reached public client: decision=%#v cancel=%#v", client.decision, client.cancel)
+			}
+		})
+	}
+}
+
+func TestWorkspaceApprovalWebRejectsOversizedMutationWithoutMutating(t *testing.T) {
+	approval := agentruntime.Approval{ID: "appr_1234567890ABCDEF", SessionID: "sess_1234567890ABCDEF", TurnID: "turn_1234567890ABCDEF", ToolCallID: "tcall_1234567890ABCDEF", State: agentruntime.ApprovalPending, Action: &agentruntime.ApprovalAction{Verb: "write", Target: "workspace-service"}, ExpiresAt: time.Date(2026, 8, 11, 20, 0, 0, 0, time.UTC)}
+	client := &approvalClient{approval: approval}
+	inbox, err := NewInbox(client)
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler, err := NewWebHandler(inbox)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "http://trusted.example/approvals/appr_1234567890ABCDEF/approve", strings.NewReader(url.Values{
+		"csrf": {workspaceWebCSRFToken(t, handler)},
+		"key":  {strings.Repeat("a", maxWebFormBytes+1)},
+	}.Encode()))
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	request.Header.Set("Origin", "http://trusted.example")
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusForbidden || client.decision.IdempotencyKey != "" {
+		t.Fatalf("oversized mutation = status=%d decision=%#v", response.Code, client.decision)
+	}
+}
+
+func workspaceWebCSRFToken(t *testing.T, handler http.Handler) string {
+	t.Helper()
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "http://trusted.example/", nil))
+	match := regexp.MustCompile(`name="csrf" value="([^"]+)"`).FindStringSubmatch(response.Body.String())
+	if len(match) != 2 {
+		t.Fatalf("CSRF token missing from page: %q", response.Body.String())
+	}
+	return match[1]
 }
 
 type approvalClient struct {

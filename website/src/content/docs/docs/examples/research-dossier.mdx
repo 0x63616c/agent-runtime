@@ -62,9 +62,9 @@ progress, listing Artifacts, and downloading a selected Artifact. The browser
 does not receive the bearer credential, object-store URL, or a Tool capability.
 Mutating forms carry an ephemeral CSRF token and require the loopback page's
 same HTTP Origin. If a form returns `forbidden`, reload the page rather than
-posting from another origin or replaying an older form. Each terminal and web
-operation has a bounded request context; retry through the durable `resume`
-flow if the runtime is temporarily unavailable.
+posting from another origin, omitting the token, or exceeding the bounded form
+body. Each terminal and web operation has a bounded request context; retry
+through the durable `resume` flow if the runtime is temporarily unavailable.
 
 ## Citation and Artifact retention
 

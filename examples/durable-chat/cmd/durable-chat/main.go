@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"sync"
 
 	durablechat "github.com/0x63616c/agent-runtime/examples/durable-chat"
 	agentruntime "github.com/0x63616c/agent-runtime/sdk/go"
@@ -64,9 +65,14 @@ func run(ctx context.Context, arguments []string, lookup func(string) (string, b
 	return http.Serve(listener, handler)
 }
 
-type requestIDs struct{ next uint64 }
+type requestIDs struct {
+	mu   sync.Mutex
+	next uint64
+}
 
 func (source *requestIDs) NextRequestID() (agentruntime.RequestID, error) {
+	source.mu.Lock()
+	defer source.mu.Unlock()
 	source.next++
 	return agentruntime.ParseRequestID(fmt.Sprintf("req_%016d", source.next))
 }

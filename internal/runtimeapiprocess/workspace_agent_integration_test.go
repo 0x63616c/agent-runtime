@@ -15,6 +15,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"regexp"
 	"runtime"
 	"strings"
 	"testing"
@@ -329,7 +330,22 @@ func getWorkspacePage(t *testing.T, endpoint string) string {
 func postWorkspaceForm(t *testing.T, endpoint, key string) {
 	t.Helper()
 	client := &http.Client{CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse }}
-	response, err := client.PostForm(endpoint, url.Values{"key": {key}})
+	parsed, err := url.Parse(endpoint)
+	if err != nil {
+		t.Fatal(err)
+	}
+	base := parsed.Scheme + "://" + parsed.Host
+	match := regexp.MustCompile(`name="csrf" value="([^"]+)"`).FindStringSubmatch(getWorkspacePage(t, base))
+	if len(match) != 2 {
+		t.Fatalf("Workspace page CSRF token missing")
+	}
+	request, err := http.NewRequest(http.MethodPost, endpoint, strings.NewReader(url.Values{"csrf": {match[1]}, "key": {key}}.Encode()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	request.Header.Set("Origin", base)
+	response, err := client.Do(request)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -341,7 +357,22 @@ func postWorkspaceForm(t *testing.T, endpoint, key string) {
 
 func postWorkspaceFormFailure(t *testing.T, endpoint, key string) {
 	t.Helper()
-	response, err := http.PostForm(endpoint, url.Values{"key": {key}})
+	parsed, err := url.Parse(endpoint)
+	if err != nil {
+		t.Fatal(err)
+	}
+	base := parsed.Scheme + "://" + parsed.Host
+	match := regexp.MustCompile(`name="csrf" value="([^"]+)"`).FindStringSubmatch(getWorkspacePage(t, base))
+	if len(match) != 2 {
+		t.Fatalf("Workspace page CSRF token missing")
+	}
+	request, err := http.NewRequest(http.MethodPost, endpoint, strings.NewReader(url.Values{"csrf": {match[1]}, "key": {key}}.Encode()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	request.Header.Set("Origin", base)
+	response, err := http.DefaultClient.Do(request)
 	if err != nil {
 		t.Fatal(err)
 	}

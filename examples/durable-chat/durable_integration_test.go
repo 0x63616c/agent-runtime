@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -151,11 +152,13 @@ func TestDurableChatTerminalAndWebBinariesUseOnlyPublicPathAcrossRestart(t *test
 	if page.StatusCode != http.StatusOK || !bytes.Contains(body.Bytes(), []byte("not a subscription canary")) || !bytes.Contains(body.Bytes(), []byte(sessionID)) {
 		t.Fatalf("web page = %d %q", page.StatusCode, body.String())
 	}
-	cancelRequest, err := http.NewRequestWithContext(ctx, http.MethodPost, web.address+"/sessions/"+sessionID+"/cancel", bytes.NewBufferString("turn="+turnID))
+	csrf := findID(t, `name="csrf" value="([A-Fa-f0-9]+)"`, body.String())
+	cancelRequest, err := http.NewRequestWithContext(ctx, http.MethodPost, web.address+"/sessions/"+sessionID+"/cancel", strings.NewReader(url.Values{"csrf": {csrf}, "turn": {turnID}}.Encode()))
 	if err != nil {
 		t.Fatal(err)
 	}
 	cancelRequest.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	cancelRequest.Header.Set("Origin", web.address)
 	response, err := http.DefaultClient.Do(cancelRequest)
 	if err != nil {
 		t.Fatalf("cancel through web binary: %v", err)

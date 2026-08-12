@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -49,22 +51,20 @@ func TestWebHandlerUsesSameDurableControllerAndLabelsSubscriptionState(t *testin
 		t.Fatal(err)
 	}
 	create := httptest.NewRecorder()
-	createRequest := httptest.NewRequest(http.MethodPost, "/sessions", strings.NewReader("revision=arev_1234567890ABCDEF"))
-	createRequest.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	csrf := webCSRFToken(t, handler)
+	createRequest := webMutationRequest(http.MethodPost, "/sessions", url.Values{"csrf": {csrf}, "revision": {"arev_1234567890ABCDEF"}})
 	handler.ServeHTTP(create, createRequest)
 	if create.Code != http.StatusSeeOther || create.Header().Get("Location") != "/?session=sess_1234567890ABCDEF" {
 		t.Fatalf("create response = %d %q", create.Code, create.Header().Get("Location"))
 	}
 	message := httptest.NewRecorder()
-	messageRequest := httptest.NewRequest(http.MethodPost, "/sessions/sess_1234567890ABCDEF/messages", strings.NewReader("text=queued+web+message"))
-	messageRequest.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	messageRequest := webMutationRequest(http.MethodPost, "/sessions/sess_1234567890ABCDEF/messages", url.Values{"csrf": {csrf}, "text": {"queued web message"}})
 	handler.ServeHTTP(message, messageRequest)
 	if message.Code != http.StatusSeeOther || client.sent.Parts[0].Text != "queued web message" {
 		t.Fatalf("message response = %d sent=%#v", message.Code, client.sent)
 	}
 	cancel := httptest.NewRecorder()
-	cancelRequest := httptest.NewRequest(http.MethodPost, "/sessions/sess_1234567890ABCDEF/cancel", strings.NewReader("turn=turn_1234567890ABCDEF"))
-	cancelRequest.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	cancelRequest := webMutationRequest(http.MethodPost, "/sessions/sess_1234567890ABCDEF/cancel", url.Values{"csrf": {csrf}, "turn": {"turn_1234567890ABCDEF"}})
 	handler.ServeHTTP(cancel, cancelRequest)
 	if cancel.Code != http.StatusSeeOther || client.cancel.TurnID != "turn_1234567890ABCDEF" {
 		t.Fatalf("cancel response = %d cancelled=%#v", cancel.Code, client.cancel)
@@ -74,6 +74,75 @@ func TestWebHandlerUsesSameDurableControllerAndLabelsSubscriptionState(t *testin
 	if !strings.Contains(page.Body.String(), "subscription canary blocked") || strings.Contains(page.Body.String(), "token") {
 		t.Fatalf("page = %q", page.Body.String())
 	}
+}
+
+func TestWebHandlerRejectsHostileOriginWithoutMutatingDurableChat(t *testing.T) {
+	client := &fakeClient{}
+	app, _ := durablechat.NewApp(client, &keys{})
+	handler, err := durablechat.NewWebHandler(durablechat.WebConfig{App: app})
+	if err != nil {
+		t.Fatal(err)
+	}
+	csrf := webCSRFToken(t, handler)
+	cases := []struct {
+		name string
+		path string
+		body url.Values
+	}{
+		{name: "create", path: "/sessions", body: url.Values{"csrf": {csrf}, "revision": {"arev_1234567890ABCDEF"}}},
+		{name: "send", path: "/sessions/sess_1234567890ABCDEF/messages", body: url.Values{"csrf": {csrf}, "text": {"hostile message"}}},
+		{name: "cancel", path: "/sessions/sess_1234567890ABCDEF/cancel", body: url.Values{"csrf": {csrf}, "turn": {"turn_1234567890ABCDEF"}}},
+	}
+	for _, test := range cases {
+		t.Run(test.name, func(t *testing.T) {
+			response := httptest.NewRecorder()
+			request := webMutationRequest(http.MethodPost, test.path, test.body)
+			request.Header.Set("Origin", "http://evil.example")
+			handler.ServeHTTP(response, request)
+			if response.Code != http.StatusForbidden {
+				t.Fatalf("hostile mutation status = %d", response.Code)
+			}
+			if client.sent.IdempotencyKey != "" || client.cancel.IdempotencyKey != "" {
+				t.Fatalf("hostile mutation reached public client: send=%#v cancel=%#v", client.sent, client.cancel)
+			}
+		})
+	}
+}
+
+func TestWebHandlerRejectsOversizedMutationWithoutMutatingDurableChat(t *testing.T) {
+	client := &fakeClient{}
+	app, _ := durablechat.NewApp(client, &keys{})
+	handler, err := durablechat.NewWebHandler(durablechat.WebConfig{App: app})
+	if err != nil {
+		t.Fatal(err)
+	}
+	response := httptest.NewRecorder()
+	request := webMutationRequest(http.MethodPost, "/sessions/sess_1234567890ABCDEF/messages", url.Values{
+		"csrf": {webCSRFToken(t, handler)},
+		"text": {strings.Repeat("a", agentruntime.MaxTextPartBytes+4097)},
+	})
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusForbidden || client.sent.IdempotencyKey != "" {
+		t.Fatalf("oversized mutation = status=%d sent=%#v", response.Code, client.sent)
+	}
+}
+
+func webCSRFToken(t *testing.T, handler http.Handler) string {
+	t.Helper()
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "http://trusted.example/", nil))
+	match := regexp.MustCompile(`name="csrf" value="([^"]+)"`).FindStringSubmatch(response.Body.String())
+	if len(match) != 2 {
+		t.Fatalf("CSRF token missing from page: %q", response.Body.String())
+	}
+	return match[1]
+}
+
+func webMutationRequest(method, path string, values url.Values) *http.Request {
+	request := httptest.NewRequest(method, "http://trusted.example"+path, strings.NewReader(values.Encode()))
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	request.Header.Set("Origin", "http://trusted.example")
+	return request
 }
 
 func TestTerminalUsesPublicLifecycleCommands(t *testing.T) {
