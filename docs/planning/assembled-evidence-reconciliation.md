@@ -1,7 +1,7 @@
 # Assembled-candidate evidence reconciliation
 
 This audit applies to assembled candidate
-`b15a3e02e663b49478811a6109e7732ede37b18e`. Historical artifacts and their
+`1795e1ec3a62973afaddd01f0083f963e6a4de78`. Historical artifacts and their
 immutable revisions remain retained. They are not rewritten or treated as
 candidate evidence when their code revision is not an ancestor of the assembled
 candidate.
@@ -12,14 +12,13 @@ candidate.
 zero on the candidate against disposable PostgreSQL, MinIO, and private Temporal
 test services. Each M7 artifact below records that exact command and its zero
 exit status; no workstation-local transcript is part of retained evidence.
-Focused candidate commands also completed with exit status zero:
+The focused TOL-002 brokered builtin, sandbox-control, and MCP adapter contract
+command also completed with exit status zero.
 
-- TOL-002: brokered builtin, sandbox-control, and MCP adapter contracts.
-- HITL-003: public HTTP/SDK approval authorization matrix under injected time.
-
-The resulting redacted artifacts `evidence/m7-b15a3e0-{tol002,tol003,tol004,
-tol005,tol006,hitl001,hitl002,hitl004,hitl006}.json` are bound to that exact
-revision. They complete TOL-002 through TOL-006 and HITL-001, HITL-002,
+The separate redacted `evidence/m7-1795e1e-{tol002,tol003,tol004,tol005,
+tol006,hitl001,hitl002,hitl004,hitl006}.json` artifacts are bound to that
+exact revision; the earlier `b15a3e0` artifacts remain historical provenance.
+The current artifacts complete TOL-002 through TOL-006 and HITL-001, HITL-002,
 HITL-004, and HITL-006 only. TOL-001 remains in progress because broker tool
 registration and general JSON-schema validation are not proven; HITL-003
 remains in progress because policy invalidation is not proven. These artifacts

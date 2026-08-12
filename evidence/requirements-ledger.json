@@ -607,6 +607,14 @@
           "command_id": "m7-b15a3e0-hitl001",
           "artifact_ref": "m7-b15a3e0-hitl001",
           "result": "passed"
+        },
+        {
+          "revision": "1795e1ec3a62973afaddd01f0083f963e6a4de78",
+          "utc_time": "2026-08-12T08:54:45Z",
+          "proof_level": "integration",
+          "command_id": "m7-1795e1e-hitl001",
+          "artifact_ref": "m7-1795e1e-hitl001",
+          "result": "passed"
         }
       ]
     },
@@ -628,6 +636,14 @@
           "proof_level": "integration",
           "command_id": "m7-b15a3e0-hitl002",
           "artifact_ref": "m7-b15a3e0-hitl002",
+          "result": "passed"
+        },
+        {
+          "revision": "1795e1ec3a62973afaddd01f0083f963e6a4de78",
+          "utc_time": "2026-08-12T08:54:45Z",
+          "proof_level": "integration",
+          "command_id": "m7-1795e1e-hitl002",
+          "artifact_ref": "m7-1795e1e-hitl002",
           "result": "passed"
         }
       ]
@@ -665,6 +681,14 @@
           "command_id": "m7-b15a3e0-hitl004",
           "artifact_ref": "m7-b15a3e0-hitl004",
           "result": "passed"
+        },
+        {
+          "revision": "1795e1ec3a62973afaddd01f0083f963e6a4de78",
+          "utc_time": "2026-08-12T08:54:45Z",
+          "proof_level": "integration",
+          "command_id": "m7-1795e1e-hitl004",
+          "artifact_ref": "m7-1795e1e-hitl004",
+          "result": "passed"
         }
       ]
     },
@@ -700,6 +724,14 @@
           "proof_level": "integration",
           "command_id": "m7-b15a3e0-hitl006",
           "artifact_ref": "m7-b15a3e0-hitl006",
+          "result": "passed"
+        },
+        {
+          "revision": "1795e1ec3a62973afaddd01f0083f963e6a4de78",
+          "utc_time": "2026-08-12T08:54:45Z",
+          "proof_level": "integration",
+          "command_id": "m7-1795e1e-hitl006",
+          "artifact_ref": "m7-1795e1e-hitl006",
           "result": "passed"
         }
       ]
@@ -1589,6 +1621,14 @@
           "command_id": "m7-b15a3e0-tol002",
           "artifact_ref": "m7-b15a3e0-tol002",
           "result": "passed"
+        },
+        {
+          "revision": "1795e1ec3a62973afaddd01f0083f963e6a4de78",
+          "utc_time": "2026-08-12T08:54:45Z",
+          "proof_level": "unit",
+          "command_id": "m7-1795e1e-tol002",
+          "artifact_ref": "m7-1795e1e-tol002",
+          "result": "passed"
         }
       ]
     },
@@ -1610,6 +1650,14 @@
           "proof_level": "integration",
           "command_id": "m7-b15a3e0-tol003",
           "artifact_ref": "m7-b15a3e0-tol003",
+          "result": "passed"
+        },
+        {
+          "revision": "1795e1ec3a62973afaddd01f0083f963e6a4de78",
+          "utc_time": "2026-08-12T08:54:45Z",
+          "proof_level": "integration",
+          "command_id": "m7-1795e1e-tol003",
+          "artifact_ref": "m7-1795e1e-tol003",
           "result": "passed"
         }
       ]
@@ -1633,6 +1681,14 @@
           "command_id": "m7-b15a3e0-tol004",
           "artifact_ref": "m7-b15a3e0-tol004",
           "result": "passed"
+        },
+        {
+          "revision": "1795e1ec3a62973afaddd01f0083f963e6a4de78",
+          "utc_time": "2026-08-12T08:54:45Z",
+          "proof_level": "integration",
+          "command_id": "m7-1795e1e-tol004",
+          "artifact_ref": "m7-1795e1e-tol004",
+          "result": "passed"
         }
       ]
     },
@@ -1655,6 +1711,14 @@
           "command_id": "m7-b15a3e0-tol005",
           "artifact_ref": "m7-b15a3e0-tol005",
           "result": "passed"
+        },
+        {
+          "revision": "1795e1ec3a62973afaddd01f0083f963e6a4de78",
+          "utc_time": "2026-08-12T08:54:45Z",
+          "proof_level": "integration",
+          "command_id": "m7-1795e1e-tol005",
+          "artifact_ref": "m7-1795e1e-tol005",
+          "result": "passed"
         }
       ]
     },
@@ -1676,6 +1740,14 @@
           "proof_level": "integration",
           "command_id": "m7-b15a3e0-tol006",
           "artifact_ref": "m7-b15a3e0-tol006",
+          "result": "passed"
+        },
+        {
+          "revision": "1795e1ec3a62973afaddd01f0083f963e6a4de78",
+          "utc_time": "2026-08-12T08:54:45Z",
+          "proof_level": "integration",
+          "command_id": "m7-1795e1e-tol006",
+          "artifact_ref": "m7-1795e1e-tol006",
           "result": "passed"
         }
       ]
