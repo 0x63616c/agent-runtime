@@ -7,6 +7,7 @@ import (
 	"net"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestIntegrationProcessWithholdsReadinessUntilListenerAccepts(t *testing.T) {
@@ -18,9 +19,9 @@ func TestIntegrationProcessWithholdsReadinessUntilListenerAccepts(t *testing.T) 
 	if err != nil {
 		t.Fatalf("listen: %v", err)
 	}
-	blocked := &acceptBlockingListener{Listener: listener, accepting: make(chan struct{}), allow: make(chan struct{})}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+	blocked := &acceptBlockingListener{Listener: listener, done: ctx.Done(), accepting: make(chan struct{}), allow: make(chan struct{})}
 	announced := make(chan struct{}, 1)
 	done := make(chan error, 1)
 	go func() {
@@ -58,6 +59,7 @@ func awaitReadiness[T any](t *testing.T, value <-chan T, description string) T {
 
 type acceptBlockingListener struct {
 	net.Listener
+	done      <-chan struct{}
 	accepting chan struct{}
 	allow     chan struct{}
 }
@@ -67,6 +69,10 @@ func (listener *acceptBlockingListener) Accept() (net.Conn, error) {
 	case listener.accepting <- struct{}{}:
 	default:
 	}
-	<-listener.allow
+	select {
+	case <-listener.allow:
+	case <-listener.done:
+		return nil, net.ErrClosed
+	}
 	return listener.Listener.Accept()
 }
