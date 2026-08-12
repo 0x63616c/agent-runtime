@@ -717,11 +717,15 @@ func TestMCPAdapterExecutesOnlyThroughWorkerAndReconcilesWithoutResubmit(t *test
 		switch message.Method {
 		case "initialize":
 			response.Header().Set("MCP-Session-Id", "session-worker")
-			json.NewEncoder(response).Encode(map[string]any{"jsonrpc": "2.0", "id": message.ID, "result": map[string]any{"protocolVersion": "2025-11-25", "capabilities": map[string]any{"tools": map[string]any{}}}})
+			if err := json.NewEncoder(response).Encode(map[string]any{"jsonrpc": "2.0", "id": message.ID, "result": map[string]any{"protocolVersion": "2025-11-25", "capabilities": map[string]any{"tools": map[string]any{}}}}); err != nil {
+				t.Errorf("encode initialize response: %v", err)
+			}
 		case "notifications/initialized":
 			response.WriteHeader(http.StatusAccepted)
 		case "tools/list":
-			json.NewEncoder(response).Encode(map[string]any{"jsonrpc": "2.0", "id": message.ID, "result": map[string]any{"tools": []any{map[string]any{"name": "effect", "inputSchema": json.RawMessage(schema)}, map[string]any{"name": "status", "inputSchema": json.RawMessage(schema)}}}})
+			if err := json.NewEncoder(response).Encode(map[string]any{"jsonrpc": "2.0", "id": message.ID, "result": map[string]any{"tools": []any{map[string]any{"name": "effect", "inputSchema": json.RawMessage(schema)}, map[string]any{"name": "status", "inputSchema": json.RawMessage(schema)}}}}); err != nil {
+				t.Errorf("encode tool inventory response: %v", err)
+			}
 		case "tools/call":
 			var call struct {
 				Name      string `json:"name"`
@@ -736,11 +740,15 @@ func TestMCPAdapterExecutesOnlyThroughWorkerAndReconcilesWithoutResubmit(t *test
 			switch call.Name {
 			case "effect":
 				effectCalls++
-				json.NewEncoder(response).Encode(map[string]any{"jsonrpc": "2.0", "id": message.ID, "result": map[string]any{"content": []any{map[string]string{"type": "text", "text": "completed"}}}})
+				if err := json.NewEncoder(response).Encode(map[string]any{"jsonrpc": "2.0", "id": message.ID, "result": map[string]any{"content": []any{map[string]string{"type": "text", "text": "completed"}}}}); err != nil {
+					t.Errorf("encode effect response: %v", err)
+				}
 			case "status":
 				statusCalls++
 				statusOperationID = call.Arguments.OperationID
-				json.NewEncoder(response).Encode(map[string]any{"jsonrpc": "2.0", "id": message.ID, "result": map[string]any{"content": []any{map[string]string{"type": "text", "text": "reconciled"}}, "structuredContent": map[string]string{"operation_id": call.Arguments.OperationID, "state": "succeeded"}}})
+				if err := json.NewEncoder(response).Encode(map[string]any{"jsonrpc": "2.0", "id": message.ID, "result": map[string]any{"content": []any{map[string]string{"type": "text", "text": "reconciled"}}, "structuredContent": map[string]string{"operation_id": call.Arguments.OperationID, "state": "succeeded"}}}); err != nil {
+					t.Errorf("encode reconciliation response: %v", err)
+				}
 			default:
 				response.WriteHeader(http.StatusBadRequest)
 			}

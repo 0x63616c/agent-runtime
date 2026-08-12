@@ -501,7 +501,7 @@ type competingPublisherMutationStore struct {
 func (store *competingPublisherMutationStore) ApplyCompiledMutation(ctx context.Context, planner *runtimestate.RuntimeStatePlanner, mutation runtimestate.CompiledMutation) (runtimestate.TransitionPlan, error) {
 	if mutation.ReceiptBinding().Command == runtimestate.CommandBeginInvocation && !store.mutated {
 		store.mutated = true
-		state, err := store.MemoryRuntimeStateStore.LoadRuntimeState(ctx, runtimestate.MutationScope{Tenant: store.competing.Tenant, Authority: runtimestate.AuthorityOutboxPublisher})
+		state, err := store.LoadRuntimeState(ctx, runtimestate.MutationScope{Tenant: store.competing.Tenant, Authority: runtimestate.AuthorityOutboxPublisher})
 		if err != nil {
 			return runtimestate.TransitionPlan{}, err
 		}
@@ -513,13 +513,13 @@ func (store *competingPublisherMutationStore) ApplyCompiledMutation(ctx context.
 		if err != nil {
 			return runtimestate.TransitionPlan{}, err
 		}
-		if _, err := store.MemoryRuntimeStateStore.Apply(ctx, claim); err != nil {
+		if _, err := store.Apply(ctx, claim); err != nil {
 			return runtimestate.TransitionPlan{}, fmt.Errorf("claim competing publisher route %#v: %w", current, err)
 		}
 	}
 	plan, err := store.MemoryRuntimeStateStore.ApplyCompiledMutation(ctx, planner, mutation)
 	if err != nil {
-		state, loadErr := store.MemoryRuntimeStateStore.LoadRuntimeState(ctx, mutation.ReceiptBinding().Scope)
+		state, loadErr := store.LoadRuntimeState(ctx, mutation.ReceiptBinding().Scope)
 		return runtimestate.TransitionPlan{}, fmt.Errorf("atomic begin after competing claim (sessions=%#v turns=%#v invocations=%#v load=%v): %w", state.Sessions, state.Turns, state.Invocations, loadErr, err)
 	}
 	return plan, nil

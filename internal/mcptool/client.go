@@ -157,7 +157,7 @@ func validateServer(config ServerConfig, allowInsecureLoopback bool) (server, er
 	if err != nil || endpoint.User != nil || endpoint.Fragment != "" || endpoint.RawQuery != "" || endpoint.Host == "" || endpoint.Path == "" {
 		return server{}, errors.New("invalid MCP endpoint")
 	}
-	if endpoint.Scheme != "https" && !(allowInsecureLoopback && endpoint.Scheme == "http" && loopbackHost(endpoint.Hostname())) {
+	if endpoint.Scheme != "https" && (!allowInsecureLoopback || endpoint.Scheme != "http" || !loopbackHost(endpoint.Hostname())) {
 		return server{}, errors.New("MCP endpoint requires HTTPS")
 	}
 	tools := make(map[string]ToolConfig, len(config.Tools))
@@ -380,7 +380,7 @@ type rpcRequest struct {
 	Params  any    `json:"params,omitempty"`
 }
 
-func (s *session) post(ctx context.Context, value rpcRequest, notification bool) (json.RawMessage, error) {
+func (s *session) post(ctx context.Context, value rpcRequest, notification bool) (result json.RawMessage, err error) {
 	body, err := json.Marshal(value)
 	if err != nil {
 		return nil, errors.New("send MCP request: encode request")
@@ -408,7 +408,12 @@ func (s *session) post(ctx context.Context, value rpcRequest, notification bool)
 	if err != nil {
 		return nil, errors.New("send MCP request: transport unavailable")
 	}
-	defer response.Body.Close()
+	defer func() {
+		if closeErr := response.Body.Close(); closeErr != nil && err == nil {
+			result = nil
+			err = fmt.Errorf("send MCP request: close response: %w", closeErr)
+		}
+	}()
 	if notification {
 		if response.StatusCode != http.StatusAccepted {
 			return nil, errors.New("send MCP notification: server did not accept notification")
@@ -432,7 +437,7 @@ func (s *session) post(ctx context.Context, value rpcRequest, notification bool)
 			return nil, err
 		}
 	}
-	result, err := decodeRPCResponse(encoded, value.ID)
+	result, err = decodeRPCResponse(encoded, value.ID)
 	if err != nil {
 		return nil, err
 	}

@@ -3,6 +3,7 @@ package workspaceagent
 import (
 	"bytes"
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -13,6 +14,12 @@ import (
 
 	agentruntime "github.com/0x63616c/agent-runtime/sdk/go"
 )
+
+type failingTerminalWriter struct{}
+
+func (failingTerminalWriter) Write([]byte) (int, error) {
+	return 0, errors.New("terminal unavailable")
+}
 
 func TestInboxUsesOnlyOwnerScopedPublicApprovalAndTurnCommands(t *testing.T) {
 	approval := agentruntime.Approval{ID: "appr_1234567890ABCDEF", SessionID: "sess_1234567890ABCDEF", TurnID: "turn_1234567890ABCDEF", ToolCallID: "tcall_1234567890ABCDEF", State: agentruntime.ApprovalPending, Action: &agentruntime.ApprovalAction{Verb: "write", Target: "workspace-service"}, Scope: &agentruntime.ApprovalScope{MaximumUses: 1}, ExpiresAt: time.Date(2026, 8, 11, 20, 0, 0, 0, time.UTC)}
@@ -60,6 +67,16 @@ func TestWorkspaceApprovalWebAndTerminalStayPublicAndBlocked(t *testing.T) {
 	}
 	if !strings.Contains(output.String(), approval.ID.String()) || !strings.Contains(output.String(), "unavailable") {
 		t.Fatalf("terminal output = %q", output.String())
+	}
+}
+
+func TestRunTerminalReturnsOutputFailure(t *testing.T) {
+	inbox, err := NewInbox(&approvalClient{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := RunTerminal(context.Background(), inbox, strings.NewReader("quit\n"), failingTerminalWriter{}); err == nil || !strings.Contains(err.Error(), "terminal unavailable") {
+		t.Fatalf("terminal output failure = %v", err)
 	}
 }
 

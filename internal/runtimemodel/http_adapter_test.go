@@ -56,7 +56,9 @@ func TestHTTPAdapterParsesOnlyCanonicalSafeToolOutcomes(t *testing.T) {
 	valid := `{"type":"tool","tool":{"tool_call_id":"tcall_1234567890ABCDEF","approval_id":"appr_1234567890ABCDEF","policy_name":"workspace-write","policy_revision":1,"tool_name":"workspace.write","action":{"verb":"write","target":"workspace-service"},"maximum_uses":1,"expires_at":"2026-08-11T13:00:00Z","descriptor":{"path":"notes.txt","kind":"workspace.write"}}}` + "\n"
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
 		writer.Header().Set("Content-Type", "application/x-ndjson")
-		fmt.Fprint(writer, valid)
+		if _, err := fmt.Fprint(writer, valid); err != nil {
+			t.Fatal(err)
+		}
 	}))
 	defer server.Close()
 	adapter, err := runtimemodel.NewHTTPAdapter(runtimemodel.HTTPAdapterConfig{Endpoint: server.URL, Token: "model-token", HTTPClient: server.Client()})
@@ -75,7 +77,9 @@ func TestHTTPAdapterParsesOnlyCanonicalSafeToolOutcomes(t *testing.T) {
 	} {
 		server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
 			writer.Header().Set("Content-Type", "application/x-ndjson")
-			fmt.Fprint(writer, stream)
+			if _, err := fmt.Fprint(writer, stream); err != nil {
+				t.Fatal(err)
+			}
 		}))
 		adapter, err := runtimemodel.NewHTTPAdapter(runtimemodel.HTTPAdapterConfig{Endpoint: server.URL, Token: "model-token", HTTPClient: server.Client()})
 		if err != nil {

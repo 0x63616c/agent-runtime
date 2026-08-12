@@ -956,7 +956,9 @@ func TestStateRuntimeHTTPAndSDKAuthorizationMatrixUsesFakeApprovalClock(t *testi
 	if err != nil {
 		t.Fatal(err)
 	}
-	response.Body.Close()
+	if err := response.Body.Close(); err != nil {
+		t.Fatal(err)
+	}
 	if response.StatusCode != http.StatusBadRequest {
 		t.Fatalf("scope-bearing public decision status = %d, want %d", response.StatusCode, http.StatusBadRequest)
 	}

@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"sync"
 	"testing"
@@ -283,6 +285,34 @@ func TestClientRefusesBoundedToolResultBeforeReturningIt(t *testing.T) {
 		t.Fatal("oversized MCP tool response was returned")
 	}
 }
+
+var errResponseBodyClose = errors.New("response body close failure")
+
+func TestSessionPostReturnsResponseCloseFailure(t *testing.T) {
+	endpoint, err := url.Parse("https://mcp.example.test/mcp")
+	if err != nil {
+		t.Fatal(err)
+	}
+	session := session{
+		client: &Client{roundTripper: roundTripper(func(*http.Request) (*http.Response, error) {
+			return &http.Response{StatusCode: http.StatusAccepted, Body: closeFailureBody{Reader: strings.NewReader("")}, Header: make(http.Header)}, nil
+		})},
+		server: server{endpoint: endpoint, origin: "https://mcp.example.test", credentials: staticCredentials("Bearer test-credential")},
+	}
+	if _, err := session.post(context.Background(), rpcRequest{JSONRPC: "2.0", Method: "notifications/initialized"}, true); err == nil || !errors.Is(err, errResponseBodyClose) {
+		t.Fatalf("close failure = %v", err)
+	}
+}
+
+type roundTripper func(*http.Request) (*http.Response, error)
+
+func (roundTripper roundTripper) RoundTrip(request *http.Request) (*http.Response, error) {
+	return roundTripper(request)
+}
+
+type closeFailureBody struct{ io.Reader }
+
+func (closeFailureBody) Close() error { return errResponseBodyClose }
 
 type message struct {
 	ID     string          `json:"id"`
