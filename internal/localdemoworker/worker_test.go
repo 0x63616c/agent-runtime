@@ -49,16 +49,16 @@ func TestScanLoopFailsClosedForNonTransientErrors(t *testing.T) {
 	}
 }
 
-func TestModelFixtureUsesTheCanonicalApprovalSummaryForItsResearchTool(t *testing.T) {
+func TestModelFixtureUsesTheCanonicalApprovalSummaryForItsWorkspaceTool(t *testing.T) {
 	response := fixtureModelResponse(runtimemodel.Request{OperationID: "orchestration-invocation-outbox_1234567890ABCDEF"})
 	if response.Tool == nil {
 		t.Fatal("fixture response has no tool request")
 	}
-	if response.Tool.ToolName != "research" || response.Tool.PolicyName != "research-dossier-demo" || response.Tool.PolicyRevision != 1 {
-		t.Fatalf("fixture policy request = %#v, want the declared research demo policy", response.Tool)
+	if response.Tool.ToolName != "workspace.write" || response.Tool.PolicyName != "workspace-write-demo" || response.Tool.PolicyRevision != 1 {
+		t.Fatalf("fixture policy request = %#v, want the declared workspace demo policy", response.Tool)
 	}
-	if response.Tool.Action.Verb != "write" || response.Tool.Action.Target != "artifact" {
-		t.Fatalf("fixture approval summary = %#v, want canonical artifact write", response.Tool.Action)
+	if response.Tool.Action.Verb != "write" || response.Tool.Action.Target != "workspace-service" {
+		t.Fatalf("fixture approval summary = %#v, want canonical workspace write", response.Tool.Action)
 	}
 	if _, err := agentruntime.ParseApprovalID(response.Tool.ApprovalID); err != nil {
 		t.Fatalf("fixture approval ID = %q, want public identifier: %v", response.Tool.ApprovalID, err)

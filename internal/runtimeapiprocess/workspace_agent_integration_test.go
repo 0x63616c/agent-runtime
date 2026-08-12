@@ -74,7 +74,11 @@ func TestDurableWorkspaceAgentBinariesUseOnlyThePublicAPI(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer pool.Close()
-	store, err := runtimepostgres.NewRuntimeStateStore(pool)
+	source, err := clock.NewFake(time.Now().UTC())
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := runtimepostgres.NewRuntimeStateStore(pool, source)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -91,10 +95,6 @@ func TestDurableWorkspaceAgentBinariesUseOnlyThePublicAPI(t *testing.T) {
 		t.Fatal(err)
 	}
 	compiler, err := runtimestate.NewCompiler(content)
-	if err != nil {
-		t.Fatal(err)
-	}
-	source, err := clock.NewFake(time.Now().UTC())
 	if err != nil {
 		t.Fatal(err)
 	}

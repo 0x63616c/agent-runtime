@@ -126,17 +126,24 @@ func RunWithWait(ctx context.Context, config ProcessConfig, wait Wait) error {
 	if err := publisher.ScanOnce(ctx); err != nil {
 		return errors.Wrap(err, "run runtime orchestration worker: publish initial outbox")
 	}
+	return publishUntilCancelled(ctx, wait, publisher.ScanOnce)
+}
+
+// publishUntilCancelled waits for a normal scheduler tick before scanning
+// durable outbox work again. Cancellation ends the process without scheduling
+// another scan; a timer's normal completion is successful work.
+func publishUntilCancelled(ctx context.Context, wait Wait, scan func(context.Context) error) error {
+	if scan == nil {
+		return errors.New("run runtime orchestration worker: outbox scan is required")
+	}
 	for {
 		if err := wait(ctx, time.Second); err != nil {
 			if ctx.Err() != nil {
 				return nil
 			}
-			if errors.Is(err, context.DeadlineExceeded) {
-				continue
-			}
 			return errors.Wrap(err, "run runtime orchestration worker: wait to publish outbox")
 		}
-		if err := publisher.ScanOnce(ctx); err != nil {
+		if err := scan(ctx); err != nil {
 			if ctx.Err() != nil {
 				return nil
 			}
@@ -146,10 +153,13 @@ func RunWithWait(ctx context.Context, config ProcessConfig, wait Wait) error {
 }
 
 func waitForInterval(ctx context.Context, interval time.Duration) error {
-	deadline, cancel := context.WithTimeout(ctx, interval)
+	wait, cancel := context.WithTimeout(ctx, interval)
 	defer cancel()
-	<-deadline.Done()
-	return deadline.Err()
+	<-wait.Done()
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+	return nil
 }
 
 type temporalSessionPublisher struct {

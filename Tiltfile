@@ -68,7 +68,7 @@ k8s_resource('temporal', resource_deps=['temporal-state'], pod_readiness='wait')
 # Reconciliation is a separately audited operator action and runs only after
 # the owned Temporal Deployment reports Ready; runtime processes never create
 # their own namespace as a startup side effect.
-local_resource('stack-reconcile', cmd='go run ./tools/dev reconcile --stack=' + stack + ' --root=.', resource_deps=['temporal'])
+local_resource('stack-reconcile', cmd='go run ./tools/dev reconcile --stack=' + stack + ' --root=.', resource_deps=['temporal', 'migration-runner'])
 k8s_resource('blob', pod_readiness='wait')
 k8s_resource('telemetry', pod_readiness='wait')
 k8s_resource('egress-proxy', pod_readiness='wait')

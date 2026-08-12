@@ -630,7 +630,11 @@ func TestMCPAdapterExecutesOnlyThroughWorkerAndReconcilesWithoutResubmit(t *test
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			effectCalls, statusCalls, statusOperationID = 0, 0, ""
-			adapter, err := runtimetool.NewMCPAdapter(mcptool.Config{Servers: []mcptool.ServerConfig{{ID: "configured", Endpoint: server.URL + "/mcp", Credentials: adapterCredentials{}, Tools: []mcptool.ToolConfig{{Name: "effect", InputSchemaDigest: schemaDigest, OperationIDArgument: "operation_id"}, {Name: "status", InputSchemaDigest: schemaDigest, OperationIDArgument: "operation_id"}}, ReconcileTool: "status", ReconcileOperationArgument: "operation_id"}}, RequestTimeout: time.Second, CancelTimeout: time.Second, AllowInsecureLoopbackTests: true})
+			client, err := mcptool.NewClient(mcptool.Config{Servers: []mcptool.ServerConfig{{ID: "configured", Endpoint: server.URL + "/mcp", Credentials: adapterCredentials{}, Tools: []mcptool.ToolConfig{{Name: "effect", InputSchemaDigest: schemaDigest, OperationIDArgument: "operation_id"}, {Name: "status", InputSchemaDigest: schemaDigest, OperationIDArgument: "operation_id"}}, ReconcileTool: "status", ReconcileOperationArgument: "operation_id"}}, RequestTimeout: time.Second, CancelTimeout: time.Second, AllowInsecureLoopbackTests: true})
+			if err != nil {
+				t.Fatal(err)
+			}
+			adapter, err := runtimetool.NewMCPAdapter(mcpWorkerAdapter{client: client})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -658,6 +662,53 @@ func TestMCPAdapterExecutesOnlyThroughWorkerAndReconcilesWithoutResubmit(t *test
 			}
 		})
 	}
+}
+
+// mcpWorkerAdapter is the private transport implementation supplied to the
+// broker-only MCP label. It keeps the configured MCP endpoint behind the
+// same operation-ID/reconciliation contract as every other external effect.
+type mcpWorkerAdapter struct{ client *mcptool.Client }
+
+func (adapter mcpWorkerAdapter) Execute(ctx context.Context, request runtimetool.Request) (runtimetool.Response, error) {
+	return adapter.invoke(ctx, request, false)
+}
+
+func (adapter mcpWorkerAdapter) Reconcile(ctx context.Context, request runtimetool.Request) (runtimetool.Response, error) {
+	return adapter.invoke(ctx, request, true)
+}
+
+func (adapter mcpWorkerAdapter) ExternalEffectContract() runtimetool.ExternalEffectContract {
+	return runtimetool.ExternalEffectContract{IdempotencyKey: "operation_id", Reconciles: true}
+}
+
+func (adapter mcpWorkerAdapter) invoke(ctx context.Context, request runtimetool.Request, reconcile bool) (runtimetool.Response, error) {
+	descriptor, err := mcptool.DecodeDescriptor(request.Descriptor)
+	if err != nil {
+		return runtimetool.Response{Failure: &agentruntime.Failure{Code: agentruntime.FailureInvalidInput, Message: "MCP tool descriptor is invalid"}}, nil
+	}
+	var output []byte
+	var terminal bool
+	if reconcile {
+		output, terminal, err = adapter.client.Reconcile(ctx, descriptor, string(request.OperationID))
+	} else {
+		output, terminal, err = adapter.client.Execute(ctx, descriptor, string(request.OperationID))
+	}
+	if err == nil {
+		return runtimetool.Response{Output: output, MediaType: "text/plain; charset=utf-8"}, nil
+	}
+	if terminal {
+		return runtimetool.Response{Failure: &agentruntime.Failure{Code: agentruntime.FailureUnavailable, Message: "MCP tool reported a terminal failure"}}, nil
+	}
+	if errors.Is(err, mcptool.ErrUncertain) {
+		return runtimetool.Response{Uncertain: true, Failure: &agentruntime.Failure{Code: agentruntime.FailureUnavailable, Message: "MCP tool outcome is uncertain"}}, nil
+	}
+	return runtimetool.Response{}, err
+}
+
+type adapterCredentials struct{}
+
+func (adapterCredentials) Authorization(context.Context) (string, error) {
+	return "Bearer adapter-test", nil
 }
 
 func TestBuiltinAdapterReconcilesLostWorkerClaimWithoutResubmitting(t *testing.T) {

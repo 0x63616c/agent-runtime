@@ -100,7 +100,11 @@ func TestResearchDossierRecoversLongRunningToolResearchThroughThePublicContract(
 		t.Fatal(err)
 	}
 	defer pool.Close()
-	store, err := runtimepostgres.NewRuntimeStateStore(pool)
+	clockSource, err := clock.NewFake(time.Now().UTC())
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := runtimepostgres.NewRuntimeStateStore(pool, clockSource)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -116,10 +120,6 @@ func TestResearchDossierRecoversLongRunningToolResearchThroughThePublicContract(
 	// HTTP runtime. It publishes an artifact; the public application reads it
 	// only through the authorized artifact endpoint after the API restarts.
 	content, err := runtimecontent.New("runtime-content", contentObjects)
-	if err != nil {
-		t.Fatal(err)
-	}
-	clockSource, err := clock.NewFake(time.Now().UTC())
 	if err != nil {
 		t.Fatal(err)
 	}

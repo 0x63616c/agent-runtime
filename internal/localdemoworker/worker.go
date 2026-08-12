@@ -61,7 +61,7 @@ func Run(ctx context.Context, role roles.Config, lookup Lookup) error {
 	if err := pool.Ping(ctx); err != nil {
 		return errors.Wrap(err, "run local demo worker: ping PostgreSQL")
 	}
-	state, err := runtimepostgres.NewRuntimeStateStore(pool)
+	state, err := runtimepostgres.NewRuntimeStateStore(pool, systemClock{})
 	if err != nil {
 		return err
 	}

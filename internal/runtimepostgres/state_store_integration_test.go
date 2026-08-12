@@ -153,7 +153,7 @@ func TestPostgresRuntimeStateStoreBackfillsUnambiguousLegacyGrantScopeOnRestart(
 	if err = tx.Commit(ctx); err != nil {
 		t.Fatal(err)
 	}
-	store, err := runtimepostgres.NewRuntimeStateStore(pool)
+	store, err := runtimepostgres.NewRuntimeStateStore(pool, stateStoreClock{now: now})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -185,7 +185,7 @@ func TestPostgresRuntimeStateStoreBackfillsUnambiguousLegacyGrantScopeOnRestart(
 	if err = store.PersistTransitionPlan(ctx, plan); err != nil {
 		t.Fatalf("persist transactionally backfilled snapshot: %v", err)
 	}
-	restarted, err := runtimepostgres.NewRuntimeStateStore(pool)
+	restarted, err := runtimepostgres.NewRuntimeStateStore(pool, stateStoreClock{now: now})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -232,7 +232,7 @@ func TestPostgresRuntimeStateStoreFailsClosedForLegacyApprovalOnRestartAndPublic
 
 	pool.Close()
 	restartedPool := openRuntimePool(t)
-	store, err := runtimepostgres.NewRuntimeStateStore(restartedPool)
+	store, err := runtimepostgres.NewRuntimeStateStore(restartedPool, stateStoreClock{now: now})
 	if err != nil {
 		t.Fatal(err)
 	}
