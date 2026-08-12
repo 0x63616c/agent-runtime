@@ -102,8 +102,8 @@ func TestWebHandlerRejectsHostileOriginWithoutMutatingDurableChat(t *testing.T) 
 			if response.Code != http.StatusForbidden {
 				t.Fatalf("hostile mutation status = %d", response.Code)
 			}
-			if client.sent.IdempotencyKey != "" || client.cancel.IdempotencyKey != "" {
-				t.Fatalf("hostile mutation reached public client: send=%#v cancel=%#v", client.sent, client.cancel)
+			if client.create.IdempotencyKey != "" || client.sent.IdempotencyKey != "" || client.cancel.IdempotencyKey != "" {
+				t.Fatalf("hostile mutation reached public client: create=%#v send=%#v cancel=%#v", client.create, client.sent, client.cancel)
 			}
 		})
 	}
@@ -162,12 +162,14 @@ func (keys *keys) Next(action string) (string, error) {
 }
 
 type fakeClient struct {
+	create agentruntime.CreateSessionRequest
 	sent   agentruntime.SendInputRequest
 	after  agentruntime.Cursor
 	cancel agentruntime.CancelTurnRequest
 }
 
-func (*fakeClient) CreateSession(context.Context, agentruntime.CreateSessionRequest) (agentruntime.Session, error) {
+func (client *fakeClient) CreateSession(_ context.Context, request agentruntime.CreateSessionRequest) (agentruntime.Session, error) {
+	client.create = request
 	return agentruntime.Session{ID: "sess_1234567890ABCDEF", State: agentruntime.SessionOpen}, nil
 }
 func (client *fakeClient) SendInput(_ context.Context, request agentruntime.SendInputRequest) (agentruntime.SendInputResult, error) {
