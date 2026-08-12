@@ -70,6 +70,62 @@ func TestLocalFixtureScenarioIsRejectedOutsideTheDeclaredLocalRender(t *testing.
 	}
 }
 
+func TestCIRenderUsesStackScopedTiltImagesWhileProductionRetainsPublishedImages(t *testing.T) {
+	document, err := renderStack("ci-image-proof", "ci", localFixtureScenarioWorkspaceApprovalReset)
+	if err != nil {
+		t.Fatalf("render Stack: %v", err)
+	}
+	var rendered struct {
+		Profiles map[string]struct {
+			Resources []json.RawMessage `json:"resources"`
+		} `json:"profiles"`
+	}
+	if err := json.Unmarshal(document, &rendered); err != nil {
+		t.Fatalf("decode rendered Stack: %v", err)
+	}
+	ciImages := map[stack.ResourceID]string{}
+	for _, profile := range []string{"ci", "production"} {
+		for _, resource := range rendered.Profiles[profile].Resources {
+			var object struct {
+				ID         stack.ResourceID `json:"id"`
+				Kubernetes *struct {
+					Image string `json:"image"`
+				} `json:"kubernetes"`
+			}
+			if err := json.Unmarshal(resource, &object); err != nil {
+				t.Fatalf("decode %s resource: %v", profile, err)
+			}
+			if object.Kubernetes == nil || !tiltBuiltResource(object.ID) {
+				continue
+			}
+			if profile == "ci" {
+				want := devImage("ci-image-proof", object.ID)
+				if object.Kubernetes.Image != want {
+					t.Fatalf("CI %s image = %q, want source-built %q", object.ID, object.Kubernetes.Image, want)
+				}
+				ciImages[object.ID] = object.Kubernetes.Image
+				continue
+			}
+			if object.Kubernetes.Image != "ghcr.io/0x63616c/agent-runtime@sha256:7c60d4d6078da20db1f3c4e19cec03d033f9a37e4f7ec98fe5b1858f806ee1b3" {
+				t.Fatalf("production %s image must remain the reviewed published digest, got %q", object.ID, object.Kubernetes.Image)
+			}
+		}
+	}
+	wantCIImages := map[stack.ResourceID]bool{
+		"api": true, "orchestration": true, "model": true, "tool": true,
+		"blob-role": true, "codec": true, "sandbox-control": true,
+		"sandbox-host": true, "egress-proxy": true,
+	}
+	if len(ciImages) != len(wantCIImages) {
+		t.Fatalf("CI Stack has %d source-built images, want %d: %#v", len(ciImages), len(wantCIImages), ciImages)
+	}
+	for id := range wantCIImages {
+		if _, found := ciImages[id]; !found {
+			t.Fatalf("CI Stack is missing source-built image for %s", id)
+		}
+	}
+}
+
 func TestLocalTiltArgumentsPreserveTheDeclaredFixtureScenario(t *testing.T) {
 	arguments := localTiltUpArguments("fixture-proof", 43821, localFixtureScenarioWorkspaceApprovalExpiry)
 	if got := strings.Join(arguments, " "); !strings.Contains(got, "--fixture-scenario=workspace-approval-expiry-v1") || !strings.Contains(got, "--stack=fixture-proof") {

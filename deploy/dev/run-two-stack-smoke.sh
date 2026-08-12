@@ -122,6 +122,15 @@ write_safe_diagnostic_summary() {
   }
 }
 
+# Tiltfile evaluation happens before there is a namespace to probe. Retain the
+# same bounded schema so a rejected CI render remains diagnosable without
+# uploading Tilt output, which can include workload credentials.
+capture_plan_failure_diagnostics() {
+  local stack="$1"
+  local namespace="$2"
+  write_safe_diagnostic_summary "$stack" "$namespace" 1 "unavailable" 0 false
+}
+
 if [[ "$diagnostic_self_test" == true ]]; then
   command -v jq >/dev/null || {
     echo "jq is required for diagnostic self-test" >&2
@@ -134,7 +143,16 @@ if [[ "$diagnostic_self_test" == true ]]; then
       exit 1
     fi
   done
-  rm -f -- "$diagnostics_dir/fixture-stack.summary.json"
+  capture_plan_failure_diagnostics "preflight-stack" "ar-preflight-stack"
+  jq -e '
+    .stack == "preflight-stack" and .namespace == "ar-preflight-stack" and
+    .tilt_ci_exit_code == 1 and .workload_probe == "unavailable" and
+    .runtime_roles_observed == 0 and .runtime_roles_ready == false
+  ' "$diagnostics_dir/preflight-stack.summary.json" >/dev/null || {
+    echo "preflight diagnostic summary did not retain bounded failed-plan metadata" >&2
+    exit 1
+  }
+  rm -f -- "$diagnostics_dir/fixture-stack.summary.json" "$diagnostics_dir/preflight-stack.summary.json"
   rmdir -- "$diagnostics_dir"
   echo "safe diagnostic summary rejects raw JSON, header, and environment payloads"
   exit 0
@@ -237,8 +255,14 @@ verify_registry_plan() {
 }
 
 if [[ "$profile" == "ci" ]]; then
-	verify_registry_plan "$stack_a"
-	verify_registry_plan "$stack_b"
+	if ! verify_registry_plan "$stack_a"; then
+		capture_plan_failure_diagnostics "$stack_a" "$namespace_a"
+		exit 1
+	fi
+	if ! verify_registry_plan "$stack_b"; then
+		capture_plan_failure_diagnostics "$stack_b" "$namespace_b"
+		exit 1
+	fi
 fi
 
 down_stack() {

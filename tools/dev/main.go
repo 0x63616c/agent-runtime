@@ -310,6 +310,12 @@ func renderStack(stack, profile string, scenario localFixtureScenario) ([]byte, 
 		resolved := make([]json.RawMessage, len(resources))
 		for index, resource := range resources {
 			value := strings.ReplaceAll(string(resource), reviewedNamespace, namespace)
+			if candidate == "production" {
+				value, err = restorePublishedImageReference(string(resource), value)
+				if err != nil {
+					return nil, err
+				}
+			}
 			resolved[index] = json.RawMessage(value)
 		}
 		prerequisites := []any{}
@@ -365,7 +371,10 @@ func reviewedProfileResources(stackName, profile string) ([]json.RawMessage, err
 				if err := json.Unmarshal(object["id"], &id); err != nil {
 					return nil, fmt.Errorf("read reviewed Stack resource identity: %w", err)
 				}
-				if profile != "local" || !tiltBuiltResource(id) {
+				// CI uses the same disposable, source-built Tilt topology as the
+				// local profile. Production alone retains the reviewed published
+				// image references.
+				if profile == "production" || !tiltBuiltResource(id) {
 					continue
 				}
 				var kubernetes map[string]json.RawMessage
@@ -396,6 +405,46 @@ func reviewedProfileResources(stackName, profile string) ([]json.RawMessage, err
 		}
 		directory = parent
 	}
+}
+
+// restorePublishedImageReference keeps the reviewed production repository and
+// digest intact when the Stack instance name happens to share its text (for
+// example, the production namespace "agent-runtime"). Namespace interpolation
+// may change service endpoints, but it must never rewrite a published image.
+func restorePublishedImageReference(source, resolved string) (string, error) {
+	var sourceObject map[string]json.RawMessage
+	var resolvedObject map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(source), &sourceObject); err != nil {
+		return "", fmt.Errorf("decode reviewed production resource: %w", err)
+	}
+	if err := json.Unmarshal([]byte(resolved), &resolvedObject); err != nil {
+		return "", fmt.Errorf("decode resolved production resource: %w", err)
+	}
+	if sourceObject["kubernetes"] == nil || resolvedObject["kubernetes"] == nil {
+		return resolved, nil
+	}
+	var sourceKubernetes map[string]json.RawMessage
+	var resolvedKubernetes map[string]json.RawMessage
+	if err := json.Unmarshal(sourceObject["kubernetes"], &sourceKubernetes); err != nil {
+		return "", fmt.Errorf("decode reviewed production workload: %w", err)
+	}
+	if err := json.Unmarshal(resolvedObject["kubernetes"], &resolvedKubernetes); err != nil {
+		return "", fmt.Errorf("decode resolved production workload: %w", err)
+	}
+	if sourceKubernetes["image"] == nil {
+		return resolved, nil
+	}
+	resolvedKubernetes["image"] = sourceKubernetes["image"]
+	encodedKubernetes, err := json.Marshal(resolvedKubernetes)
+	if err != nil {
+		return "", fmt.Errorf("encode resolved production workload: %w", err)
+	}
+	resolvedObject["kubernetes"] = encodedKubernetes
+	encodedResource, err := json.Marshal(resolvedObject)
+	if err != nil {
+		return "", fmt.Errorf("encode resolved production resource: %w", err)
+	}
+	return string(encodedResource), nil
 }
 
 func attachLocalFixtureScenario(resources []json.RawMessage, scenario localFixtureScenario) error {
