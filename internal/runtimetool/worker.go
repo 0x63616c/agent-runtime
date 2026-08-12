@@ -16,6 +16,11 @@ import (
 
 const maximumRetainedToolOutputBytes = 8 << 20
 
+// toolOutboxLease bounds restart recovery after the worker has recorded an
+// external-effect intent. A new claimer must reconcile the same OperationID,
+// never resubmit it, once this short lease expires.
+const toolOutboxLease = 10 * time.Second
+
 var sensitiveToolOutput = regexp.MustCompile(`(?i)(authorization|token|secret|password)(\s*[=:]\s*)([^\s,;"}]+)`)
 
 type Request struct {
@@ -428,7 +433,7 @@ func (w *Worker) persistToolOutcomeAndSettle(ctx context.Context, record runtime
 }
 func (w *Worker) claim(ctx context.Context, r runtimestate.OutboxRecord) (runtimestate.OutboxRecord, error) {
 	return w.transition(ctx, r, func(x runtimestate.OutboxRecord) (runtimestate.CompiledMutation, error) {
-		return w.compiler.CompileClaimOutbox(runtimestate.ClaimOutboxCommand{Scope: runtimestate.MutationScope{Tenant: r.Tenant, Authority: runtimestate.AuthorityOutboxPublisher}, IdempotencyKey: fmt.Sprintf("tool-claim-%s-%d", r.OutboxID, x.Version), OutboxID: r.OutboxID, ExpectedVersion: x.Version, Claimer: w.claimer, ClaimUntil: w.clock.Now().Add(2 * time.Minute)})
+		return w.compiler.CompileClaimOutbox(runtimestate.ClaimOutboxCommand{Scope: runtimestate.MutationScope{Tenant: r.Tenant, Authority: runtimestate.AuthorityOutboxPublisher}, IdempotencyKey: fmt.Sprintf("tool-claim-%s-%d", r.OutboxID, x.Version), OutboxID: r.OutboxID, ExpectedVersion: x.Version, Claimer: w.claimer, ClaimUntil: w.clock.Now().Add(toolOutboxLease)})
 	})
 }
 func (w *Worker) ack(ctx context.Context, r runtimestate.OutboxRecord) error {
