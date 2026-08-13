@@ -69,6 +69,12 @@ firecracker-direct-smoke report="" vm_id="" uid="0" gid="0" cgroup_parent="" sta
     just firecracker-direct-preflight "{{ config }}" "{{ fixture_lock }}"
     go run ./cmd/firecracker-smoke -execution-mode direct -direct-config "{{ config }}" -direct-fixture-source-map "{{ fixture_source_map }}" -report "{{ report }}" -fixture-lock "{{ fixture_lock }}" -vm-id "{{ vm_id }}" -uid "{{ uid }}" -gid "{{ gid }}" -cgroup-parent "{{ cgroup_parent }}" -stack-resource "{{ stack_resource }}" -external-owner "{{ external_owner }}"
 
+# Offline-only manifest for the single privileged KVM pod used by the direct
+# home-server proof. Applying it is deliberately unavailable as a Just alias:
+# the harness requires the explicit --execute-authorized-direct-kvm consent.
+firecracker-direct-runner-manifest run_id="smoke-test" image="" output="/tmp/agent-runtime-direct-kvm.yaml":
+    deploy/production/direct-kvm-runner.sh render --run-id "{{ run_id }}" --image "{{ image }}" --output "{{ output }}"
+
 # Compatibility alias for the protected boot harness. It is not the enrolled
 # public runtime-command integration suite.
 firecracker-integration report="evidence/firecracker-integration.json" vm_id="" uid="0" gid="0" cgroup_parent="" stack_resource="" external_owner="" fixture_lock="tools/firecracker/fixtures.lock":
