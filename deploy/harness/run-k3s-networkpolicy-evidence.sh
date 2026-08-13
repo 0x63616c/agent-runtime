@@ -63,9 +63,23 @@ for attempt in $(seq 1 90); do
   sleep 1
 done
 
-# K3s' bundled flannel and policy controller are disabled above. Cilium is the
-# sole CNI and must be healthy before the NetworkPolicy proof can begin.
-"$repo_root/deploy/harness/install-pinned-cilium-cni.sh" "$kubeconfig_path" "$K3S_CONTEXT"
+# K3s' bundled flannel and policy controller are disabled above. Linux CI uses
+# Cilium; the Darwin Docker/K3s harness uses Calico's iptables dataplane because
+# Docker there does not expose the shared BPF mount Cilium requires.
+case "$(uname -s):$(uname -m)" in
+  Linux:x86_64)
+    policy_engine=cilium
+    "$repo_root/deploy/harness/install-pinned-cilium-cni.sh" "$kubeconfig_path" "$K3S_CONTEXT"
+    ;;
+  Darwin:arm64)
+    policy_engine=calico-iptables
+    "$repo_root/deploy/harness/install-pinned-calico-cni.sh" "$kubeconfig_path" "$K3S_CONTEXT"
+    ;;
+  *)
+    echo "disposable NetworkPolicy harness supports only Linux x86_64 and Darwin arm64" >&2
+    exit 2
+    ;;
+esac
 
 v1="$repo_root/deploy/stacks/issue10-disposable-v1.json"
 v2="$repo_root/deploy/stacks/issue10-disposable-v2.json"
@@ -100,6 +114,10 @@ for attempt in $(seq 1 45); do
   sleep 1
 done
 
+# A v2 policy is a distinct reviewed rendering. Advance the private capability
+# only after re-observing the v1 Namespace UID and nonce binding; apply cannot
+# silently cross a reviewed render-digest boundary.
+stackctl transition --stack-file "$v2" --current-stack-file "$v1" --stack issue10-work --profile ci --bootstrap-capability-file "$bootstrap_capability_file"
 stackctl apply --stack-file "$v2" --stack issue10-work --profile ci --bootstrap-capability-file "$bootstrap_capability_file"
 allowed_observations=0
 for attempt in $(seq 1 45); do
@@ -107,7 +125,7 @@ for attempt in $(seq 1 45); do
     allowed_observations=$((allowed_observations + 1))
     if [ "$allowed_observations" = 3 ]; then
       result_tmp=$(mktemp "${result_path}.XXXXXX")
-      printf '{"k3s_image":"%s","profile":"ci","default_deny_consecutive_failures":3,"declared_egress_consecutive_successes":3,"container_cleanup":"required"}\n' "$K3S_IMAGE" > "$result_tmp"
+      printf '{"k3s_image":"%s","policy_engine":"%s","profile":"ci","default_deny_consecutive_failures":3,"declared_egress_consecutive_successes":3,"container_cleanup":"required"}\n' "$K3S_IMAGE" "$policy_engine" > "$result_tmp"
       chmod 600 "$result_tmp"
       mv "$result_tmp" "$result_path"
       echo "NetworkPolicy deny and declared postgres egress allow proof passed"

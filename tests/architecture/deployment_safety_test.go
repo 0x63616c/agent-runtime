@@ -58,12 +58,31 @@ var _ = Describe("M1 deployment safety boundaries", func() {
 		for _, required := range []string{
 			`--flannel-backend=none --disable-network-policy`,
 			`install-pinned-cilium-cni.sh" "$kubeconfig_path" "$K3S_CONTEXT"`,
+			`install-pinned-calico-cni.sh" "$kubeconfig_path" "$K3S_CONTEXT"`,
+			`policy_engine=calico-iptables`,
 			`bootstrap_capability_file="$harness_tmp/bootstrap-capability.json"`,
 			`stackctl bootstrap --stack-file "$v1" --stack issue10-work --profile ci --bootstrap-capability-file "$bootstrap_capability_file"`,
 			`stackctl apply --stack-file "$v1" --stack issue10-work --profile ci --bootstrap-capability-file "$bootstrap_capability_file"`,
+			`stackctl transition --stack-file "$v2" --current-stack-file "$v1" --stack issue10-work --profile ci --bootstrap-capability-file "$bootstrap_capability_file"`,
 			`stackctl apply --stack-file "$v2" --stack issue10-work --profile ci --bootstrap-capability-file "$bootstrap_capability_file"`,
 		} {
 			Expect(script).To(ContainSubstring(required))
+		}
+	})
+
+	It("uses an explicitly iptables-only Calico fallback for the Darwin disposable harness", func() {
+		installer := read("deploy/harness/install-pinned-calico-cni.sh")
+		for _, required := range []string{
+			`CALICO_VERSION=v3.32.1`,
+			`CALICO_MANIFEST_SHA256=a1df919d9721cf667accdc3e72848911b0cb25cfab7d2478ad0c996302c95744`,
+			`Darwin:arm64`,
+			`patch daemonset calico-node --type=strategic`,
+			`"name":"ebpf-bootstrap","$patch":"delete"`,
+			`set env daemonset/calico-node FELIX_BPFENABLED=false`,
+			`rollout status daemonset/calico-node --timeout=5m`,
+			`rollout status deployment/calico-kube-controllers --timeout=5m`,
+		} {
+			Expect(installer).To(ContainSubstring(required))
 		}
 	})
 
@@ -73,7 +92,7 @@ var _ = Describe("M1 deployment safety boundaries", func() {
 			`CILIUM_VERSION=v1.18.11`,
 			`CILIUM_CHART_SHA256=85ea267d7fb4a7f95fe0775ebad3919658905fb78627541a55e96478c33a8473`,
 			`CILIUM_CLI_VERSION=v0.19.4`,
-			`--chart-directory "$installer_tmp/cilium"`,
+			`--chart-directory "$chart_dir/cilium"`,
 			`--wait-duration 5m`,
 			`rollout status daemonset/cilium --timeout=5m`,
 			`rollout status deployment/cilium-operator --timeout=5m`,
