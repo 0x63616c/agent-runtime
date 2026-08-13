@@ -7,7 +7,7 @@ import (
 	"github.com/0x63616c/agent-runtime/internal/providers/codexsubscription"
 )
 
-func TestEvaluateFailsClosedForCurrentOfficialAppServerMaturity(t *testing.T) {
+func TestEvaluateFailsClosedForPinnedExperimentalAppServer(t *testing.T) {
 	disposition, err := codexsubscription.Evaluate(codexsubscription.Assessment{
 		Surface:                    codexsubscription.SurfaceAppServer,
 		CodexVersion:               "codex-cli 0.146.1",
@@ -20,7 +20,7 @@ func TestEvaluateFailsClosedForCurrentOfficialAppServerMaturity(t *testing.T) {
 		t.Fatalf("evaluate current official review: %v", err)
 	}
 	if disposition.Eligible || !strings.Contains(disposition.Reason, "not approved for production") {
-		t.Fatalf("disposition = %#v, want visible unsupported production block", disposition)
+		t.Fatalf("disposition = %#v, want visible experimental-surface block", disposition)
 	}
 }
 

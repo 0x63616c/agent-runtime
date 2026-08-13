@@ -1,20 +1,22 @@
 # Codex subscription support research
 
-**Research date:** 2026-08-06
+**Research date:** 2026-08-13
 **Scope:** M6, `MOD-001`–`MOD-005`, ADR-0004, and GitHub issue #26
 **Evidence level:** official-source research and read-only local CLI inspection;
 not a live authentication or model canary
 
-## M6 start re-verification (2026-08-11)
+## M6 re-verification (2026-08-13)
 
-The official App Server page was re-read at M6 start. It still describes App
-Server as a deep Codex-agent integration (authentication, conversation
-history, approvals, and streamed agent events), not a provider-neutral raw
-model protocol. More importantly, it still states that the App Server command
-and WebSocket transport are experimental and unsupported for production
-workloads. The official authentication and feature-maturity pages were also
-re-read. No stable, production-supported subscription-backed `Model` surface
-with a verified no-Codex-tools boundary was found.
+The official App Server page was re-read. It describes App Server as a deep
+Codex-agent integration (authentication, conversation history, approvals, and
+streamed agent events), not a provider-neutral raw-model protocol. Its current
+documentation distinguishes stable base APIs from individual opt-in
+experimental APIs. However, the exact pinned official CLI (`codex-cli
+0.146.1`) still labels the `app-server` command `[experimental]`; the online
+guide does not establish a production-support commitment that overrides that
+release-specific maturity label. The authentication and feature-maturity pages
+were also re-read. No stable, subscription-backed `Model` surface with a
+verified no-Codex-tools boundary was found.
 
 Accordingly, M6 now has a deterministic, fail-closed support-assessment seam
 at `internal/providers/codexsubscription`. It accepts only bounded, non-secret
@@ -39,10 +41,10 @@ than an undocumented ChatGPT backend.
 
 It does not yet close this runtime's release gate:
 
-1. The installed official CLI labels `app-server` experimental, and OpenAI's
-   App Server guide says the app-server command and WebSocket transport are
-   experimental and unsupported for production workloads. OpenAI defines an
-   experimental feature as unstable and use-at-own-risk, not production-safe.
+1. The pinned official CLI labels `app-server` `[experimental]`. The protocol
+   guide's stable base API surface does not make that exact executable a
+   production-approved model integration; OpenAI's maturity guidance defines
+   experimental features as unstable and use-at-own-risk.
 2. App Server, the Codex SDKs, `codex exec`, and the MCP server control a
    complete coding agent. They do not expose a provider-neutral raw model
    invocation. Codex owns threads, command execution, file changes, approvals,
@@ -55,10 +57,11 @@ It does not yet close this runtime's release gate:
    would violate the intended model-role/tool-role separation unless a proven
    outer isolation boundary prevents access.
 4. OpenAI documents ChatGPT-managed auth for local Codex use and selected
-   trusted automation. It explicitly warns against the `auth.json` CI/CD
-   workflow for public/open-source repositories. Business/Enterprise Codex
-   access tokens are documented for trusted local/app-server automation, but
-   they do not establish a Plus/Pro multi-tenant service credential model.
+   trusted automation. It recommends API-key authentication for programmatic
+   CI/CD and documents an advanced `auth.json` refresh/cache pattern only for
+   trusted CI/CD runners. Enterprise Codex access tokens are documented for
+   trusted local/app-server automation, but they do not establish a Plus/Pro
+   multi-tenant service credential model.
 5. Personal account credentials cannot be shared or used to make one account
    available to unrelated users. A public self-hosted runtime therefore cannot
    pool an operator's personal subscription across tenants. Each human user
@@ -92,7 +95,7 @@ The block can be reconsidered when at least one of these becomes true:
   subscription access and API-key sign-in for usage-based access. ChatGPT
   workspace permissions, RBAC, retention, and residency controls apply to the
   former. See [Codex authentication](https://developers.openai.com/codex/auth/).
-- App Server's stable auth/account surface includes `account/read`,
+- App Server's documented auth/account surface includes `account/read`,
   `account/login/start`, login completion/update notifications, login cancel,
   logout, and ChatGPT rate-limit reads. In ChatGPT-managed mode, Codex owns the
   OAuth flow, persists tokens, and refreshes them automatically. Browser and
@@ -108,10 +111,10 @@ The block can be reconsidered when at least one of these becomes true:
 - `chatgptAuthTokens`, where a host app supplies and refreshes ChatGPT tokens,
   is explicitly experimental. It is not an acceptable escape hatch for this
   release.
-- Codex access tokens are documented for ChatGPT Business and Enterprise
-  workspaces. They are user/workspace-bound agent identities for trusted local
-  CLI or App Server automation, must be secret-managed and rotated, and must
-  not run on public/forked/untrusted runners. See [Codex access
+- Codex access tokens are documented for ChatGPT Enterprise workspaces. They
+  are user/workspace-bound agent identities for trusted local CLI or App Server
+  automation, must be secret-managed and rotated, and must not run on
+  public/forked/untrusted runners. See [Codex access
   tokens](https://learn.chatgpt.com/codex/enterprise/access-tokens).
 
 ### Integration surfaces
@@ -119,11 +122,11 @@ The block can be reconsidered when at least one of these becomes true:
 | Surface | Officially documented purpose | Subscription-capable | M6 fit |
 | --- | --- | --- | --- |
 | `codex exec --json` subprocess | Non-interactive coding-agent automation with JSONL events, resume, sandbox and approval settings | Reuses saved ChatGPT auth | Not a raw Model seam; Codex may perform its own commands/tools. Useful only as a constrained compatibility canary or separate nested-agent product. |
-| Codex App Server over stdio | Embed Codex into a product with auth, history, approvals and streamed agent events | Yes; Codex-managed browser/device OAuth | Best protocol candidate, but the command is currently experimental/unsupported for production and represents a complete Codex agent. |
-| App Server over WebSocket | Remote App Server transport | Yes | Explicitly experimental/unsupported; reject for production. stdio is the only candidate boundary. |
+| Codex App Server over stdio | Embed Codex into a product with auth, history, approvals and streamed agent events | Yes; Codex-managed browser/device OAuth | The base protocol is documented separately from opt-in experimental APIs, but the pinned CLI command remains `[experimental]` and it represents a complete Codex agent rather than a raw Model seam. |
+| App Server over WebSocket | Remote App Server transport | Yes | Remote transport needs its own TLS/auth deployment proof and does not solve the Model/tool-boundary issue. stdio remains the narrowest candidate boundary. |
 | TypeScript Codex SDK | Server-side control of local Codex threads | Reuses local Codex runtime/auth | Official application integration, but it is a coding-agent SDK, not Go and not a raw model provider. |
 | Python Codex SDK | Controls pinned local App Server via JSON-RPC | Reuses local Codex runtime/auth | Beta and still inherits App Server semantics/maturity. It can inform a Go protocol adapter but is not itself release evidence. |
-| Codex MCP server | Use Codex as a specialist from another orchestrator | Reuses Codex auth | Explicitly experimental; semantically a nested agent/tool, not a Model adapter. |
+| Codex MCP server | Use Codex as a specialist from another orchestrator | Reuses Codex auth | Semantically a nested agent/tool, not a Model adapter; the reviewed page does not establish the required model-only boundary. |
 | Direct OAuth/device implementation | None for third-party runtimes; App Server/CLI own the documented flows | Inferred only | Reject. Do not copy client IDs, exchange/refresh tokens, or call inferred endpoints. |
 | Platform Responses API | Supported model API with API credentials | No subscription-billing substitute confirmed | Useful for deterministic/API-key work only; cannot satisfy `MOD-001`. |
 
@@ -173,10 +176,10 @@ logout, auth status, device flow, model requests, or credential diagnostics.
 | --- | --- |
 | CLI | `codex-cli 0.146.1`, official standalone package, Apple ARM64 |
 | Login CLI | Browser/default login, `--device-auth`, stdin API key, and stdin access-token entrypoints are present |
-| App Server | Command is labelled `[experimental]`; stdio, Unix socket, and experimental WebSocket transports are present |
+| App Server | Command is labelled `[experimental]`; stdio, Unix socket, and WebSocket transports are present |
 | Schema | Exact-version JSON Schema/TypeScript generation commands are present |
 | Automation | `codex exec --json`, `--ephemeral`, `--ignore-user-config`, `--ignore-rules`, resume, sandbox, and approval controls are present |
-| MCP | `codex mcp-server` is present; official source labels its interface experimental |
+| MCP | `codex mcp-server` is present; it was not used as a Model adapter candidate |
 
 No credential file, keyring entry, token, account identity, workspace identity,
 login state, or user configuration was read.
@@ -188,14 +191,19 @@ login state, or user configuration was read.
 - Codex-managed ChatGPT login and automatic refresh exist in App Server.
 - Credential file/keyring storage is configurable; `auth.json` contains access
   tokens and is security-sensitive.
-- Business/Enterprise Codex access tokens support trusted App Server/CLI
+- Enterprise Codex access tokens support trusted App Server/CLI
   automation.
-- App Server embeds a complete Codex agent and currently carries an
-  experimental/unsupported-for-production warning.
-- WebSocket, MCP, external ChatGPT-token injection, and dynamic tools are
-  experimental in the reviewed official material.
-- OpenAI warns not to use the ChatGPT-managed `auth.json` CI/CD workflow for a
-  public/open-source repository.
+- App Server embeds a complete Codex agent. The current documentation exposes
+  a stable base API plus individual explicit experimental opt-ins, while the
+  exact pinned CLI labels the command experimental; it does not document a
+  stable model-only/no-built-in-tools mode.
+- Dynamic tools and external ChatGPT-token injection are experimental in the
+  reviewed official material. Remote transports and MCP do not establish the
+  required model-only boundary.
+- OpenAI recommends API-key authentication for programmatic CI/CD. It documents
+  a separate advanced `auth.json` refresh/cache pattern for trusted CI/CD
+  runners, which does not establish this release's isolated subscription-model
+  boundary.
 
 ### Inferences requiring proof or OpenAI clarification
 
@@ -235,7 +243,7 @@ Codex process. It must never parse, export, refresh, copy, or log tokens itself.
    expiry, and excluded from logs/evidence.
 5. Treat App Server logout as the documented local operation; do not claim
    remote token revocation unless a current official surface proves it. For
-   Business/Enterprise access tokens, follow their explicit rotate/revoke
+   Enterprise access tokens, follow their explicit rotate/revoke
    lifecycle.
 6. Pin the Codex runtime version and artifact digest, generate and retain its
    stable-only schema, reject unexpected versions/schema, and re-run this
@@ -276,9 +284,10 @@ boundary block is resolved. It must:
    build scripts;
 2. use one authorized test user/workspace identity, never a shared personal
    subscription for application tenants;
-3. prefer a documented Business/Enterprise Codex access token for non-
+3. prefer a documented Enterprise Codex access token for non-
    interactive automation where available; a personal ChatGPT login can be a
-   manual local proof but must not seed `auth.json` into this public repo's CI;
+   manual local proof but must not seed `auth.json` into an untrusted CI
+   environment;
 4. pin the Codex artifact/version/schema, use an empty isolated workspace,
    disable user config/rules/plugins/MCP, request the least execution authority,
    and execute only a fixed benign prompt;

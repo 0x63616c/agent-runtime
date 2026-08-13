@@ -45,9 +45,12 @@ const (
 )
 
 // Evaluate fails closed unless the retained official review proves every
-// production prerequisite. Current App Server documentation marks its command
-// and WebSocket transport experimental, so production-supported must remain
-// false until a future official review changes that fact.
+// production prerequisite. The protocol documentation has stable base APIs as
+// well as explicit experimental opt-ins, but the exact pinned CLI can still
+// label its app-server command experimental. ProductionSupported records the
+// review's approval of that exact executable and Model use; a stable protocol
+// subset alone does not prove it. It also never proves the separate
+// no-Codex-tools boundary required by this runtime.
 func Evaluate(assessment Assessment) (Disposition, error) {
 	if assessment.Surface != SurfaceAppServer {
 		return Disposition{}, errors.New("evaluate Codex subscription support: official surface is required")
