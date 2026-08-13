@@ -99,8 +99,8 @@ func TestProcessOutputSpoolRedactsBinaryOverlapsAcrossEveryChunkBoundary(t *test
 		[]byte("before to"),
 		[]byte("ken-va"),
 		[]byte("lue after "),
-		[]byte{'\x00', 's', 'e'},
-		[]byte{'c', 'r', 'e', 't', '\x00'},
+		{'\x00', 's', 'e'},
+		{'c', 'r', 'e', 't', '\x00'},
 	} {
 		if err := spool.Write(OutputStdout, chunk); err != nil {
 			t.Fatalf("Write(%q) error = %v", chunk, err)
@@ -114,7 +114,7 @@ func TestProcessOutputSpoolRedactsBinaryOverlapsAcrossEveryChunkBoundary(t *test
 			got = append(got, event.Chunk.Bytes...)
 		}
 	}
-	for _, forbidden := range [][]byte{[]byte("token"), []byte("token-value"), []byte{'\x00', 's', 'e', 'c', 'r', 'e', 't', '\x00'}} {
+	for _, forbidden := range [][]byte{[]byte("token"), []byte("token-value"), {'\x00', 's', 'e', 'c', 'r', 'e', 't', '\x00'}} {
 		if bytes.Contains(got, forbidden) {
 			t.Fatalf("retained output leaked %q: %q", forbidden, got)
 		}
