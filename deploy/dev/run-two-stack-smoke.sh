@@ -149,6 +149,45 @@ empty_runtime_role_startup_status() {
   jq -nc --argjson roles "$runtime_role_ids" '$roles | map({id:.,pods:[]})'
 }
 
+# Tilt output can include rendered workload configuration, so it is never
+# retained. This classifier reads a private, short-lived output file and emits
+# one bounded phase token only. The token separates failures before Kubernetes
+# workload creation (render/image/apply) from a readiness timeout without
+# copying arbitrary output into the CI artifact or log.
+classify_tilt_ci_failure() {
+  local output="$1"
+  if grep -Eiq '(^|[^[:alpha:]])(tiltfile|go run ./tools/dev render|stackctl manifests|tools/dev secrets)([^[:alpha:]]|$)' "$output"; then
+    printf '%s' render
+  elif grep -Eiq '(^|[^[:alpha:]])(docker build|build failed|failed to solve|error building image)([^[:alpha:]]|$)' "$output"; then
+    printf '%s' image_build
+  elif grep -Eiq '(^|[^[:alpha:]])(error from server|apply failed|failed to apply|unable to recognize)([^[:alpha:]]|$)' "$output"; then
+    printf '%s' kubernetes_apply
+  elif grep -Eiq '(^|[^[:alpha:]])(timed out waiting|readiness|resource .* failed)([^[:alpha:]]|$)' "$output"; then
+    printf '%s' readiness
+  else
+    printf '%s' unknown
+  fi
+}
+
+run_tilt_ci_attempt() {
+  local stack="$1"
+  local namespace="$2"
+  local output
+  output="$(mktemp "${TMPDIR:-/tmp}/agent-runtime-tilt-ci-output.XXXXXX")"
+  chmod 600 "$output"
+  if tilt ci --context "$context" --namespace "$namespace" --port 0 --timeout "$readiness_timeout" \
+    -- --stack="$stack" --profile="$profile" "${ci_tilt_args[@]}" >"$output" 2>&1; then
+    rm -f -- "$output"
+    printf '%s' none
+    return 0
+  fi
+  local phase
+  phase="$(classify_tilt_ci_failure "$output")"
+  rm -f -- "$output"
+  printf '%s' "$phase"
+  return 1
+}
+
 # Observe only stable identity and configuration metadata from the live Stack.
 # Kubernetes Secret values and workload output are intentionally never read or
 # retained. The strict credential-name mapping proves each runtime role is not
@@ -288,6 +327,7 @@ write_safe_diagnostic_summary() {
   local role_status="$7"
   local tilt_ci_attempts="$8"
   local startup_status="$9"
+  local tilt_ci_failure_phases="${10}"
   local destination="$diagnostics_dir/$stack.summary.json"
 
   jq -n \
@@ -301,14 +341,17 @@ write_safe_diagnostic_summary() {
     --argjson runtime_role_status "$role_status" \
     --argjson tilt_ci_attempts "$tilt_ci_attempts" \
     --argjson runtime_role_startup_status "$startup_status" \
-    '{kind:"diagnostic-summary/v2",version:2,stack:$stack,namespace:$namespace,profile:$profile,tilt_ci_exit_code:$tilt_ci_exit_code,tilt_ci_attempts:$tilt_ci_attempts,workload_probe:$probe_status,runtime_roles_observed:$runtime_roles_observed,runtime_roles_ready:$runtime_roles_ready,runtime_role_status:$runtime_role_status,runtime_role_startup_status:$runtime_role_startup_status}' \
+    --argjson tilt_ci_failure_phases "$tilt_ci_failure_phases" \
+    '{kind:"diagnostic-summary/v3",version:3,stack:$stack,namespace:$namespace,profile:$profile,tilt_ci_exit_code:$tilt_ci_exit_code,tilt_ci_attempts:$tilt_ci_attempts,tilt_ci_failure_phases:$tilt_ci_failure_phases,workload_probe:$probe_status,runtime_roles_observed:$runtime_roles_observed,runtime_roles_ready:$runtime_roles_ready,runtime_role_status:$runtime_role_status,runtime_role_startup_status:$runtime_role_startup_status}' \
     >"$destination"
 
   jq -e '
-    keys == ["kind","namespace","profile","runtime_role_startup_status","runtime_role_status","runtime_roles_observed","runtime_roles_ready","stack","tilt_ci_attempts","tilt_ci_exit_code","version","workload_probe"] and
-    .kind == "diagnostic-summary/v2" and .version == 2 and
+    keys == ["kind","namespace","profile","runtime_role_startup_status","runtime_role_status","runtime_roles_observed","runtime_roles_ready","stack","tilt_ci_attempts","tilt_ci_exit_code","tilt_ci_failure_phases","version","workload_probe"] and
+    .kind == "diagnostic-summary/v3" and .version == 3 and
     (.stack | type == "string") and (.namespace | type == "string") and (.profile | type == "string") and
-    (.tilt_ci_exit_code | type == "number") and (.tilt_ci_attempts | type == "number" and . >= 0 and . <= 2) and (.workload_probe | type == "string") and
+    (.tilt_ci_exit_code | type == "number") and (.tilt_ci_attempts | type == "number" and . >= 0 and . <= 2) and
+    (.tilt_ci_attempts as $attempts | .tilt_ci_failure_phases | type == "array" and (if $attempts == 0 then length <= 1 else length <= $attempts end) and all(.[]; . == "bootstrap" or . == "render" or . == "image_build" or . == "kubernetes_apply" or . == "readiness" or . == "unknown")) and
+    (.workload_probe | type == "string") and
     (.runtime_roles_observed | type == "number") and (.runtime_roles_ready | type == "boolean") and
     (.runtime_role_status | type == "array" and length == 8 and
       ([.[].id] | unique | sort) == ["api","blob-role","codec","model","orchestration","sandbox-control","sandbox-host","tool"] and
@@ -338,7 +381,7 @@ write_safe_diagnostic_summary() {
 capture_plan_failure_diagnostics() {
   local stack="$1"
   local namespace="$2"
-  write_safe_diagnostic_summary "$stack" "$namespace" 1 "unavailable" 0 false "$(empty_runtime_role_status)" 0 "$(empty_runtime_role_startup_status)"
+  write_safe_diagnostic_summary "$stack" "$namespace" 1 "unavailable" 0 false "$(empty_runtime_role_status)" 0 "$(empty_runtime_role_startup_status)" '["render"]'
 }
 
 if [[ "$diagnostic_self_test" == true ]]; then
@@ -349,7 +392,19 @@ if [[ "$diagnostic_self_test" == true ]]; then
   fixture_role_status="$(empty_runtime_role_status)"
   pod_status_fixture='{"items":[{"metadata":{"labels":{"agent-runtime.dev/resource":"api"}},"status":{"phase":"Pending","containerStatuses":[{"ready":false,"restartCount":1,"state":{"waiting":{"reason":"adversarial-runtime-detail"}}}]}}]}'
   fixture_startup_status="$(printf '%s' "$pod_status_fixture" | runtime_role_startup_status)"
-  write_safe_diagnostic_summary "fixture-stack" "ar-fixture-stack" 7 "unavailable" 0 false "$fixture_role_status" 2 "$fixture_startup_status"
+  write_safe_diagnostic_summary "fixture-stack" "ar-fixture-stack" 7 "unavailable" 0 false "$fixture_role_status" 2 "$fixture_startup_status" '["image_build","unknown"]'
+  tilt_fixture="$(mktemp "${TMPDIR:-/tmp}/agent-runtime-tilt-classifier.XXXXXX")"
+  printf '%s\n' 'Build Failed: MODEL_API_KEY=adversarial-env-secret' >"$tilt_fixture"
+  if [[ "$(classify_tilt_ci_failure "$tilt_fixture")" != image_build ]]; then
+    echo "Tilt failure classifier did not classify a build failure" >&2
+    exit 1
+  fi
+  printf '%s\n' 'unrecognized failure Bearer adversarial-header-token' >"$tilt_fixture"
+  if [[ "$(classify_tilt_ci_failure "$tilt_fixture")" != unknown ]]; then
+    echo "Tilt failure classifier did not classify an unknown failure" >&2
+    exit 1
+  fi
+  rm -f -- "$tilt_fixture"
   for unsafe_value in 'Bearer adversarial-header-token' 'MODEL_API_KEY=adversarial-env-secret' '{"token":"adversarial-json-secret"}' 'adversarial-runtime-detail'; do
     if grep -F -- "$unsafe_value" "$diagnostics_dir/fixture-stack.summary.json" >/dev/null; then
       echo "safe diagnostic summary retained an unsafe fixture value" >&2
@@ -359,7 +414,7 @@ if [[ "$diagnostic_self_test" == true ]]; then
   capture_plan_failure_diagnostics "preflight-stack" "ar-preflight-stack"
   jq -e '
     .stack == "preflight-stack" and .namespace == "ar-preflight-stack" and
-    .tilt_ci_exit_code == 1 and .tilt_ci_attempts == 0 and .workload_probe == "unavailable" and
+    .tilt_ci_exit_code == 1 and .tilt_ci_attempts == 0 and .tilt_ci_failure_phases == ["render"] and .workload_probe == "unavailable" and
     .runtime_roles_observed == 0 and .runtime_roles_ready == false and
     (.runtime_role_startup_status | length == 8 and all(.[]; (.pods | length) == 0)) and
     (.runtime_role_status | length == 8 and all(.[]; .replicas == 0 and .ready_replicas == 0 and .available_replicas == 0))
@@ -379,6 +434,10 @@ if [[ "$diagnostic_self_test" == true ]]; then
   fi
   jq -e '.runtime_role_startup_status[] | select(.id == "api") | .pods == [{phase:"Pending",ready_containers:0,restart_count:1,state_reasons:["other"]}]' "$diagnostics_dir/fixture-stack.summary.json" >/dev/null || {
     echo "safe diagnostic summary did not replace an unapproved pod state reason" >&2
+    exit 1
+  }
+  jq -e '.kind == "diagnostic-summary/v3" and .version == 3 and .tilt_ci_failure_phases == ["image_build","unknown"]' "$diagnostics_dir/fixture-stack.summary.json" >/dev/null || {
+    echo "safe diagnostic summary did not retain typed Tilt failure phases" >&2
     exit 1
   }
   rm -f -- "$diagnostics_dir/fixture-stack.summary.json" "$diagnostics_dir/preflight-stack.summary.json"
@@ -633,6 +692,7 @@ capture_stack_diagnostics() {
   local namespace="$2"
   local ci_status="$3"
   local tilt_ci_attempts="$4"
+  local tilt_ci_failure_phases="$5"
   local probe_status="unavailable"
   local roles_observed=0
   local roles_ready=false
@@ -656,7 +716,7 @@ capture_stack_diagnostics() {
   else
     startup_status="$(empty_runtime_role_startup_status)"
   fi
-  write_safe_diagnostic_summary "$stack" "$namespace" "$ci_status" "$probe_status" "$roles_observed" "$roles_ready" "$role_status" "$tilt_ci_attempts" "$startup_status"
+  write_safe_diagnostic_summary "$stack" "$namespace" "$ci_status" "$probe_status" "$roles_observed" "$roles_ready" "$role_status" "$tilt_ci_attempts" "$startup_status" "$tilt_ci_failure_phases"
 }
 
 start_stack() {
@@ -664,6 +724,8 @@ start_stack() {
   local namespace="$2"
   local ci_status=0
   local tilt_ci_attempts=0
+  local tilt_ci_failure_phases='[]'
+  local tilt_ci_failure_phase
   if [[ "$profile" == "ci" ]]; then
     # Bootstrap is deliberately outside the Tiltfile: plan rendering must be
     # side-effect free, and stackctl must create the Namespace before Tilt can
@@ -675,12 +737,17 @@ start_stack() {
 			go run ./tools/dev bootstrap --stack="$stack" --root=. >/dev/null 2>&1 || ci_status=$?
 		fi
   fi
+  if [[ "$ci_status" != 0 ]]; then
+    tilt_ci_failure_phases='["bootstrap"]'
+  fi
   # Do not retain Tilt output: it may contain workload environment or headers.
   # The allowlisted summary below records only bounded readiness metadata.
   if [[ "$ci_status" == 0 ]]; then
     tilt_ci_attempts=1
-    tilt ci --context "$context" --namespace "$namespace" --port 0 --timeout "$readiness_timeout" \
-      -- --stack="$stack" --profile="$profile" "${ci_tilt_args[@]}" >/dev/null 2>&1 || ci_status=$?
+    if ! tilt_ci_failure_phase="$(run_tilt_ci_attempt "$stack" "$namespace")"; then
+      ci_status=1
+      tilt_ci_failure_phases="$(jq -nc --arg phase "$tilt_ci_failure_phase" '[ $phase ]')"
+    fi
     # A disposable k3d node can transiently reject a just-built image while
     # its local registry catch-up completes. Retrying the same reviewed Stack
     # preserves its bootstrap authority, namespace, and image identities; it
@@ -689,11 +756,15 @@ start_stack() {
       ci_status=0
       tilt_ci_attempts=2
       sleep 5
-      tilt ci --context "$context" --namespace "$namespace" --port 0 --timeout "$readiness_timeout" \
-        -- --stack="$stack" --profile="$profile" "${ci_tilt_args[@]}" >/dev/null 2>&1 || ci_status=$?
+      if ! tilt_ci_failure_phase="$(run_tilt_ci_attempt "$stack" "$namespace")"; then
+        ci_status=1
+        tilt_ci_failure_phases="$(jq -c --arg phase "$tilt_ci_failure_phase" '. + [ $phase ]' <<<"$tilt_ci_failure_phases")"
+      else
+        tilt_ci_failure_phases='[]'
+      fi
     fi
   fi
-  capture_stack_diagnostics "$stack" "$namespace" "$ci_status" "$tilt_ci_attempts"
+  capture_stack_diagnostics "$stack" "$namespace" "$ci_status" "$tilt_ci_attempts" "$tilt_ci_failure_phases"
   if [[ "$ci_status" != 0 ]]; then
     return "$ci_status"
   fi
