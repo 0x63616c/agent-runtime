@@ -552,6 +552,17 @@ func TestFixtureProvisionerVerifiesEveryDownloadBeforeReturningExecutablePaths(t
 		if !ok || filepath.Dir(artifact.Path) != set.Directory() {
 			t.Errorf("Artifact(%q) = %#v, %v; want staged artifact", name, artifact, ok)
 		}
+		info, statErr := os.Stat(artifact.Path)
+		if statErr != nil {
+			t.Fatalf("stat %s: %v", name, statErr)
+		}
+		wantMode := os.FileMode(0o600)
+		if name == FixtureFirecracker || name == FixtureJailer {
+			wantMode = 0o500
+		}
+		if got := info.Mode().Perm(); got != wantMode {
+			t.Errorf("Artifact(%q) mode = %o, want %o", name, got, wantMode)
+		}
 	}
 }
 

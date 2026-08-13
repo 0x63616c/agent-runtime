@@ -609,6 +609,14 @@ func ProvisionFixtures(ctx context.Context, lock FixtureLock, fetcher FixtureFet
 		if err := stageFixtureArtifact(artifactPath, source, artifact, path); err != nil {
 			return FixtureSet{}, err
 		}
+		// The two upstream release binaries are executed by the Linux Jailer
+		// path. Artifacts are deliberately staged non-writable; retain only the
+		// owner execute bit they need instead of trusting archive mode bits.
+		if artifact.Name == FixtureFirecracker || artifact.Name == FixtureJailer {
+			if err := os.Chmod(artifactPath, 0o500); err != nil {
+				return FixtureSet{}, fmt.Errorf("%w: make %s executable: %v", ErrArtifactIntegrity, artifact.Name, err)
+			}
+		}
 		set.artifacts[artifact.Name] = PinnedArtifact{Path: artifactPath, Digest: artifact.Digest}
 	}
 	set.verified = true
