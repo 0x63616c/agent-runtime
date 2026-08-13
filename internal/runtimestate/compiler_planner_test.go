@@ -955,6 +955,50 @@ func TestPlannerPersistsToolIntentBeforeApprovalDecision(t *testing.T) {
 	}
 }
 
+func TestPlannerInvalidatesPendingApprovalWhenPolicyIsRevised(t *testing.T) {
+	now := time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC)
+	content, _, tenant, principal := testRuntimeContent(t)
+	compiler, _ := runtimestate.NewCompiler(content)
+	planner, _ := runtimestate.NewRuntimeStatePlanner(fixedPlannerClock{now: now}, &uniquePlannerIDs{})
+	adminScope := runtimestate.MutationScope{Tenant: tenant, Authority: runtimestate.AuthorityTenantAdministrator}
+
+	firstPolicy, err := compiler.CompileRegisterPolicyRevision(runtimestate.RegisterPolicyRevisionCommand{Scope: adminScope, IdempotencyKey: "policy-v1", Name: "workspace-write", Rules: []agentruntime.PolicyRule{{ToolName: "write", Decision: agentruntime.PolicyRequiresApproval}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstPlan, err := planner.Plan(context.Background(), runtimestate.RuntimeState{}, firstPolicy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	policy := firstPlan.Result().Policy
+	session := validSessionID(t)
+	pendingTurn := agentruntime.TurnID("turn_1234567890ABCDEF")
+	queuedTurn := agentruntime.TurnID("turn_1234567890ABCDEG")
+	digest := "sha256:" + strings.Repeat("a", 64)
+	state := firstPlan.State()
+	state.Sessions = append(state.Sessions, runtimestate.SessionRecord{Tenant: tenant, Principal: principal, SessionID: session, State: agentruntime.SessionOpen, CreatedAt: now, UpdatedAt: now})
+	state.Turns = append(state.Turns,
+		runtimestate.TurnRecord{Tenant: tenant, Principal: principal, SessionID: session, TurnID: pendingTurn, Position: 1, State: agentruntime.TurnWaitingForApproval},
+		runtimestate.TurnRecord{Tenant: tenant, Principal: principal, SessionID: session, TurnID: queuedTurn, Position: 2, State: agentruntime.TurnQueued},
+	)
+	state.Approvals = append(state.Approvals, runtimestate.ApprovalRecord{Tenant: tenant, Principal: principal, ApprovalID: "appr_1234567890ABCDEF", SessionID: session, TurnID: pendingTurn, ToolCallID: "tcall_1234567890ABCDEF", ActionDigest: digest, PolicyRevisionDigest: policy.Digest, State: string(agentruntime.ApprovalPending), CapabilityDigest: digest, ActionVerb: "write", ActionTarget: "workspace-service", MaximumUses: 1, ExpiresAt: now.Add(time.Hour), CreatedAt: now})
+
+	revision, err := compiler.CompileRegisterPolicyRevision(runtimestate.RegisterPolicyRevisionCommand{Scope: adminScope, IdempotencyKey: "policy-v2", Name: policy.Name, ExpectedRevision: policy.Revision, Rules: []agentruntime.PolicyRule{{ToolName: "write", Decision: agentruntime.PolicyDenied}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan, err := planner.Plan(context.Background(), state, revision)
+	if err != nil {
+		t.Fatalf("revise policy: %v", err)
+	}
+	if plan.State().Approvals[0].State != string(agentruntime.ApprovalCancelled) || plan.State().Turns[0].State != agentruntime.TurnCancelled || plan.State().Turns[1].State != agentruntime.TurnRunning {
+		t.Fatalf("policy revision did not cancel approval/promote queued Turn: %#v", plan.State())
+	}
+	if !plannerEffectsContainEvent(plan.Effects(), agentruntime.EventApprovalCancelled) || !plannerHasAuditKind(plan.State().Audit, "approval.policy_invalidated") {
+		t.Fatalf("policy invalidation effects = %#v", plan.Effects())
+	}
+}
+
 func plannerHasAuditKind(records []runtimestate.AuditFactRecord, expected string) bool {
 	for _, record := range records {
 		if record.Kind == expected {

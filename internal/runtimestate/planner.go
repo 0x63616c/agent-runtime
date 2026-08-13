@@ -387,7 +387,76 @@ func (planner *RuntimeStatePlanner) registerPolicy(state *RuntimeState, binding 
 	if err != nil {
 		return PlanResult{}, EffectSet{}, err
 	}
+	// A policy revision supersedes every still-pending proposal made under an
+	// earlier revision of the same named policy.  A model intent never carries
+	// authority forward across a policy change: withdraw the approval, make its
+	// owning Turn terminal, and promote the next queued Turn just as an owner
+	// cancellation would.  This happens in the policy transition itself so an
+	// approver cannot race the policy administrator between separate writes.
+	for index := range state.Approvals {
+		approval := state.Approvals[index]
+		if approval.Tenant != binding.Scope.Tenant || approval.State != string(agentruntime.ApprovalPending) || !policyDigestBelongsTo(state.Policies, command.Name, approval.PolicyRevisionDigest) {
+			continue
+		}
+		invalidation, invalidateErr := planner.invalidatePendingApproval(state, binding, index, now)
+		if invalidateErr != nil {
+			return PlanResult{}, EffectSet{}, invalidateErr
+		}
+		effects = appendEffects(effects, invalidation)
+	}
 	return PlanResult{Policy: record}, effects, nil
+}
+
+func policyDigestBelongsTo(policies []PolicyRevisionRecord, name, digest string) bool {
+	for _, policy := range policies {
+		if policy.Name == name && policy.Digest == digest {
+			return true
+		}
+	}
+	return false
+}
+
+// invalidatePendingApproval removes authority that was proposed under a
+// superseded policy revision. It mirrors an owner cancelling a waiting Turn,
+// while preserving the more specific policy-invalidation audit fact.
+func (planner *RuntimeStatePlanner) invalidatePendingApproval(state *RuntimeState, binding ReceiptBinding, approvalIndex int, now time.Time) (EffectSet, error) {
+	approval := state.Approvals[approvalIndex]
+	sessionIndex := findSession(state, MutationScope{Tenant: approval.Tenant, Principal: approval.Principal}, approval.SessionID)
+	turnIndex := findTurn(state, MutationScope{Tenant: approval.Tenant, Principal: approval.Principal}, approval.SessionID, approval.TurnID)
+	if sessionIndex < 0 || turnIndex < 0 || state.Turns[turnIndex].State != agentruntime.TurnWaitingForApproval {
+		return EffectSet{}, ErrConflict
+	}
+	approval.State = string(agentruntime.ApprovalCancelled)
+	state.Approvals[approvalIndex] = approval
+
+	session, turn := state.Sessions[sessionIndex], state.Turns[turnIndex]
+	turn.State, turn.Version, turn.CompletedAt = agentruntime.TurnCancelled, turn.Version+1, &now
+	state.Turns[turnIndex] = turn
+	session.Version++
+	session.UpdatedAt = now
+	promoted := planner.promote(state, session.SessionID, now)
+	state.Sessions[sessionIndex] = session
+
+	kinds := []agentruntime.EventKind{agentruntime.EventTurnCancelled}
+	if promoted != nil {
+		kinds = append(kinds, agentruntime.EventTurnStarted)
+	}
+	effects, err := planner.effects(state, binding, session, turn, InvocationRecord{}, kinds, now)
+	if err != nil {
+		return EffectSet{}, err
+	}
+	approvalEffects, err := planner.invalidatedApprovalEffects(state, binding, session, turn, approval, now)
+	if err != nil {
+		return EffectSet{}, err
+	}
+	return appendEffects(effects, approvalEffects), nil
+}
+
+func appendEffects(left, right EffectSet) EffectSet {
+	left.Events = append(left.Events, right.Events...)
+	left.Audit = append(left.Audit, right.Audit...)
+	left.Outbox = append(left.Outbox, right.Outbox...)
+	return left
 }
 
 func policyDigest(name string, revision uint64, rules []agentruntime.PolicyRule) (string, error) {
@@ -1113,6 +1182,17 @@ func (planner *RuntimeStatePlanner) cancel(state *RuntimeState, binding ReceiptB
 // in the caller's one transition plan, so a stored cancellation cannot expose
 // one durable stream without the other.
 func (planner *RuntimeStatePlanner) cancelledApprovalEffects(state *RuntimeState, binding ReceiptBinding, session SessionRecord, turn TurnRecord, approval ApprovalRecord, now time.Time) (EffectSet, error) {
+	return planner.terminalApprovalEffects(state, binding, session, turn, approval, now, "approval.cancelled")
+}
+
+// invalidatedApprovalEffects records a policy change distinctly from an
+// owner-initiated cancellation. Both use the same safe public withdrawal
+// event; only the private audit reason differs.
+func (planner *RuntimeStatePlanner) invalidatedApprovalEffects(state *RuntimeState, binding ReceiptBinding, session SessionRecord, turn TurnRecord, approval ApprovalRecord, now time.Time) (EffectSet, error) {
+	return planner.terminalApprovalEffects(state, binding, session, turn, approval, now, "approval.policy_invalidated")
+}
+
+func (planner *RuntimeStatePlanner) terminalApprovalEffects(state *RuntimeState, binding ReceiptBinding, session SessionRecord, turn TurnRecord, approval ApprovalRecord, now time.Time, auditKind string) (EffectSet, error) {
 	event, err := planner.event(state, session, turn, InvocationRecord{}, binding, agentruntime.EventApprovalCancelled, now, planner.retain(now, DataClassEvent))
 	if err != nil {
 		return EffectSet{}, err
@@ -1125,7 +1205,7 @@ func (planner *RuntimeStatePlanner) cancelledApprovalEffects(state *RuntimeState
 	state.Outbox = append(state.Outbox, eventOutbox)
 	effects := EffectSet{Events: []ProductEventRecord{event}, Outbox: []OutboxRecord{eventOutbox}}
 	eventOutboxIndex := len(state.Outbox) - 1
-	auditEffects, err := planner.auditOnly(state, binding, "approval.cancelled", approval.SessionID, approval.TurnID, now)
+	auditEffects, err := planner.auditOnly(state, binding, auditKind, approval.SessionID, approval.TurnID, now)
 	if err != nil || len(auditEffects.Audit) == 0 {
 		if err == nil {
 			err = ErrIntegrity
