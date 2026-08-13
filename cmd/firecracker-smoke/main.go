@@ -3,6 +3,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/json"
@@ -15,6 +16,8 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
+	"syscall"
 	"time"
 
 	"github.com/0x63616c/agent-runtime/internal/firecracker"
@@ -23,16 +26,22 @@ import (
 
 const runnerContract = "protected-linux-kvm-v1"
 
+const directExecutionMode = "direct"
+
+const directKVMConfigPath = "/etc/agent-runtime/firecracker-direct-kvm.json"
+
 type report struct {
-	SchemaVersion  string                     `json:"schema_version"`
-	ProofLevel     string                     `json:"proof_level"`
-	Result         firecracker.EvidenceResult `json:"result"`
-	Preflight      firecracker.KVMPreflight   `json:"preflight"`
-	FixtureVersion string                     `json:"fixture_version,omitempty"`
-	FixtureDigests map[string]string          `json:"fixture_digests,omitempty"`
-	SerialMarker   string                     `json:"serial_marker,omitempty"`
-	Cleanup        firecracker.CleanupProof   `json:"cleanup,omitempty"`
-	Reason         string                     `json:"reason,omitempty"`
+	SchemaVersion           string                     `json:"schema_version"`
+	ProofLevel              string                     `json:"proof_level"`
+	Result                  firecracker.EvidenceResult `json:"result"`
+	Preflight               firecracker.KVMPreflight   `json:"preflight"`
+	FixtureVersion          string                     `json:"fixture_version,omitempty"`
+	FixtureDigests          map[string]string          `json:"fixture_digests,omitempty"`
+	SerialMarker            string                     `json:"serial_marker,omitempty"`
+	Cleanup                 firecracker.CleanupProof   `json:"cleanup,omitempty"`
+	Reason                  string                     `json:"reason,omitempty"`
+	ExecutionMode           string                     `json:"execution_mode,omitempty"`
+	directEvidenceDirectory string
 }
 
 func main() {
@@ -44,16 +53,26 @@ func main() {
 	cgroupParent := flag.String("cgroup-parent", "", "required delegated cgroup-v2 parent relative to /sys/fs/cgroup")
 	stackResource := flag.String("stack-resource", "", "required declared Stack resource owning the cgroup parent")
 	externalOwner := flag.String("external-owner", "", "required declared Stack resource owning non-Jailer smoke limits")
+	executionMode := flag.String("execution-mode", "protected", "protected or direct execution authority")
+	directConfigPath := flag.String("direct-config", directKVMConfigPath, "root-owned direct KVM configuration")
 	timeout := flag.Duration("timeout", 2*time.Minute, "bounded protected smoke timeout")
 	flag.Parse()
 	if *reportPath == "" {
 		fmt.Fprintln(os.Stderr, "firecracker-smoke: -report is required")
 		os.Exit(2)
 	}
+	if *executionMode == directExecutionMode && !validDirectEvidenceReportPath(*reportPath) {
+		fmt.Fprintln(os.Stderr, "firecracker-smoke: direct execution report must be a clean JSON path beneath /var/lib/agent-runtime/firecracker-evidence")
+		os.Exit(2)
+	}
 
 	record := report{SchemaVersion: "firecracker.smoke-evidence/v2", ProofLevel: firecracker.ProofLevelLinuxKVME2E, Result: firecracker.EvidenceBlocked, Preflight: firecracker.InspectLocalKVMPreflight()}
-	err := run(recordRunnerConfig{fixtureLockPath: *fixtureLockPath, vmID: *vmID, uid: *uid, gid: *gid, cgroupParent: *cgroupParent, stackResource: *stackResource, externalOwner: *externalOwner, timeout: *timeout}, &record)
-	if writeErr := writeReport(*reportPath, record); writeErr != nil {
+	err := run(recordRunnerConfig{fixtureLockPath: *fixtureLockPath, reportPath: *reportPath, vmID: *vmID, uid: *uid, gid: *gid, cgroupParent: *cgroupParent, stackResource: *stackResource, externalOwner: *externalOwner, executionMode: *executionMode, directConfigPath: *directConfigPath, timeout: *timeout}, &record)
+	write := writeReport
+	if *executionMode == directExecutionMode {
+		write = writeDirectReport
+	}
+	if writeErr := write(*reportPath, record); writeErr != nil {
 		fmt.Fprintf(os.Stderr, "firecracker-smoke: write report: %v\n", writeErr)
 		os.Exit(2)
 	}
@@ -64,17 +83,29 @@ func main() {
 }
 
 type recordRunnerConfig struct {
-	fixtureLockPath, vmID, cgroupParent, stackResource, externalOwner string
-	uid, gid                                                          uint64
-	timeout                                                           time.Duration
+	fixtureLockPath, reportPath, vmID, cgroupParent, stackResource, externalOwner, executionMode, directConfigPath string
+	uid, gid                                                                                                       uint64
+	timeout                                                                                                        time.Duration
 }
 
 func run(config recordRunnerConfig, record *report) (err error) {
 	if record == nil {
 		return errors.New("smoke report is required")
 	}
-	if os.Getenv("FIRECRACKER_RUNNER_CONTRACT") != runnerContract {
+	if config.executionMode == "" {
+		config.executionMode = "protected"
+	}
+	record.ExecutionMode = config.executionMode
+	if config.executionMode == "protected" && os.Getenv("FIRECRACKER_RUNNER_CONTRACT") != runnerContract {
 		return block(record, "protected self-hosted KVM runner contract is absent")
+	}
+	if config.executionMode == directExecutionMode {
+		if err := validateDirectExecutionBinding(config, record); err != nil {
+			return block(record, err.Error())
+		}
+	}
+	if config.executionMode != "protected" && config.executionMode != directExecutionMode {
+		return block(record, "execution mode must be protected or direct")
 	}
 	if err := record.Preflight.Validate(); err != nil {
 		return block(record, err.Error())
@@ -155,6 +186,83 @@ func run(config recordRunnerConfig, record *report) (err error) {
 	return nil
 }
 
+type directExecutionBinding struct {
+	Version             string `json:"version"`
+	ExecutionNamespace  string `json:"execution_namespace"`
+	EvidenceDirectory   string `json:"evidence_directory"`
+	JailerChrootBaseDir string `json:"jailer_chroot_base_dir"`
+	CgroupParent        string `json:"cgroup_parent"`
+	StackResource       string `json:"stack_resource"`
+	ExternalOwner       string `json:"external_owner"`
+	JailerUID           uint32 `json:"jailer_uid"`
+	JailerGID           uint32 `json:"jailer_gid"`
+}
+
+// validateDirectExecutionBinding makes the post-preflight smoke command use
+// exactly the root-owned direct authority, rather than trusting repeated shell
+// arguments. The preflight has already verified ownership, directories, KVM,
+// and fixture provenance before this binding is read.
+func validateDirectExecutionBinding(config recordRunnerConfig, record *report) error {
+	if config.directConfigPath != directKVMConfigPath {
+		return errors.New("direct Firecracker config path does not match the reviewed authority")
+	}
+	info, err := os.Stat(config.directConfigPath)
+	if err != nil || validateRootOwnedDirect(info) != nil {
+		return errors.New("root-owned direct KVM config is unavailable after preflight")
+	}
+	contents, err := os.ReadFile(config.directConfigPath)
+	if err != nil {
+		return errors.New("root-owned direct KVM config is unavailable after preflight")
+	}
+	decoder := json.NewDecoder(bytes.NewReader(contents))
+	decoder.DisallowUnknownFields()
+	var binding directExecutionBinding
+	if err := decoder.Decode(&binding); err != nil {
+		return errors.New("root-owned direct KVM config is invalid after preflight")
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		return errors.New("root-owned direct KVM config has trailing data after preflight")
+	}
+	if binding.Version != "agent-runtime.firecracker-direct-kvm/v1" || !validDirectName(binding.ExecutionNamespace) || !validDirectEvidenceDirectory(binding.EvidenceDirectory) || binding.JailerChrootBaseDir != "/srv/agent-runtime/jailer" || !validDirectRelativePath(binding.CgroupParent) || !validDirectName(binding.StackResource) || !validDirectName(binding.ExternalOwner) || binding.JailerUID == 0 || binding.JailerGID == 0 || config.uid != uint64(binding.JailerUID) || config.gid != uint64(binding.JailerGID) || config.cgroupParent != binding.CgroupParent || config.stackResource != binding.StackResource || config.externalOwner != binding.ExternalOwner || !strings.HasPrefix(config.vmID, binding.ExecutionNamespace+"-") {
+		return errors.New("direct smoke inputs do not match the root-owned direct KVM authority")
+	}
+	for _, path := range []string{binding.JailerChrootBaseDir, binding.EvidenceDirectory, filepath.Join("/sys/fs/cgroup", binding.CgroupParent)} {
+		info, err := os.Stat(path)
+		if err != nil || !info.IsDir() || validateRootOwnedDirect(info) != nil {
+			return errors.New("root-owned direct KVM directories changed after preflight")
+		}
+	}
+	if filepath.Dir(config.reportPath) != binding.EvidenceDirectory || !validDirectEvidenceReportPath(config.reportPath) {
+		return errors.New("direct smoke report does not use the root-owned configured evidence directory")
+	}
+	record.directEvidenceDirectory = binding.EvidenceDirectory
+	return nil
+}
+
+func validateRootOwnedDirect(info os.FileInfo) error {
+	if info == nil {
+		return errors.New("missing file information")
+	}
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	if !ok || stat.Uid != 0 || info.Mode().Perm()&0o022 != 0 {
+		return errors.New("must be root-owned and not writable by group or others")
+	}
+	return nil
+}
+
+func validDirectEvidenceDirectory(value string) bool {
+	const directEvidenceRoot = "/var/lib/agent-runtime/firecracker-evidence"
+	return filepath.IsAbs(value) && filepath.Clean(value) == value && value != directEvidenceRoot && strings.HasPrefix(value, directEvidenceRoot+"/")
+}
+
+func validDirectRelativePath(value string) bool {
+	return value != "" && filepath.Clean(value) == value && !strings.HasPrefix(value, "/") && !strings.HasPrefix(value, "../") && !strings.Contains(value, "//")
+}
+
+func validDirectName(value string) bool {
+	return len(value) > 0 && len(value) <= 128 && strings.TrimSpace(value) == value && !strings.ContainsAny(value, "\x00\r\n/")
+}
+
 func block(record *report, reason string) error {
 	record.Result = firecracker.EvidenceBlocked
 	record.Reason = reason
@@ -170,6 +278,34 @@ func writeReport(path string, record report) error {
 		return err
 	}
 	return os.WriteFile(path, append(contents, '\n'), 0o600)
+}
+
+func writeDirectReport(path string, record report) error {
+	if record.directEvidenceDirectory == "" || filepath.Dir(path) != record.directEvidenceDirectory || !validDirectEvidenceReportPath(path) {
+		return errors.New("direct evidence destination is not bound to root-owned configuration")
+	}
+	contents, err := json.MarshalIndent(record, "", "  ")
+	if err != nil {
+		return err
+	}
+	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		return fmt.Errorf("create immutable direct evidence report: %w", err)
+	}
+	if _, writeErr := file.Write(append(contents, '\n')); writeErr != nil {
+		_ = file.Close()
+		return writeErr
+	}
+	if syncErr := file.Sync(); syncErr != nil {
+		_ = file.Close()
+		return syncErr
+	}
+	return file.Close()
+}
+
+func validDirectEvidenceReportPath(path string) bool {
+	const directEvidenceRoot = "/var/lib/agent-runtime/firecracker-evidence"
+	return filepath.IsAbs(path) && filepath.Clean(path) == path && strings.HasPrefix(path, directEvidenceRoot+"/") && strings.HasSuffix(path, ".json")
 }
 
 func fixtureDigests(fixtures firecracker.FixtureSet) map[string]string {

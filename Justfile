@@ -47,10 +47,27 @@ runtime-api-durable-e2e:
 live-lab-manifest name="agent-runtime-live-lab-review" context="home-server" output="/tmp/agent-runtime-live-lab-stack.json":
     deploy/production/live-lab-manifest.sh render --name "{{name}}" --context "{{context}}" --output "{{output}}"
 
+# Offline-only direct home-server test profile. Its generated ci profile uses
+# namespace-local, short-lived input files rather than cluster-wide secrets.
+direct-live-lab-manifest name="agent-runtime-direct-live-lab-m1" context="home-server" output="/tmp/agent-runtime-direct-live-lab-stack.json":
+    deploy/production/direct-live-lab-manifest.sh render --name "{{name}}" --context "{{context}}" --output "{{output}}"
+
 # Requires the protected self-hosted Linux/x86_64/KVM runner contract and always
 # retains a redacted blocked report rather than treating a local machine as proof.
 firecracker-smoke report="evidence/firecracker-smoke.json" vm_id="" uid="0" gid="0" cgroup_parent="" stack_resource="" external_owner="" fixture_lock="tools/firecracker/fixtures.lock":
     go run ./cmd/firecracker-smoke -report "{{ report }}" -fixture-lock "{{ fixture_lock }}" -vm-id "{{ vm_id }}" -uid "{{ uid }}" -gid "{{ gid }}" -cgroup-parent "{{ cgroup_parent }}" -stack-resource "{{ stack_resource }}" -external-owner "{{ external_owner }}"
+
+# Direct home-server preflight. Unlike the protected GitHub path, this checks
+# only the operator-owned Linux/KVM boundary and never relies on runner labels,
+# GitHub environments, or protected refs. It changes no host state.
+firecracker-direct-preflight config="/etc/agent-runtime/firecracker-direct-kvm.json" fixture_lock="tools/firecracker/fixtures.lock":
+    go run ./cmd/firecracker-direct-preflight -config "{{ config }}" -fixture-lock "{{ fixture_lock }}"
+
+# Runs the same no-NIC smoke harness directly after the operator-owned direct
+# preflight. All input identities must match the root-owned direct config.
+firecracker-direct-smoke report="" vm_id="" uid="0" gid="0" cgroup_parent="" stack_resource="" external_owner="" fixture_lock="tools/firecracker/fixtures.lock" config="/etc/agent-runtime/firecracker-direct-kvm.json":
+    just firecracker-direct-preflight "{{ config }}" "{{ fixture_lock }}"
+    go run ./cmd/firecracker-smoke -execution-mode direct -direct-config "{{ config }}" -report "{{ report }}" -fixture-lock "{{ fixture_lock }}" -vm-id "{{ vm_id }}" -uid "{{ uid }}" -gid "{{ gid }}" -cgroup-parent "{{ cgroup_parent }}" -stack-resource "{{ stack_resource }}" -external-owner "{{ external_owner }}"
 
 # Compatibility alias for the protected boot harness. It is not the enrolled
 # public runtime-command integration suite.

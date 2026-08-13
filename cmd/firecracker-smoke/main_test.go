@@ -26,6 +26,29 @@ func TestRunRefusesMissingProtectedInputsAfterTheRunnerPreflight(t *testing.T) {
 	}
 }
 
+func TestRunRefusesDirectExecutionOutsideTheRootOwnedAuthority(t *testing.T) {
+	record := report{Preflight: firecracker.KVMPreflight{GOOS: "linux", GOARCH: "amd64", KVMCharacterDevice: true, KVMReadWrite: true, CgroupV2: true}}
+	err := run(recordRunnerConfig{fixtureLockPath: filepath.Join(t.TempDir(), "not-read.lock"), executionMode: directExecutionMode}, &record)
+	if err == nil || record.Result != firecracker.EvidenceBlocked || record.Reason != "direct Firecracker config path does not match the reviewed authority" || record.ExecutionMode != directExecutionMode {
+		t.Fatalf("run() = (%v, %#v), want direct authority refusal before fixture read", err, record)
+	}
+}
+
+func TestRunRefusesDirectExecutionConfigOutsideTheReviewedAuthority(t *testing.T) {
+	t.Setenv("FIRECRACKER_DIRECT_KVM_PREFLIGHT", "passed")
+	record := report{Preflight: firecracker.KVMPreflight{GOOS: "linux", GOARCH: "amd64", KVMCharacterDevice: true, KVMReadWrite: true, CgroupV2: true}}
+	err := run(recordRunnerConfig{fixtureLockPath: filepath.Join(t.TempDir(), "not-read.lock"), executionMode: directExecutionMode, directConfigPath: filepath.Join(t.TempDir(), "config.json")}, &record)
+	if err == nil || record.Reason != "direct Firecracker config path does not match the reviewed authority" {
+		t.Fatalf("run() = (%v, %#v), want authority-path refusal", err, record)
+	}
+}
+
+func TestDirectEvidenceReportIsConfinedToTheOperatorEvidenceRoot(t *testing.T) {
+	if validDirectEvidenceReportPath("evidence/report.json") || validDirectEvidenceReportPath("/tmp/report.json") || validDirectEvidenceReportPath("/var/lib/agent-runtime/firecracker-evidence/run/report.txt") || !validDirectEvidenceReportPath("/var/lib/agent-runtime/firecracker-evidence/home-server/run.json") {
+		t.Fatal("validDirectEvidenceReportPath() did not confine direct evidence")
+	}
+}
+
 func TestWriteReportRetainsOnlyTheBoundedRedactedRecord(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "report.json")
 	record := report{SchemaVersion: "firecracker.smoke-evidence/v2", ProofLevel: firecracker.ProofLevelLinuxKVME2E, Result: firecracker.EvidenceBlocked, Reason: "fixture lock unavailable"}
