@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"reflect"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -613,13 +614,21 @@ func TestPostgresResourceReadModelProjectsSandboxAndProcessAtomically(t *testing
 		t.Fatalf("NewPostgresResourceReadModel() error = %v", err)
 	}
 	now := time.Date(2026, time.August, 12, 12, 0, 0, 0, time.UTC)
-	sandboxOperation := Operation{Principal: "tenant-a:principal-a", Tenant: "tenant-a", ID: "op_projection_sandbox", Kind: "create-sandbox", TargetKind: "sandbox", TargetID: "sbx_projection", InputDigest: digest("a"), CanonicalDigest: digest("b"), EffectiveSpecDigest: digest("c"), CapabilityDigest: digest("d"), DispatchBody: `{"version":"sandbox.control/v1"}`, AcceptedAt: now, RetentionExpiresAt: now.Add(time.Hour), CleanupRequired: true}
 	initialSandbox := sandbox.SandboxInfo{ID: "sbx_projection", Desired: sandbox.SandboxActive, Actual: sandbox.SandboxPending}
+	sandboxBinding := testResourceProjectionBinding(t, ResourceProjectionSandbox, string(initialSandbox.ID), initialSandbox)
+	sandboxOperation := Operation{Principal: "tenant-a:principal-a", Tenant: "tenant-a", ID: "op_projection_sandbox", Kind: "create-sandbox", TargetKind: "sandbox", TargetID: "sbx_projection", InputDigest: digest("a"), CanonicalDigest: digest("b"), EffectiveSpecDigest: digest("c"), CapabilityDigest: digest("d"), DispatchBody: `{"version":"sandbox.control/v1"}`, AcceptedAt: now, RetentionExpiresAt: now.Add(time.Hour), CleanupRequired: true, ResourceProjectionBinding: &sandboxBinding}
 	accepted, replay, err := model.AcceptSandbox(ctx, sandboxOperation, initialSandbox)
-	if err != nil || replay || accepted.State != StateAccepted || accepted.Version != 1 {
+	if err != nil || replay || accepted.State != StateAccepted || accepted.Version != 1 || accepted.ResourceProjectionBinding == nil || *accepted.ResourceProjectionBinding != sandboxBinding {
 		t.Fatalf("AcceptSandbox() = %#v, %t, %v", accepted, replay, err)
 	}
-	if replayed, replay, err := model.AcceptSandbox(ctx, sandboxOperation, initialSandbox); err != nil || !replay || replayed != accepted {
+	wrongBinding := sandboxBinding
+	wrongBinding.AdmittedSnapshotDigest = digest("f")
+	wrongAdmission := sandboxOperation
+	wrongAdmission.ResourceProjectionBinding = &wrongBinding
+	if _, _, err := model.AcceptSandbox(ctx, wrongAdmission, initialSandbox); !errors.Is(err, ErrConflict) {
+		t.Fatalf("AcceptSandbox(wrong admitted digest) error = %v; want ErrConflict", err)
+	}
+	if replayed, replay, err := model.AcceptSandbox(ctx, sandboxOperation, initialSandbox); err != nil || !replay || !reflect.DeepEqual(replayed, accepted) {
 		t.Fatalf("AcceptSandbox(retry) = %#v, %t, %v; want exact replay", replayed, replay, err)
 	}
 	if _, err := model.GetSandbox(ctx, "tenant-b:principal-b", initialSandbox.ID); !errors.Is(err, ErrNotFoundOrDenied) {
@@ -635,7 +644,7 @@ func TestPostgresResourceReadModelProjectsSandboxAndProcessAtomically(t *testing
 	if err != nil || gotSandbox.Actual != sandbox.SandboxProvisioning {
 		t.Fatalf("GetSandbox() = %#v, %v; want atomically updated provisioning metadata", gotSandbox, err)
 	}
-	if replayed, replay, err := model.AcceptSandbox(ctx, sandboxOperation, initialSandbox); err != nil || !replay || replayed != dispatched {
+	if replayed, replay, err := model.AcceptSandbox(ctx, sandboxOperation, initialSandbox); err != nil || !replay || !reflect.DeepEqual(replayed, dispatched) {
 		t.Fatalf("AcceptSandbox(after transition retry) = %#v, %t, %v; want current exact replay", replayed, replay, err)
 	}
 	wrongSandbox := provisioning
@@ -643,12 +652,13 @@ func TestPostgresResourceReadModelProjectsSandboxAndProcessAtomically(t *testing
 	if _, err := model.TransitionSandbox(ctx, sandboxOperation.Principal, sandboxOperation.ID, dispatched.Version, StateStarted, wrongSandbox); !errors.Is(err, ErrConflict) {
 		t.Fatalf("TransitionSandbox(wrong target) error = %v; want ErrConflict", err)
 	}
-	if current, err := model.ledger.Get(ctx, sandboxOperation.Principal, sandboxOperation.ID); err != nil || current != dispatched {
+	if current, err := model.ledger.Get(ctx, sandboxOperation.Principal, sandboxOperation.ID); err != nil || !reflect.DeepEqual(current, dispatched) {
 		t.Fatalf("operation changed after rejected projection = %#v, %v; want %#v", current, err, dispatched)
 	}
 
-	processOperation := Operation{Principal: sandboxOperation.Principal, Tenant: sandboxOperation.Tenant, ID: "op_projection_process", Kind: "exec-process", TargetKind: "process", TargetID: "prc_projection", InputDigest: digest("e"), CanonicalDigest: digest("f"), EffectiveSpecDigest: digest("0"), CapabilityDigest: digest("1"), DispatchBody: `{"version":"sandbox.control/v1"}`, AcceptedAt: now, RetentionExpiresAt: now.Add(time.Hour), CleanupRequired: true}
 	initialProcess := sandbox.ProcessInfo{ID: "prc_projection", SandboxID: initialSandbox.ID, State: sandbox.ProcessAccepted}
+	processBinding := testResourceProjectionBinding(t, ResourceProjectionProcess, string(initialProcess.ID), initialProcess)
+	processOperation := Operation{Principal: sandboxOperation.Principal, Tenant: sandboxOperation.Tenant, ID: "op_projection_process", Kind: "exec-process", TargetKind: "process", TargetID: "prc_projection", InputDigest: digest("e"), CanonicalDigest: digest("f"), EffectiveSpecDigest: digest("0"), CapabilityDigest: digest("1"), DispatchBody: `{"version":"sandbox.control/v1"}`, AcceptedAt: now, RetentionExpiresAt: now.Add(time.Hour), CleanupRequired: true, ResourceProjectionBinding: &processBinding}
 	processAccepted, replay, err := model.AcceptProcess(ctx, processOperation, initialProcess)
 	if err != nil || replay || processAccepted.State != StateAccepted {
 		t.Fatalf("AcceptProcess() = %#v, %t, %v", processAccepted, replay, err)
@@ -663,6 +673,15 @@ func TestPostgresResourceReadModelProjectsSandboxAndProcessAtomically(t *testing
 	if err != nil || gotProcess.State != sandbox.ProcessRunning || gotProcess.SandboxID != initialSandbox.ID {
 		t.Fatalf("GetProcess() = %#v, %v; want atomically updated process metadata", gotProcess, err)
 	}
+}
+
+func testResourceProjectionBinding(t *testing.T, kind ResourceProjectionKind, resourceID string, value any) ResourceProjectionBinding {
+	t.Helper()
+	body, err := json.Marshal(value)
+	if err != nil {
+		t.Fatalf("marshal admitted resource projection: %v", err)
+	}
+	return ResourceProjectionBinding{Kind: kind, ResourceID: resourceID, AdmittedSnapshotDigest: projectionSnapshotDigest(body), Transition: ResourceProjectionReplaceSnapshot}
 }
 
 func openIntegrationPool(t *testing.T, ctx context.Context, dsn string) *pgxpool.Pool {

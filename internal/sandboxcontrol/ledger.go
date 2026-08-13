@@ -2,6 +2,8 @@ package sandboxcontrol
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"sort"
 	"strings"
 	"sync"
@@ -69,6 +71,42 @@ type Assignment struct {
 	LeaseExpiresAt time.Time
 }
 
+// ResourceProjectionKind is the closed set of resource snapshots that can be
+// durably attached to an operation at admission. It is intentionally narrower
+// than an operation target: a target identifies routing, while this binding
+// authorizes one complete resource read-model snapshot.
+type ResourceProjectionKind string
+
+const (
+	ResourceProjectionSandbox ResourceProjectionKind = "sandbox"
+	ResourceProjectionProcess ResourceProjectionKind = "process"
+)
+
+// ResourceProjectionTransition declares how the admitted resource snapshot is
+// maintained as its operation advances. The value is persisted with the
+// immutable binding, so an adapter cannot silently change the projection model
+// after acceptance.
+type ResourceProjectionTransition string
+
+const (
+	// ResourceProjectionReplaceSnapshot requires each lifecycle transition to
+	// atomically replace the complete current resource snapshot.
+	ResourceProjectionReplaceSnapshot ResourceProjectionTransition = "replace-complete-snapshot"
+)
+
+// ResourceProjectionBinding is the immutable admission-time contract between
+// an operation and a resource read-model. AdmittedSnapshotDigest identifies
+// the exact initial complete snapshot; it is not recomputed from later state.
+//
+// This is an internal storage seam only. It does not make resource inspection
+// public or infer host observations that have not been durably supplied.
+type ResourceProjectionBinding struct {
+	Kind                   ResourceProjectionKind
+	ResourceID             string
+	AdmittedSnapshotDigest string
+	Transition             ResourceProjectionTransition
+}
+
 // Operation is the bounded durable operation ledger record.
 // CanonicalDigest and EffectiveSpecDigest are references only: unbounded input
 // and output content belongs in their dedicated stores.
@@ -89,7 +127,11 @@ type Operation struct {
 	AcceptedAt          time.Time
 	RetentionExpiresAt  time.Time
 	CleanupRequired     bool
-	Assignment          Assignment
+	// ResourceProjectionBinding, when present, is immutable admission metadata
+	// for a complete resource snapshot. Resource-aware stores enforce it before
+	// accepting or replacing any projection.
+	ResourceProjectionBinding *ResourceProjectionBinding
+	Assignment                Assignment
 }
 
 // HostResult is a host acknowledgement guarded by its assigned fence.
@@ -169,7 +211,7 @@ func (ledger *MemoryLedger) ClaimExpiredCleanup(ctx context.Context, now time.Ti
 		operation.Version++
 		ledger.operations[key] = operation
 		ledger.appendOutbox(operation, OutboxStateChanged)
-		claimed = append(claimed, operation)
+		claimed = append(claimed, copyOperationRecord(operation))
 	}
 	return claimed, nil
 }
@@ -206,10 +248,10 @@ func (ledger *MemoryLedger) Accept(ctx context.Context, operation Operation) (Op
 		if prior.State == StateTombstoned {
 			return Operation{}, false, ErrOperationIDExpired
 		}
-		if operationInputDigest(prior) != operationInputDigest(operation) {
+		if operationInputDigest(prior) != operationInputDigest(operation) || !sameResourceProjectionBinding(prior.ResourceProjectionBinding, operation.ResourceProjectionBinding) {
 			return Operation{}, false, ErrConflict
 		}
-		return prior, true, nil
+		return copyOperationRecord(prior), true, nil
 	}
 	for _, prior := range ledger.operations {
 		if prior.ID == operation.ID {
@@ -220,7 +262,7 @@ func (ledger *MemoryLedger) Accept(ctx context.Context, operation Operation) (Op
 	operation.Version = 1
 	operation.AcceptedAt = operation.AcceptedAt.UTC()
 	operation.RetentionExpiresAt = operation.RetentionExpiresAt.UTC()
-	ledger.operations[key] = operation
+	ledger.operations[key] = copyOperationRecord(operation)
 	ledger.appendOutbox(operation, OutboxAccepted)
 	return copyOperationRecord(operation), false, nil
 }
@@ -258,7 +300,7 @@ func (ledger *MemoryLedger) Transition(ctx context.Context, principal, id string
 	operation.Version++
 	ledger.operations[key] = operation
 	ledger.appendOutbox(operation, OutboxStateChanged)
-	return operation, nil
+	return copyOperationRecord(operation), nil
 }
 
 // Assign records a fresh fenced host assignment and expires any prior lease.
@@ -284,7 +326,7 @@ func (ledger *MemoryLedger) Assign(ctx context.Context, principal, id, hostID st
 	operation.Version++
 	ledger.operations[key] = operation
 	ledger.appendOutbox(operation, OutboxDispatched)
-	return operation, nil
+	return copyOperationRecord(operation), nil
 }
 
 // RecordHostResult accepts only the current host assignment's fenced result.
@@ -309,7 +351,7 @@ func (ledger *MemoryLedger) RecordHostResult(ctx context.Context, principal, id 
 	operation.Version++
 	ledger.operations[key] = operation
 	ledger.appendOutbox(operation, OutboxStateChanged)
-	return operation, nil
+	return copyOperationRecord(operation), nil
 }
 
 // RecoverExpiredAssignments fences expired host authority and makes its
@@ -341,7 +383,7 @@ func (ledger *MemoryLedger) RecoverExpiredAssignments(ctx context.Context, now t
 		operation.Version++
 		ledger.operations[key] = operation
 		ledger.appendOutbox(operation, OutboxLeaseExpired)
-		recovered = append(recovered, operation)
+		recovered = append(recovered, copyOperationRecord(operation))
 	}
 	return recovered, nil
 }
@@ -375,7 +417,7 @@ func (ledger *MemoryLedger) Reap(ctx context.Context, now time.Time, limit int) 
 		operation.Version++
 		ledger.operations[key] = operation
 		ledger.appendOutbox(operation, OutboxTombstoned)
-		reaped = append(reaped, operation)
+		reaped = append(reaped, copyOperationRecord(operation))
 	}
 	return reaped, nil
 }
@@ -441,10 +483,53 @@ func validateOperation(operation Operation) error {
 	if err := validateDispatchBody(operation.DispatchBody); err != nil {
 		return err
 	}
+	if operation.ResourceProjectionBinding != nil {
+		binding := *operation.ResourceProjectionBinding
+		if !validResourceProjectionBinding(binding) || operation.TargetKind != string(binding.Kind) || operation.TargetID != binding.ResourceID {
+			return errors.New("accept sandbox operation: resource projection binding is invalid")
+		}
+	}
 	return nil
 }
 
+func validResourceProjectionBinding(binding ResourceProjectionBinding) bool {
+	if !validBounded(binding.ResourceID, maxOperationIDBytes) || !validProjectionSnapshotDigest(binding.AdmittedSnapshotDigest) || binding.Transition != ResourceProjectionReplaceSnapshot {
+		return false
+	}
+	switch binding.Kind {
+	case ResourceProjectionSandbox, ResourceProjectionProcess:
+		return true
+	default:
+		return false
+	}
+}
+
+func validProjectionSnapshotDigest(value string) bool {
+	const prefix = "sha256:"
+	if len(value) != len(prefix)+sha256.Size*2 || !strings.HasPrefix(value, prefix) {
+		return false
+	}
+	_, err := hex.DecodeString(value[len(prefix):])
+	return err == nil
+}
+
+func projectionSnapshotDigest(body []byte) string {
+	digest := sha256.Sum256(body)
+	return "sha256:" + hex.EncodeToString(digest[:])
+}
+
+func sameResourceProjectionBinding(left, right *ResourceProjectionBinding) bool {
+	if left == nil || right == nil {
+		return left == nil && right == nil
+	}
+	return *left == *right
+}
+
 func copyOperationRecord(operation Operation) Operation {
+	if operation.ResourceProjectionBinding != nil {
+		binding := *operation.ResourceProjectionBinding
+		operation.ResourceProjectionBinding = &binding
+	}
 	return operation
 }
 

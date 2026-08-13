@@ -63,6 +63,57 @@ func TestMemoryLedgerReconnectUsesInputDigestAcrossPolicyChanges(t *testing.T) {
 	}
 }
 
+func TestMemoryLedgerPreservesAdmittedResourceProjectionBinding(t *testing.T) {
+	now := time.Date(2026, time.August, 12, 12, 0, 0, 0, time.UTC)
+	binding := ResourceProjectionBinding{
+		Kind:                   ResourceProjectionSandbox,
+		ResourceID:             "sbx_bound",
+		AdmittedSnapshotDigest: digest("a"),
+		Transition:             ResourceProjectionReplaceSnapshot,
+	}
+	operation := Operation{
+		Principal:                 "tenant-a:principal-a",
+		ID:                        "op_bound",
+		TargetKind:                "sandbox",
+		TargetID:                  "sbx_bound",
+		CanonicalDigest:           "sha256:request",
+		EffectiveSpecDigest:       "sha256:effective",
+		AcceptedAt:                now,
+		RetentionExpiresAt:        now.Add(time.Hour),
+		ResourceProjectionBinding: &binding,
+	}
+	ledger := NewMemoryLedger()
+	accepted, replay, err := ledger.Accept(context.Background(), operation)
+	if err != nil || replay || accepted.ResourceProjectionBinding == nil || *accepted.ResourceProjectionBinding != binding {
+		t.Fatalf("Accept() = %#v, %t, %v; want persisted binding", accepted, replay, err)
+	}
+	accepted.ResourceProjectionBinding.AdmittedSnapshotDigest = digest("f")
+	stored, err := ledger.Get(context.Background(), operation.Principal, operation.ID)
+	if err != nil || stored.ResourceProjectionBinding == nil || *stored.ResourceProjectionBinding != binding {
+		t.Fatalf("Get() after caller mutation = %#v, %v; want immutable persisted binding", stored, err)
+	}
+	changed := operation
+	changed.ResourceProjectionBinding = &ResourceProjectionBinding{
+		Kind:                   binding.Kind,
+		ResourceID:             binding.ResourceID,
+		AdmittedSnapshotDigest: digest("b"),
+		Transition:             binding.Transition,
+	}
+	if _, _, err := ledger.Accept(context.Background(), changed); !errors.Is(err, ErrConflict) {
+		t.Fatalf("Accept(changed admitted snapshot) error = %v; want ErrConflict", err)
+	}
+	invalid := operation
+	invalid.ResourceProjectionBinding = &ResourceProjectionBinding{
+		Kind:                   binding.Kind,
+		ResourceID:             "sbx_other",
+		AdmittedSnapshotDigest: binding.AdmittedSnapshotDigest,
+		Transition:             binding.Transition,
+	}
+	if _, _, err := NewMemoryLedger().Accept(context.Background(), invalid); err == nil {
+		t.Fatal("Accept(mismatched projection target) succeeded")
+	}
+}
+
 func TestMemoryLedgerExpiresLeaseBeforeAcceptingLateHostResult(t *testing.T) {
 	ledger := NewMemoryLedger()
 	now := time.Date(2026, 8, 7, 0, 0, 0, 0, time.UTC)

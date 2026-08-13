@@ -42,20 +42,18 @@ func (ledger *PostgresLedger) Accept(ctx context.Context, operation Operation) (
 			INSERT INTO runtime.sandbox_operations (
 				principal, tenant, operation_id, kind, target_kind, target_id,
 				input_digest, canonical_digest, effective_spec_digest, capability_digest,
-				dispatch_body,
+				dispatch_body, resource_projection_kind, resource_projection_id,
+				resource_projection_admitted_snapshot_digest, resource_projection_transition,
 				state, version, accepted_at, retention_expires_at, cleanup_required,
 				assignment_fencing_token
-			) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, 1, $13, $14, $15, 0)
+			) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, 1, $17, $18, $19, 0)
 			ON CONFLICT DO NOTHING
-			RETURNING principal, tenant, operation_id, kind, target_kind, target_id,
-				input_digest, canonical_digest, effective_spec_digest, capability_digest,
-				dispatch_body,
-				state, version, accepted_at, retention_expires_at, cleanup_required,
-				assignment_host_id, assignment_host_generation, assignment_id,
-				assignment_lease_epoch, assignment_fencing_token, assignment_lease_expires_at`,
+			RETURNING `+selectOperationColumns,
 			operation.Principal, operation.Tenant, operation.ID, operation.Kind, operation.TargetKind,
 			operation.TargetID, operationInputDigest(operation), operation.CanonicalDigest, operation.EffectiveSpecDigest,
-			operation.CapabilityDigest, operation.DispatchBody, StateAccepted, operation.AcceptedAt.UTC(),
+			operation.CapabilityDigest, operation.DispatchBody, resourceProjectionKindValue(operation),
+			resourceProjectionIDValue(operation), resourceProjectionDigestValue(operation),
+			resourceProjectionTransitionValue(operation), StateAccepted, operation.AcceptedAt.UTC(),
 			operation.RetentionExpiresAt.UTC(), operation.CleanupRequired)
 		inserted, err := scanOperation(row)
 		switch {
@@ -76,7 +74,7 @@ func (ledger *PostgresLedger) Accept(ctx context.Context, operation Operation) (
 		if prior.State == StateTombstoned {
 			return ErrOperationIDExpired
 		}
-		if operationInputDigest(prior) != operationInputDigest(operation) {
+		if operationInputDigest(prior) != operationInputDigest(operation) || !sameResourceProjectionBinding(prior.ResourceProjectionBinding, operation.ResourceProjectionBinding) {
 			return ErrConflict
 		}
 		accepted = prior
@@ -382,7 +380,8 @@ func retryablePostgres(err error) bool {
 
 const selectOperationColumns = `principal, tenant, operation_id, kind, target_kind, target_id,
 	input_digest, canonical_digest, effective_spec_digest, capability_digest,
-	dispatch_body,
+	dispatch_body, resource_projection_kind, resource_projection_id,
+	resource_projection_admitted_snapshot_digest, resource_projection_transition,
 	state, version, accepted_at, retention_expires_at, cleanup_required,
 	assignment_host_id, assignment_host_generation, assignment_id,
 	assignment_lease_epoch, assignment_fencing_token, assignment_lease_expires_at`
@@ -427,10 +426,15 @@ func scanOperation(row rowScanner) (Operation, error) {
 	var hostID *string
 	var assignmentID *string
 	var leaseExpiresAt *time.Time
+	var projectionKind *string
+	var projectionID *string
+	var projectionDigest *string
+	var projectionTransition *string
 	err := row.Scan(
 		&operation.Principal, &operation.Tenant, &operation.ID, &operation.Kind, &operation.TargetKind,
 		&operation.TargetID, &operation.InputDigest, &operation.CanonicalDigest, &operation.EffectiveSpecDigest,
-		&operation.CapabilityDigest, &operation.DispatchBody, &operation.State, &version,
+		&operation.CapabilityDigest, &operation.DispatchBody, &projectionKind, &projectionID,
+		&projectionDigest, &projectionTransition, &operation.State, &version,
 		&operation.AcceptedAt, &operation.RetentionExpiresAt,
 		&operation.CleanupRequired, &hostID, &hostGeneration, &assignmentID,
 		&leaseEpoch, &fence, &leaseExpiresAt,
@@ -456,7 +460,45 @@ func scanOperation(row rowScanner) (Operation, error) {
 	if leaseExpiresAt != nil {
 		operation.Assignment.LeaseExpiresAt = leaseExpiresAt.UTC()
 	}
+	if projectionKind != nil || projectionID != nil || projectionDigest != nil || projectionTransition != nil {
+		if projectionKind == nil || projectionID == nil || projectionDigest == nil || projectionTransition == nil {
+			return Operation{}, errors.New("scan sandbox operation: incomplete persisted resource projection binding")
+		}
+		binding := ResourceProjectionBinding{Kind: ResourceProjectionKind(*projectionKind), ResourceID: *projectionID, AdmittedSnapshotDigest: *projectionDigest, Transition: ResourceProjectionTransition(*projectionTransition)}
+		if !validResourceProjectionBinding(binding) || operation.TargetKind != string(binding.Kind) || operation.TargetID != binding.ResourceID {
+			return Operation{}, errors.New("scan sandbox operation: invalid persisted resource projection binding")
+		}
+		operation.ResourceProjectionBinding = &binding
+	}
 	return operation, nil
+}
+
+func resourceProjectionKindValue(operation Operation) any {
+	if operation.ResourceProjectionBinding == nil {
+		return nil
+	}
+	return string(operation.ResourceProjectionBinding.Kind)
+}
+
+func resourceProjectionIDValue(operation Operation) any {
+	if operation.ResourceProjectionBinding == nil {
+		return nil
+	}
+	return operation.ResourceProjectionBinding.ResourceID
+}
+
+func resourceProjectionDigestValue(operation Operation) any {
+	if operation.ResourceProjectionBinding == nil {
+		return nil
+	}
+	return operation.ResourceProjectionBinding.AdmittedSnapshotDigest
+}
+
+func resourceProjectionTransitionValue(operation Operation) any {
+	if operation.ResourceProjectionBinding == nil {
+		return nil
+	}
+	return string(operation.ResourceProjectionBinding.Transition)
 }
 
 func collectOutbox(rows pgx.Rows, limit int) ([]OutboxRecord, error) {

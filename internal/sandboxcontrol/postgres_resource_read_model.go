@@ -82,7 +82,7 @@ func (model *PostgresResourceReadModel) acceptProjection(ctx context.Context, op
 	if err := validateOperation(operation); err != nil {
 		return Operation{}, false, err
 	}
-	if operation.TargetKind != kind || operation.TargetID != resourceID {
+	if operation.TargetKind != kind || operation.TargetID != resourceID || !matchesAdmittedResourceProjection(operation.ResourceProjectionBinding, ResourceProjectionKind(kind), resourceID, body) {
 		return Operation{}, false, ErrConflict
 	}
 	var accepted Operation
@@ -92,14 +92,18 @@ func (model *PostgresResourceReadModel) acceptProjection(ctx context.Context, op
 			INSERT INTO runtime.sandbox_operations (
 				principal, tenant, operation_id, kind, target_kind, target_id,
 				input_digest, canonical_digest, effective_spec_digest, capability_digest,
-				dispatch_body, state, version, accepted_at, retention_expires_at,
+				dispatch_body, resource_projection_kind, resource_projection_id,
+				resource_projection_admitted_snapshot_digest, resource_projection_transition,
+				state, version, accepted_at, retention_expires_at,
 				cleanup_required, assignment_fencing_token
-			) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, 1, $13, $14, $15, 0)
+			) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, 1, $17, $18, $19, 0)
 			ON CONFLICT DO NOTHING
 			RETURNING `+selectOperationColumns,
 			operation.Principal, operation.Tenant, operation.ID, operation.Kind, operation.TargetKind, operation.TargetID,
 			operationInputDigest(operation), operation.CanonicalDigest, operation.EffectiveSpecDigest, operation.CapabilityDigest,
-			operation.DispatchBody, StateAccepted, operation.AcceptedAt.UTC(), operation.RetentionExpiresAt.UTC(), operation.CleanupRequired)
+			operation.DispatchBody, resourceProjectionKindValue(operation), resourceProjectionIDValue(operation),
+			resourceProjectionDigestValue(operation), resourceProjectionTransitionValue(operation),
+			StateAccepted, operation.AcceptedAt.UTC(), operation.RetentionExpiresAt.UTC(), operation.CleanupRequired)
 		inserted, err := scanOperation(row)
 		switch {
 		case err == nil:
@@ -119,7 +123,7 @@ func (model *PostgresResourceReadModel) acceptProjection(ctx context.Context, op
 		if prior.State == StateTombstoned {
 			return ErrOperationIDExpired
 		}
-		if operationInputDigest(prior) != operationInputDigest(operation) || prior.TargetKind != kind || prior.TargetID != resourceID {
+		if operationInputDigest(prior) != operationInputDigest(operation) || prior.TargetKind != kind || prior.TargetID != resourceID || !sameResourceProjectionBinding(prior.ResourceProjectionBinding, operation.ResourceProjectionBinding) {
 			return ErrConflict
 		}
 		// Version one is the initial acceptance snapshot and must match exactly.
@@ -155,7 +159,7 @@ func (model *PostgresResourceReadModel) transitionProjection(ctx context.Context
 		if current.Version != version || !permits(current.State, next) {
 			return ErrInvalidTransition
 		}
-		if current.TargetKind != kind || current.TargetID != resourceID {
+		if current.TargetKind != kind || current.TargetID != resourceID || current.ResourceProjectionBinding == nil || current.ResourceProjectionBinding.Transition != ResourceProjectionReplaceSnapshot {
 			return ErrConflict
 		}
 		current.State, current.Version = next, current.Version+1
@@ -169,6 +173,10 @@ func (model *PostgresResourceReadModel) transitionProjection(ctx context.Context
 		return insertOutbox(ctx, tx, current, OutboxStateChanged)
 	})
 	return updated, err
+}
+
+func matchesAdmittedResourceProjection(binding *ResourceProjectionBinding, kind ResourceProjectionKind, resourceID string, body []byte) bool {
+	return binding != nil && binding.Kind == kind && binding.ResourceID == resourceID && binding.AdmittedSnapshotDigest == projectionSnapshotDigest(body) && binding.Transition == ResourceProjectionReplaceSnapshot
 }
 
 func (model *PostgresResourceReadModel) GetSandbox(ctx context.Context, principal string, id sandbox.SandboxID) (sandbox.SandboxInfo, error) {

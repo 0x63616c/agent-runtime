@@ -2,6 +2,7 @@ package sandboxcontrol
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"testing"
 
@@ -15,6 +16,35 @@ func TestOperationLedgerDoesNotImplyAResourceReadModel(t *testing.T) {
 	var store DurableStore = NewMemoryLedger()
 	if _, ok := store.(ResourceReadModel); ok {
 		t.Fatal("memory operation ledger unexpectedly implements resource read model")
+	}
+}
+
+func TestResourceProjectionBindingPinsOnlyItsAdmittedSnapshot(t *testing.T) {
+	initial := sandbox.SandboxInfo{ID: "sbx_01", Desired: sandbox.SandboxActive, Actual: sandbox.SandboxPending}
+	body, err := json.Marshal(initial)
+	if err != nil {
+		t.Fatalf("marshal initial snapshot: %v", err)
+	}
+	binding := ResourceProjectionBinding{
+		Kind:                   ResourceProjectionSandbox,
+		ResourceID:             string(initial.ID),
+		AdmittedSnapshotDigest: projectionSnapshotDigest(body),
+		Transition:             ResourceProjectionReplaceSnapshot,
+	}
+	if !matchesAdmittedResourceProjection(&binding, ResourceProjectionSandbox, string(initial.ID), body) {
+		t.Fatal("admitted snapshot did not match its binding")
+	}
+	changed := initial
+	changed.Actual = sandbox.SandboxProvisioning
+	changedBody, err := json.Marshal(changed)
+	if err != nil {
+		t.Fatalf("marshal changed snapshot: %v", err)
+	}
+	if matchesAdmittedResourceProjection(&binding, ResourceProjectionSandbox, string(initial.ID), changedBody) {
+		t.Fatal("changed snapshot matched an immutable admitted digest")
+	}
+	if matchesAdmittedResourceProjection(&binding, ResourceProjectionProcess, string(initial.ID), body) {
+		t.Fatal("different resource kind matched the binding")
 	}
 }
 
