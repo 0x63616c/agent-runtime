@@ -1,0 +1,51 @@
+# Linux/amd64-only, offline-capable builder for the immutable Firecracker
+# fixture candidate.  The build script supplies fixture-source.bundle from a
+# clean, exact repository revision; the image restores that revision locally
+# and records it in the OCI metadata below.  The disposable Job has no
+# network, so every tool and Go module needed by its assembly scripts is
+# installed or cached while this image is built.
+FROM docker.io/library/golang:1.26.0-alpine3.22@sha256:169d3991a4f795124a88b33c73549955a3d856e26e8504b5530c30bd245f9f1b
+
+ARG TARGETOS
+ARG TARGETARCH
+ARG SOURCE_REVISION
+ARG SOURCE_DATE_EPOCH
+
+RUN test "$TARGETOS" = linux && test "$TARGETARCH" = amd64 && \
+    test -n "$SOURCE_REVISION" && test -n "$SOURCE_DATE_EPOCH" && \
+    apk add --no-cache \
+      --repository https://dl-cdn.alpinelinux.org/alpine/v3.22/main \
+      bash=5.2.37-r0 \
+      binutils=2.44-r3 \
+      coreutils=9.7-r1 \
+      e2fsprogs=1.47.2-r2 \
+      git=2.49.1-r0 \
+      python3=3.12.13-r0 \
+      tar=1.35-r3
+
+# A Git bundle lets the build script prove that this is the requested commit
+# without copying a mutable host .git directory into the image.  It also makes
+# the runtime Job's clean-checkout assertion meaningful while remaining fully
+# self-contained when Kubernetes disables network access.
+WORKDIR /workspace
+COPY fixture-source.bundle /tmp/fixture-source.bundle
+RUN git init --quiet /workspace && \
+    git -C /workspace fetch --quiet /tmp/fixture-source.bundle HEAD:refs/heads/source && \
+    git -C /workspace checkout --quiet --detach "$SOURCE_REVISION" && \
+    test "$(git -C /workspace rev-parse HEAD)" = "$SOURCE_REVISION" && \
+    test -z "$(git -C /workspace status --porcelain)" && \
+    rm -f /tmp/fixture-source.bundle
+
+# Cache every module before the Job's network namespace is disabled.  The
+# fixture scripts build only the static guest agent from this checked-out tree.
+RUN go mod download && go mod verify
+
+ENV SOURCE_DATE_EPOCH=$SOURCE_DATE_EPOCH \
+    GONOSUMDB='*' \
+    GOPROXY=off
+
+LABEL org.opencontainers.image.source="https://github.com/0x63616c/agent-runtime" \
+      org.opencontainers.image.revision="${SOURCE_REVISION}" \
+      org.opencontainers.image.title="agent-runtime-firecracker-fixture-builder"
+
+USER 0:0
