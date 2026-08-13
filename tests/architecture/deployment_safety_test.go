@@ -311,7 +311,7 @@ var _ = Describe("M1 deployment safety boundaries", func() {
 			`AGENT_RUNTIME_TWO_STACK_DIAGNOSTICS`,
 			`readiness_timeout=12m`,
 			`write_safe_diagnostic_summary`,
-			`diagnostic-summary/v1`,
+			`diagnostic-summary/v2`,
 			`runtime_role_status`,
 			`capture_plan_failure_diagnostics`,
 			`--self-test-diagnostics`,
