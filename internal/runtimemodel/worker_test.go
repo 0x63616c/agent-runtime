@@ -1,17 +1,21 @@
 package runtimemodel_test
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"testing"
 	"time"
 
 	"github.com/0x63616c/agent-runtime/internal/clock"
+	"github.com/0x63616c/agent-runtime/internal/providers/codexsubscription"
 	"github.com/0x63616c/agent-runtime/internal/runtimecontent"
 	"github.com/0x63616c/agent-runtime/internal/runtimemodel"
 	"github.com/0x63616c/agent-runtime/internal/runtimestate"
 	"github.com/0x63616c/agent-runtime/internal/runtimetool"
+	"github.com/0x63616c/agent-runtime/internal/subscriptioncanary"
 	agentruntime "github.com/0x63616c/agent-runtime/sdk/go"
 )
 
@@ -147,6 +151,125 @@ func TestWorkerCancellationLeavesClaimedInvocationForExactRecovery(t *testing.T)
 	}
 	if record := invocationOutbox(t, context.Background(), store, tenant); record.State != runtimestate.OutboxClaimed || record.ClaimUntil == nil {
 		t.Fatalf("cancelled invocation outbox = %#v, want retained claimed record", record)
+	}
+}
+
+func TestSubscriptionCanarySemanticE2ECancelsThenReconcilesWithoutOpaqueValues(t *testing.T) {
+	const capability = "opaque-capability-value-must-never-persist"
+	const credential = "opaque-credential-value-must-never-persist"
+	values := map[string]string{
+		"AR_SUBSCRIPTION_CANARY_CAPABILITY_ENV": "SUBSCRIPTION_CANARY_CAPABILITY",
+		"AR_SUBSCRIPTION_CANARY_CREDENTIAL_ENV": "SUBSCRIPTION_CANARY_CREDENTIAL",
+		"SUBSCRIPTION_CANARY_CAPABILITY":        capability,
+		"SUBSCRIPTION_CANARY_CREDENTIAL":        credential,
+		"AR_SUBSCRIPTION_CANARY_MODEL_PROFILE":  "balanced",
+		"AR_SUBSCRIPTION_CANARY_REVISION":       "abcdef0123456789abcdef0123456789abcdef01",
+		"AR_SUBSCRIPTION_CANARY_TIMEOUT":        "30s",
+		"AR_SUBSCRIPTION_CANARY_CANCEL_MODE":    "explicit-cancel",
+		"AR_SUBSCRIPTION_CANARY_RECOVERY_MODE":  "reconcile-on-restart",
+	}
+	config, err := subscriptioncanary.Load(func(name string) (string, bool) { value, found := values[name]; return value, found })
+	if err != nil {
+		t.Fatalf("load subscription canary preflight: %v", err)
+	}
+	assertNoOpaqueCanaryValues(t, []byte(fmt.Sprintf("%#v", config)), capability, credential)
+
+	now := time.Date(2026, 8, 12, 0, 0, 0, 0, time.UTC)
+	lifecycle := codexsubscription.NewLifecycle()
+	reference := codexsubscription.CredentialContextRef("canary-context")
+	if _, err := lifecycle.Register(reference, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := lifecycle.BeginLogin(reference, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := lifecycle.CompleteLogin(reference, codexsubscription.LifecycleReady, now); err != nil {
+		t.Fatal(err)
+	}
+	status, err := lifecycle.Status(reference)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertNoOpaqueCanaryValues(t, []byte(fmt.Sprintf("%#v", status)), capability, credential)
+
+	ctx := context.Background()
+	objects := &modelObjects{values: map[string][]byte{}}
+	content, err := runtimecontent.New("runtime-content", objects)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tenant, _ := runtimecontent.ParseTenantID("tenant-a")
+	principal, _ := runtimecontent.ParsePrincipalID("principal-a")
+	compiler, err := runtimestate.NewCompiler(content)
+	if err != nil {
+		t.Fatal(err)
+	}
+	source, err := clock.NewFake(now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	planner, err := runtimestate.NewRuntimeStatePlanner(source, &modelIDs{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := runtimestate.NewMemoryRuntimeStateStore(planner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _, invocation := createModelIntent(t, ctx, content, compiler, store, tenant, principal)
+
+	var logs bytes.Buffer
+	cancelContext, cancel := context.WithCancel(ctx)
+	provider := &canarySemanticAdapter{lifecycle: lifecycle, reference: reference, cancel: cancel, logger: slog.New(slog.NewJSONHandler(&logs, nil))}
+	profile, err := runtimemodel.NewProfileAdapter(runtimemodel.ProfileAdapterConfig{Profiles: []runtimemodel.ProviderProfile{{Profile: config.ModelProfile, Provider: "subscription-fixture", Adapter: provider}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	worker, err := runtimemodel.NewWorker(runtimemodel.WorkerConfig{Store: store, Tenants: store, Compiler: compiler, Planner: planner, Clock: source, Content: content, Adapter: profile, Claimer: "model-worker"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := worker.ScanOnce(cancelContext); !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancelled canary invoke = %v, want context cancellation", err)
+	}
+	if provider.invocations != 1 || provider.reconciliations != 0 {
+		t.Fatalf("cancelled canary calls = invoke=%d reconcile=%d", provider.invocations, provider.reconciliations)
+	}
+	if err := source.Advance(2*time.Minute + time.Nanosecond); err != nil {
+		t.Fatal(err)
+	}
+	restarted, err := runtimemodel.NewWorker(runtimemodel.WorkerConfig{Store: store, Tenants: store, Compiler: compiler, Planner: planner, Clock: source, Content: content, Adapter: profile, Claimer: "restarted-model-worker"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := restarted.ScanOnce(ctx); err != nil {
+		t.Fatalf("reconcile restarted canary: %v", err)
+	}
+	if provider.invocations != 1 || provider.reconciliations != 1 || provider.last.OperationID != invocation.OperationID {
+		t.Fatalf("restarted canary calls = invoke=%d reconcile=%d operation=%q", provider.invocations, provider.reconciliations, provider.last.OperationID)
+	}
+
+	state, err := store.LoadRuntimeState(ctx, runtimestate.MutationScope{Tenant: tenant, Authority: runtimestate.AuthorityRuntimeWorker})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(state.Invocations) != 1 || state.Invocations[0].State != runtimestate.InvocationSucceeded {
+		t.Fatalf("restarted canary invocation state = %#v", state.Invocations)
+	}
+	assertNoOpaqueCanaryValues(t, []byte(fmt.Sprintf("%#v", state)), capability, credential)
+	assertNoOpaqueCanaryValues(t, logs.Bytes(), capability, credential)
+	for key, value := range objects.values {
+		assertNoOpaqueCanaryValues(t, []byte(key), capability, credential)
+		assertNoOpaqueCanaryValues(t, value, capability, credential)
+	}
+}
+
+func assertNoOpaqueCanaryValues(t *testing.T, value []byte, opaqueValues ...string) {
+	t.Helper()
+	for _, opaque := range opaqueValues {
+		if bytes.Contains(value, []byte(opaque)) {
+			t.Fatal("opaque canary value reached a diagnostic or persisted boundary")
+		}
 	}
 }
 
@@ -293,6 +416,37 @@ type cancellingAdapter struct {
 	cancel          context.CancelFunc
 	invocations     int
 	reconciliations int
+}
+
+type canarySemanticAdapter struct {
+	lifecycle       *codexsubscription.Lifecycle
+	reference       codexsubscription.CredentialContextRef
+	cancel          context.CancelFunc
+	logger          *slog.Logger
+	invocations     int
+	reconciliations int
+	last            runtimemodel.Request
+}
+
+func (adapter *canarySemanticAdapter) Invoke(_ context.Context, request runtimemodel.Request) (runtimemodel.Response, error) {
+	if _, err := adapter.lifecycle.Status(adapter.reference); err != nil {
+		return runtimemodel.Response{}, err
+	}
+	adapter.invocations++
+	adapter.last = request
+	adapter.logger.Info("subscription fixture invoke cancelled", "operation_id", request.OperationID)
+	adapter.cancel()
+	return runtimemodel.Response{}, context.Canceled
+}
+
+func (adapter *canarySemanticAdapter) Reconcile(_ context.Context, request runtimemodel.Request) (runtimemodel.Response, error) {
+	if status, err := adapter.lifecycle.Status(adapter.reference); err != nil || status.State != codexsubscription.LifecycleReady {
+		return runtimemodel.Response{}, errors.New("reconcile subscription fixture: redacted lifecycle is not ready")
+	}
+	adapter.reconciliations++
+	adapter.last = request
+	adapter.logger.Info("subscription fixture reconciled", "operation_id", request.OperationID)
+	return runtimemodel.Response{Output: []byte("reconciled model output")}, nil
 }
 
 func (adapter *cancellingAdapter) Invoke(_ context.Context, _ runtimemodel.Request) (runtimemodel.Response, error) {

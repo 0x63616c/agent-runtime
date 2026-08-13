@@ -74,6 +74,11 @@ runtime-operations-preflight:
 subscription-model-canary-preflight:
     go run ./cmd/subscription-model-canary -preflight
 
+# Exercises the offline fake-provider cancellation and restart-reconciliation
+# seam. It never reads real credentials, calls a provider, or creates evidence.
+subscription-model-canary-semantic-e2e:
+    go test ./internal/runtimemodel -run TestSubscriptionCanarySemanticE2ECancelsThenReconcilesWithoutOpaqueValues -count=1
+
 # Starts a disposable two-PostgreSQL + TLS audit-sink composition and exercises
 # the exact runner-contract preflight without creating operational evidence.
 runtime-operations-rehearsal:
