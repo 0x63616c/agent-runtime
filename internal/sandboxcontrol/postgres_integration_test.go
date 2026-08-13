@@ -719,6 +719,22 @@ func TestPostgresResourceReadModelProjectsSandboxAndProcessAtomically(t *testing
 	if err != nil || gotProcess.State != sandbox.ProcessRunning || gotProcess.SandboxID != initialSandbox.ID {
 		t.Fatalf("GetProcess() = %#v, %v; want atomically updated process metadata", gotProcess, err)
 	}
+
+	initialVolume := sandbox.VolumeInfo{ID: "vol_projection", SizeBytes: 1024, Inodes: 64, RetentionExpiresAt: now.Add(time.Hour)}
+	volumeBinding := testResourceProjectionBinding(t, ResourceProjectionVolume, string(initialVolume.ID), initialVolume)
+	volumeOperation := Operation{Principal: sandboxOperation.Principal, Tenant: sandboxOperation.Tenant, ID: "op_projection_volume", Kind: "create-volume", TargetKind: "volume", TargetID: string(initialVolume.ID), InputDigest: digest("2"), CanonicalDigest: digest("3"), EffectiveSpecDigest: digest("4"), CapabilityDigest: digest("5"), DispatchBody: `{"version":"sandbox.control/v1"}`, AcceptedAt: now, RetentionExpiresAt: now.Add(time.Hour), CleanupRequired: true, ResourceProjectionBinding: &volumeBinding}
+	volumeAccepted, replay, err := model.AcceptVolume(ctx, volumeOperation, initialVolume)
+	if err != nil || replay || volumeAccepted.State != StateAccepted || volumeAccepted.ResourceProjectionBinding == nil || volumeAccepted.ResourceProjectionBinding.Kind != ResourceProjectionVolume {
+		t.Fatalf("AcceptVolume() = %#v, %t, %v", volumeAccepted, replay, err)
+	}
+	gotVolume, err := model.GetVolume(ctx, volumeOperation.Principal, initialVolume.ID)
+	if err != nil || !reflect.DeepEqual(gotVolume, initialVolume) {
+		t.Fatalf("GetVolume() = %#v, %v; want %#v", gotVolume, err, initialVolume)
+	}
+	listedVolumes, err := model.ListVolumes(ctx, volumeOperation.Principal, sandbox.Page{Limit: 1})
+	if err != nil || len(listedVolumes.Items) != 1 || !reflect.DeepEqual(listedVolumes.Items[0], initialVolume) {
+		t.Fatalf("ListVolumes() = %#v, %v", listedVolumes, err)
+	}
 }
 
 func testResourceProjectionBinding(t *testing.T, kind ResourceProjectionKind, resourceID string, value any) ResourceProjectionBinding {

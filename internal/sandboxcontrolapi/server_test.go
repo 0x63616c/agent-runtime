@@ -129,6 +129,55 @@ func TestControlHandlerRejectsChangedInputOtherPrincipalAndBindingMismatch(t *te
 	}
 }
 
+func TestControlHandlerAdmitsStableOpaqueVolumeProjection(t *testing.T) {
+	now := time.Date(2030, 8, 7, 2, 0, 0, 0, time.UTC)
+	fakeClock, _ := clock.NewFake(now)
+	store := &volumeAdmissionStore{MemoryLedger: sandboxcontrol.NewMemoryLedger()}
+	authenticator, err := NewStaticAuthenticator("Bearer token", Identity{Authority: "issuer", Tenant: "tenant", Subject: "subject", Principal: "tenant:subject"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := newTestServer(t, testServerConfig(store, authenticator, fakeClock, bytes.Repeat([]byte{0x55}, 32)))
+	client := newPublicClient(t, server, "token")
+	request := sandbox.OperationRequest{ID: "op_volume_admission", Kind: sandbox.OperationCreateVolume, CreateVolume: &sandbox.CreateVolumeRequest{Spec: sandbox.VolumeSpec{SizeBytes: 512, Inodes: 8}}}
+	if _, err := client.Submit(context.Background(), request); err != nil {
+		t.Fatalf("Submit(create-volume) error = %v", err)
+	}
+	operation, err := client.GetOperation(context.Background(), request.ID)
+	if err != nil || operation.Target.Kind != sandbox.TargetVolume || operation.Target.VolumeID == "" || string(operation.Target.VolumeID) == string(request.ID) {
+		t.Fatalf("GetOperation(create-volume) = %#v, %v", operation, err)
+	}
+	if _, err := client.Submit(context.Background(), request); err != nil {
+		t.Fatalf("Submit(create-volume retry) error = %v", err)
+	}
+	if store.volume.ID != operation.Target.VolumeID || store.volume.SizeBytes != 512 || store.volume.Inodes != 8 || store.binding == nil || store.binding.Kind != sandboxcontrol.ResourceProjectionVolume || store.binding.ResourceID != string(operation.Target.VolumeID) {
+		t.Fatalf("admitted volume projection = %#v binding=%#v", store.volume, store.binding)
+	}
+}
+
+// volumeAdmissionStore is a test-only control admission seam. Production uses
+// PostgresResourceReadModel, whose acceptance/projection transaction is
+// covered by the PostgreSQL integration suite.
+type volumeAdmissionStore struct {
+	*sandboxcontrol.MemoryLedger
+	volume  sandbox.VolumeInfo
+	binding *sandboxcontrol.ResourceProjectionBinding
+}
+
+func (store *volumeAdmissionStore) AcceptVolume(ctx context.Context, operation sandboxcontrol.Operation, value sandbox.VolumeInfo) (sandboxcontrol.Operation, bool, error) {
+	accepted, replay, err := store.Accept(ctx, operation)
+	if err == nil && !replay {
+		store.volume = value
+		binding := *operation.ResourceProjectionBinding
+		store.binding = &binding
+	}
+	return accepted, replay, err
+}
+
+func (store *volumeAdmissionStore) TransitionVolume(ctx context.Context, principal, operationID string, version uint64, next sandboxcontrol.State, value sandbox.VolumeInfo) (sandboxcontrol.Operation, error) {
+	return sandboxcontrol.Operation{}, errors.New("test volume transition is not implemented")
+}
+
 func TestControlHandlerBoundsBodiesAndHonorsCancelledWait(t *testing.T) {
 	now := time.Date(2030, 8, 7, 2, 0, 0, 0, time.UTC)
 	fakeClock, _ := clock.NewFake(now)

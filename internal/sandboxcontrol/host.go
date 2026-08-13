@@ -584,11 +584,19 @@ func (ledger *MemoryLedger) fenceHostLocked(hostID string, generation uint64, ne
 
 func envelopeFor(operation Operation, issuedAt, expiresAt time.Time, seed DeliverySeed) sandboxhostprotocol.Envelope {
 	sandboxID := ""
+	volumeID := ""
+	snapshotID := ""
 	if operation.TargetKind == "sandbox" {
 		sandboxID = operation.TargetID
 	}
+	if operation.TargetKind == "volume" {
+		volumeID = operation.TargetID
+	}
+	if operation.TargetKind == "snapshot" {
+		snapshotID = operation.TargetID
+	}
 	payload := []byte(operation.DispatchBody)
-	return sandboxhostprotocol.Envelope{ProtocolVersion: sandboxhostprotocol.Version, EnvelopeID: seed.EnvelopeID, DeliveryID: seed.DeliveryID, Nonce: seed.Nonce, IssuedAt: issuedAt.UTC(), ExpiresAt: expiresAt.UTC(), HostID: operation.Assignment.HostID, HostGeneration: operation.Assignment.HostGeneration, AssignmentID: operation.Assignment.AssignmentID, LeaseEpoch: operation.Assignment.LeaseEpoch, FencingToken: operation.Assignment.FencingToken, Tenant: operation.Tenant, Principal: operation.Principal, SandboxID: sandboxID, OperationID: operation.ID, OperationKind: operation.Kind, EffectiveSpecDigest: operation.EffectiveSpecDigest, CapabilityDigest: operation.CapabilityDigest, CanonicalRequestDigest: operation.CanonicalDigest, SequenceContract: "host-proposed/control-owned-v1", PayloadDigest: sandboxhostprotocol.Digest(payload), Payload: payload}
+	return sandboxhostprotocol.Envelope{ProtocolVersion: sandboxhostprotocol.Version, EnvelopeID: seed.EnvelopeID, DeliveryID: seed.DeliveryID, Nonce: seed.Nonce, IssuedAt: issuedAt.UTC(), ExpiresAt: expiresAt.UTC(), HostID: operation.Assignment.HostID, HostGeneration: operation.Assignment.HostGeneration, AssignmentID: operation.Assignment.AssignmentID, LeaseEpoch: operation.Assignment.LeaseEpoch, FencingToken: operation.Assignment.FencingToken, Tenant: operation.Tenant, Principal: operation.Principal, SandboxID: sandboxID, VolumeID: volumeID, SnapshotID: snapshotID, OperationID: operation.ID, OperationKind: operation.Kind, EffectiveSpecDigest: operation.EffectiveSpecDigest, CapabilityDigest: operation.CapabilityDigest, CanonicalRequestDigest: operation.CanonicalDigest, SequenceContract: "host-proposed/control-owned-v1", PayloadDigest: sandboxhostprotocol.Digest(payload), Payload: payload}
 }
 
 func dispatchFrom(operation Operation, fields hostAssignmentFields) HostDispatch {

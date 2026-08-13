@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"math"
+	"time"
 
 	"github.com/0x63616c/agent-runtime/sandbox"
 	"github.com/cockroachdb/errors"
@@ -26,6 +27,15 @@ type PostgresResourceReadModel struct {
 	ledger *PostgresLedger
 }
 
+// ResourceAdmissionStore is the durable admission seam for a complete
+// resource projection. It deliberately has no public transport of its own:
+// callers must still pass a canonical operation through the control service.
+type ResourceAdmissionStore interface {
+	DurableStore
+	AcceptVolume(context.Context, Operation, sandbox.VolumeInfo) (Operation, bool, error)
+	TransitionVolume(context.Context, string, string, uint64, State, sandbox.VolumeInfo) (Operation, error)
+}
+
 // NewPostgresResourceReadModel binds a preconfigured pool. The operator must
 // have applied the sandbox-control migrations before it is used.
 func NewPostgresResourceReadModel(pool *pgxpool.Pool) (*PostgresResourceReadModel, error) {
@@ -34,6 +44,43 @@ func NewPostgresResourceReadModel(pool *pgxpool.Pool) (*PostgresResourceReadMode
 		return nil, err
 	}
 	return &PostgresResourceReadModel{ledger: ledger}, nil
+}
+
+// The ordinary ledger methods remain available so this model can be used as
+// the control service's single durable store. Resource-aware callers opt into
+// the typed methods below; all other operations retain the ledger behavior.
+func (model *PostgresResourceReadModel) Accept(ctx context.Context, operation Operation) (Operation, bool, error) {
+	return model.ledger.Accept(ctx, operation)
+}
+func (model *PostgresResourceReadModel) Get(ctx context.Context, principal, id string) (Operation, error) {
+	return model.ledger.Get(ctx, principal, id)
+}
+func (model *PostgresResourceReadModel) Transition(ctx context.Context, principal, id string, version uint64, next State) (Operation, error) {
+	return model.ledger.Transition(ctx, principal, id, version, next)
+}
+func (model *PostgresResourceReadModel) Assign(ctx context.Context, principal, id, hostID string, expiresAt time.Time) (Operation, error) {
+	return model.ledger.Assign(ctx, principal, id, hostID, expiresAt)
+}
+func (model *PostgresResourceReadModel) RecordHostResult(ctx context.Context, principal, id string, result HostResult) (Operation, error) {
+	return model.ledger.RecordHostResult(ctx, principal, id, result)
+}
+func (model *PostgresResourceReadModel) RecoverExpiredAssignments(ctx context.Context, now time.Time, limit int) ([]Operation, error) {
+	return model.ledger.RecoverExpiredAssignments(ctx, now, limit)
+}
+func (model *PostgresResourceReadModel) ClaimExpiredCleanup(ctx context.Context, now time.Time, limit int) ([]Operation, error) {
+	return model.ledger.ClaimExpiredCleanup(ctx, now, limit)
+}
+func (model *PostgresResourceReadModel) Reap(ctx context.Context, now time.Time, limit int) ([]Operation, error) {
+	return model.ledger.Reap(ctx, now, limit)
+}
+func (model *PostgresResourceReadModel) ReadOutbox(ctx context.Context, after uint64, limit int) ([]OutboxRecord, error) {
+	return model.ledger.ReadOutbox(ctx, after, limit)
+}
+func (model *PostgresResourceReadModel) ReadOperationOutbox(ctx context.Context, principal, id string, after uint64, limit int) ([]OutboxRecord, error) {
+	return model.ledger.ReadOperationOutbox(ctx, principal, id, after, limit)
+}
+func (model *PostgresResourceReadModel) ReplayOutput(ctx context.Context, principal string, processID sandbox.ProcessID, after sandbox.OutputCursor) ([]sandbox.OutputEvent, error) {
+	return model.ledger.ReplayOutput(ctx, principal, processID, after)
 }
 
 // AcceptSandbox durably accepts a sandbox operation and its initial complete
@@ -57,6 +104,16 @@ func (model *PostgresResourceReadModel) AcceptProcess(ctx context.Context, opera
 	return model.acceptProjection(ctx, operation, "process", string(value.ID), body)
 }
 
+// AcceptVolume durably accepts a volume operation and its initial complete
+// metadata in one transaction.
+func (model *PostgresResourceReadModel) AcceptVolume(ctx context.Context, operation Operation, value sandbox.VolumeInfo) (Operation, bool, error) {
+	body, err := marshalResourceProjection(ctx, operation.Principal, string(value.ID), value)
+	if err != nil {
+		return Operation{}, false, err
+	}
+	return model.acceptProjection(ctx, operation, "volume", string(value.ID), body)
+}
+
 // TransitionSandbox changes one sandbox operation and replaces its complete
 // metadata projection atomically.
 func (model *PostgresResourceReadModel) TransitionSandbox(ctx context.Context, principal, operationID string, version uint64, next State, value sandbox.SandboxInfo) (Operation, error) {
@@ -75,6 +132,16 @@ func (model *PostgresResourceReadModel) TransitionProcess(ctx context.Context, p
 		return Operation{}, err
 	}
 	return model.transitionProjection(ctx, principal, operationID, version, next, "process", string(value.ID), body)
+}
+
+// TransitionVolume changes one volume operation and replaces its complete
+// metadata projection atomically.
+func (model *PostgresResourceReadModel) TransitionVolume(ctx context.Context, principal, operationID string, version uint64, next State, value sandbox.VolumeInfo) (Operation, error) {
+	body, err := marshalResourceProjection(ctx, principal, string(value.ID), value)
+	if err != nil {
+		return Operation{}, err
+	}
+	return model.transitionProjection(ctx, principal, operationID, version, next, "volume", string(value.ID), body)
 }
 
 func (model *PostgresResourceReadModel) acceptProjection(ctx context.Context, operation Operation, kind, resourceID string, body []byte) (Operation, bool, error) {
@@ -179,6 +246,21 @@ func matchesAdmittedResourceProjection(binding *ResourceProjectionBinding, kind 
 	return binding != nil && binding.Kind == kind && binding.ResourceID == resourceID && binding.AdmittedSnapshotDigest == projectionSnapshotDigest(body) && binding.Transition == ResourceProjectionReplaceSnapshot
 }
 
+// NewResourceProjectionBinding derives the immutable admission-time binding
+// from exactly the complete metadata that will be persisted. It is useful to
+// the control admission layer before it selects the typed durable method.
+func NewResourceProjectionBinding(ctx context.Context, principal string, kind ResourceProjectionKind, resourceID string, value any) (ResourceProjectionBinding, error) {
+	body, err := marshalResourceProjection(ctx, principal, resourceID, value)
+	if err != nil {
+		return ResourceProjectionBinding{}, err
+	}
+	binding := ResourceProjectionBinding{Kind: kind, ResourceID: resourceID, AdmittedSnapshotDigest: projectionSnapshotDigest(body), Transition: ResourceProjectionReplaceSnapshot}
+	if !validResourceProjectionBinding(binding) {
+		return ResourceProjectionBinding{}, ErrConflict
+	}
+	return binding, nil
+}
+
 func (model *PostgresResourceReadModel) GetSandbox(ctx context.Context, principal string, id sandbox.SandboxID) (sandbox.SandboxInfo, error) {
 	if err := validateProjectionInput(ctx, principal, string(id)); err != nil {
 		return sandbox.SandboxInfo{}, err
@@ -207,6 +289,54 @@ func (model *PostgresResourceReadModel) GetProcess(ctx context.Context, principa
 		return sandbox.ProcessInfo{}, errors.New("read sandbox resource projection: invalid persisted process metadata")
 	}
 	return copyProcessInfo(value), nil
+}
+
+// GetVolume returns the complete principal-scoped volume projection.
+func (model *PostgresResourceReadModel) GetVolume(ctx context.Context, principal string, id sandbox.VolumeID) (sandbox.VolumeInfo, error) {
+	if err := validateProjectionInput(ctx, principal, string(id)); err != nil {
+		return sandbox.VolumeInfo{}, err
+	}
+	body, err := readResourceProjection(ctx, model.ledger.pool, principal, "volume", string(id))
+	if err != nil {
+		return sandbox.VolumeInfo{}, err
+	}
+	var value sandbox.VolumeInfo
+	if err := json.Unmarshal(body, &value); err != nil || value.ID != id {
+		return sandbox.VolumeInfo{}, errors.New("read sandbox resource projection: invalid persisted volume metadata")
+	}
+	return copyVolumeInfo(value), nil
+}
+
+// ListVolumes returns a bounded, stable page of principal-scoped volume projections.
+func (model *PostgresResourceReadModel) ListVolumes(ctx context.Context, principal string, page sandbox.Page) (sandbox.VolumePage, error) {
+	if err := validateProjectionPage(ctx, principal, page); err != nil {
+		return sandbox.VolumePage{}, err
+	}
+	rows, err := model.ledger.pool.Query(ctx, `SELECT body FROM runtime.sandbox_resource_projections WHERE principal=$1 AND resource_kind='volume' AND resource_id > $2 ORDER BY resource_id LIMIT $3`, principal, string(page.Cursor), int(page.Limit)+1)
+	if err != nil {
+		return sandbox.VolumePage{}, errors.Wrap(err, "list sandbox resource projections")
+	}
+	defer rows.Close()
+	result := sandbox.VolumePage{Items: make([]sandbox.VolumeInfo, 0, page.Limit)}
+	for rows.Next() {
+		var body []byte
+		if err := rows.Scan(&body); err != nil {
+			return sandbox.VolumePage{}, errors.Wrap(err, "list sandbox resource projections")
+		}
+		var value sandbox.VolumeInfo
+		if err := json.Unmarshal(body, &value); err != nil || value.ID == "" {
+			return sandbox.VolumePage{}, errors.New("read sandbox resource projection: invalid persisted volume metadata")
+		}
+		if len(result.Items) == int(page.Limit) {
+			result.Next = sandbox.PageCursor(result.Items[len(result.Items)-1].ID)
+			break
+		}
+		result.Items = append(result.Items, copyVolumeInfo(value))
+	}
+	if err := rows.Err(); err != nil {
+		return sandbox.VolumePage{}, errors.Wrap(err, "list sandbox resource projections")
+	}
+	return result, nil
 }
 
 func marshalResourceProjection(ctx context.Context, principal, resourceID string, value any) ([]byte, error) {

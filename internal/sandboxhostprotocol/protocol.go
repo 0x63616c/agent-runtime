@@ -61,15 +61,20 @@ type Envelope struct {
 	Principal              string    `json:"principal"`
 	SandboxID              string    `json:"sandbox_id"`
 	ProcessID              string    `json:"process_id"`
-	OperationID            string    `json:"operation_id"`
-	OperationKind          string    `json:"operation_kind"`
-	EffectiveSpecDigest    string    `json:"effective_spec_digest"`
-	CapabilityDigest       string    `json:"capability_digest"`
-	CanonicalRequestDigest string    `json:"canonical_request_digest"`
-	SequenceContract       string    `json:"sequence_contract"`
-	PayloadDigest          string    `json:"payload_digest"`
-	Payload                []byte    `json:"payload"`
-	Signature              string    `json:"signature"`
+	// VolumeID and SnapshotID carry only an admitted resource identity. They
+	// never identify a host pathname, mount, snapshot payload, or backend
+	// handle.
+	VolumeID               string `json:"volume_id"`
+	SnapshotID             string `json:"snapshot_id"`
+	OperationID            string `json:"operation_id"`
+	OperationKind          string `json:"operation_kind"`
+	EffectiveSpecDigest    string `json:"effective_spec_digest"`
+	CapabilityDigest       string `json:"capability_digest"`
+	CanonicalRequestDigest string `json:"canonical_request_digest"`
+	SequenceContract       string `json:"sequence_contract"`
+	PayloadDigest          string `json:"payload_digest"`
+	Payload                []byte `json:"payload"`
+	Signature              string `json:"signature"`
 }
 
 // Result is one host-signed terminal or progress observation.
@@ -468,7 +473,11 @@ func encodeSignedDataPlaneReceipt(receipt DataPlaneReceipt) ([]byte, error) {
 }
 
 func validEnvelope(envelope Envelope) bool {
-	return envelope.ProtocolVersion == Version && boundedID(envelope.EnvelopeID, 128) && boundedID(envelope.DeliveryID, 128) && boundedID(envelope.Nonce, 128) && !envelope.IssuedAt.IsZero() && envelope.IssuedAt.Location() == time.UTC && envelope.ExpiresAt.Location() == time.UTC && envelope.ExpiresAt.After(envelope.IssuedAt) && envelope.ExpiresAt.Sub(envelope.IssuedAt) <= time.Hour && validControlKeyBinding(envelope) && boundedID(envelope.HostID, 128) && envelope.HostGeneration > 0 && boundedID(envelope.AssignmentID, 128) && envelope.LeaseEpoch > 0 && envelope.FencingToken > 0 && boundedID(envelope.Tenant, 256) && boundedID(envelope.Principal, 512) && strings.HasPrefix(envelope.Principal, envelope.Tenant+":") && boundedID(envelope.OperationID, 128) && boundedID(envelope.OperationKind, 64) && validDigest(envelope.EffectiveSpecDigest) && validDigest(envelope.CapabilityDigest) && validDigest(envelope.CanonicalRequestDigest) && envelope.SequenceContract == "host-proposed/control-owned-v1" && validDigest(envelope.PayloadDigest) && len(envelope.Payload) > 0 && len(envelope.Payload) <= maxPayloadLen && Digest(envelope.Payload) == envelope.PayloadDigest && (envelope.Signature == "" || len(envelope.Signature) <= 128)
+	return envelope.ProtocolVersion == Version && boundedID(envelope.EnvelopeID, 128) && boundedID(envelope.DeliveryID, 128) && boundedID(envelope.Nonce, 128) && !envelope.IssuedAt.IsZero() && envelope.IssuedAt.Location() == time.UTC && envelope.ExpiresAt.Location() == time.UTC && envelope.ExpiresAt.After(envelope.IssuedAt) && envelope.ExpiresAt.Sub(envelope.IssuedAt) <= time.Hour && validControlKeyBinding(envelope) && boundedID(envelope.HostID, 128) && envelope.HostGeneration > 0 && boundedID(envelope.AssignmentID, 128) && envelope.LeaseEpoch > 0 && envelope.FencingToken > 0 && boundedID(envelope.Tenant, 256) && boundedID(envelope.Principal, 512) && strings.HasPrefix(envelope.Principal, envelope.Tenant+":") && optionalBoundedID(envelope.SandboxID, 128) && optionalBoundedID(envelope.ProcessID, 128) && optionalBoundedID(envelope.VolumeID, 128) && optionalBoundedID(envelope.SnapshotID, 128) && boundedID(envelope.OperationID, 128) && boundedID(envelope.OperationKind, 64) && validDigest(envelope.EffectiveSpecDigest) && validDigest(envelope.CapabilityDigest) && validDigest(envelope.CanonicalRequestDigest) && envelope.SequenceContract == "host-proposed/control-owned-v1" && validDigest(envelope.PayloadDigest) && len(envelope.Payload) > 0 && len(envelope.Payload) <= maxPayloadLen && Digest(envelope.Payload) == envelope.PayloadDigest && (envelope.Signature == "" || len(envelope.Signature) <= 128)
+}
+
+func optionalBoundedID(value string, maximum int) bool {
+	return value == "" || boundedID(value, maximum)
 }
 
 func validControlKeyBinding(envelope Envelope) bool {

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/0x63616c/agent-runtime/internal/sandboxhostprotocol"
+	"github.com/0x63616c/agent-runtime/sandbox"
 )
 
 func TestMemoryHostControlLostAckRestartFenceAndQuarantine(t *testing.T) {
@@ -93,6 +94,36 @@ func TestMemoryHostControlLostAckRestartFenceAndQuarantine(t *testing.T) {
 	requeued, err := ledger.ConfirmHostCleanupAndRequeue(context.Background(), got.Principal, got.ID, got.Version, now.Add(6*time.Second))
 	if err != nil || requeued.State != StateAccepted || requeued.Assignment.FencingToken != got.Assignment.FencingToken {
 		t.Fatalf("ConfirmHostCleanupAndRequeue() = %#v, %v", requeued, err)
+	}
+}
+
+func TestHostDispatchCarriesAdmittedVolumeIdentity(t *testing.T) {
+	now := time.Date(2026, 8, 13, 12, 0, 0, 0, time.UTC)
+	ledger := NewMemoryLedger()
+	public, _, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	host := HostEnrollment{HostID: "host_volume", Tenant: "tenant_01", Pool: "pool_01", Generation: 1, ProtocolVersion: sandboxhostprotocol.Version, CertificateDigest: digest("1"), SigningPublicKey: public, CapabilityDigest: digest("2"), Status: HostActive, ExpiresAt: now.Add(time.Hour)}
+	if err := ledger.ProvisionHost(context.Background(), host, AttestationInput{Profile: AttestationProfileLocalMetadata}, nil); err != nil {
+		t.Fatal(err)
+	}
+	info := sandbox.VolumeInfo{ID: "vol_host", SizeBytes: 1024, Inodes: 64, RetentionExpiresAt: now.Add(time.Hour)}
+	binding, err := NewResourceProjectionBinding(context.Background(), "tenant_01:subject_01", ResourceProjectionVolume, string(info.ID), info)
+	if err != nil {
+		t.Fatal(err)
+	}
+	op := Operation{Principal: "tenant_01:subject_01", Tenant: host.Tenant, ID: "op_host_volume", Kind: "create-volume", TargetKind: "volume", TargetID: string(info.ID), InputDigest: digest("3"), CanonicalDigest: digest("4"), EffectiveSpecDigest: digest("5"), CapabilityDigest: host.CapabilityDigest, DispatchBody: `{"version":"sandbox.control/v1"}`, AcceptedAt: now, RetentionExpiresAt: now.Add(time.Hour), CleanupRequired: true, ResourceProjectionBinding: &binding}
+	if _, _, err := ledger.Accept(context.Background(), op); err != nil {
+		t.Fatal(err)
+	}
+	dispatch, err := ledger.PullHostAssignment(context.Background(), HostIdentity{HostID: host.HostID, Generation: host.Generation, CertificateDigest: host.CertificateDigest}, now, now.Add(time.Minute), DeliverySeed{AssignmentID: "assignment_volume", EnvelopeID: "envelope_volume", DeliveryID: "delivery_volume", Nonce: "nonce_volume"}, testEnvelopeSigner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	envelope := envelopeFor(dispatch.Operation, now, now.Add(time.Minute), DeliverySeed{AssignmentID: dispatch.Operation.Assignment.AssignmentID, EnvelopeID: "envelope_check", DeliveryID: "delivery_check", Nonce: "nonce_check"})
+	if envelope.VolumeID != string(info.ID) || envelope.SandboxID != "" || envelope.SnapshotID != "" {
+		t.Fatalf("host envelope = %#v", envelope)
 	}
 }
 

@@ -231,12 +231,43 @@ func (server *server) submit(writer http.ResponseWriter, request *http.Request) 
 		return
 	}
 	operation := toRecord(identity.Tenant, identity.Principal, body, resolved)
-	stored, _, err := server.config.Store.Accept(request.Context(), operation)
+	var stored sandboxcontrol.Operation
+	if resolved.Operation.Kind == sandbox.OperationCreateVolume {
+		resourceStore, ok := server.config.Store.(sandboxcontrol.ResourceAdmissionStore)
+		if !ok {
+			writeUnavailable(writer)
+			return
+		}
+		admitted, decodeErr := sandbox.DecodeControlOperationRequest(body)
+		if decodeErr != nil || admitted.CreateVolume == nil {
+			writeUnavailable(writer)
+			return
+		}
+		volumeID := server.volumeID(identity.Principal, resolved.Operation.Ref.ID)
+		value := sandbox.VolumeInfo{ID: volumeID, SizeBytes: admitted.CreateVolume.Spec.SizeBytes, Inodes: admitted.CreateVolume.Spec.Inodes, RetentionExpiresAt: resolved.Operation.RetentionExpiresAt}
+		binding, bindErr := sandboxcontrol.NewResourceProjectionBinding(request.Context(), identity.Principal, sandboxcontrol.ResourceProjectionVolume, string(volumeID), value)
+		if bindErr != nil {
+			writeUnavailable(writer)
+			return
+		}
+		operation.TargetKind, operation.TargetID, operation.ResourceProjectionBinding = string(sandbox.TargetVolume), string(volumeID), &binding
+		stored, _, err = resourceStore.AcceptVolume(request.Context(), operation, value)
+	} else {
+		stored, _, err = server.config.Store.Accept(request.Context(), operation)
+	}
 	if err != nil {
 		writeStoreError(writer, err)
 		return
 	}
 	writeJSON(writer, http.StatusOK, operationResponse{Version: controlVersion, Kind: "operation-response", Operation: fromRecord(stored)})
+}
+
+// volumeID is control-sourced, opaque and stable for a principal/operation
+// retry. The caller's operation ID never becomes the resource ID directly.
+func (server *server) volumeID(principal string, operationID sandbox.OperationID) sandbox.VolumeID {
+	mac := hmac.New(sha256.New, server.assertionKey)
+	_, _ = mac.Write([]byte("sandbox.volume/v1\x00" + principal + "\x00" + string(operationID)))
+	return sandbox.VolumeID("vol_" + base64.RawURLEncoding.EncodeToString(mac.Sum(nil)[:18]))
 }
 
 func (server *server) get(writer http.ResponseWriter, request *http.Request) {

@@ -80,6 +80,12 @@ type ResourceProjectionKind string
 const (
 	ResourceProjectionSandbox ResourceProjectionKind = "sandbox"
 	ResourceProjectionProcess ResourceProjectionKind = "process"
+	// ResourceProjectionVolume binds a named-volume lifecycle operation to the
+	// complete principal-scoped volume projection admitted with it.
+	ResourceProjectionVolume ResourceProjectionKind = "volume"
+	// ResourceProjectionSnapshot reserves the matching typed binding for a
+	// future snapshot source/result authority. It is not an execution claim.
+	ResourceProjectionSnapshot ResourceProjectionKind = "snapshot"
 )
 
 // ResourceProjectionTransition declares how the admitted resource snapshot is
@@ -498,7 +504,7 @@ func validResourceProjectionBinding(binding ResourceProjectionBinding) bool {
 		return false
 	}
 	switch binding.Kind {
-	case ResourceProjectionSandbox, ResourceProjectionProcess:
+	case ResourceProjectionSandbox, ResourceProjectionProcess, ResourceProjectionVolume, ResourceProjectionSnapshot:
 		return true
 	default:
 		return false
