@@ -1,32 +1,23 @@
 # Self-hosted deployment contract
 
 Status: the v1 declarative role-composition and configuration-validation slice,
-M5 state-backed public API process, and private Session Temporal worker source
-are implemented. The checked-in Stack deliberately keeps the already-attested
-GHCR image on its pre-worker `orchestration` health composition until the
-current source revision is published and attested; it does not misrepresent an
-older digest as an `orchestration-codec` worker image. Model/tool/approval
-execution and Firecracker host-agent production operation remain later
-milestones. Do not treat a rendered reference Stack or published role image as
-a completed production rollout; live Kubernetes/Temporal/blob evidence is
-retained separately.
+state-backed public API process, and private Session Temporal worker source are
+implemented. The checked-in Stack's single public `api` Deployment now
+starts `/agent-runtime-api` from the provenance-verified immutable image
+`sha256:aa96439dbda5207c31dea06d72a5f58c7e0f3a929c6a8bcfd2a24e67d3365207`.
+It has a strict durable PostgreSQL/content configuration, an independent
+ServiceAccount, exact external Secret references, and default-deny egress only
+to state, blob, and telemetry. It replaces the earlier health-only API fixture;
+there is no second API Service or a permissive transitional path.
 
-The checked-in Stack's `runtime serve --role api` deployment remains the
-health-only role-composition fixture. The separately runnable
-`agent-runtime-api` has an explicit durable PostgreSQL/content configuration
-and named disposable-dependency integration evidence, but a production API
-credential/configuration rollout is operator work and is not inferred from the
-health-only Stack role.
-
-The checked-in Stack deliberately contains no `runtime-api` Deployment,
-Service, egress policy, ServiceAccount, or API-token Secret wiring. Its pinned
-GHCR digest is attested to source revision `a372977` and does not contain the
-durable `agent-runtime-api` executable or configuration in this repository.
-The source API and its disposable PostgreSQL/MinIO integration remain runnable,
-but they are not Stack deployment evidence. Reintroducing the production API
-requires a newly published, provenance-verified immutable image containing
-that executable, followed by a reviewed Stack change that adds the complete
-deployment and trust wiring together.
+The source role and its disposable PostgreSQL/MinIO integration are runnable,
+but a rendered Stack is not a completed production rollout. Before applying
+this configuration, the operator must provision the named API tokens and a
+content-store identity restricted to the declared bucket/prefix, grant the
+runtime database login its reviewed non-superuser role, and retain the live
+Kubernetes/Temporal/blob deployment evidence separately. Model/tool/approval
+execution and Firecracker host-agent production operation are not yet live
+deployment claims.
 
 Agent Runtime is self-hosted as explicit, separately deployable processes. An
 operator applies a reviewed typed Stack with `stackctl`; no runtime binary,
