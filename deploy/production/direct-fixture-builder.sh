@@ -16,10 +16,31 @@ usage:
     --kernel-version-id VERSION-ID \
     --source-date-epoch EPOCH --rootfs-bytes BYTES --rootfs-uuid UUID \
     --output /absolute/manifest.yaml
+  direct-fixture-builder.sh execute \
+    --run-id ID \
+    --image ghcr.io/0x63616c/agent-runtime-firecracker-fixture-builder@sha256:HEX \
+    --revision GIT-SHA \
+    --firecracker-version vX.Y.Z \
+    --kernel-url HTTPS-URL \
+    --kernel-version-id VERSION-ID \
+    --source-date-epoch EPOCH --rootfs-bytes BYTES --rootfs-uuid UUID \
+    --kubeconfig /absolute/KUBECONFIG --context CONTEXT \
+    --registry-docker-config /absolute/config.json \
+    --evidence-file /absolute/EVIDENCE.json \
+    --execute-authorized-direct-fixture-build
   direct-fixture-builder.sh --self-test
 
 This command only writes OUTPUT. It never contacts Kubernetes, pulls or
 publishes an image, downloads inputs, builds a fixture, or edits a lock.
+
+execute is the sole mutating mode. It requires its literal consent flag and a
+Docker registry config JSON file already present at an absolute local path.
+It creates a fresh namespace and a namespace-scoped, immutable
+`fixture-builder-registry` image-pull secret, then applies the otherwise
+suspended Job. The registry config is passed directly to kubectl, never
+rendered into YAML, logged, copied into evidence, or retained locally by this
+script. execute always attempts to delete and wait for deletion of its unique
+namespace after writing bounded, redacted evidence.
 
 The rendered Job is intentionally one-shot and fails closed unless an operator
 has already staged these root-owned, immutable inputs on the Linux node:
@@ -43,6 +64,7 @@ EOF
 }
 
 fail() { echo "direct fixture builder failed: $*" >&2; exit 1; }
+readonly registry_secret_name='fixture-builder-registry'
 valid_run_id() { [[ "$1" =~ ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$ && ${#1} -le 24 ]]; }
 valid_revision() { [[ "$1" =~ ^[0-9a-f]{40}$ ]]; }
 valid_version() { [[ "$1" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; }
@@ -55,6 +77,49 @@ valid_epoch() { [[ "$1" =~ ^[0-9]+$ ]]; }
 valid_bytes() { [[ "$1" =~ ^[0-9]+$ && "$1" -ge 1048576 ]]; }
 valid_uuid() { [[ "$1" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]]; }
 require_new_absolute() { [[ "$1" == /* && ! -e "$1" && -d "$(dirname "$1")" ]] || fail "$2 must be a new absolute path beneath an existing directory"; }
+require_file() { [[ "$1" == /* && -f "$1" ]] || fail "$2 must be an existing absolute regular file"; }
+valid_context() { [[ "$1" =~ ^[A-Za-z0-9@._:-]{1,128}$ ]]; }
+
+validate_registry_docker_config() {
+  local config="$1"
+  python3 - "$config" <<'PY'
+import base64
+import json
+import os
+import re
+import sys
+
+path = sys.argv[1]
+try:
+    stat = os.stat(path)
+    if stat.st_size <= 0 or stat.st_size > 1024 * 1024:
+        raise ValueError('registry Docker config must be between 1 byte and 1 MiB')
+    with open(path, encoding='utf-8') as handle:
+        value = json.load(handle)
+    entry = value['auths']['ghcr.io']
+    encoded = entry['auth']
+    if not isinstance(encoded, str) or not re.fullmatch(r'[A-Za-z0-9+/]+={0,2}', encoded):
+        raise ValueError('ghcr.io auth must be a base64 basic-auth value')
+    decoded = base64.b64decode(encoded, validate=True).decode('utf-8')
+    if ':' not in decoded or any(character in decoded for character in '\r\n'):
+        raise ValueError('ghcr.io auth must decode to a single basic-auth identity')
+except (OSError, KeyError, TypeError, ValueError, UnicodeDecodeError, json.JSONDecodeError) as error:
+    raise SystemExit('registry Docker config is invalid: %s' % error)
+PY
+}
+
+redact_logs() {
+  python3 - <<'PY'
+import re
+import sys
+
+text = sys.stdin.read(65536)
+text = re.sub(r'(?i)(authorization|token|password|secret|auth)\s*([:=])\s*[^\s]+', r'\1\2[REDACTED]', text)
+text = re.sub(r'(?i)bearer\s+[^\s]+', 'Bearer [REDACTED]', text)
+text = re.sub(r'(?<![A-Za-z0-9+/=])[A-Za-z0-9+/]{40,}={0,2}(?![A-Za-z0-9+/=])', '[REDACTED]', text)
+sys.stdout.write(text)
+PY
+}
 
 render() {
   local run_id='' image='' revision='' firecracker_version='' kernel_url='' kernel_version_id='' epoch='' rootfs_bytes='' rootfs_uuid='' output=''
@@ -113,6 +178,9 @@ metadata:
     app.kubernetes.io/part-of: agent-runtime
     agent-runtime.dev/direct-fixture-build: "$run_id"
 spec:
+  # Rendered manifests cannot pull a private GHCR image accidentally. execute
+  # creates this secret first and applies an unsuspended temporary copy.
+  suspend: true
   backoffLimit: 0
   ttlSecondsAfterFinished: 300
   template:
@@ -125,6 +193,8 @@ spec:
         kubernetes.io/os: linux
         kubernetes.io/arch: amd64
       automountServiceAccountToken: false
+      imagePullSecrets:
+        - name: $registry_secret_name
       restartPolicy: Never
       terminationGracePeriodSeconds: 10
       securityContext: { runAsUser: 0, runAsGroup: 0, fsGroup: 0 }
@@ -197,14 +267,86 @@ spec:
 EOF
 }
 
+execute() {
+  local run_id='' image='' revision='' firecracker_version='' kernel_url='' kernel_version_id='' epoch='' rootfs_bytes='' rootfs_uuid='' kubeconfig='' context_value='' registry_docker_config='' evidence='' authorized=false manifest='' active_manifest=''
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --run-id) run_id=${2:-}; shift 2;; --image) image=${2:-}; shift 2;; --revision) revision=${2:-}; shift 2;;
+      --firecracker-version) firecracker_version=${2:-}; shift 2;; --kernel-url) kernel_url=${2:-}; shift 2;;
+      --kernel-version-id) kernel_version_id=${2:-}; shift 2;; --source-date-epoch) epoch=${2:-}; shift 2;;
+      --rootfs-bytes) rootfs_bytes=${2:-}; shift 2;; --rootfs-uuid) rootfs_uuid=${2:-}; shift 2;;
+      --kubeconfig) kubeconfig=${2:-}; shift 2;; --context) context_value=${2:-}; shift 2;;
+      --registry-docker-config) registry_docker_config=${2:-}; shift 2;; --evidence-file) evidence=${2:-}; shift 2;;
+      --execute-authorized-direct-fixture-build) authorized=true; shift;; *) usage;;
+    esac
+  done
+  [[ "$authorized" == true && -n "$run_id" && -n "$image" && -n "$revision" && -n "$firecracker_version" && -n "$kernel_url" && -n "$kernel_version_id" && -n "$epoch" && -n "$rootfs_bytes" && -n "$rootfs_uuid" && -n "$kubeconfig" && -n "$context_value" && -n "$registry_docker_config" && -n "$evidence" ]] || usage
+  valid_run_id "$run_id" || fail 'run ID must be a lowercase DNS label of at most 24 characters'
+  valid_context "$context_value" || fail 'invalid Kubernetes context'
+  require_file "$kubeconfig" 'kubeconfig'
+  require_file "$registry_docker_config" 'registry Docker config'
+  validate_registry_docker_config "$registry_docker_config"
+  require_new_absolute "$evidence" 'evidence file'
+  command -v kubectl >/dev/null || fail 'kubectl is required'
+  command -v jq >/dev/null || fail 'jq is required'
+
+  local namespace="agent-runtime-fixture-build-$run_id" job='firecracker-fixture-builder'
+  kubectl --kubeconfig "$kubeconfig" config get-contexts -o name | grep -Fx -- "$context_value" >/dev/null || fail 'explicit context is unavailable'
+  [[ -z "$(kubectl --kubeconfig "$kubeconfig" --context "$context_value" get "namespace/$namespace" --ignore-not-found -o name)" ]] || fail 'namespace already exists; fixture builder will not take it over'
+
+  manifest="$(mktemp)"; active_manifest="$(mktemp)"
+  rm -f -- "$manifest" "$active_manifest"
+  trap 'rm -f -- "${manifest:-}" "${active_manifest:-}"' EXIT
+  # The public render path always writes a suspended Job. This private copy is
+  # the only one made runnable, and only after the secret exists in its new
+  # namespace.
+  render --run-id "$run_id" --image "$image" --revision "$revision" --firecracker-version "$firecracker_version" --kernel-url "$kernel_url" --kernel-version-id "$kernel_version_id" --source-date-epoch "$epoch" --rootfs-bytes "$rootfs_bytes" --rootfs-uuid "$rootfs_uuid" --output "$manifest"
+  sed 's/^  suspend: true$/  suspend: false/' "$manifest" >"$active_manifest"
+  grep -Fqx '  suspend: false' "$active_manifest" || fail 'could not prepare explicit runnable fixture builder manifest'
+
+  local cleanup=true namespace_created=false result=0 status='' logs=''
+  trap 'if [[ "${cleanup:-false}" == true && "${namespace_created:-false}" == true ]]; then kubectl --kubeconfig "$kubeconfig" --context "$context_value" delete "namespace/$namespace" --ignore-not-found --wait=false >/dev/null 2>&1 || true; kubectl --kubeconfig "$kubeconfig" --context "$context_value" wait --for=delete "namespace/$namespace" --timeout=180s >/dev/null 2>&1 || echo "fixture builder cleanup failed; delete namespace $namespace" >&2; fi; rm -f -- "${manifest:-}" "${active_manifest:-}"' EXIT
+  kubectl --kubeconfig "$kubeconfig" --context "$context_value" create namespace "$namespace" >/dev/null
+  namespace_created=true
+  kubectl --kubeconfig "$kubeconfig" --context "$context_value" label "namespace/$namespace" \
+    app.kubernetes.io/part-of=agent-runtime \
+    "agent-runtime.dev/direct-fixture-build=$run_id" \
+    pod-security.kubernetes.io/enforce=privileged \
+    pod-security.kubernetes.io/audit=privileged \
+    pod-security.kubernetes.io/warn=privileged >/dev/null
+  kubectl --kubeconfig "$kubeconfig" --context "$context_value" --namespace "$namespace" create secret generic "$registry_secret_name" \
+    --type=kubernetes.io/dockerconfigjson \
+    --from-file=.dockerconfigjson="$registry_docker_config" \
+    --dry-run=client -o yaml | kubectl --kubeconfig "$kubeconfig" --context "$context_value" apply -f - >/dev/null
+  kubectl --kubeconfig "$kubeconfig" --context "$context_value" --namespace "$namespace" patch "secret/$registry_secret_name" --type merge -p '{"immutable":true}' >/dev/null
+  if ! kubectl --kubeconfig "$kubeconfig" --context "$context_value" apply -f "$active_manifest" >/dev/null; then
+    result=1
+  elif ! kubectl --kubeconfig "$kubeconfig" --context "$context_value" wait --for=condition=complete "job/$job" --namespace "$namespace" --timeout=900s >/dev/null; then
+    result=1
+  fi
+  status="$(kubectl --kubeconfig "$kubeconfig" --context "$context_value" get "job/$job" --namespace "$namespace" -o jsonpath='{.status.conditions[0].type}' 2>/dev/null || true)"
+  logs="$(kubectl --kubeconfig "$kubeconfig" --context "$context_value" logs "job/$job" --namespace "$namespace" --timestamps 2>&1 | redact_logs || true)"
+  jq -n --arg namespace "$namespace" --arg job "$job" --arg context "$context_value" --arg image "$image" --arg revision "$revision" --arg status "$status" --arg logs "$logs" --arg registry_secret "$registry_secret_name" --argjson succeeded "$( [[ "$result" == 0 ]] && echo true || echo false )" \
+    '{version:1,kind:"agent-runtime.direct-fixture-build/v1",namespace:$namespace,job:$job,context:$context,image:$image,revision:$revision,image_pull_secret:$registry_secret,job_status:$status,succeeded:$succeeded,redacted_logs:$logs,cleanup:"namespace deletion follows this record"}' >"$evidence"
+  kubectl --kubeconfig "$kubeconfig" --context "$context_value" delete "namespace/$namespace" --wait=false >/dev/null
+  kubectl --kubeconfig "$kubeconfig" --context "$context_value" wait --for=delete "namespace/$namespace" --timeout=180s >/dev/null
+  cleanup=false
+  [[ "$result" == 0 ]] || fail "fixture builder did not complete; redacted logs are in $evidence"
+  echo "fixture builder completed; evidence: $evidence"
+}
+
 self_test() {
-  local tmp manifest digest
+  local tmp manifest digest invalid_registry
   tmp="$(mktemp -d)"; trap 'rm -rf -- "${tmp:-}"' EXIT
   manifest="$tmp/fixture-builder.yaml"
+  invalid_registry="$tmp/invalid-registry.json"
+  printf '%s\n' '{"auths":{"ghcr.io":{"auth":"not-base64!"}}}' >"$invalid_registry"
   digest="$(printf 'a%.0s' {1..64})"
   render --run-id fixture-test --image "ghcr.io/0x63616c/agent-runtime-firecracker-fixture-builder@sha256:$digest" --revision "$(git rev-parse HEAD)" --firecracker-version v1.16.1 --kernel-url https://s3.amazonaws.com/spec.ccfc.min/firecracker-ci/20260717-5ac3f5ffdcd7-0/x86_64/vmlinux-6.18.36 --kernel-version-id S8eTJ2TzOZVY__PbUPFfdzt2az2_GIqL --source-date-epoch 1704067200 --rootfs-bytes 16777216 --rootfs-uuid 00000000-0000-0000-0000-000000000001 --output "$manifest"
   grep -Fqx '  policyTypes: [Ingress, Egress]' "$manifest"
   grep -Fqx '      automountServiceAccountToken: false' "$manifest"
+  grep -Fqx '  suspend: true' "$manifest"
+  grep -Fqx "        - name: $registry_secret_name" "$manifest"
   grep -Fqx '            readOnlyRootFilesystem: true' "$manifest"
   grep -Fqx '            capabilities: { drop: ["ALL"] }' "$manifest"
   grep -Fqx '    pod-security.kubernetes.io/enforce: privileged' "$manifest"
@@ -215,11 +357,14 @@ self_test() {
   grep -Fq '/workspace/tools/firecracker/write-direct-fixture-source-map.sh /var/lib/agent-runtime/firecracker-fixtures/home-server /etc/agent-runtime/firecracker-direct-fixtures.json' "$manifest"
   if "$0" render --run-id bad_ID --image "ghcr.io/0x63616c/agent-runtime-firecracker-fixture-builder@sha256:$digest" --revision "$(git rev-parse HEAD)" --firecracker-version v1.16.1 --kernel-url https://example.invalid/vmlinux?versionId=abc --kernel-version-id abc --source-date-epoch 1704067200 --rootfs-bytes 16777216 --rootfs-uuid 00000000-0000-0000-0000-000000000001 --output "$tmp/bad.yaml" >/dev/null 2>&1; then fail 'accepted invalid run ID'; fi
   if "$0" render --run-id fixture-test --image ghcr.io/0x63616c/agent-runtime-firecracker-fixture-builder:latest --revision "$(git rev-parse HEAD)" --firecracker-version v1.16.1 --kernel-url https://example.invalid/vmlinux?versionId=abc --kernel-version-id abc --source-date-epoch 1704067200 --rootfs-bytes 16777216 --rootfs-uuid 00000000-0000-0000-0000-000001 --output "$tmp/bad.yaml" >/dev/null 2>&1; then fail 'accepted unpinned image'; fi
-  echo 'direct fixture builder renders a pinned, no-network one-shot job and refuses mutable identities'
+  if "$0" execute --run-id fixture-test --image "ghcr.io/0x63616c/agent-runtime-firecracker-fixture-builder@sha256:$digest" --revision "$(git rev-parse HEAD)" --firecracker-version v1.16.1 --kernel-url https://example.invalid/vmlinux?versionId=abc --kernel-version-id abc --source-date-epoch 1704067200 --rootfs-bytes 16777216 --rootfs-uuid 00000000-0000-0000-0000-000000000001 --kubeconfig /dev/null --context home-server --registry-docker-config /dev/null --evidence-file "$tmp/evidence.json" >/dev/null 2>&1; then fail 'execute accepted no explicit authorization flag'; fi
+  if "$0" execute --run-id fixture-test --image "ghcr.io/0x63616c/agent-runtime-firecracker-fixture-builder@sha256:$digest" --revision "$(git rev-parse HEAD)" --firecracker-version v1.16.1 --kernel-url https://example.invalid/vmlinux?versionId=abc --kernel-version-id abc --source-date-epoch 1704067200 --rootfs-bytes 16777216 --rootfs-uuid 00000000-0000-0000-0000-000000000001 --kubeconfig /dev/null --context home-server --registry-docker-config "$invalid_registry" --evidence-file "$tmp/evidence.json" --execute-authorized-direct-fixture-build >/dev/null 2>&1; then fail 'execute accepted an invalid registry config'; fi
+  echo 'direct fixture builder renders a suspended, pinned no-network job and refuses implicit execution'
 }
 
 case "${1:-}" in
   render) shift; render "$@";;
+  execute) shift; execute "$@";;
   --self-test) self_test;;
   *) usage;;
 esac
