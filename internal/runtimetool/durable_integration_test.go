@@ -475,7 +475,7 @@ func TestDurableBrokeredToolLifecyclePersistsApprovalAndFinalization(t *testing.
 		t.Fatal(err)
 	}
 	apply(recoveryConsume)
-	recoveryOperationID := runtimestate.OperationID("op-tool-recovery-" + recoveryGrant.GrantID)
+	recoveryOperationID := runtimestate.OperationID("op_tool_recovery_" + recoveryGrant.GrantID)
 	recoveryBegin, err := compiler.CompileBeginToolExecution(runtimestate.BeginToolExecutionCommand{Scope: workerScope, IdempotencyKey: "durable-tool-recovery-begin", GrantID: recoveryGrant.GrantID, ToolCallID: recovery.ToolCallID, SessionID: recoverySession, TurnID: recoveryTurn, OperationID: recoveryOperationID})
 	if err != nil {
 		t.Fatal(err)

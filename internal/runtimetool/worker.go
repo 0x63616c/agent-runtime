@@ -404,7 +404,10 @@ func (w *Worker) admitApprovedGrants(ctx context.Context, tenant runtimecontent.
 		if grant.RevokedAt != nil || !w.clock.Now().Before(grant.ExpiresAt) {
 			continue
 		}
-		operationID := runtimestate.OperationID("op-tool-" + grant.GrantID)
+		// sandbox.control/v1 accepts operation identifiers in the public `op_`
+		// namespace. Keep the runtime-owned grant correlation while emitting an
+		// identifier the concrete sandbox adapter can submit unchanged.
+		operationID := runtimestate.OperationID("op_tool_" + grant.GrantID)
 		existing := false
 		for _, execution := range state.ToolExecutions {
 			if execution.GrantID == grant.GrantID {

@@ -388,7 +388,7 @@ func TestWorkerConsumesApprovedGrantAndResumesAfterConsumeBeforeIntent(t *testin
 			if len(state.Grants) != 1 || state.Grants[0].Uses != 1 {
 				t.Fatalf("grant use count = %#v, want exactly one durable consumption", state.Grants)
 			}
-			if len(state.ToolExecutions) != 1 || state.ToolExecutions[0].OperationID != runtimestate.OperationID("op-tool-"+approved.grantID) || state.ToolExecutions[0].State != runtimestate.ToolExecutionSucceeded {
+			if len(state.ToolExecutions) != 1 || state.ToolExecutions[0].OperationID != runtimestate.OperationID("op_tool_"+approved.grantID) || state.ToolExecutions[0].State != runtimestate.ToolExecutionSucceeded {
 				t.Fatalf("tool executions = %#v, want one succeeded deterministic execution", state.ToolExecutions)
 			}
 		})

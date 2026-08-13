@@ -142,6 +142,14 @@ go test -race -tags=integration ./examples/durable-chat -run 'Test(DurableChatRe
 reset_runtime_schema
 go test -race -tags=integration ./internal/runtimeapiprocess -run 'TestDurableWorkspaceAgentBinariesUseOnlyThePublicAPI' -count=1
 
+# This joins the M7 public Session/Approval contract to the actual
+# model-to-tool-to-sandbox-control boundary. It uses only disposable services
+# and a memory control ledger; it does not claim guest execution.
+reset_runtime_schema
+AR_RUNTIME_API_WORKER_POSTGRES_DSN="$runtime_worker_dsn" \
+  go test -race -tags=integration ./internal/runtimeapiprocess \
+  -run '^TestWorkspaceApprovalDispatchesOnlyItsSealedActionToSandboxControl$' -count=1
+
 # M8 remains an explicit public application proof, isolated from the M6/M7
 # package proofs above. It owns only disposable PostgreSQL, MinIO, and
 # Temporal test services; it is not a production deployment attestation.
