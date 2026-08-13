@@ -20,8 +20,9 @@ The lab derives the API observability declaration from the local Stack profile,
 then replaces only its durable storage with `memory-unsafe` so it can exercise
 the API process without a database. It checks API-to-collector trace/metric
 delivery, collector-to-Jaeger delivery, the Prometheus metric endpoint, and
-the checked-in unsafe-attribute deletion list. It removes all containers,
-network, temporary files, and locally built image on exit.
+the running collector's deletion of synthetic unsafe OTLP attributes before
+they reach Jaeger. It removes all containers, network, temporary files, and
+locally built image on exit.
 
 Its optional artifact is `agent-runtime.direct-lab-evidence/v1`; it is not
 Kubernetes, home-server, protected-run, or production evidence.

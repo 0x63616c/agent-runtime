@@ -3,6 +3,7 @@ package observabilityassets
 import (
 	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -87,6 +88,132 @@ func TestDisposableOTLPLabWaitsForItsExpectedPublicResponse(t *testing.T) {
 		if !strings.Contains(text, argument) {
 			t.Fatalf("disposable OTLP lab lacks bounded curl argument %q", argument)
 		}
+	}
+	if !strings.Contains(text, `--validate-redaction-probe-response`) || !strings.Contains(text, `collector_unsafe_attribute_runtime_probe:true`) {
+		t.Fatal("disposable OTLP lab does not expose its runtime redaction probe verification")
+	}
+}
+
+func TestDisposableOTLPLabRedactionProbeRejectsEveryForbiddenAttributeKey(t *testing.T) {
+	script := filepath.Clean("../../deploy/observability/local/run-otlp-lab.sh")
+	for _, unsafeKey := range []string{
+		"http.request.header.authorization", "http.request.body", "http.response.body", "gen_ai.prompt",
+		"gen_ai.completion", "runtime.model.reasoning", "runtime.tool.output", "process.command_args",
+	} {
+		t.Run(unsafeKey, func(t *testing.T) {
+			response := filepath.Join(t.TempDir(), "jaeger-response.json")
+			fixture := map[string]any{"data": []any{map[string]any{"spans": []any{map[string]any{"tags": []any{
+				map[string]any{"key": "safe.probe", "value": "collector-redaction-probe-safe-v1"},
+				map[string]any{"key": unsafeKey, "value": "synthetic-unsafe-value"},
+			}}}}}}
+			bytes, err := json.Marshal(fixture)
+			if err != nil {
+				t.Fatalf("marshal fixture: %v", err)
+			}
+			if err := os.WriteFile(response, bytes, 0o600); err != nil {
+				t.Fatalf("write fixture: %v", err)
+			}
+			command := exec.Command("bash", script, "--validate-redaction-probe-response", response)
+			if output, err := command.CombinedOutput(); err == nil {
+				t.Fatalf("redaction probe accepted %q: %s", unsafeKey, output)
+			}
+		})
+	}
+
+	t.Run("safe response", func(t *testing.T) {
+		response := filepath.Join(t.TempDir(), "jaeger-response.json")
+		fixture := []byte(`{"data":[{"spans":[{"tags":[{"key":"safe.probe","value":"collector-redaction-probe-safe-v1"}]}]}]}`)
+		if err := os.WriteFile(response, fixture, 0o600); err != nil {
+			t.Fatalf("write fixture: %v", err)
+		}
+		command := exec.Command("bash", script, "--validate-redaction-probe-response", response)
+		if output, err := command.CombinedOutput(); err != nil {
+			t.Fatalf("redaction probe rejected safe response: %v: %s", err, output)
+		}
+	})
+}
+
+func TestDisposableOTLPLabRefusesEvidenceOutsideCleanMainCheckout(t *testing.T) {
+	for _, scenario := range []struct {
+		name    string
+		prepare func(t *testing.T, repository string)
+		message string
+	}{
+		{
+			name: "dirty",
+			prepare: func(t *testing.T, repository string) {
+				t.Helper()
+				if err := os.WriteFile(filepath.Join(repository, "deploy", "production", "stack.json"), []byte("{}\n"), 0o600); err != nil {
+					t.Fatalf("make checkout dirty: %v", err)
+				}
+			},
+			message: "OTLP evidence requires a clean checkout",
+		},
+		{
+			name: "untracked",
+			prepare: func(t *testing.T, repository string) {
+				t.Helper()
+				if err := os.WriteFile(filepath.Join(repository, "untracked-evidence-input"), []byte("untracked\n"), 0o600); err != nil {
+					t.Fatalf("make untracked input: %v", err)
+				}
+			},
+			message: "OTLP evidence requires a clean checkout",
+		},
+		{
+			name: "non-main branch",
+			prepare: func(t *testing.T, repository string) {
+				t.Helper()
+				runGit(t, repository, "checkout", "-qb", "evidence-branch")
+			},
+			message: "OTLP evidence requires a checkout attached to main",
+		},
+	} {
+		t.Run(scenario.name, func(t *testing.T) {
+			repository := disposableOTLPLabRepository(t)
+			scenario.prepare(t, repository)
+			script := filepath.Join(repository, "deploy", "observability", "local", "run-otlp-lab.sh")
+			report := filepath.Join(repository, "evidence.json")
+			output, err := exec.Command("bash", script, "--report", report, "--execute-authorized-disposable-lab").CombinedOutput()
+			if err == nil || !strings.Contains(string(output), scenario.message) {
+				t.Fatalf("evidence checkout refusal = %v, %s; want %q", err, output, scenario.message)
+			}
+		})
+	}
+}
+
+func disposableOTLPLabRepository(t *testing.T) string {
+	t.Helper()
+	repository := t.TempDir()
+	for _, path := range []string{
+		"deploy/observability/local/run-otlp-lab.sh",
+		"deploy/observability/otelcol/collector.yaml",
+		"deploy/production/stack.json",
+	} {
+		bytes, err := os.ReadFile(filepath.Clean("../../" + path))
+		if err != nil {
+			t.Fatalf("read %s: %v", path, err)
+		}
+		target := filepath.Join(repository, path)
+		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+			t.Fatalf("make parent for %s: %v", path, err)
+		}
+		if err := os.WriteFile(target, bytes, 0o700); err != nil {
+			t.Fatalf("write %s: %v", path, err)
+		}
+	}
+	runGit(t, repository, "init", "-q", "-b", "main")
+	runGit(t, repository, "config", "user.email", "observability-test@example.invalid")
+	runGit(t, repository, "config", "user.name", "Observability Test")
+	runGit(t, repository, "add", ".")
+	runGit(t, repository, "commit", "-qm", "OTLP lab fixture")
+	return repository
+}
+
+func runGit(t *testing.T, repository string, arguments ...string) {
+	t.Helper()
+	command := exec.Command("git", append([]string{"-C", repository}, arguments...)...)
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("git %v: %v: %s", arguments, err, output)
 	}
 }
 
