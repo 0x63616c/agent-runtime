@@ -23,6 +23,8 @@ import (
 
 const maxPageBytes = 2 << 20
 
+const sourceRevisionPath = "/source-revision.json"
+
 type routeManifest struct {
 	SchemaVersion int      `json:"schemaVersion"`
 	BasePath      string   `json:"basePath"`
@@ -51,7 +53,7 @@ func main() {
 	expectedSHA := flag.String("expected-sha", "", "required lowercase 40-character source revision expected when a deployment marker is present")
 	manifestPath := flag.String("manifest", "website/route-manifest.json", "checked-in route manifest")
 	websiteRoot := flag.String("website-root", "website", "website source root used to derive expected public page titles")
-	requireMarker := flag.Bool("require-source-sha-marker", false, "fail when the published pages do not expose a source revision marker")
+	requireMarker := flag.Bool("require-source-sha-marker", false, "deprecated compatibility flag; source revision marker is always required")
 	flag.Parse()
 	if flag.NArg() != 0 {
 		usage()
@@ -92,7 +94,9 @@ func run(ctx context.Context, opts options, client *http.Client) error {
 	noRedirect := *client
 	noRedirect.CheckRedirect = func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse }
 
-	markerSeen := false
+	if err := verifySourceRevision(ctx, &noRedirect, base, opts.ExpectedSHA); err != nil {
+		return err
+	}
 	for _, page := range pages {
 		address := strings.TrimSuffix(base.String(), "/") + page.Route
 		request, err := http.NewRequestWithContext(ctx, http.MethodGet, address, nil)
@@ -144,20 +148,52 @@ func run(ctx context.Context, opts options, client *http.Client) error {
 		if err := verifyPage(string(body), address, page); err != nil {
 			return err
 		}
-		if marker, ok := sourceMarker(string(body)); ok {
-			markerSeen = true
-			if marker != opts.ExpectedSHA {
-				return fmt.Errorf("published route %s exposes source revision %q, want %q", page.Route, marker, opts.ExpectedSHA)
-			}
-		}
 	}
-	if opts.RequireSourceSHAMarker && !markerSeen {
-		return errors.New("published pages expose no source revision marker")
+	fmt.Printf("verified %d canonical public docs routes at %s; source revision marker matches %s\n", len(pages), base, opts.ExpectedSHA)
+	return nil
+}
+
+type sourceRevisionMarker struct {
+	SchemaVersion  int    `json:"schemaVersion"`
+	SourceRevision string `json:"sourceRevision"`
+}
+
+func verifySourceRevision(ctx context.Context, client *http.Client, base *url.URL, expectedSHA string) error {
+	markerURL := strings.TrimSuffix(base.String(), "/") + sourceRevisionPath
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, markerURL, nil)
+	if err != nil {
+		return fmt.Errorf("create source revision marker request: %w", err)
 	}
-	if markerSeen {
-		fmt.Printf("verified %d canonical public docs routes at %s; source revision marker matches %s\n", len(pages), base, opts.ExpectedSHA)
-	} else {
-		fmt.Printf("verified %d canonical public docs routes at %s; no source revision marker was published\n", len(pages), base)
+	response, err := client.Do(request)
+	if err != nil {
+		return fmt.Errorf("fetch source revision marker: %w", err)
+	}
+	body, readErr := io.ReadAll(io.LimitReader(response.Body, maxPageBytes+1))
+	closeErr := response.Body.Close()
+	if readErr != nil {
+		return fmt.Errorf("read source revision marker: %w", readErr)
+	}
+	if closeErr != nil {
+		return fmt.Errorf("close source revision marker: %w", closeErr)
+	}
+	if response.StatusCode != http.StatusOK {
+		return fmt.Errorf("source revision marker returned HTTP %d, want 200", response.StatusCode)
+	}
+	if len(body) > maxPageBytes {
+		return fmt.Errorf("source revision marker exceeds %d byte response limit", maxPageBytes)
+	}
+	if !strings.HasPrefix(strings.ToLower(response.Header.Get("Content-Type")), "application/json") {
+		return fmt.Errorf("source revision marker has Content-Type %q, want application/json", response.Header.Get("Content-Type"))
+	}
+	var marker sourceRevisionMarker
+	if err := decodeJSON(body, &marker); err != nil {
+		return fmt.Errorf("decode source revision marker: %w", err)
+	}
+	if marker.SchemaVersion != 1 || !validSHA(marker.SourceRevision) {
+		return errors.New("source revision marker must be schemaVersion 1 with an exact lowercase sourceRevision SHA")
+	}
+	if marker.SourceRevision != expectedSHA {
+		return fmt.Errorf("source revision marker exposes source revision %q, want %q", marker.SourceRevision, expectedSHA)
 	}
 	return nil
 }
@@ -249,8 +285,6 @@ var (
 	mainPattern          = regexp.MustCompile(`(?is)<main\b[^>]*>(.*?)</main>`)
 	linkPattern          = regexp.MustCompile(`(?is)<link\b[^>]*\brel\s*=\s*["']canonical["'][^>]*>`)
 	hrefPattern          = regexp.MustCompile(`(?is)\bhref\s*=\s*["']([^"']+)["']`)
-	metaTag              = regexp.MustCompile(`(?is)<meta\b[^>]*>`)
-	attribute            = regexp.MustCompile(`(?is)\b([a-z0-9-]+)\s*=\s*["']([^"']*)["']`)
 	stripTags            = regexp.MustCompile(`(?is)<[^>]+>`)
 	spaces               = regexp.MustCompile(`\s+`)
 	forbiddenPublicTerms = []struct {
@@ -273,29 +307,6 @@ func canonicalHref(page string) string {
 		return ""
 	}
 	return found[1]
-}
-
-func sourceMarker(page string) (string, bool) {
-	for _, tag := range metaTag.FindAllString(page, -1) {
-		attributes := htmlAttributes(tag)
-		if (attributes["name"] == "agent-runtime-source-sha" || attributes["name"] == "agent-runtime-source-revision") && validSHA(attributes["content"]) {
-			return attributes["content"], true
-		}
-	}
-	for _, found := range attribute.FindAllStringSubmatch(page, -1) {
-		if (found[1] == "data-agent-runtime-source-sha" || found[1] == "data-agent-runtime-source-revision") && validSHA(found[2]) {
-			return found[2], true
-		}
-	}
-	return "", false
-}
-
-func htmlAttributes(tag string) map[string]string {
-	attributes := make(map[string]string)
-	for _, found := range attribute.FindAllStringSubmatch(tag, -1) {
-		attributes[strings.ToLower(found[1])] = found[2]
-	}
-	return attributes
 }
 
 func frontmatterTitle(source string) string {

@@ -1,0 +1,55 @@
+{
+  "version": 1,
+  "purpose": "Protected Firecracker KVM runner bootstrap contract",
+  "github_environment": "firecracker-kvm",
+  "runner": {
+    "required_labels": [
+      "self-hosted",
+      "linux",
+      "x64",
+      "kvm",
+      "firecracker-protected"
+    ],
+    "required_workflow": "firecracker-kvm",
+    "protected_ref_required": true,
+    "platform": {
+      "os": "linux",
+      "architecture": "amd64"
+    },
+    "kvm_device": "/dev/kvm"
+  },
+  "bootstrap": {
+    "config_path": "/etc/agent-runtime/firecracker-kvm-runner.json",
+    "owner_uid": 0,
+    "config_must_be_root_owned": true,
+    "config_must_not_be_group_or_other_writable": true,
+    "required_fields": [
+      "version",
+      "jailer_chroot_base_dir",
+      "cgroup_parent",
+      "stack_resource",
+      "external_owner",
+      "jailer_uid",
+      "jailer_gid"
+    ],
+    "jailer_chroot_base_dir": "/srv/agent-runtime/jailer",
+    "cgroup_root": "/sys/fs/cgroup"
+  },
+  "fixtures": {
+    "lock_path": "tools/firecracker/fixtures.lock",
+    "lock_version": "firecracker.fixtures/v2",
+    "required_source_ids": [
+      "firecracker-release",
+      "kernel",
+      "rootfs",
+      "guest-agent"
+    ],
+    "project_release_assets_required": [
+      "kernel",
+      "rootfs",
+      "guest-agent"
+    ]
+  },
+  "secret_values_in_repository": false,
+  "provisioning_status": "not_provisioned"
+}

@@ -130,16 +130,34 @@ execute() {
   [[ "$apply" == true && -n "$stack_file" && -n "$preflight_file" && -n "$plan_file" && -n "$evidence_file" && -n "$kubeconfig" && -n "$approval_file" && -n "$actor" ]] || usage
   require_regular "$stack_file" "stack file"; require_regular "$kubeconfig" "kubeconfig"; require_new_output "$evidence_file" "evidence file"
   [[ "$actor" =~ ^[a-z0-9][a-z0-9@._-]{0,127}$ ]] || fail "actor must be a bounded operator identity"
-  read_identity "$stack_file"; validate_preflight "$preflight_file"; validate_plan "$plan_file" "$evidence_file"; validate_approval "$approval_file" "$actor" "$evidence_file"
+  read_identity "$stack_file"; validate_preflight "$preflight_file"; validate_plan "$plan_file" "$evidence_file"
   # Deliberately re-run the separate read-only probe immediately before the first
   # mutation. Its JSON is retained only in the caller-supplied evidence path.
   current_preflight="$("$root/deploy/production/live-lab-preflight.sh" --stack-file "$stack_file" --kubeconfig "$kubeconfig" --context "$context")"
   printf '%s' "$current_preflight" | jq -e '.read_only == true and .validated.namespace_absent == true' >/dev/null || fail "fresh preflight is not ready"
+  # The preflight can take long enough for an approval to expire. Re-read the
+  # private document immediately before the first mutation; an approval is not
+  # authority to bootstrap after its bound expiry.
+  validate_approval "$approval_file" "$actor" "$evidence_file"
   local audit_file capability_file bootstrap apply_result observe_result reconcile_result teardown_result cleanup_needed=false
   audit_file="${evidence_file}.operator-audit.jsonl"; capability_file="${evidence_file}.bootstrap-capability.json"
   [[ ! -e "$audit_file" && ! -e "$capability_file" ]] || fail "derived audit or bootstrap capability path already exists"
   common=(--stack-file "$stack_file" --stack "$stack_name" --profile production --kubeconfig "$kubeconfig" --context "$context" --actor "$actor" --audit-file "$audit_file" --migration-root "$root/deploy/production")
-  trap 'if [[ "$cleanup_needed" == true ]]; then go run "$root/cmd/stackctl" teardown "${common[@]}" --bootstrap-capability-file "$capability_file" >/dev/null || true; fi' EXIT
+  trap 'if [[ "$cleanup_needed" == true ]]; then
+    cleanup_error=""
+    if ! go run "$root/cmd/stackctl" teardown "${common[@]}" --bootstrap-capability-file "$capability_file" >/dev/null; then
+      cleanup_error="operator teardown failed"
+    fi
+    # Never imply that an attempted teardown was successful. The namespace is
+    # the containment boundary, so explicitly prove it is absent after any
+    # recovery path and leave a clear failure for the operator if it remains.
+    if kubectl --kubeconfig "$kubeconfig" --context "$context" get "namespace/$namespace" >/dev/null 2>&1; then
+      cleanup_error="${cleanup_error:+$cleanup_error; }live-lab namespace remains after cleanup"
+    fi
+    if [[ -n "$cleanup_error" ]]; then
+      echo "live-lab evidence cleanup failed: $cleanup_error; manual contained teardown is required for $namespace" >&2
+    fi
+  fi' EXIT
   bootstrap="$(go run "$root/cmd/stackctl" bootstrap "${common[@]}" --bootstrap-capability-file "$capability_file")"; cleanup_needed=true
   apply_result="$(go run "$root/cmd/stackctl" apply "${common[@]}" --bootstrap-capability-file "$capability_file")"
   observe_result="$(go run "$root/cmd/stackctl" observe "${common[@]}" --bootstrap-capability-file "$capability_file")"
@@ -151,13 +169,20 @@ execute() {
 }
 
 self_test() {
-  local tmp stack preflight plan evidence bad
+  local tmp stack preflight plan evidence bad approval
   tmp="$(mktemp -d)"; trap 'rm -rf -- "$tmp"' EXIT
-  stack="$tmp/stack.json"; preflight="$tmp/preflight.json"; plan="$tmp/plan.json"; evidence="$tmp/evidence.json"; bad="$tmp/bad.json"
+  stack="$tmp/stack.json"; preflight="$tmp/preflight.json"; plan="$tmp/plan.json"; evidence="$tmp/evidence.json"; bad="$tmp/bad.json"; approval="$tmp/approval.json"
   "$manifest_validator" render --name agent-runtime-live-lab-selftest --context home-server --output "$stack" >/dev/null
   jq -n '{status:"ready-for-reviewed-operator-apply",read_only:true,stack:"agent-runtime-live-lab-selftest",namespace:"agent-runtime-live-lab-selftest",context:"home-server",validated:{namespace_absent:true,external_secrets_api:true,network_policy_api:true,external_secret_references:true,immutable_images:true,default_deny_workload_policies:true},ready_linux_amd64_capacity:{nodes:1}}' >"$preflight"
   "$0" prepare --stack-file "$stack" --preflight-file "$preflight" --plan-file "$plan" --evidence-file "$evidence" >/dev/null
   jq -e '.status == "prepared-offline" and .read_only == true and .claims.evidence_requires_explicit_approval == true' "$plan" >/dev/null
+  read_identity "$stack"
+  jq -n --arg digest "$stack_digest" --arg evidence "$evidence" '{version:1,action:"apply-and-collect-live-lab-evidence",stack:"agent-runtime-live-lab-selftest",namespace:"agent-runtime-live-lab-selftest",context:"home-server",stack_sha256:$digest,actor:"operator",evidence_file:$evidence,approved_by:"reviewer",expires_at:"2030-01-01T00:00:00Z"}' >"$approval"
+  chmod 600 "$approval"
+  validate_approval "$approval" operator "$evidence"
+  jq '.expires_at = "1970-01-01T00:00:00Z"' "$approval" >"$bad"
+  chmod 600 "$bad"
+  if (validate_approval "$bad" operator "$evidence") >/dev/null 2>&1; then fail "execute accepted an expired target-bound approval"; fi
   jq '.validated.namespace_absent = false' "$preflight" >"$bad"
   if "$0" prepare --stack-file "$stack" --preflight-file "$bad" --plan-file "$tmp/bad-plan.json" --evidence-file "$tmp/bad-evidence.json" >/dev/null 2>&1; then fail "prepare accepted a preflight that could take over a namespace"; fi
   rm -rf -- "$tmp"

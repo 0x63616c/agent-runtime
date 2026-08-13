@@ -16,6 +16,9 @@ const publishedSHA = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 func TestRunVerifiesPublishedCanonicalRoutesAndMarker(t *testing.T) {
 	root, manifest := fixtureWebsite(t)
 	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if serveSourceRevision(w, r, publishedSHA) {
+			return
+		}
 		if r.URL.Path != "/agent-runtime/docs/start-here" {
 			t.Fatalf("path = %q", r.URL.Path)
 		}
@@ -31,6 +34,9 @@ func TestRunVerifiesPublishedCanonicalRoutesAndMarker(t *testing.T) {
 func TestRunRejectsInternalTermAndRevisionMismatch(t *testing.T) {
 	root, manifest := fixtureWebsite(t)
 	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if serveSourceRevision(w, r, "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb") {
+			return
+		}
 		w.Header().Set("Content-Type", "text/html")
 		_, _ = w.Write([]byte(page("Start here", serverURL(r), "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "Public introduction.")))
 	}))
@@ -44,6 +50,9 @@ func TestRunRejectsInternalTermAndRevisionMismatch(t *testing.T) {
 func TestRunRejectsInternalTerm(t *testing.T) {
 	root, manifest := fixtureWebsite(t)
 	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if serveSourceRevision(w, r, publishedSHA) {
+			return
+		}
 		w.Header().Set("Content-Type", "text/html")
 		_, _ = w.Write([]byte(page("Start here", serverURL(r), publishedSHA, "M5 internal delivery.")))
 	}))
@@ -57,6 +66,9 @@ func TestRunRejectsInternalTerm(t *testing.T) {
 func TestRunRejectsDuplicateTitle(t *testing.T) {
 	root, manifest := fixtureWebsite(t)
 	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if serveSourceRevision(w, r, publishedSHA) {
+			return
+		}
 		w.Header().Set("Content-Type", "text/html")
 		_, _ = w.Write([]byte(`<link rel="canonical" href="` + serverURL(r) + `"><main><h1>Start here</h1><h1>Repeated</h1></main>`))
 	}))
@@ -69,7 +81,12 @@ func TestRunRejectsDuplicateTitle(t *testing.T) {
 
 func TestRunRejectsCanonicalLinkWithoutHref(t *testing.T) {
 	root, manifest := fixtureWebsite(t)
-	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/agent-runtime/source-revision.json" {
+			w.Header().Set("Content-Type", "application/json; charset=utf-8")
+			_, _ = w.Write([]byte(`{"schemaVersion":1,"sourceRevision":"` + publishedSHA + `"}`))
+			return
+		}
 		w.Header().Set("Content-Type", "text/html")
 		_, _ = w.Write([]byte(`<link rel="canonical"><main><h1>Start here</h1></main>`))
 	}))
@@ -80,16 +97,26 @@ func TestRunRejectsCanonicalLinkWithoutHref(t *testing.T) {
 	}
 }
 
-func TestRunCanReportAbsenceOfOptionalMarker(t *testing.T) {
+func TestRunRejectsMissingSourceRevisionMarker(t *testing.T) {
 	root, manifest := fixtureWebsite(t)
 	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html")
 		_, _ = w.Write([]byte(page("Start here", serverURL(r), "", "Public introduction.")))
 	}))
 	defer server.Close()
-	if err := run(context.Background(), options{BaseURL: server.URL + "/agent-runtime", ExpectedSHA: publishedSHA, ManifestPath: manifest, WebsiteRoot: root}, server.Client()); err != nil {
-		t.Fatalf("run() without optional marker error = %v", err)
+	err := run(context.Background(), options{BaseURL: server.URL + "/agent-runtime", ExpectedSHA: publishedSHA, ManifestPath: manifest, WebsiteRoot: root}, server.Client())
+	if err == nil || !strings.Contains(err.Error(), "source revision marker") {
+		t.Fatalf("run() error = %v, want missing marker refusal", err)
 	}
+}
+
+func serveSourceRevision(w http.ResponseWriter, r *http.Request, revision string) bool {
+	if r.URL.Path != "/agent-runtime/source-revision.json" {
+		return false
+	}
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	_, _ = w.Write([]byte(`{"schemaVersion":1,"sourceRevision":"` + revision + `"}`))
+	return true
 }
 
 func fixtureWebsite(t *testing.T) (string, string) {

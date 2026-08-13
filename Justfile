@@ -99,7 +99,8 @@ docs-check:
     npm --prefix website ci
     npm --prefix website audit --omit=dev --audit-level=high
     npm --prefix website run typecheck
-    npm --prefix website run build
+    PUBLIC_AGENT_RUNTIME_SOURCE_SHA="$(git rev-parse HEAD)" npm --prefix website run build
+    PUBLIC_AGENT_RUNTIME_SOURCE_SHA="$(git rev-parse HEAD)" npm --prefix website run check:build-marker
     npm --prefix website run check:routes
     npm --prefix website run check:public-claims
     npm --prefix website run check:quality

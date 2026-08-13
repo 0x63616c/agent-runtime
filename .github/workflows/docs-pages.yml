@@ -45,6 +45,8 @@ jobs:
         with:
           just-version: 1.58.0
       - name: Validate and build documentation
+        env:
+          PUBLIC_AGENT_RUNTIME_SOURCE_SHA: ${{ github.sha }}
         run: just docs-check
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@7b1f4a764d45c48632c6b24a0339c27f5614fb0b # v4

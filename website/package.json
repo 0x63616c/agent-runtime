@@ -9,6 +9,7 @@
     "preview": "astro preview",
     "typecheck": "astro check",
     "check:routes": "node ./scripts/check-routes.mjs",
+    "check:build-marker": "node ./scripts/check-build-marker.mjs",
     "check:public-claims": "node ./scripts/check-public-claims.mjs",
     "check:quality": "node ./scripts/check-doc-quality.mjs"
   },
