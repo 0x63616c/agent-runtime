@@ -8,6 +8,13 @@ import (
 )
 
 func sandboxIDFor(operationID OperationID) SandboxID {
+	return SandboxIDForCreateOperation(operationID)
+}
+
+// SandboxIDForCreateOperation returns the deterministic sandbox identity
+// reserved by a create-sandbox operation. Private host owners use this exact
+// derivation when a create envelope intentionally has no target SandboxID.
+func SandboxIDForCreateOperation(operationID OperationID) SandboxID {
 	return SandboxID("sbx_" + string(operationID)[3:])
 }
 

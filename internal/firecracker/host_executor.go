@@ -20,6 +20,10 @@ type HostProcessExecutor struct {
 	Transfer *TransferExecutionAuthority
 	Restore  *SnapshotRestoreExecutionAuthority
 	Mount    *MountExecutionAuthority
+	// Ownership is the optional durable direct-KVM foundation-plan owner. It
+	// never certifies availability or starts a Jailer; when composed it binds
+	// verified create and exec deliveries before this adapter reaches a host.
+	Ownership *DirectLaunchOwnership
 }
 
 // UnavailableHostProcessExecutor binds the public host-control runtime to the
@@ -117,6 +121,19 @@ func (executor HostProcessExecutor) ExecuteAuthenticated(ctx context.Context, en
 	}
 	if err := sandboxhostprotocol.ValidateAuthenticatedEnvelopeWire(authenticatedEnvelope, envelope); err != nil {
 		return fmt.Errorf("execute authenticated Firecracker host envelope: exact canonical envelope is required: %w", ErrCapabilityUnavailable)
+	}
+	if executor.Ownership != nil {
+		switch envelope.OperationKind {
+		case "create-sandbox":
+			if err := executor.Ownership.ClaimCreate(envelope, authenticatedEnvelope); err != nil {
+				return err
+			}
+			return fmt.Errorf("execute authenticated Firecracker create: durable foundation ownership is not a certified launch: %w", ErrCapabilityUnavailable)
+		case "exec-process":
+			if err := executor.Ownership.BindExec(envelope, authenticatedEnvelope); err != nil {
+				return err
+			}
+		}
 	}
 	err := executor.Host.ExecuteAuthenticatedDispatch(ctx, envelope, authenticatedEnvelope)
 	if ctx == nil || ctx.Err() == nil || errors.Is(err, ErrCapabilityUnavailable) {
@@ -240,6 +257,11 @@ func (executor HostProcessExecutor) ExecuteAuthenticatedWithDataPlaneReceipt(ctx
 func (executor HostProcessExecutor) ReapAuthenticated(ctx context.Context, envelope sandboxhostprotocol.Envelope, authenticatedEnvelope []byte) error {
 	if executor.Host == nil || sandboxhostprotocol.ValidateAuthenticatedEnvelopeWire(authenticatedEnvelope, envelope) != nil {
 		return fmt.Errorf("reap authenticated Firecracker command: exact canonical envelope is required: %w", ErrCapabilityUnavailable)
+	}
+	if executor.Ownership != nil && envelope.OperationKind == "exec-process" {
+		if err := executor.Ownership.BindExec(envelope, authenticatedEnvelope); err != nil {
+			return err
+		}
 	}
 	if guestTransferOperationKind(envelope.OperationKind) {
 		if executor.Transfer == nil {
