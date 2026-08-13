@@ -5,6 +5,7 @@ package runtimeapiprocess_test
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -237,6 +238,52 @@ func TestDurableWorkspaceAgentBinariesUseOnlyThePublicAPI(t *testing.T) {
 	if page, e := bob.ListApprovals(ctx); e != nil || len(page.Approvals) != 0 {
 		t.Fatalf("restarted cross-principal inbox = %#v, %v", page, e)
 	}
+
+	// A policy revision is an invalidation boundary, not merely future-admission
+	// configuration. Exercise it through the durable public administrator and
+	// owner clients after the actual API process restart: an already pending
+	// Approval must become terminal before any capability grant can exist.
+	invalidated := seed("INVALIDA", futureExpiry)
+	admin = durableProcessClient(t, baseURL, secrets["ADMIN_TOKEN"], ids)
+	revised, err := admin.RevisePolicy(ctx, agentruntime.RevisePolicyRequest{
+		IdempotencyKey:   "workspace-e2e-invalidate-pending-approval",
+		Name:             policy.Name,
+		ExpectedRevision: policy.Revision,
+		Rules:            []agentruntime.PolicyRule{{ToolName: "write", Decision: agentruntime.PolicyDenied}},
+	})
+	if err != nil || revised.Revision != policy.Revision+1 {
+		t.Fatalf("public policy revision = %#v, %v", revised, err)
+	}
+	if approval, e := alice.InspectApproval(ctx, invalidated.approvalID); e != nil || approval.State != agentruntime.ApprovalCancelled || approval.DecidedAt != nil {
+		t.Fatalf("policy-revised pending Approval = %#v, %v", approval, e)
+	}
+	if turn, e := alice.InspectTurn(ctx, invalidated.sessionID, invalidated.turnID); e != nil || turn.State != agentruntime.TurnCancelled || turn.CompletedAt == nil {
+		t.Fatalf("policy-revised pending Turn = %#v, %v", turn, e)
+	}
+	if _, e := alice.DecideApproval(ctx, agentruntime.DecideApprovalRequest{ApprovalID: invalidated.approvalID, Decision: agentruntime.ApprovalApproved, IdempotencyKey: "workspace-e2e-invalidated-late-decision"}); !hasDurableConflict(e) {
+		t.Fatalf("policy-invalidated Approval late decision = %v, want stable public conflict", e)
+	}
+	state, err := store.LoadRuntimeState(ctx, runtimestate.MutationScope{Tenant: tenant, Authority: runtimestate.AuthorityRuntimeWorker})
+	if err != nil {
+		t.Fatalf("load state after policy invalidation: %v", err)
+	}
+	for _, grant := range state.Grants {
+		if grant.SessionID == invalidated.sessionID && grant.TurnID == invalidated.turnID {
+			t.Fatalf("policy-invalidated pending Approval minted a grant: %#v", grant)
+		}
+	}
+	policyInvalidatedAudit := false
+	for _, fact := range state.Audit {
+		policyInvalidatedAudit = policyInvalidatedAudit || (fact.SessionID == invalidated.sessionID && fact.TurnID == invalidated.turnID && fact.Kind == "approval.policy_invalidated")
+	}
+	if !policyInvalidatedAudit {
+		t.Fatalf("policy invalidation audit fact missing: %#v", state.Audit)
+	}
+}
+
+func hasDurableConflict(err error) bool {
+	var runtimeError *agentruntime.Error
+	return errors.As(err, &runtimeError) && runtimeError.Failure.Code == agentruntime.FailureConflict
 }
 
 type workspaceE2EIDs struct{ next uint64 }
