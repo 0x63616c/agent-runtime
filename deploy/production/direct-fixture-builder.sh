@@ -244,7 +244,7 @@ spec:
               find "\$stage" -type f -exec chown 0:0 {} + -exec chmod 0600 {} +
               mv "\$stage" /var/lib/agent-runtime/firecracker-fixtures/home-server
               install -d -o 0 -g 0 -m 0700 /var/lib/agent-runtime/firecracker-direct
-              /workspace/tools/firecracker/write-direct-fixture-source-map.sh /var/lib/agent-runtime/firecracker-fixtures/home-server /var/lib/agent-runtime/firecracker-direct/fixture-source-map.json
+              sh /workspace/tools/firecracker/write-direct-fixture-source-map.sh /var/lib/agent-runtime/firecracker-fixtures/home-server /var/lib/agent-runtime/firecracker-direct/fixture-source-map.json
           securityContext:
             readOnlyRootFilesystem: true
             allowPrivilegeEscalation: false
