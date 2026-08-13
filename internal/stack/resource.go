@@ -145,6 +145,8 @@ type KubernetesResource struct {
 	SecretEnvironment []SecretEnvironmentVariable `json:"secret_environment,omitempty"`
 	// VolumeMounts binds a workload to explicitly declared PersistentVolumeClaims.
 	VolumeMounts []PersistentVolumeMount `json:"volume_mounts,omitempty"`
+	// ConfigMapMounts binds reviewed ConfigMap keys read-only into a workload.
+	ConfigMapMounts []ConfigMapMount `json:"config_map_mounts,omitempty"`
 	// Readiness is the explicit workload health probe when an operator must await service readiness.
 	Readiness *ReadinessProbe `json:"readiness,omitempty"`
 	// Ports is explicit, including an empty array for workloads with no ports.
@@ -206,6 +208,16 @@ type PersistentVolumeMount struct {
 	ReadOnly bool `json:"read_only"`
 }
 
+// ConfigMapMount binds one reviewed ConfigMap key read-only at an absolute path.
+type ConfigMapMount struct {
+	// ConfigMap names the Stack ConfigMap resource.
+	ConfigMap ResourceID `json:"config_map"`
+	// Key names the reviewed ConfigMap key to project.
+	Key string `json:"key"`
+	// Path is the absolute in-container file path for the projected key.
+	Path string `json:"path"`
+}
+
 // ReadinessProbe is a bounded exec health check declared with a workload.
 type ReadinessProbe struct {
 	// Command is reviewed argv executed in the workload container.
@@ -260,6 +272,9 @@ type NetworkRules struct {
 	AllowDNS bool `json:"allow_dns,omitempty"`
 	// AllowedEgress names explicit service resource dependencies.
 	AllowedEgress []ResourceID `json:"allowed_egress"`
+	// AllowedIngress names the declared workloads permitted to initiate traffic to Subject.
+	// An explicitly empty list applies an ingress default-deny policy.
+	AllowedIngress []ResourceID `json:"allowed_ingress,omitempty"`
 }
 
 // Permission is one non-wildcard Kubernetes Role rule.
@@ -505,7 +520,7 @@ func validateKubernetes(resource Resource, namespace string, profile Profile) er
 			names[variable.Name] = struct{}{}
 		}
 		claims := make(map[ResourceID]struct{}, len(object.VolumeMounts))
-		paths := make(map[string]struct{}, len(object.VolumeMounts))
+		paths := make(map[string]struct{}, len(object.VolumeMounts)+len(object.ConfigMapMounts))
 		for _, variable := range object.SecretEnvironment {
 			if !environmentNamePattern.MatchString(variable.Name) || variable.Secret == "" || !environmentNamePattern.MatchString(variable.Key) || len(variable.Key) > 253 {
 				return errors.Newf("resource %s secret environment must name a declared key and Secret reference", resource.ID)
@@ -526,6 +541,19 @@ func validateKubernetes(resource Resource, namespace string, profile Profile) er
 				return errors.Newf("resource %s mount path %s is declared more than once", resource.ID, mount.Path)
 			}
 			claims[mount.Claim], paths[mount.Path] = struct{}{}, struct{}{}
+		}
+		configMaps := make(map[ResourceID]struct{}, len(object.ConfigMapMounts))
+		for _, mount := range object.ConfigMapMounts {
+			if mount.ConfigMap == "" || mount.Key == "" || strings.Contains(mount.Key, "/") || len(mount.Key) > 253 || !strings.HasPrefix(mount.Path, "/") || strings.Contains(mount.Path, "..") || len(mount.Path) > 1024 {
+				return errors.Newf("resource %s ConfigMap mount must use a declared key and bounded absolute path", resource.ID)
+			}
+			if _, duplicate := configMaps[mount.ConfigMap]; duplicate {
+				return errors.Newf("resource %s ConfigMap %s is mounted more than once", resource.ID, mount.ConfigMap)
+			}
+			if _, duplicate := paths[mount.Path]; duplicate {
+				return errors.Newf("resource %s mount path %s is declared more than once", resource.ID, mount.Path)
+			}
+			configMaps[mount.ConfigMap], paths[mount.Path] = struct{}{}, struct{}{}
 		}
 		if object.Readiness != nil {
 			if object.Readiness.InitialDelaySeconds < 0 || object.Readiness.PeriodSeconds <= 0 || object.Readiness.FailureThreshold <= 0 || len(object.Readiness.Command) == 0 {
@@ -554,7 +582,7 @@ func validateKubernetes(resource Resource, namespace string, profile Profile) er
 		if object.Network == nil || !object.Network.DefaultDeny || object.Network.AllowedEgress == nil {
 			return errors.Newf("resource %s NetworkPolicy must explicitly default deny", resource.ID)
 		}
-		if (len(object.Network.AllowedEgress) > 0 || object.Network.AllowDNS) && object.Network.Subject == "" {
+		if (len(object.Network.AllowedEgress) > 0 || object.Network.AllowDNS || object.Network.AllowedIngress != nil) && object.Network.Subject == "" {
 			return errors.Newf("resource %s NetworkPolicy egress exceptions must select one declared workload", resource.ID)
 		}
 	case "Role":

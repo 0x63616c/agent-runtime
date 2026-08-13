@@ -753,7 +753,7 @@
             "environment": [
               {
                 "name": "RUNTIME_ROLE_CONFIG",
-                "value": "{\"version\":1,\"role\":\"orchestration-codec\",\"namespace\":\"ar-agent-runtime\",\"listen_address\":\"0.0.0.0:8081\",\"dependencies\":[{\"name\":\"state\",\"endpoint\":\"postgres://state.ar-agent-runtime.svc:5432/agent_runtime\",\"secret_environment\":\"STATE_DATABASE_DSN\"},{\"name\":\"telemetry\",\"endpoint\":\"http://telemetry.ar-agent-runtime.svc:4318\"},{\"name\":\"temporal\",\"endpoint\":\"temporal.ar-agent-runtime.svc:7233\",\"secret_environment\":\"TEMPORAL_AUTH_TOKEN\"},{\"name\":\"payload-blob\",\"endpoint\":\"http://blob.ar-agent-runtime.svc:9000\",\"secret_environment\":\"ORCHESTRATION_PAYLOAD_BLOB_ACCESS_KEY\"},{\"name\":\"payload-blob-secret\",\"endpoint\":\"http://blob.ar-agent-runtime.svc:9000\",\"secret_environment\":\"ORCHESTRATION_PAYLOAD_BLOB_SECRET_KEY\"}],\"worker\":{\"task_queue\":\"ar-agent-runtime-session-v1\",\"payload_blob_endpoint\":\"http://blob.ar-agent-runtime.svc:9000\",\"payload_blob_bucket\":\"ar-agent-runtime-temporal-payload\",\"payload_blob_prefix\":\"temporal-payload\",\"payload_access_key_environment\":\"ORCHESTRATION_PAYLOAD_BLOB_ACCESS_KEY\",\"payload_secret_key_environment\":\"ORCHESTRATION_PAYLOAD_BLOB_SECRET_KEY\"}}"
+                "value": "{\"version\":1,\"role\":\"orchestration-codec\",\"namespace\":\"ar-agent-runtime\",\"listen_address\":\"0.0.0.0:8081\",\"dependencies\":[{\"name\":\"state\",\"endpoint\":\"postgres://state.ar-agent-runtime.svc:5432/agent_runtime\",\"secret_environment\":\"STATE_DATABASE_DSN\"},{\"name\":\"telemetry\",\"endpoint\":\"http://otel-collector:4318\"},{\"name\":\"temporal\",\"endpoint\":\"temporal.ar-agent-runtime.svc:7233\",\"secret_environment\":\"TEMPORAL_AUTH_TOKEN\"},{\"name\":\"payload-blob\",\"endpoint\":\"http://blob.ar-agent-runtime.svc:9000\",\"secret_environment\":\"ORCHESTRATION_PAYLOAD_BLOB_ACCESS_KEY\"},{\"name\":\"payload-blob-secret\",\"endpoint\":\"http://blob.ar-agent-runtime.svc:9000\",\"secret_environment\":\"ORCHESTRATION_PAYLOAD_BLOB_SECRET_KEY\"}],\"worker\":{\"task_queue\":\"ar-agent-runtime-session-v1\",\"payload_blob_endpoint\":\"http://blob.ar-agent-runtime.svc:9000\",\"payload_blob_bucket\":\"ar-agent-runtime-temporal-payload\",\"payload_blob_prefix\":\"temporal-payload\",\"payload_access_key_environment\":\"ORCHESTRATION_PAYLOAD_BLOB_ACCESS_KEY\",\"payload_secret_key_environment\":\"ORCHESTRATION_PAYLOAD_BLOB_SECRET_KEY\"}}"
               }
             ],
             "secret_environment": [
@@ -843,7 +843,7 @@
             "environment": [
               {
                 "name": "RUNTIME_ROLE_CONFIG",
-                "value": "{\"version\":1,\"role\":\"model\",\"namespace\":\"ar-agent-runtime\",\"listen_address\":\"0.0.0.0:8082\",\"dependencies\":[{\"name\":\"conversation\",\"endpoint\":\"http://api.ar-agent-runtime.svc:8080\",\"secret_environment\":\"CONVERSATION_ACCESS_TOKEN\"},{\"name\":\"egress-proxy\",\"endpoint\":\"http://egress-proxy.ar-agent-runtime.svc:8088\"},{\"name\":\"model\",\"endpoint\":\"https://model-provider.example.invalid\",\"secret_environment\":\"MODEL_API_KEY\"},{\"name\":\"telemetry\",\"endpoint\":\"http://telemetry.ar-agent-runtime.svc:4318\"}],\"local_demo_worker\":{\"enabled\":true,\"mode\":\"local-demo-v1\",\"fixture\":\"workspace-approval-v1\",\"fixture_scenario\":\"workspace-approval-reset-v1\",\"state_dsn_environment\":\"LOCAL_DEMO_STATE_DSN\",\"content_endpoint\":\"blob.ar-agent-runtime.svc:9000\",\"content_access_key_environment\":\"LOCAL_DEMO_CONTENT_ACCESS_KEY\",\"content_secret_key_environment\":\"LOCAL_DEMO_CONTENT_SECRET_KEY\",\"content_bucket\":\"ar-agent-runtime\"}}"
+                "value": "{\"version\":1,\"role\":\"model\",\"namespace\":\"ar-agent-runtime\",\"listen_address\":\"0.0.0.0:8082\",\"dependencies\":[{\"name\":\"conversation\",\"endpoint\":\"http://api.ar-agent-runtime.svc:8080\",\"secret_environment\":\"CONVERSATION_ACCESS_TOKEN\"},{\"name\":\"egress-proxy\",\"endpoint\":\"http://egress-proxy.ar-agent-runtime.svc:8088\"},{\"name\":\"model\",\"endpoint\":\"https://model-provider.example.invalid\",\"secret_environment\":\"MODEL_API_KEY\"},{\"name\":\"telemetry\",\"endpoint\":\"http://otel-collector:4318\"}],\"local_demo_worker\":{\"enabled\":true,\"mode\":\"local-demo-v1\",\"fixture\":\"workspace-approval-v1\",\"fixture_scenario\":\"workspace-approval-reset-v1\",\"state_dsn_environment\":\"LOCAL_DEMO_STATE_DSN\",\"content_endpoint\":\"blob.ar-agent-runtime.svc:9000\",\"content_access_key_environment\":\"LOCAL_DEMO_CONTENT_ACCESS_KEY\",\"content_secret_key_environment\":\"LOCAL_DEMO_CONTENT_SECRET_KEY\",\"content_bucket\":\"ar-agent-runtime\"}}"
               }
             ],
             "secret_environment": [
@@ -938,7 +938,7 @@
             "environment": [
               {
                 "name": "RUNTIME_ROLE_CONFIG",
-                "value": "{\"version\":1,\"role\":\"tool\",\"namespace\":\"ar-agent-runtime\",\"listen_address\":\"0.0.0.0:8083\",\"dependencies\":[{\"name\":\"sandbox-control\",\"endpoint\":\"http://sandbox-control.ar-agent-runtime.svc:8086\",\"secret_environment\":\"SANDBOX_CONTROL_TOKEN\"},{\"name\":\"telemetry\",\"endpoint\":\"http://telemetry.ar-agent-runtime.svc:4318\"},{\"name\":\"tool-broker\",\"endpoint\":\"http://api.ar-agent-runtime.svc:8080\",\"secret_environment\":\"TOOL_BROKER_TOKEN\"}],\"local_demo_worker\":{\"enabled\":true,\"mode\":\"local-demo-v1\",\"fixture\":\"workspace-approval-v1\",\"fixture_scenario\":\"workspace-approval-reset-v1\",\"state_dsn_environment\":\"LOCAL_DEMO_STATE_DSN\",\"content_endpoint\":\"blob.ar-agent-runtime.svc:9000\",\"content_access_key_environment\":\"LOCAL_DEMO_CONTENT_ACCESS_KEY\",\"content_secret_key_environment\":\"LOCAL_DEMO_CONTENT_SECRET_KEY\",\"content_bucket\":\"ar-agent-runtime\"}}"
+                "value": "{\"version\":1,\"role\":\"tool\",\"namespace\":\"ar-agent-runtime\",\"listen_address\":\"0.0.0.0:8083\",\"dependencies\":[{\"name\":\"sandbox-control\",\"endpoint\":\"http://sandbox-control.ar-agent-runtime.svc:8086\",\"secret_environment\":\"SANDBOX_CONTROL_TOKEN\"},{\"name\":\"telemetry\",\"endpoint\":\"http://otel-collector:4318\"},{\"name\":\"tool-broker\",\"endpoint\":\"http://api.ar-agent-runtime.svc:8080\",\"secret_environment\":\"TOOL_BROKER_TOKEN\"}],\"local_demo_worker\":{\"enabled\":true,\"mode\":\"local-demo-v1\",\"fixture\":\"workspace-approval-v1\",\"fixture_scenario\":\"workspace-approval-reset-v1\",\"state_dsn_environment\":\"LOCAL_DEMO_STATE_DSN\",\"content_endpoint\":\"blob.ar-agent-runtime.svc:9000\",\"content_access_key_environment\":\"LOCAL_DEMO_CONTENT_ACCESS_KEY\",\"content_secret_key_environment\":\"LOCAL_DEMO_CONTENT_SECRET_KEY\",\"content_bucket\":\"ar-agent-runtime\"}}"
               }
             ],
             "secret_environment": [
@@ -1032,7 +1032,7 @@
             "environment": [
               {
                 "name": "RUNTIME_ROLE_CONFIG",
-                "value": "{\"version\":1,\"role\":\"blob\",\"namespace\":\"ar-agent-runtime\",\"listen_address\":\"0.0.0.0:8084\",\"dependencies\":[{\"name\":\"storage\",\"endpoint\":\"http://blob.ar-agent-runtime.svc:9000\",\"secret_environment\":\"BLOB_STORAGE_CREDENTIAL\"},{\"name\":\"telemetry\",\"endpoint\":\"http://telemetry.ar-agent-runtime.svc:4318\"}]}"
+                "value": "{\"version\":1,\"role\":\"blob\",\"namespace\":\"ar-agent-runtime\",\"listen_address\":\"0.0.0.0:8084\",\"dependencies\":[{\"name\":\"storage\",\"endpoint\":\"http://blob.ar-agent-runtime.svc:9000\",\"secret_environment\":\"BLOB_STORAGE_CREDENTIAL\"},{\"name\":\"telemetry\",\"endpoint\":\"http://otel-collector:4318\"}]}"
               }
             ],
             "secret_environment": [
@@ -1106,7 +1106,7 @@
             "environment": [
               {
                 "name": "RUNTIME_ROLE_CONFIG",
-                "value": "{\"version\":1,\"role\":\"codec\",\"namespace\":\"ar-agent-runtime\",\"listen_address\":\"0.0.0.0:8085\",\"dependencies\":[{\"name\":\"blob\",\"endpoint\":\"http://blob.ar-agent-runtime.svc:9000\",\"secret_environment\":\"CODEC_BLOB_CREDENTIAL\"},{\"name\":\"telemetry\",\"endpoint\":\"http://telemetry.ar-agent-runtime.svc:4318\"}]}"
+                "value": "{\"version\":1,\"role\":\"codec\",\"namespace\":\"ar-agent-runtime\",\"listen_address\":\"0.0.0.0:8085\",\"dependencies\":[{\"name\":\"blob\",\"endpoint\":\"http://blob.ar-agent-runtime.svc:9000\",\"secret_environment\":\"CODEC_BLOB_CREDENTIAL\"},{\"name\":\"telemetry\",\"endpoint\":\"http://otel-collector:4318\"}]}"
               },
               {
                 "name": "CODEC_ALLOWED_ORIGINS",
@@ -1185,7 +1185,7 @@
             "environment": [
               {
                 "name": "RUNTIME_ROLE_CONFIG",
-                "value": "{\"version\":1,\"role\":\"sandbox-control\",\"namespace\":\"ar-agent-runtime\",\"listen_address\":\"0.0.0.0:8086\",\"dependencies\":[{\"name\":\"host-ca\",\"endpoint\":\"https://host-ca.example.invalid\",\"secret_environment\":\"SANDBOX_HOST_CA\"},{\"name\":\"sandbox-state\",\"endpoint\":\"postgres://state.ar-agent-runtime.svc:5432/sandbox\",\"secret_environment\":\"SANDBOX_STATE_DSN\"},{\"name\":\"telemetry\",\"endpoint\":\"http://telemetry.ar-agent-runtime.svc:4318\"}]}"
+                "value": "{\"version\":1,\"role\":\"sandbox-control\",\"namespace\":\"ar-agent-runtime\",\"listen_address\":\"0.0.0.0:8086\",\"dependencies\":[{\"name\":\"host-ca\",\"endpoint\":\"https://host-ca.example.invalid\",\"secret_environment\":\"SANDBOX_HOST_CA\"},{\"name\":\"sandbox-state\",\"endpoint\":\"postgres://state.ar-agent-runtime.svc:5432/sandbox\",\"secret_environment\":\"SANDBOX_STATE_DSN\"},{\"name\":\"telemetry\",\"endpoint\":\"http://otel-collector:4318\"}]}"
               }
             ],
             "secret_environment": [
@@ -1265,7 +1265,7 @@
             "environment": [
               {
                 "name": "RUNTIME_ROLE_CONFIG",
-                "value": "{\"version\":1,\"role\":\"sandbox-host\",\"namespace\":\"ar-agent-runtime\",\"listen_address\":\"0.0.0.0:8087\",\"dependencies\":[{\"name\":\"host-identity\",\"endpoint\":\"https://host-identity.example.invalid\",\"secret_environment\":\"SANDBOX_HOST_IDENTITY\"},{\"name\":\"sandbox-control\",\"endpoint\":\"http://sandbox-control.ar-agent-runtime.svc:8086\",\"secret_environment\":\"SANDBOX_CONTROL_TOKEN\"},{\"name\":\"telemetry\",\"endpoint\":\"http://telemetry.ar-agent-runtime.svc:4318\"}]}"
+                "value": "{\"version\":1,\"role\":\"sandbox-host\",\"namespace\":\"ar-agent-runtime\",\"listen_address\":\"0.0.0.0:8087\",\"dependencies\":[{\"name\":\"host-identity\",\"endpoint\":\"https://host-identity.example.invalid\",\"secret_environment\":\"SANDBOX_HOST_IDENTITY\"},{\"name\":\"sandbox-control\",\"endpoint\":\"http://sandbox-control.ar-agent-runtime.svc:8086\",\"secret_environment\":\"SANDBOX_CONTROL_TOKEN\"},{\"name\":\"telemetry\",\"endpoint\":\"http://otel-collector:4318\"}]}"
               }
             ],
             "secret_environment": [
@@ -1981,9 +1981,9 @@
           "scope": "namespace",
           "dependencies": [
             "api",
-            "state",
-            "telemetry",
-            "blob"
+            "blob",
+            "otel-collector",
+            "state"
           ],
           "retention": {
             "policy": "ephemeral",
@@ -2001,7 +2001,7 @@
               "subject": "api",
               "allowed_egress": [
                 "state",
-                "telemetry",
+                "otel-collector",
                 "blob"
               ],
               "allow_dns": true
@@ -2015,11 +2015,11 @@
           "owner": "security-operator",
           "scope": "namespace",
           "dependencies": [
+            "blob",
             "orchestration",
+            "otel-collector",
             "state",
-            "telemetry",
-            "temporal",
-            "blob"
+            "temporal"
           ],
           "retention": {
             "policy": "ephemeral",
@@ -2037,7 +2037,7 @@
               "subject": "orchestration",
               "allowed_egress": [
                 "state",
-                "telemetry",
+                "otel-collector",
                 "temporal",
                 "blob"
               ],
@@ -2052,12 +2052,12 @@
           "owner": "security-operator",
           "scope": "namespace",
           "dependencies": [
-            "model",
             "api",
             "blob",
             "egress-proxy",
-            "state",
-            "telemetry"
+            "model",
+            "otel-collector",
+            "state"
           ],
           "retention": {
             "policy": "ephemeral",
@@ -2077,8 +2077,8 @@
                 "api",
                 "blob",
                 "egress-proxy",
-                "state",
-                "telemetry"
+                "otel-collector",
+                "state"
               ],
               "allow_dns": true
             },
@@ -2091,12 +2091,12 @@
           "owner": "security-operator",
           "scope": "namespace",
           "dependencies": [
-            "tool",
             "api",
             "blob",
+            "otel-collector",
             "sandbox-control",
             "state",
-            "telemetry"
+            "tool"
           ],
           "retention": {
             "policy": "ephemeral",
@@ -2115,9 +2115,9 @@
               "allowed_egress": [
                 "api",
                 "blob",
+                "otel-collector",
                 "sandbox-control",
-                "state",
-                "telemetry"
+                "state"
               ],
               "allow_dns": true
             },
@@ -2130,9 +2130,9 @@
           "owner": "security-operator",
           "scope": "namespace",
           "dependencies": [
-            "blob-role",
             "blob",
-            "telemetry"
+            "blob-role",
+            "otel-collector"
           ],
           "retention": {
             "policy": "ephemeral",
@@ -2150,7 +2150,7 @@
               "subject": "blob-role",
               "allowed_egress": [
                 "blob",
-                "telemetry"
+                "otel-collector"
               ],
               "allow_dns": true
             },
@@ -2163,9 +2163,9 @@
           "owner": "security-operator",
           "scope": "namespace",
           "dependencies": [
-            "codec",
             "blob",
-            "telemetry"
+            "codec",
+            "otel-collector"
           ],
           "retention": {
             "policy": "ephemeral",
@@ -2183,7 +2183,7 @@
               "subject": "codec",
               "allowed_egress": [
                 "blob",
-                "telemetry"
+                "otel-collector"
               ],
               "allow_dns": true
             },
@@ -2196,9 +2196,9 @@
           "owner": "security-operator",
           "scope": "namespace",
           "dependencies": [
+            "otel-collector",
             "sandbox-control",
-            "state",
-            "telemetry"
+            "state"
           ],
           "retention": {
             "policy": "ephemeral",
@@ -2216,7 +2216,7 @@
               "subject": "sandbox-control",
               "allowed_egress": [
                 "state",
-                "telemetry"
+                "otel-collector"
               ],
               "allow_dns": true
             },
@@ -2229,9 +2229,9 @@
           "owner": "security-operator",
           "scope": "namespace",
           "dependencies": [
-            "sandbox-host",
+            "otel-collector",
             "sandbox-control",
-            "telemetry"
+            "sandbox-host"
           ],
           "retention": {
             "policy": "ephemeral",
@@ -2249,7 +2249,7 @@
               "subject": "sandbox-host",
               "allowed_egress": [
                 "sandbox-control",
-                "telemetry"
+                "otel-collector"
               ],
               "allow_dns": true
             },
@@ -2347,6 +2347,7 @@
           "owner": "security-operator",
           "scope": "namespace",
           "dependencies": [
+            "otel-collector",
             "telemetry"
           ],
           "retention": {
@@ -2558,6 +2559,238 @@
             "collector_service": "telemetry-service",
             "port_name": "http",
             "retention_days": 30
+          }
+        },
+        {
+          "id": "otel-collector-config",
+          "kind": "kubernetes",
+          "owner": "telemetry-operator",
+          "scope": "namespace",
+          "dependencies": [],
+          "retention": {
+            "policy": "ephemeral",
+            "days": 0
+          },
+          "backup_restore_owner": "none",
+          "delete_behavior": "delete",
+          "external_controller": false,
+          "kubernetes": {
+            "api_version": "v1",
+            "kind": "ConfigMap",
+            "name": "otel-collector-config",
+            "data": {
+              "collector.yaml": "# This is a deployment input, not a running deployment. The operator must bind\n# the OTLP receiver only to the declared in-cluster Service and separately prove\n# the collector, trace store, and Prometheus scrape path in the target lab.\nreceivers:\n  otlp:\n    protocols:\n      grpc:\n        endpoint: 0.0.0.0:4317\n      http:\n        endpoint: 0.0.0.0:4318\n\nprocessors:\n  memory_limiter:\n    check_interval: 1s\n    limit_mib: 256\n    spike_limit_mib: 64\n  attributes/drop-unsafe:\n    actions:\n      - key: http.request.header.authorization\n        action: delete\n      - key: http.request.body\n        action: delete\n      - key: http.response.body\n        action: delete\n      - key: gen_ai.prompt\n        action: delete\n      - key: gen_ai.completion\n        action: delete\n      - key: runtime.model.reasoning\n        action: delete\n      - key: runtime.tool.output\n        action: delete\n      - key: process.command_args\n        action: delete\n  batch:\n    send_batch_size: 512\n    timeout: 1s\n\nexporters:\n  # The trace store is deliberately an in-cluster DNS name. Authentication and\n  # any external export are not part of this reusable collector contract.\n  otlphttp/trace-store:\n    endpoint: http://trace-store:4318\n    compression: gzip\n    timeout: 5s\n  prometheus:\n    endpoint: 0.0.0.0:8889\n    resource_to_telemetry_conversion:\n      enabled: false\n\nservice:\n  pipelines:\n    traces:\n      receivers: [otlp]\n      processors: [memory_limiter, attributes/drop-unsafe, batch]\n      exporters: [otlphttp/trace-store]\n    metrics:\n      receivers: [otlp]\n      processors: [memory_limiter, attributes/drop-unsafe, batch]\n      exporters: [prometheus]\n"
+            },
+            "environment": []
+          }
+        },
+        {
+          "id": "otel-collector",
+          "kind": "kubernetes",
+          "owner": "telemetry-operator",
+          "scope": "namespace",
+          "dependencies": [
+            "telemetry-account",
+            "otel-collector-config",
+            "telemetry"
+          ],
+          "retention": {
+            "policy": "ephemeral",
+            "days": 0
+          },
+          "backup_restore_owner": "none",
+          "delete_behavior": "delete",
+          "external_controller": false,
+          "kubernetes": {
+            "api_version": "apps/v1",
+            "kind": "Deployment",
+            "name": "otel-collector",
+            "replicas": 1,
+            "image": "otel/opentelemetry-collector-contrib@sha256:09f7a495e6542343cc25aa4e3facba144ba03b0f0b030e4469186e8164a9ed64",
+            "service_account": "telemetry-account",
+            "arguments": [
+              "--config=/etc/otel/collector.yaml"
+            ],
+            "environment": [],
+            "secret_environment": [],
+            "ports": [
+              {
+                "name": "otlp-grpc",
+                "number": 4317,
+                "protocol": "TCP"
+              },
+              {
+                "name": "otlp-http",
+                "number": 4318,
+                "protocol": "TCP"
+              },
+              {
+                "name": "metrics",
+                "number": 8889,
+                "protocol": "TCP"
+              }
+            ],
+            "compute": {
+              "request_milli_cpu": 100,
+              "limit_milli_cpu": 500,
+              "request_memory_bytes": 134217728,
+              "limit_memory_bytes": 536870912
+            },
+            "storage": [],
+            "volume_mounts": [],
+            "config_map_mounts": [
+              {
+                "config_map": "otel-collector-config",
+                "key": "collector.yaml",
+                "path": "/etc/otel/collector.yaml"
+              }
+            ]
+          }
+        },
+        {
+          "id": "trace-store-service",
+          "kind": "kubernetes",
+          "owner": "telemetry-operator",
+          "scope": "namespace",
+          "dependencies": [
+            "telemetry"
+          ],
+          "retention": {
+            "policy": "ephemeral",
+            "days": 0
+          },
+          "backup_restore_owner": "none",
+          "delete_behavior": "delete",
+          "external_controller": false,
+          "kubernetes": {
+            "api_version": "v1",
+            "kind": "Service",
+            "name": "trace-store",
+            "selector": "telemetry",
+            "ports": [
+              {
+                "name": "http",
+                "number": 4318,
+                "protocol": "TCP"
+              }
+            ],
+            "environment": []
+          }
+        },
+        {
+          "id": "otel-collector-service",
+          "kind": "kubernetes",
+          "owner": "telemetry-operator",
+          "scope": "namespace",
+          "dependencies": [
+            "otel-collector"
+          ],
+          "retention": {
+            "policy": "ephemeral",
+            "days": 0
+          },
+          "backup_restore_owner": "none",
+          "delete_behavior": "delete",
+          "external_controller": false,
+          "kubernetes": {
+            "api_version": "v1",
+            "kind": "Service",
+            "name": "otel-collector",
+            "selector": "otel-collector",
+            "ports": [
+              {
+                "name": "otlp-grpc",
+                "number": 4317,
+                "protocol": "TCP"
+              },
+              {
+                "name": "otlp-http",
+                "number": 4318,
+                "protocol": "TCP"
+              },
+              {
+                "name": "metrics",
+                "number": 8889,
+                "protocol": "TCP"
+              }
+            ],
+            "environment": []
+          }
+        },
+        {
+          "id": "otel-collector-egress",
+          "kind": "kubernetes",
+          "owner": "security-operator",
+          "scope": "namespace",
+          "dependencies": [
+            "otel-collector",
+            "telemetry"
+          ],
+          "retention": {
+            "policy": "ephemeral",
+            "days": 0
+          },
+          "backup_restore_owner": "none",
+          "delete_behavior": "delete",
+          "external_controller": false,
+          "kubernetes": {
+            "api_version": "networking.k8s.io/v1",
+            "kind": "NetworkPolicy",
+            "name": "otel-collector-egress",
+            "network": {
+              "default_deny": true,
+              "subject": "otel-collector",
+              "allow_dns": true,
+              "allowed_egress": [
+                "telemetry"
+              ]
+            },
+            "environment": []
+          }
+        },
+        {
+          "id": "otel-collector-ingress",
+          "kind": "kubernetes",
+          "owner": "security-operator",
+          "scope": "namespace",
+          "dependencies": [
+            "api",
+            "blob-role",
+            "codec",
+            "model",
+            "orchestration",
+            "otel-collector",
+            "sandbox-control",
+            "sandbox-host",
+            "tool"
+          ],
+          "retention": {
+            "policy": "ephemeral",
+            "days": 0
+          },
+          "backup_restore_owner": "none",
+          "delete_behavior": "delete",
+          "external_controller": false,
+          "kubernetes": {
+            "api_version": "networking.k8s.io/v1",
+            "kind": "NetworkPolicy",
+            "name": "otel-collector-ingress",
+            "network": {
+              "default_deny": true,
+              "subject": "otel-collector",
+              "allowed_egress": [],
+              "allowed_ingress": [
+                "api",
+                "orchestration",
+                "model",
+                "tool",
+                "blob-role",
+                "codec",
+                "sandbox-control",
+                "sandbox-host"
+              ]
+            },
+            "environment": []
           }
         },
         {
@@ -3726,7 +3959,7 @@
             "environment": [
               {
                 "name": "RUNTIME_ROLE_CONFIG",
-                "value": "{\"version\":1,\"role\":\"orchestration-codec\",\"namespace\":\"ar-ci-agent-runtime\",\"listen_address\":\"0.0.0.0:8081\",\"dependencies\":[{\"name\":\"state\",\"endpoint\":\"postgres://state.ar-ci-agent-runtime.svc:5432/agent_runtime\",\"secret_environment\":\"STATE_DATABASE_DSN\"},{\"name\":\"telemetry\",\"endpoint\":\"http://telemetry.ar-ci-agent-runtime.svc:4318\"},{\"name\":\"temporal\",\"endpoint\":\"temporal.ar-ci-agent-runtime.svc:7233\",\"secret_environment\":\"TEMPORAL_AUTH_TOKEN\"},{\"name\":\"payload-blob\",\"endpoint\":\"http://blob.ar-ci-agent-runtime.svc:9000\",\"secret_environment\":\"ORCHESTRATION_PAYLOAD_BLOB_ACCESS_KEY\"},{\"name\":\"payload-blob-secret\",\"endpoint\":\"http://blob.ar-ci-agent-runtime.svc:9000\",\"secret_environment\":\"ORCHESTRATION_PAYLOAD_BLOB_SECRET_KEY\"}],\"worker\":{\"task_queue\":\"ar-ci-agent-runtime-session-v1\",\"payload_blob_endpoint\":\"http://blob.ar-ci-agent-runtime.svc:9000\",\"payload_blob_bucket\":\"ar-ci-agent-runtime-temporal-payload\",\"payload_blob_prefix\":\"temporal-payload\",\"payload_access_key_environment\":\"ORCHESTRATION_PAYLOAD_BLOB_ACCESS_KEY\",\"payload_secret_key_environment\":\"ORCHESTRATION_PAYLOAD_BLOB_SECRET_KEY\"}}"
+                "value": "{\"version\":1,\"role\":\"orchestration-codec\",\"namespace\":\"ar-ci-agent-runtime\",\"listen_address\":\"0.0.0.0:8081\",\"dependencies\":[{\"name\":\"state\",\"endpoint\":\"postgres://state.ar-ci-agent-runtime.svc:5432/agent_runtime\",\"secret_environment\":\"STATE_DATABASE_DSN\"},{\"name\":\"telemetry\",\"endpoint\":\"http://otel-collector:4318\"},{\"name\":\"temporal\",\"endpoint\":\"temporal.ar-ci-agent-runtime.svc:7233\",\"secret_environment\":\"TEMPORAL_AUTH_TOKEN\"},{\"name\":\"payload-blob\",\"endpoint\":\"http://blob.ar-ci-agent-runtime.svc:9000\",\"secret_environment\":\"ORCHESTRATION_PAYLOAD_BLOB_ACCESS_KEY\"},{\"name\":\"payload-blob-secret\",\"endpoint\":\"http://blob.ar-ci-agent-runtime.svc:9000\",\"secret_environment\":\"ORCHESTRATION_PAYLOAD_BLOB_SECRET_KEY\"}],\"worker\":{\"task_queue\":\"ar-ci-agent-runtime-session-v1\",\"payload_blob_endpoint\":\"http://blob.ar-ci-agent-runtime.svc:9000\",\"payload_blob_bucket\":\"ar-ci-agent-runtime-temporal-payload\",\"payload_blob_prefix\":\"temporal-payload\",\"payload_access_key_environment\":\"ORCHESTRATION_PAYLOAD_BLOB_ACCESS_KEY\",\"payload_secret_key_environment\":\"ORCHESTRATION_PAYLOAD_BLOB_SECRET_KEY\"}}"
               }
             ],
             "secret_environment": [
@@ -3816,7 +4049,7 @@
             "environment": [
               {
                 "name": "RUNTIME_ROLE_CONFIG",
-                "value": "{\"version\":1,\"role\":\"model\",\"namespace\":\"ar-ci-agent-runtime\",\"listen_address\":\"0.0.0.0:8082\",\"dependencies\":[{\"name\":\"conversation\",\"endpoint\":\"http://api.ar-ci-agent-runtime.svc:8080\",\"secret_environment\":\"CONVERSATION_ACCESS_TOKEN\"},{\"name\":\"egress-proxy\",\"endpoint\":\"http://egress-proxy.ar-ci-agent-runtime.svc:8088\"},{\"name\":\"model\",\"endpoint\":\"https://model-provider.example.invalid\",\"secret_environment\":\"MODEL_API_KEY\"},{\"name\":\"telemetry\",\"endpoint\":\"http://telemetry.ar-ci-agent-runtime.svc:4318\"}]}"
+                "value": "{\"version\":1,\"role\":\"model\",\"namespace\":\"ar-ci-agent-runtime\",\"listen_address\":\"0.0.0.0:8082\",\"dependencies\":[{\"name\":\"conversation\",\"endpoint\":\"http://api.ar-ci-agent-runtime.svc:8080\",\"secret_environment\":\"CONVERSATION_ACCESS_TOKEN\"},{\"name\":\"egress-proxy\",\"endpoint\":\"http://egress-proxy.ar-ci-agent-runtime.svc:8088\"},{\"name\":\"model\",\"endpoint\":\"https://model-provider.example.invalid\",\"secret_environment\":\"MODEL_API_KEY\"},{\"name\":\"telemetry\",\"endpoint\":\"http://otel-collector:4318\"}]}"
               }
             ],
             "secret_environment": [
@@ -3896,7 +4129,7 @@
             "environment": [
               {
                 "name": "RUNTIME_ROLE_CONFIG",
-                "value": "{\"version\":1,\"role\":\"tool\",\"namespace\":\"ar-ci-agent-runtime\",\"listen_address\":\"0.0.0.0:8083\",\"dependencies\":[{\"name\":\"sandbox-control\",\"endpoint\":\"http://sandbox-control.ar-ci-agent-runtime.svc:8086\",\"secret_environment\":\"SANDBOX_CONTROL_TOKEN\"},{\"name\":\"telemetry\",\"endpoint\":\"http://telemetry.ar-ci-agent-runtime.svc:4318\"},{\"name\":\"tool-broker\",\"endpoint\":\"http://api.ar-ci-agent-runtime.svc:8080\",\"secret_environment\":\"TOOL_BROKER_TOKEN\"}]}"
+                "value": "{\"version\":1,\"role\":\"tool\",\"namespace\":\"ar-ci-agent-runtime\",\"listen_address\":\"0.0.0.0:8083\",\"dependencies\":[{\"name\":\"sandbox-control\",\"endpoint\":\"http://sandbox-control.ar-ci-agent-runtime.svc:8086\",\"secret_environment\":\"SANDBOX_CONTROL_TOKEN\"},{\"name\":\"telemetry\",\"endpoint\":\"http://otel-collector:4318\"},{\"name\":\"tool-broker\",\"endpoint\":\"http://api.ar-ci-agent-runtime.svc:8080\",\"secret_environment\":\"TOOL_BROKER_TOKEN\"}]}"
               }
             ],
             "secret_environment": [
@@ -3975,7 +4208,7 @@
             "environment": [
               {
                 "name": "RUNTIME_ROLE_CONFIG",
-                "value": "{\"version\":1,\"role\":\"blob\",\"namespace\":\"ar-ci-agent-runtime\",\"listen_address\":\"0.0.0.0:8084\",\"dependencies\":[{\"name\":\"storage\",\"endpoint\":\"http://blob.ar-ci-agent-runtime.svc:9000\",\"secret_environment\":\"BLOB_STORAGE_CREDENTIAL\"},{\"name\":\"telemetry\",\"endpoint\":\"http://telemetry.ar-ci-agent-runtime.svc:4318\"}]}"
+                "value": "{\"version\":1,\"role\":\"blob\",\"namespace\":\"ar-ci-agent-runtime\",\"listen_address\":\"0.0.0.0:8084\",\"dependencies\":[{\"name\":\"storage\",\"endpoint\":\"http://blob.ar-ci-agent-runtime.svc:9000\",\"secret_environment\":\"BLOB_STORAGE_CREDENTIAL\"},{\"name\":\"telemetry\",\"endpoint\":\"http://otel-collector:4318\"}]}"
               }
             ],
             "secret_environment": [
@@ -4049,7 +4282,7 @@
             "environment": [
               {
                 "name": "RUNTIME_ROLE_CONFIG",
-                "value": "{\"version\":1,\"role\":\"codec\",\"namespace\":\"ar-ci-agent-runtime\",\"listen_address\":\"0.0.0.0:8085\",\"dependencies\":[{\"name\":\"blob\",\"endpoint\":\"http://blob.ar-ci-agent-runtime.svc:9000\",\"secret_environment\":\"CODEC_BLOB_CREDENTIAL\"},{\"name\":\"telemetry\",\"endpoint\":\"http://telemetry.ar-ci-agent-runtime.svc:4318\"}]}"
+                "value": "{\"version\":1,\"role\":\"codec\",\"namespace\":\"ar-ci-agent-runtime\",\"listen_address\":\"0.0.0.0:8085\",\"dependencies\":[{\"name\":\"blob\",\"endpoint\":\"http://blob.ar-ci-agent-runtime.svc:9000\",\"secret_environment\":\"CODEC_BLOB_CREDENTIAL\"},{\"name\":\"telemetry\",\"endpoint\":\"http://otel-collector:4318\"}]}"
               },
               {
                 "name": "CODEC_ALLOWED_ORIGINS",
@@ -4128,7 +4361,7 @@
             "environment": [
               {
                 "name": "RUNTIME_ROLE_CONFIG",
-                "value": "{\"version\":1,\"role\":\"sandbox-control\",\"namespace\":\"ar-ci-agent-runtime\",\"listen_address\":\"0.0.0.0:8086\",\"dependencies\":[{\"name\":\"host-ca\",\"endpoint\":\"https://host-ca.example.invalid\",\"secret_environment\":\"SANDBOX_HOST_CA\"},{\"name\":\"sandbox-state\",\"endpoint\":\"postgres://state.ar-ci-agent-runtime.svc:5432/sandbox\",\"secret_environment\":\"SANDBOX_STATE_DSN\"},{\"name\":\"telemetry\",\"endpoint\":\"http://telemetry.ar-ci-agent-runtime.svc:4318\"}]}"
+                "value": "{\"version\":1,\"role\":\"sandbox-control\",\"namespace\":\"ar-ci-agent-runtime\",\"listen_address\":\"0.0.0.0:8086\",\"dependencies\":[{\"name\":\"host-ca\",\"endpoint\":\"https://host-ca.example.invalid\",\"secret_environment\":\"SANDBOX_HOST_CA\"},{\"name\":\"sandbox-state\",\"endpoint\":\"postgres://state.ar-ci-agent-runtime.svc:5432/sandbox\",\"secret_environment\":\"SANDBOX_STATE_DSN\"},{\"name\":\"telemetry\",\"endpoint\":\"http://otel-collector:4318\"}]}"
               }
             ],
             "secret_environment": [
@@ -4208,7 +4441,7 @@
             "environment": [
               {
                 "name": "RUNTIME_ROLE_CONFIG",
-                "value": "{\"version\":1,\"role\":\"sandbox-host\",\"namespace\":\"ar-ci-agent-runtime\",\"listen_address\":\"0.0.0.0:8087\",\"dependencies\":[{\"name\":\"host-identity\",\"endpoint\":\"https://host-identity.example.invalid\",\"secret_environment\":\"SANDBOX_HOST_IDENTITY\"},{\"name\":\"sandbox-control\",\"endpoint\":\"http://sandbox-control.ar-ci-agent-runtime.svc:8086\",\"secret_environment\":\"SANDBOX_CONTROL_TOKEN\"},{\"name\":\"telemetry\",\"endpoint\":\"http://telemetry.ar-ci-agent-runtime.svc:4318\"}]}"
+                "value": "{\"version\":1,\"role\":\"sandbox-host\",\"namespace\":\"ar-ci-agent-runtime\",\"listen_address\":\"0.0.0.0:8087\",\"dependencies\":[{\"name\":\"host-identity\",\"endpoint\":\"https://host-identity.example.invalid\",\"secret_environment\":\"SANDBOX_HOST_IDENTITY\"},{\"name\":\"sandbox-control\",\"endpoint\":\"http://sandbox-control.ar-ci-agent-runtime.svc:8086\",\"secret_environment\":\"SANDBOX_CONTROL_TOKEN\"},{\"name\":\"telemetry\",\"endpoint\":\"http://otel-collector:4318\"}]}"
               }
             ],
             "secret_environment": [
@@ -4924,9 +5157,9 @@
           "scope": "namespace",
           "dependencies": [
             "api",
-            "state",
-            "telemetry",
-            "blob"
+            "blob",
+            "otel-collector",
+            "state"
           ],
           "retention": {
             "policy": "ephemeral",
@@ -4944,7 +5177,7 @@
               "subject": "api",
               "allowed_egress": [
                 "state",
-                "telemetry",
+                "otel-collector",
                 "blob"
               ],
               "allow_dns": true
@@ -4958,11 +5191,11 @@
           "owner": "security-operator",
           "scope": "namespace",
           "dependencies": [
+            "blob",
             "orchestration",
+            "otel-collector",
             "state",
-            "telemetry",
-            "temporal",
-            "blob"
+            "temporal"
           ],
           "retention": {
             "policy": "ephemeral",
@@ -4980,7 +5213,7 @@
               "subject": "orchestration",
               "allowed_egress": [
                 "state",
-                "telemetry",
+                "otel-collector",
                 "temporal",
                 "blob"
               ],
@@ -4995,12 +5228,12 @@
           "owner": "security-operator",
           "scope": "namespace",
           "dependencies": [
-            "model",
             "api",
             "blob",
             "egress-proxy",
-            "state",
-            "telemetry"
+            "model",
+            "otel-collector",
+            "state"
           ],
           "retention": {
             "policy": "ephemeral",
@@ -5019,7 +5252,7 @@
               "allowed_egress": [
                 "api",
                 "egress-proxy",
-                "telemetry"
+                "otel-collector"
               ],
               "allow_dns": true
             },
@@ -5032,12 +5265,12 @@
           "owner": "security-operator",
           "scope": "namespace",
           "dependencies": [
-            "tool",
             "api",
             "blob",
+            "otel-collector",
             "sandbox-control",
             "state",
-            "telemetry"
+            "tool"
           ],
           "retention": {
             "policy": "ephemeral",
@@ -5056,7 +5289,7 @@
               "allowed_egress": [
                 "api",
                 "sandbox-control",
-                "telemetry"
+                "otel-collector"
               ],
               "allow_dns": true
             },
@@ -5069,9 +5302,9 @@
           "owner": "security-operator",
           "scope": "namespace",
           "dependencies": [
-            "blob-role",
             "blob",
-            "telemetry"
+            "blob-role",
+            "otel-collector"
           ],
           "retention": {
             "policy": "ephemeral",
@@ -5089,7 +5322,7 @@
               "subject": "blob-role",
               "allowed_egress": [
                 "blob",
-                "telemetry"
+                "otel-collector"
               ],
               "allow_dns": true
             },
@@ -5102,9 +5335,9 @@
           "owner": "security-operator",
           "scope": "namespace",
           "dependencies": [
-            "codec",
             "blob",
-            "telemetry"
+            "codec",
+            "otel-collector"
           ],
           "retention": {
             "policy": "ephemeral",
@@ -5122,7 +5355,7 @@
               "subject": "codec",
               "allowed_egress": [
                 "blob",
-                "telemetry"
+                "otel-collector"
               ],
               "allow_dns": true
             },
@@ -5135,9 +5368,9 @@
           "owner": "security-operator",
           "scope": "namespace",
           "dependencies": [
+            "otel-collector",
             "sandbox-control",
-            "state",
-            "telemetry"
+            "state"
           ],
           "retention": {
             "policy": "ephemeral",
@@ -5155,7 +5388,7 @@
               "subject": "sandbox-control",
               "allowed_egress": [
                 "state",
-                "telemetry"
+                "otel-collector"
               ],
               "allow_dns": true
             },
@@ -5168,9 +5401,9 @@
           "owner": "security-operator",
           "scope": "namespace",
           "dependencies": [
-            "sandbox-host",
+            "otel-collector",
             "sandbox-control",
-            "telemetry"
+            "sandbox-host"
           ],
           "retention": {
             "policy": "ephemeral",
@@ -5188,7 +5421,7 @@
               "subject": "sandbox-host",
               "allowed_egress": [
                 "sandbox-control",
-                "telemetry"
+                "otel-collector"
               ],
               "allow_dns": true
             },
@@ -5286,6 +5519,7 @@
           "owner": "security-operator",
           "scope": "namespace",
           "dependencies": [
+            "otel-collector",
             "telemetry"
           ],
           "retention": {
@@ -5497,6 +5731,238 @@
             "collector_service": "telemetry-service",
             "port_name": "http",
             "retention_days": 30
+          }
+        },
+        {
+          "id": "otel-collector-config",
+          "kind": "kubernetes",
+          "owner": "telemetry-operator",
+          "scope": "namespace",
+          "dependencies": [],
+          "retention": {
+            "policy": "ephemeral",
+            "days": 0
+          },
+          "backup_restore_owner": "none",
+          "delete_behavior": "delete",
+          "external_controller": false,
+          "kubernetes": {
+            "api_version": "v1",
+            "kind": "ConfigMap",
+            "name": "otel-collector-config",
+            "data": {
+              "collector.yaml": "# This is a deployment input, not a running deployment. The operator must bind\n# the OTLP receiver only to the declared in-cluster Service and separately prove\n# the collector, trace store, and Prometheus scrape path in the target lab.\nreceivers:\n  otlp:\n    protocols:\n      grpc:\n        endpoint: 0.0.0.0:4317\n      http:\n        endpoint: 0.0.0.0:4318\n\nprocessors:\n  memory_limiter:\n    check_interval: 1s\n    limit_mib: 256\n    spike_limit_mib: 64\n  attributes/drop-unsafe:\n    actions:\n      - key: http.request.header.authorization\n        action: delete\n      - key: http.request.body\n        action: delete\n      - key: http.response.body\n        action: delete\n      - key: gen_ai.prompt\n        action: delete\n      - key: gen_ai.completion\n        action: delete\n      - key: runtime.model.reasoning\n        action: delete\n      - key: runtime.tool.output\n        action: delete\n      - key: process.command_args\n        action: delete\n  batch:\n    send_batch_size: 512\n    timeout: 1s\n\nexporters:\n  # The trace store is deliberately an in-cluster DNS name. Authentication and\n  # any external export are not part of this reusable collector contract.\n  otlphttp/trace-store:\n    endpoint: http://trace-store:4318\n    compression: gzip\n    timeout: 5s\n  prometheus:\n    endpoint: 0.0.0.0:8889\n    resource_to_telemetry_conversion:\n      enabled: false\n\nservice:\n  pipelines:\n    traces:\n      receivers: [otlp]\n      processors: [memory_limiter, attributes/drop-unsafe, batch]\n      exporters: [otlphttp/trace-store]\n    metrics:\n      receivers: [otlp]\n      processors: [memory_limiter, attributes/drop-unsafe, batch]\n      exporters: [prometheus]\n"
+            },
+            "environment": []
+          }
+        },
+        {
+          "id": "otel-collector",
+          "kind": "kubernetes",
+          "owner": "telemetry-operator",
+          "scope": "namespace",
+          "dependencies": [
+            "telemetry-account",
+            "otel-collector-config",
+            "telemetry"
+          ],
+          "retention": {
+            "policy": "ephemeral",
+            "days": 0
+          },
+          "backup_restore_owner": "none",
+          "delete_behavior": "delete",
+          "external_controller": false,
+          "kubernetes": {
+            "api_version": "apps/v1",
+            "kind": "Deployment",
+            "name": "otel-collector",
+            "replicas": 1,
+            "image": "otel/opentelemetry-collector-contrib@sha256:09f7a495e6542343cc25aa4e3facba144ba03b0f0b030e4469186e8164a9ed64",
+            "service_account": "telemetry-account",
+            "arguments": [
+              "--config=/etc/otel/collector.yaml"
+            ],
+            "environment": [],
+            "secret_environment": [],
+            "ports": [
+              {
+                "name": "otlp-grpc",
+                "number": 4317,
+                "protocol": "TCP"
+              },
+              {
+                "name": "otlp-http",
+                "number": 4318,
+                "protocol": "TCP"
+              },
+              {
+                "name": "metrics",
+                "number": 8889,
+                "protocol": "TCP"
+              }
+            ],
+            "compute": {
+              "request_milli_cpu": 100,
+              "limit_milli_cpu": 500,
+              "request_memory_bytes": 134217728,
+              "limit_memory_bytes": 536870912
+            },
+            "storage": [],
+            "volume_mounts": [],
+            "config_map_mounts": [
+              {
+                "config_map": "otel-collector-config",
+                "key": "collector.yaml",
+                "path": "/etc/otel/collector.yaml"
+              }
+            ]
+          }
+        },
+        {
+          "id": "trace-store-service",
+          "kind": "kubernetes",
+          "owner": "telemetry-operator",
+          "scope": "namespace",
+          "dependencies": [
+            "telemetry"
+          ],
+          "retention": {
+            "policy": "ephemeral",
+            "days": 0
+          },
+          "backup_restore_owner": "none",
+          "delete_behavior": "delete",
+          "external_controller": false,
+          "kubernetes": {
+            "api_version": "v1",
+            "kind": "Service",
+            "name": "trace-store",
+            "selector": "telemetry",
+            "ports": [
+              {
+                "name": "http",
+                "number": 4318,
+                "protocol": "TCP"
+              }
+            ],
+            "environment": []
+          }
+        },
+        {
+          "id": "otel-collector-service",
+          "kind": "kubernetes",
+          "owner": "telemetry-operator",
+          "scope": "namespace",
+          "dependencies": [
+            "otel-collector"
+          ],
+          "retention": {
+            "policy": "ephemeral",
+            "days": 0
+          },
+          "backup_restore_owner": "none",
+          "delete_behavior": "delete",
+          "external_controller": false,
+          "kubernetes": {
+            "api_version": "v1",
+            "kind": "Service",
+            "name": "otel-collector",
+            "selector": "otel-collector",
+            "ports": [
+              {
+                "name": "otlp-grpc",
+                "number": 4317,
+                "protocol": "TCP"
+              },
+              {
+                "name": "otlp-http",
+                "number": 4318,
+                "protocol": "TCP"
+              },
+              {
+                "name": "metrics",
+                "number": 8889,
+                "protocol": "TCP"
+              }
+            ],
+            "environment": []
+          }
+        },
+        {
+          "id": "otel-collector-egress",
+          "kind": "kubernetes",
+          "owner": "security-operator",
+          "scope": "namespace",
+          "dependencies": [
+            "otel-collector",
+            "telemetry"
+          ],
+          "retention": {
+            "policy": "ephemeral",
+            "days": 0
+          },
+          "backup_restore_owner": "none",
+          "delete_behavior": "delete",
+          "external_controller": false,
+          "kubernetes": {
+            "api_version": "networking.k8s.io/v1",
+            "kind": "NetworkPolicy",
+            "name": "otel-collector-egress",
+            "network": {
+              "default_deny": true,
+              "subject": "otel-collector",
+              "allow_dns": true,
+              "allowed_egress": [
+                "telemetry"
+              ]
+            },
+            "environment": []
+          }
+        },
+        {
+          "id": "otel-collector-ingress",
+          "kind": "kubernetes",
+          "owner": "security-operator",
+          "scope": "namespace",
+          "dependencies": [
+            "api",
+            "blob-role",
+            "codec",
+            "model",
+            "orchestration",
+            "otel-collector",
+            "sandbox-control",
+            "sandbox-host",
+            "tool"
+          ],
+          "retention": {
+            "policy": "ephemeral",
+            "days": 0
+          },
+          "backup_restore_owner": "none",
+          "delete_behavior": "delete",
+          "external_controller": false,
+          "kubernetes": {
+            "api_version": "networking.k8s.io/v1",
+            "kind": "NetworkPolicy",
+            "name": "otel-collector-ingress",
+            "network": {
+              "default_deny": true,
+              "subject": "otel-collector",
+              "allowed_egress": [],
+              "allowed_ingress": [
+                "api",
+                "orchestration",
+                "model",
+                "tool",
+                "blob-role",
+                "codec",
+                "sandbox-control",
+                "sandbox-host"
+              ]
+            },
+            "environment": []
           }
         },
         {
@@ -6665,7 +7131,7 @@
             "environment": [
               {
                 "name": "RUNTIME_ROLE_CONFIG",
-                "value": "{\"version\":1,\"role\":\"orchestration-codec\",\"namespace\":\"agent-runtime\",\"listen_address\":\"0.0.0.0:8081\",\"dependencies\":[{\"name\":\"state\",\"endpoint\":\"postgres://state.agent-runtime.svc:5432/agent_runtime\",\"secret_environment\":\"STATE_DATABASE_DSN\"},{\"name\":\"telemetry\",\"endpoint\":\"http://telemetry.agent-runtime.svc:4318\"},{\"name\":\"temporal\",\"endpoint\":\"temporal.agent-runtime.svc:7233\",\"secret_environment\":\"TEMPORAL_AUTH_TOKEN\"},{\"name\":\"payload-blob\",\"endpoint\":\"http://blob.agent-runtime.svc:9000\",\"secret_environment\":\"ORCHESTRATION_PAYLOAD_BLOB_ACCESS_KEY\"},{\"name\":\"payload-blob-secret\",\"endpoint\":\"http://blob.agent-runtime.svc:9000\",\"secret_environment\":\"ORCHESTRATION_PAYLOAD_BLOB_SECRET_KEY\"}],\"worker\":{\"task_queue\":\"agent-runtime-session-v1\",\"payload_blob_endpoint\":\"http://blob.agent-runtime.svc:9000\",\"payload_blob_bucket\":\"agent-runtime-temporal-payload\",\"payload_blob_prefix\":\"temporal-payload\",\"payload_access_key_environment\":\"ORCHESTRATION_PAYLOAD_BLOB_ACCESS_KEY\",\"payload_secret_key_environment\":\"ORCHESTRATION_PAYLOAD_BLOB_SECRET_KEY\"}}"
+                "value": "{\"version\":1,\"role\":\"orchestration-codec\",\"namespace\":\"agent-runtime\",\"listen_address\":\"0.0.0.0:8081\",\"dependencies\":[{\"name\":\"state\",\"endpoint\":\"postgres://state.agent-runtime.svc:5432/agent_runtime\",\"secret_environment\":\"STATE_DATABASE_DSN\"},{\"name\":\"telemetry\",\"endpoint\":\"http://otel-collector:4318\"},{\"name\":\"temporal\",\"endpoint\":\"temporal.agent-runtime.svc:7233\",\"secret_environment\":\"TEMPORAL_AUTH_TOKEN\"},{\"name\":\"payload-blob\",\"endpoint\":\"http://blob.agent-runtime.svc:9000\",\"secret_environment\":\"ORCHESTRATION_PAYLOAD_BLOB_ACCESS_KEY\"},{\"name\":\"payload-blob-secret\",\"endpoint\":\"http://blob.agent-runtime.svc:9000\",\"secret_environment\":\"ORCHESTRATION_PAYLOAD_BLOB_SECRET_KEY\"}],\"worker\":{\"task_queue\":\"agent-runtime-session-v1\",\"payload_blob_endpoint\":\"http://blob.agent-runtime.svc:9000\",\"payload_blob_bucket\":\"agent-runtime-temporal-payload\",\"payload_blob_prefix\":\"temporal-payload\",\"payload_access_key_environment\":\"ORCHESTRATION_PAYLOAD_BLOB_ACCESS_KEY\",\"payload_secret_key_environment\":\"ORCHESTRATION_PAYLOAD_BLOB_SECRET_KEY\"}}"
               }
             ],
             "secret_environment": [
@@ -6755,7 +7221,7 @@
             "environment": [
               {
                 "name": "RUNTIME_ROLE_CONFIG",
-                "value": "{\"version\":1,\"role\":\"model\",\"namespace\":\"agent-runtime\",\"listen_address\":\"0.0.0.0:8082\",\"dependencies\":[{\"name\":\"conversation\",\"endpoint\":\"http://api.agent-runtime.svc:8080\",\"secret_environment\":\"CONVERSATION_ACCESS_TOKEN\"},{\"name\":\"egress-proxy\",\"endpoint\":\"http://egress-proxy.agent-runtime.svc:8088\"},{\"name\":\"model\",\"endpoint\":\"https://model-provider.example.invalid\",\"secret_environment\":\"MODEL_API_KEY\"},{\"name\":\"telemetry\",\"endpoint\":\"http://telemetry.agent-runtime.svc:4318\"}]}"
+                "value": "{\"version\":1,\"role\":\"model\",\"namespace\":\"agent-runtime\",\"listen_address\":\"0.0.0.0:8082\",\"dependencies\":[{\"name\":\"conversation\",\"endpoint\":\"http://api.agent-runtime.svc:8080\",\"secret_environment\":\"CONVERSATION_ACCESS_TOKEN\"},{\"name\":\"egress-proxy\",\"endpoint\":\"http://egress-proxy.agent-runtime.svc:8088\"},{\"name\":\"model\",\"endpoint\":\"https://model-provider.example.invalid\",\"secret_environment\":\"MODEL_API_KEY\"},{\"name\":\"telemetry\",\"endpoint\":\"http://otel-collector:4318\"}]}"
               }
             ],
             "secret_environment": [
@@ -6835,7 +7301,7 @@
             "environment": [
               {
                 "name": "RUNTIME_ROLE_CONFIG",
-                "value": "{\"version\":1,\"role\":\"tool\",\"namespace\":\"agent-runtime\",\"listen_address\":\"0.0.0.0:8083\",\"dependencies\":[{\"name\":\"sandbox-control\",\"endpoint\":\"http://sandbox-control.agent-runtime.svc:8086\",\"secret_environment\":\"SANDBOX_CONTROL_TOKEN\"},{\"name\":\"telemetry\",\"endpoint\":\"http://telemetry.agent-runtime.svc:4318\"},{\"name\":\"tool-broker\",\"endpoint\":\"http://api.agent-runtime.svc:8080\",\"secret_environment\":\"TOOL_BROKER_TOKEN\"}]}"
+                "value": "{\"version\":1,\"role\":\"tool\",\"namespace\":\"agent-runtime\",\"listen_address\":\"0.0.0.0:8083\",\"dependencies\":[{\"name\":\"sandbox-control\",\"endpoint\":\"http://sandbox-control.agent-runtime.svc:8086\",\"secret_environment\":\"SANDBOX_CONTROL_TOKEN\"},{\"name\":\"telemetry\",\"endpoint\":\"http://otel-collector:4318\"},{\"name\":\"tool-broker\",\"endpoint\":\"http://api.agent-runtime.svc:8080\",\"secret_environment\":\"TOOL_BROKER_TOKEN\"}]}"
               }
             ],
             "secret_environment": [
@@ -6914,7 +7380,7 @@
             "environment": [
               {
                 "name": "RUNTIME_ROLE_CONFIG",
-                "value": "{\"version\":1,\"role\":\"blob\",\"namespace\":\"agent-runtime\",\"listen_address\":\"0.0.0.0:8084\",\"dependencies\":[{\"name\":\"storage\",\"endpoint\":\"http://blob.agent-runtime.svc:9000\",\"secret_environment\":\"BLOB_STORAGE_CREDENTIAL\"},{\"name\":\"telemetry\",\"endpoint\":\"http://telemetry.agent-runtime.svc:4318\"}]}"
+                "value": "{\"version\":1,\"role\":\"blob\",\"namespace\":\"agent-runtime\",\"listen_address\":\"0.0.0.0:8084\",\"dependencies\":[{\"name\":\"storage\",\"endpoint\":\"http://blob.agent-runtime.svc:9000\",\"secret_environment\":\"BLOB_STORAGE_CREDENTIAL\"},{\"name\":\"telemetry\",\"endpoint\":\"http://otel-collector:4318\"}]}"
               }
             ],
             "secret_environment": [
@@ -6988,7 +7454,7 @@
             "environment": [
               {
                 "name": "RUNTIME_ROLE_CONFIG",
-                "value": "{\"version\":1,\"role\":\"codec\",\"namespace\":\"agent-runtime\",\"listen_address\":\"0.0.0.0:8085\",\"dependencies\":[{\"name\":\"blob\",\"endpoint\":\"http://blob.agent-runtime.svc:9000\",\"secret_environment\":\"CODEC_BLOB_CREDENTIAL\"},{\"name\":\"telemetry\",\"endpoint\":\"http://telemetry.agent-runtime.svc:4318\"}]}"
+                "value": "{\"version\":1,\"role\":\"codec\",\"namespace\":\"agent-runtime\",\"listen_address\":\"0.0.0.0:8085\",\"dependencies\":[{\"name\":\"blob\",\"endpoint\":\"http://blob.agent-runtime.svc:9000\",\"secret_environment\":\"CODEC_BLOB_CREDENTIAL\"},{\"name\":\"telemetry\",\"endpoint\":\"http://otel-collector:4318\"}]}"
               },
               {
                 "name": "CODEC_ALLOWED_ORIGINS",
@@ -7067,7 +7533,7 @@
             "environment": [
               {
                 "name": "RUNTIME_ROLE_CONFIG",
-                "value": "{\"version\":1,\"role\":\"sandbox-control\",\"namespace\":\"agent-runtime\",\"listen_address\":\"0.0.0.0:8086\",\"dependencies\":[{\"name\":\"host-ca\",\"endpoint\":\"https://host-ca.example.invalid\",\"secret_environment\":\"SANDBOX_HOST_CA\"},{\"name\":\"sandbox-state\",\"endpoint\":\"postgres://state.agent-runtime.svc:5432/sandbox\",\"secret_environment\":\"SANDBOX_STATE_DSN\"},{\"name\":\"telemetry\",\"endpoint\":\"http://telemetry.agent-runtime.svc:4318\"}]}"
+                "value": "{\"version\":1,\"role\":\"sandbox-control\",\"namespace\":\"agent-runtime\",\"listen_address\":\"0.0.0.0:8086\",\"dependencies\":[{\"name\":\"host-ca\",\"endpoint\":\"https://host-ca.example.invalid\",\"secret_environment\":\"SANDBOX_HOST_CA\"},{\"name\":\"sandbox-state\",\"endpoint\":\"postgres://state.agent-runtime.svc:5432/sandbox\",\"secret_environment\":\"SANDBOX_STATE_DSN\"},{\"name\":\"telemetry\",\"endpoint\":\"http://otel-collector:4318\"}]}"
               }
             ],
             "secret_environment": [
@@ -7147,7 +7613,7 @@
             "environment": [
               {
                 "name": "RUNTIME_ROLE_CONFIG",
-                "value": "{\"version\":1,\"role\":\"sandbox-host\",\"namespace\":\"agent-runtime\",\"listen_address\":\"0.0.0.0:8087\",\"dependencies\":[{\"name\":\"host-identity\",\"endpoint\":\"https://host-identity.example.invalid\",\"secret_environment\":\"SANDBOX_HOST_IDENTITY\"},{\"name\":\"sandbox-control\",\"endpoint\":\"http://sandbox-control.agent-runtime.svc:8086\",\"secret_environment\":\"SANDBOX_CONTROL_TOKEN\"},{\"name\":\"telemetry\",\"endpoint\":\"http://telemetry.agent-runtime.svc:4318\"}]}"
+                "value": "{\"version\":1,\"role\":\"sandbox-host\",\"namespace\":\"agent-runtime\",\"listen_address\":\"0.0.0.0:8087\",\"dependencies\":[{\"name\":\"host-identity\",\"endpoint\":\"https://host-identity.example.invalid\",\"secret_environment\":\"SANDBOX_HOST_IDENTITY\"},{\"name\":\"sandbox-control\",\"endpoint\":\"http://sandbox-control.agent-runtime.svc:8086\",\"secret_environment\":\"SANDBOX_CONTROL_TOKEN\"},{\"name\":\"telemetry\",\"endpoint\":\"http://otel-collector:4318\"}]}"
               }
             ],
             "secret_environment": [
@@ -7863,9 +8329,9 @@
           "scope": "namespace",
           "dependencies": [
             "api",
-            "state",
-            "telemetry",
-            "blob"
+            "blob",
+            "otel-collector",
+            "state"
           ],
           "retention": {
             "policy": "persistent",
@@ -7883,7 +8349,7 @@
               "subject": "api",
               "allowed_egress": [
                 "state",
-                "telemetry",
+                "otel-collector",
                 "blob"
               ],
               "allow_dns": true
@@ -7897,11 +8363,11 @@
           "owner": "security-operator",
           "scope": "namespace",
           "dependencies": [
+            "blob",
             "orchestration",
+            "otel-collector",
             "state",
-            "telemetry",
-            "temporal",
-            "blob"
+            "temporal"
           ],
           "retention": {
             "policy": "persistent",
@@ -7919,7 +8385,7 @@
               "subject": "orchestration",
               "allowed_egress": [
                 "state",
-                "telemetry",
+                "otel-collector",
                 "temporal",
                 "blob"
               ],
@@ -7934,12 +8400,12 @@
           "owner": "security-operator",
           "scope": "namespace",
           "dependencies": [
-            "model",
             "api",
             "blob",
             "egress-proxy",
-            "state",
-            "telemetry"
+            "model",
+            "otel-collector",
+            "state"
           ],
           "retention": {
             "policy": "persistent",
@@ -7958,7 +8424,7 @@
               "allowed_egress": [
                 "api",
                 "egress-proxy",
-                "telemetry"
+                "otel-collector"
               ],
               "allow_dns": true
             },
@@ -7971,12 +8437,12 @@
           "owner": "security-operator",
           "scope": "namespace",
           "dependencies": [
-            "tool",
             "api",
             "blob",
+            "otel-collector",
             "sandbox-control",
             "state",
-            "telemetry"
+            "tool"
           ],
           "retention": {
             "policy": "persistent",
@@ -7995,7 +8461,7 @@
               "allowed_egress": [
                 "api",
                 "sandbox-control",
-                "telemetry"
+                "otel-collector"
               ],
               "allow_dns": true
             },
@@ -8008,9 +8474,9 @@
           "owner": "security-operator",
           "scope": "namespace",
           "dependencies": [
-            "blob-role",
             "blob",
-            "telemetry"
+            "blob-role",
+            "otel-collector"
           ],
           "retention": {
             "policy": "persistent",
@@ -8028,7 +8494,7 @@
               "subject": "blob-role",
               "allowed_egress": [
                 "blob",
-                "telemetry"
+                "otel-collector"
               ],
               "allow_dns": true
             },
@@ -8041,9 +8507,9 @@
           "owner": "security-operator",
           "scope": "namespace",
           "dependencies": [
-            "codec",
             "blob",
-            "telemetry"
+            "codec",
+            "otel-collector"
           ],
           "retention": {
             "policy": "persistent",
@@ -8061,7 +8527,7 @@
               "subject": "codec",
               "allowed_egress": [
                 "blob",
-                "telemetry"
+                "otel-collector"
               ],
               "allow_dns": true
             },
@@ -8074,9 +8540,9 @@
           "owner": "security-operator",
           "scope": "namespace",
           "dependencies": [
+            "otel-collector",
             "sandbox-control",
-            "state",
-            "telemetry"
+            "state"
           ],
           "retention": {
             "policy": "persistent",
@@ -8094,7 +8560,7 @@
               "subject": "sandbox-control",
               "allowed_egress": [
                 "state",
-                "telemetry"
+                "otel-collector"
               ],
               "allow_dns": true
             },
@@ -8107,9 +8573,9 @@
           "owner": "security-operator",
           "scope": "namespace",
           "dependencies": [
-            "sandbox-host",
+            "otel-collector",
             "sandbox-control",
-            "telemetry"
+            "sandbox-host"
           ],
           "retention": {
             "policy": "persistent",
@@ -8127,7 +8593,7 @@
               "subject": "sandbox-host",
               "allowed_egress": [
                 "sandbox-control",
-                "telemetry"
+                "otel-collector"
               ],
               "allow_dns": true
             },
@@ -8225,6 +8691,7 @@
           "owner": "security-operator",
           "scope": "namespace",
           "dependencies": [
+            "otel-collector",
             "telemetry"
           ],
           "retention": {
@@ -8436,6 +8903,238 @@
             "collector_service": "telemetry-service",
             "port_name": "http",
             "retention_days": 30
+          }
+        },
+        {
+          "id": "otel-collector-config",
+          "kind": "kubernetes",
+          "owner": "telemetry-operator",
+          "scope": "namespace",
+          "dependencies": [],
+          "retention": {
+            "policy": "ephemeral",
+            "days": 0
+          },
+          "backup_restore_owner": "none",
+          "delete_behavior": "delete",
+          "external_controller": false,
+          "kubernetes": {
+            "api_version": "v1",
+            "kind": "ConfigMap",
+            "name": "otel-collector-config",
+            "data": {
+              "collector.yaml": "# This is a deployment input, not a running deployment. The operator must bind\n# the OTLP receiver only to the declared in-cluster Service and separately prove\n# the collector, trace store, and Prometheus scrape path in the target lab.\nreceivers:\n  otlp:\n    protocols:\n      grpc:\n        endpoint: 0.0.0.0:4317\n      http:\n        endpoint: 0.0.0.0:4318\n\nprocessors:\n  memory_limiter:\n    check_interval: 1s\n    limit_mib: 256\n    spike_limit_mib: 64\n  attributes/drop-unsafe:\n    actions:\n      - key: http.request.header.authorization\n        action: delete\n      - key: http.request.body\n        action: delete\n      - key: http.response.body\n        action: delete\n      - key: gen_ai.prompt\n        action: delete\n      - key: gen_ai.completion\n        action: delete\n      - key: runtime.model.reasoning\n        action: delete\n      - key: runtime.tool.output\n        action: delete\n      - key: process.command_args\n        action: delete\n  batch:\n    send_batch_size: 512\n    timeout: 1s\n\nexporters:\n  # The trace store is deliberately an in-cluster DNS name. Authentication and\n  # any external export are not part of this reusable collector contract.\n  otlphttp/trace-store:\n    endpoint: http://trace-store:4318\n    compression: gzip\n    timeout: 5s\n  prometheus:\n    endpoint: 0.0.0.0:8889\n    resource_to_telemetry_conversion:\n      enabled: false\n\nservice:\n  pipelines:\n    traces:\n      receivers: [otlp]\n      processors: [memory_limiter, attributes/drop-unsafe, batch]\n      exporters: [otlphttp/trace-store]\n    metrics:\n      receivers: [otlp]\n      processors: [memory_limiter, attributes/drop-unsafe, batch]\n      exporters: [prometheus]\n"
+            },
+            "environment": []
+          }
+        },
+        {
+          "id": "otel-collector",
+          "kind": "kubernetes",
+          "owner": "telemetry-operator",
+          "scope": "namespace",
+          "dependencies": [
+            "telemetry-account",
+            "otel-collector-config",
+            "telemetry"
+          ],
+          "retention": {
+            "policy": "ephemeral",
+            "days": 0
+          },
+          "backup_restore_owner": "none",
+          "delete_behavior": "delete",
+          "external_controller": false,
+          "kubernetes": {
+            "api_version": "apps/v1",
+            "kind": "Deployment",
+            "name": "otel-collector",
+            "replicas": 1,
+            "image": "otel/opentelemetry-collector-contrib@sha256:09f7a495e6542343cc25aa4e3facba144ba03b0f0b030e4469186e8164a9ed64",
+            "service_account": "telemetry-account",
+            "arguments": [
+              "--config=/etc/otel/collector.yaml"
+            ],
+            "environment": [],
+            "secret_environment": [],
+            "ports": [
+              {
+                "name": "otlp-grpc",
+                "number": 4317,
+                "protocol": "TCP"
+              },
+              {
+                "name": "otlp-http",
+                "number": 4318,
+                "protocol": "TCP"
+              },
+              {
+                "name": "metrics",
+                "number": 8889,
+                "protocol": "TCP"
+              }
+            ],
+            "compute": {
+              "request_milli_cpu": 100,
+              "limit_milli_cpu": 500,
+              "request_memory_bytes": 134217728,
+              "limit_memory_bytes": 536870912
+            },
+            "storage": [],
+            "volume_mounts": [],
+            "config_map_mounts": [
+              {
+                "config_map": "otel-collector-config",
+                "key": "collector.yaml",
+                "path": "/etc/otel/collector.yaml"
+              }
+            ]
+          }
+        },
+        {
+          "id": "trace-store-service",
+          "kind": "kubernetes",
+          "owner": "telemetry-operator",
+          "scope": "namespace",
+          "dependencies": [
+            "telemetry"
+          ],
+          "retention": {
+            "policy": "ephemeral",
+            "days": 0
+          },
+          "backup_restore_owner": "none",
+          "delete_behavior": "delete",
+          "external_controller": false,
+          "kubernetes": {
+            "api_version": "v1",
+            "kind": "Service",
+            "name": "trace-store",
+            "selector": "telemetry",
+            "ports": [
+              {
+                "name": "http",
+                "number": 4318,
+                "protocol": "TCP"
+              }
+            ],
+            "environment": []
+          }
+        },
+        {
+          "id": "otel-collector-service",
+          "kind": "kubernetes",
+          "owner": "telemetry-operator",
+          "scope": "namespace",
+          "dependencies": [
+            "otel-collector"
+          ],
+          "retention": {
+            "policy": "ephemeral",
+            "days": 0
+          },
+          "backup_restore_owner": "none",
+          "delete_behavior": "delete",
+          "external_controller": false,
+          "kubernetes": {
+            "api_version": "v1",
+            "kind": "Service",
+            "name": "otel-collector",
+            "selector": "otel-collector",
+            "ports": [
+              {
+                "name": "otlp-grpc",
+                "number": 4317,
+                "protocol": "TCP"
+              },
+              {
+                "name": "otlp-http",
+                "number": 4318,
+                "protocol": "TCP"
+              },
+              {
+                "name": "metrics",
+                "number": 8889,
+                "protocol": "TCP"
+              }
+            ],
+            "environment": []
+          }
+        },
+        {
+          "id": "otel-collector-egress",
+          "kind": "kubernetes",
+          "owner": "security-operator",
+          "scope": "namespace",
+          "dependencies": [
+            "otel-collector",
+            "telemetry"
+          ],
+          "retention": {
+            "policy": "ephemeral",
+            "days": 0
+          },
+          "backup_restore_owner": "none",
+          "delete_behavior": "delete",
+          "external_controller": false,
+          "kubernetes": {
+            "api_version": "networking.k8s.io/v1",
+            "kind": "NetworkPolicy",
+            "name": "otel-collector-egress",
+            "network": {
+              "default_deny": true,
+              "subject": "otel-collector",
+              "allow_dns": true,
+              "allowed_egress": [
+                "telemetry"
+              ]
+            },
+            "environment": []
+          }
+        },
+        {
+          "id": "otel-collector-ingress",
+          "kind": "kubernetes",
+          "owner": "security-operator",
+          "scope": "namespace",
+          "dependencies": [
+            "api",
+            "blob-role",
+            "codec",
+            "model",
+            "orchestration",
+            "otel-collector",
+            "sandbox-control",
+            "sandbox-host",
+            "tool"
+          ],
+          "retention": {
+            "policy": "ephemeral",
+            "days": 0
+          },
+          "backup_restore_owner": "none",
+          "delete_behavior": "delete",
+          "external_controller": false,
+          "kubernetes": {
+            "api_version": "networking.k8s.io/v1",
+            "kind": "NetworkPolicy",
+            "name": "otel-collector-ingress",
+            "network": {
+              "default_deny": true,
+              "subject": "otel-collector",
+              "allowed_egress": [],
+              "allowed_ingress": [
+                "api",
+                "orchestration",
+                "model",
+                "tool",
+                "blob-role",
+                "codec",
+                "sandbox-control",
+                "sandbox-host"
+              ]
+            },
+            "environment": []
           }
         },
         {

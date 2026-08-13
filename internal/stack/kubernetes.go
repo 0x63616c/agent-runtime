@@ -262,13 +262,24 @@ type kubernetesPodSpec struct {
 }
 
 type kubernetesVolume struct {
-	Name                  string                          `json:"name"`
-	PersistentVolumeClaim kubernetesPersistentVolumeClaim `json:"persistentVolumeClaim"`
+	Name                  string                           `json:"name"`
+	PersistentVolumeClaim *kubernetesPersistentVolumeClaim `json:"persistentVolumeClaim,omitempty"`
+	ConfigMap             *kubernetesConfigMapVolume       `json:"configMap,omitempty"`
 }
 
 type kubernetesPersistentVolumeClaim struct {
 	ClaimName string `json:"claimName"`
 	ReadOnly  bool   `json:"readOnly,omitempty"`
+}
+
+type kubernetesConfigMapVolume struct {
+	Name  string                          `json:"name"`
+	Items []kubernetesConfigMapVolumeItem `json:"items"`
+}
+
+type kubernetesConfigMapVolumeItem struct {
+	Key  string `json:"key"`
+	Path string `json:"path"`
 }
 
 type kubernetesContainer struct {
@@ -341,12 +352,18 @@ func marshalWorkloadSpec(resource Resource, namespace, stack string, profile Pro
 		secret := resources[variable.Secret].SecretReference
 		environment = append(environment, kubernetesEnvironmentVariable{Name: variable.Name, ValueFrom: &kubernetesEnvironmentValueFrom{SecretKeyRef: kubernetesSecretKeyReference{Name: secret.Reference, Key: variable.Key}}})
 	}
-	volumes := make([]kubernetesVolume, 0, len(object.VolumeMounts))
-	mounts := make([]kubernetesVolumeMount, 0, len(object.VolumeMounts))
+	volumes := make([]kubernetesVolume, 0, len(object.VolumeMounts)+len(object.ConfigMapMounts))
+	mounts := make([]kubernetesVolumeMount, 0, len(object.VolumeMounts)+len(object.ConfigMapMounts))
 	for _, mount := range object.VolumeMounts {
 		claim := resources[mount.Claim].Kubernetes
-		volumes = append(volumes, kubernetesVolume{Name: string(mount.Claim), PersistentVolumeClaim: kubernetesPersistentVolumeClaim{ClaimName: claim.Name, ReadOnly: mount.ReadOnly}})
+		volumes = append(volumes, kubernetesVolume{Name: string(mount.Claim), PersistentVolumeClaim: &kubernetesPersistentVolumeClaim{ClaimName: claim.Name, ReadOnly: mount.ReadOnly}})
 		mounts = append(mounts, kubernetesVolumeMount{Name: string(mount.Claim), MountPath: mount.Path, ReadOnly: mount.ReadOnly})
+	}
+	for _, mount := range object.ConfigMapMounts {
+		configMap := resources[mount.ConfigMap].Kubernetes
+		volumeName := string(mount.ConfigMap)
+		volumes = append(volumes, kubernetesVolume{Name: volumeName, ConfigMap: &kubernetesConfigMapVolume{Name: configMap.Name, Items: []kubernetesConfigMapVolumeItem{{Key: mount.Key, Path: mount.Key}}}})
+		mounts = append(mounts, kubernetesVolumeMount{Name: volumeName, MountPath: mount.Path, ReadOnly: true})
 	}
 	container := kubernetesContainer{
 		Name: object.Name, Image: object.Image, Command: append([]string(nil), object.Command...), Args: append([]string(nil), object.Arguments...), Env: environment, Ports: ports,
@@ -419,9 +436,14 @@ type kubernetesResourceQuotaSpec struct {
 }
 
 type kubernetesNetworkPolicySpec struct {
-	PodSelector kubernetesSelector              `json:"podSelector"`
-	PolicyTypes []string                        `json:"policyTypes"`
-	Egress      []kubernetesNetworkPolicyEgress `json:"egress,omitempty"`
+	PodSelector kubernetesSelector               `json:"podSelector"`
+	PolicyTypes []string                         `json:"policyTypes"`
+	Ingress     []kubernetesNetworkPolicyIngress `json:"ingress,omitempty"`
+	Egress      []kubernetesNetworkPolicyEgress  `json:"egress,omitempty"`
+}
+
+type kubernetesNetworkPolicyIngress struct {
+	From []kubernetesNetworkPolicyPeer `json:"from"`
 }
 
 type kubernetesNetworkPolicyEgress struct {
@@ -457,6 +479,12 @@ func networkPolicySpec(rules *NetworkRules) kubernetesNetworkPolicySpec {
 	}
 	for _, target := range rules.AllowedEgress {
 		spec.Egress = append(spec.Egress, kubernetesNetworkPolicyEgress{To: []kubernetesNetworkPolicyPeer{{PodSelector: kubernetesSelector{MatchLabels: map[string]string{resourceLabel: string(target)}}}}})
+	}
+	if rules.AllowedIngress != nil {
+		spec.PolicyTypes = append(spec.PolicyTypes, "Ingress")
+		for _, source := range rules.AllowedIngress {
+			spec.Ingress = append(spec.Ingress, kubernetesNetworkPolicyIngress{From: []kubernetesNetworkPolicyPeer{{PodSelector: kubernetesSelector{MatchLabels: map[string]string{resourceLabel: string(source)}}}}})
+		}
 	}
 	return spec
 }

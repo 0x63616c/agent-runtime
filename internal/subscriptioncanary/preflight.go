@@ -11,7 +11,10 @@ import (
 	"time"
 )
 
-const ContractVersion = "subscription-model-canary/v1"
+const (
+	ContractVersion = "subscription-model-canary/v1"
+	RunnerContract  = "protected-subscription-model-canary/v1"
+)
 
 // Config is a redacted preflight projection. Capability and credential values
 // are checked only for presence and are deliberately not retained here.
@@ -31,6 +34,9 @@ type Config struct {
 func Load(lookup func(string) (string, bool)) (Config, error) {
 	if lookup == nil {
 		return Config{}, errors.New("subscription model canary preflight: environment lookup is required")
+	}
+	if err := requireProtectedRunner(lookup); err != nil {
+		return Config{}, err
 	}
 	capabilityEnvironment, err := referencedEnvironment(lookup, "AR_SUBSCRIPTION_CANARY_CAPABILITY_ENV")
 	if err != nil {
@@ -72,6 +78,25 @@ func Load(lookup func(string) (string, bool)) (Config, error) {
 		CancelMode:            cancelMode,
 		RecoveryMode:          recoveryMode,
 	}, nil
+}
+
+// requireProtectedRunner binds the preflight to the dedicated GitHub Actions
+// lane. It still does not authorize a provider call or create evidence: its
+// purpose is to make a local shell and a general-purpose runner fail closed.
+func requireProtectedRunner(lookup func(string) (string, bool)) error {
+	for name, want := range map[string]string{
+		"AR_SUBSCRIPTION_CANARY_RUNNER_CONTRACT":    RunnerContract,
+		"AR_SUBSCRIPTION_CANARY_GITHUB_ENVIRONMENT": "subscription-model-canary",
+		"AR_SUBSCRIPTION_CANARY_RUNNER_LABELS":      "self-hosted,linux,x64,subscription-model-canary-protected",
+		"GITHUB_WORKFLOW":                           "subscription-model-canary",
+		"GITHUB_REF_PROTECTED":                      "true",
+		"RUNNER_ENVIRONMENT":                        "self-hosted",
+	} {
+		if got := required(lookup, name); got != want {
+			return fmt.Errorf("subscription model canary preflight: protected runner %s=%q is required", name, want)
+		}
+	}
+	return nil
 }
 
 func referencedEnvironment(lookup func(string) (string, bool), selector string) (string, error) {

@@ -281,12 +281,18 @@ func validateTypedReferences(resource Resource, resources map[ResourceID]Resourc
 			for _, reference := range resource.Kubernetes.Network.AllowedEgress {
 				required[reference] = ResourceKubernetes
 			}
+			for _, reference := range resource.Kubernetes.Network.AllowedIngress {
+				required[reference] = ResourceKubernetes
+			}
 		}
 		for _, variable := range resource.Kubernetes.SecretEnvironment {
 			required[variable.Secret] = ResourceSecretReference
 		}
 		for _, mount := range resource.Kubernetes.VolumeMounts {
 			required[mount.Claim] = ResourceKubernetes
+		}
+		for _, mount := range resource.Kubernetes.ConfigMapMounts {
+			required[mount.ConfigMap] = ResourceKubernetes
 		}
 		for _, rule := range resource.Kubernetes.IngressRules {
 			required[rule.Service] = ResourceKubernetes
@@ -321,6 +327,16 @@ func validateTypedReferences(resource Resource, resources map[ResourceID]Resourc
 					return errors.Newf("resource %s volume claim %s must name a PersistentVolumeClaim", resource.ID, reference)
 				}
 			}
+			for _, mount := range resource.Kubernetes.ConfigMapMounts {
+				if mount.ConfigMap == reference && (target.Kubernetes == nil || target.Kubernetes.Kind != "ConfigMap") {
+					return errors.Newf("resource %s ConfigMap mount %s must name a ConfigMap", resource.ID, reference)
+				}
+				if mount.ConfigMap == reference {
+					if _, found := target.Kubernetes.Data[mount.Key]; !found {
+						return errors.Newf("resource %s ConfigMap mount key %s is not declared by %s", resource.ID, mount.Key, reference)
+					}
+				}
+			}
 			for _, rule := range resource.Kubernetes.IngressRules {
 				if rule.Service == reference && !isServicePort(target.Kubernetes, rule.ServicePort) {
 					return errors.Newf("resource %s Ingress service port %s is not declared by %s", resource.ID, rule.ServicePort, reference)
@@ -340,6 +356,11 @@ func validateTypedReferences(resource Resource, resources map[ResourceID]Resourc
 			for _, reference := range object.Network.AllowedEgress {
 				if !isKubernetesWorkload(resources[reference]) {
 					return errors.Newf("resource %s NetworkPolicy egress target %s must name a declared workload", resource.ID, reference)
+				}
+			}
+			for _, reference := range object.Network.AllowedIngress {
+				if !isKubernetesWorkload(resources[reference]) {
+					return errors.Newf("resource %s NetworkPolicy ingress source %s must name a declared workload", resource.ID, reference)
 				}
 			}
 		}

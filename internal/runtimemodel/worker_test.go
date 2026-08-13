@@ -158,6 +158,12 @@ func TestSubscriptionCanarySemanticE2ECancelsThenReconcilesWithoutOpaqueValues(t
 	const capability = "opaque-capability-value-must-never-persist"
 	const credential = "opaque-credential-value-must-never-persist"
 	values := map[string]string{
+		"AR_SUBSCRIPTION_CANARY_RUNNER_CONTRACT":     subscriptioncanary.RunnerContract,
+		"AR_SUBSCRIPTION_CANARY_GITHUB_ENVIRONMENT": "subscription-model-canary",
+		"AR_SUBSCRIPTION_CANARY_RUNNER_LABELS":       "self-hosted,linux,x64,subscription-model-canary-protected",
+		"GITHUB_WORKFLOW":                            "subscription-model-canary",
+		"GITHUB_REF_PROTECTED":                       "true",
+		"RUNNER_ENVIRONMENT":                         "self-hosted",
 		"AR_SUBSCRIPTION_CANARY_CAPABILITY_ENV": "SUBSCRIPTION_CANARY_CAPABILITY",
 		"AR_SUBSCRIPTION_CANARY_CREDENTIAL_ENV": "SUBSCRIPTION_CANARY_CREDENTIAL",
 		"SUBSCRIPTION_CANARY_CAPABILITY":        capability,

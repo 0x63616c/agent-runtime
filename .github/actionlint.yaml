@@ -1,0 +1,6 @@
+self-hosted-runner:
+  labels:
+    - kvm
+    - firecracker-protected
+    - runtime-operations-protected
+    - subscription-model-canary-protected

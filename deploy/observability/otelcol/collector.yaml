@@ -40,7 +40,7 @@ exporters:
   # The trace store is deliberately an in-cluster DNS name. Authentication and
   # any external export are not part of this reusable collector contract.
   otlphttp/trace-store:
-    endpoint: http://trace-store.telemetry.svc.cluster.local:4318
+    endpoint: http://trace-store:4318
     compression: gzip
     timeout: 5s
   prometheus:

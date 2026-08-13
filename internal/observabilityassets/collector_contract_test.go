@@ -26,8 +26,8 @@ func TestOpenTelemetryCollectorContractAcceptsBothSignalsAndDoesNotExportSecrets
 	}
 	assertCollectorPipeline(t, contract.Service.Pipelines.Traces, "otlphttp/trace-store")
 	assertCollectorPipeline(t, contract.Service.Pipelines.Metrics, "prometheus")
-	if contract.Exporters.OTLPHTTPTraceStore.Endpoint != "http://trace-store.telemetry.svc.cluster.local:4318" {
-		t.Fatalf("trace-store endpoint = %q, want in-cluster trace store", contract.Exporters.OTLPHTTPTraceStore.Endpoint)
+	if contract.Exporters.OTLPHTTPTraceStore.Endpoint != "http://trace-store:4318" {
+		t.Fatalf("trace-store endpoint = %q, want declared same-namespace Service", contract.Exporters.OTLPHTTPTraceStore.Endpoint)
 	}
 	if contract.Exporters.OTLPHTTPTraceStore.Compression != "gzip" || contract.Exporters.OTLPHTTPTraceStore.Timeout != "5s" {
 		t.Fatalf("trace-store transport = %#v, want bounded compressed export", contract.Exporters.OTLPHTTPTraceStore)

@@ -46,6 +46,20 @@ var _ = Describe("Typed Kubernetes manifests", func() {
 		Expect(compact.String()).NotTo(ContainSubstring(`"ipBlock"`))
 	})
 
+	It("renders an explicit ingress allowlist without admitting external traffic", func() {
+		resources := strings.Replace(kubernetesManifestResources, `"allowed_egress":[]`, `"allowed_egress":[],"allowed_ingress":["api"]`, 1)
+		spec, err := stack.Parse(strings.NewReader(stackDocument(resources, resources, resources)))
+		Expect(err).NotTo(HaveOccurred())
+		rendered, err := stack.Render(spec, stack.ProfileLocal)
+		Expect(err).NotTo(HaveOccurred())
+		manifests, err := stack.RenderKubernetes(rendered)
+		Expect(err).NotTo(HaveOccurred())
+		var compact bytes.Buffer
+		Expect(json.Compact(&compact, manifests.JSON())).To(Succeed())
+		Expect(compact.String()).To(ContainSubstring(`"policyTypes":["Egress","Ingress"]`))
+		Expect(compact.String()).To(ContainSubstring(`"ingress":[{"from":[{"podSelector":{"matchLabels":{"agent-runtime.dev/resource":"api"}}}]}]`))
+	})
+
 	It("projects declared secret references and persistent claims without serializing secret values", func() {
 		resources := `[
   {"id":"database-credentials","kind":"secret_reference","owner":"platform-operator","scope":"namespace","dependencies":[],"retention":{"policy":"external","days":0},"backup_restore_owner":"platform-operator","delete_behavior":"retain","external_controller":true,"secret_reference":{"provider":"local-generated","reference":"database-credentials","version":"v1","keys":["POSTGRES_PASSWORD"]}},
@@ -65,6 +79,21 @@ var _ = Describe("Typed Kubernetes manifests", func() {
 		Expect(compact).To(ContainSubstring(`"secretKeyRef"`))
 		Expect(compact).To(ContainSubstring(`"claimName":"postgres-data"`))
 		Expect(compact).NotTo(ContainSubstring(`"value":"POSTGRES_PASSWORD"`))
+	})
+
+	It("projects declared ConfigMap keys into a read-only workload path", func() {
+		resources := strings.Replace(kubernetesManifestResources, `"dependencies":["runtime-account"]`, `"dependencies":["runtime-account","runtime-config"]`, 1)
+		resources = strings.Replace(resources, `"storage":[]}}`, `"storage":[],"config_map_mounts":[{"config_map":"runtime-config","key":"mode","path":"/etc/runtime/mode"}]}}`, 1)
+		spec, err := stack.Parse(strings.NewReader(stackDocument(resources, resources, resources)))
+		Expect(err).NotTo(HaveOccurred())
+		rendered, err := stack.Render(spec, stack.ProfileLocal)
+		Expect(err).NotTo(HaveOccurred())
+		manifests, err := stack.RenderKubernetes(rendered)
+		Expect(err).NotTo(HaveOccurred())
+		var compact bytes.Buffer
+		Expect(json.Compact(&compact, manifests.JSON())).To(Succeed())
+		Expect(compact.String()).To(ContainSubstring(`"configMap":{"name":"runtime-config","items":[{"key":"mode","path":"mode"}]}`))
+		Expect(compact.String()).To(ContainSubstring(`"mountPath":"/etc/runtime/mode","readOnly":true`))
 	})
 
 	It("renders an explicit replica count and declared ingress service route", func() {

@@ -1,0 +1,60 @@
+name: subscription-model-canary
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  preflight:
+    name: protected-subscription-model-canary-preflight
+    # This lane is intentionally distinct from general self-hosted runners.
+    # The binary also checks each asserted identity before it can pass.
+    runs-on: [self-hosted, linux, x64, subscription-model-canary-protected]
+    environment: subscription-model-canary
+    timeout-minutes: 10
+    steps:
+      - name: Check out immutable revision
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install pinned Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Install pinned just
+        uses: extractions/setup-just@53165ef7e734c5c07cb06b3c8e7b647c5aa16db3 # v4
+        with:
+          just-version: 1.58.0
+      - name: Run protected subscription canary preflight
+        env:
+          AR_SUBSCRIPTION_CANARY_RUNNER_CONTRACT: protected-subscription-model-canary/v1
+          AR_SUBSCRIPTION_CANARY_GITHUB_ENVIRONMENT: subscription-model-canary
+          AR_SUBSCRIPTION_CANARY_RUNNER_LABELS: self-hosted,linux,x64,subscription-model-canary-protected
+          AR_SUBSCRIPTION_CANARY_CAPABILITY_ENV: SUBSCRIPTION_CANARY_CAPABILITY
+          AR_SUBSCRIPTION_CANARY_CREDENTIAL_ENV: SUBSCRIPTION_CANARY_CREDENTIAL
+          SUBSCRIPTION_CANARY_CAPABILITY: ${{ secrets.SUBSCRIPTION_CANARY_CAPABILITY }}
+          SUBSCRIPTION_CANARY_CREDENTIAL: ${{ secrets.SUBSCRIPTION_CANARY_CREDENTIAL }}
+          AR_SUBSCRIPTION_CANARY_MODEL_PROFILE: ${{ vars.SUBSCRIPTION_CANARY_MODEL_PROFILE }}
+          AR_SUBSCRIPTION_CANARY_REVISION: ${{ github.sha }}
+          AR_SUBSCRIPTION_CANARY_TIMEOUT: 30s
+          AR_SUBSCRIPTION_CANARY_CANCEL_MODE: explicit-cancel
+          AR_SUBSCRIPTION_CANARY_RECOVERY_MODE: reconcile-on-restart
+        run: just subscription-model-canary-preflight
+      - name: Write redacted protected preflight report
+        if: success()
+        env:
+          SOURCE_REVISION: ${{ github.sha }}
+        run: |
+          mkdir -p evidence
+          printf '%s\n' '{"schema_version":"agent-runtime.subscription-model-canary-preflight/v1","result":"passed","source_revision":"'"$SOURCE_REVISION"'","limitations":["Preflight verifies protected-run controls only; it does not call a provider or constitute canary evidence."]}' > evidence/subscription-model-canary-preflight.json
+      - name: Retain redacted protected preflight report
+        if: success() && hashFiles('evidence/subscription-model-canary-preflight.json') != ''
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: subscription-model-canary-preflight-${{ github.sha }}
+          path: evidence/subscription-model-canary-preflight.json
+          if-no-files-found: error
+          retention-days: 90
