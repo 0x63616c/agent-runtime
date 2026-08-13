@@ -66,6 +66,10 @@ var _ = Describe("binding governance", func() {
 
 	It("retains main-CI evidence while preserving the incremental gate outcome", func() {
 		workflow := read(".github/workflows/ci.yml")
+		Expect(workflow).To(ContainSubstring("Install pinned Linux lint tool"))
+		Expect(workflow).To(ContainSubstring("github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.12.2"))
+		Expect(workflow).To(ContainSubstring("run: just check"))
+		Expect(workflow).NotTo(ContainSubstring("golangci-lint-action"))
 		Expect(workflow).To(ContainSubstring("id: incremental"))
 		Expect(workflow).To(ContainSubstring("if: always() && steps.incremental.outcome != 'skipped'"))
 		Expect(workflow).To(ContainSubstring("-proof-level main_ci"))

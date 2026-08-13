@@ -33,11 +33,14 @@ jobs:
           just-version: 1.58.0
       - name: Check generated ownership drift
         run: go run ./cmd/generate-requirement-manifest --check
-      - name: Run pinned lint policy
-        uses: golangci/golangci-lint-action@d583c34f0599d37dbac4a198b9c83201be380893 # v9.3.0
-        with:
-          version: v2.12.2
-          args: --timeout=5m
+      - name: Install pinned Linux lint tool
+        env:
+          GOBIN: ${{ runner.temp }}/bin
+        run: |
+          set -euo pipefail
+          mkdir -p "$GOBIN"
+          go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.12.2
+          echo "$GOBIN" >> "$GITHUB_PATH"
       - name: Run incremental direct-main gate
         id: incremental
         run: just check
