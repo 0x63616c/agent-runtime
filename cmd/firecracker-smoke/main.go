@@ -29,6 +29,8 @@ const runnerContract = "protected-linux-kvm-v1"
 const directExecutionMode = "direct"
 
 const directKVMConfigPath = "/etc/agent-runtime/firecracker-direct-kvm.json"
+const directFixtureLockPath = "/var/lib/agent-runtime/firecracker-fixtures/home-server/fixtures.lock"
+const directFixtureSourceMapPath = "/etc/agent-runtime/firecracker-direct-fixtures.json"
 
 type report struct {
 	SchemaVersion           string                     `json:"schema_version"`
@@ -55,6 +57,7 @@ func main() {
 	externalOwner := flag.String("external-owner", "", "required declared Stack resource owning non-Jailer smoke limits")
 	executionMode := flag.String("execution-mode", "protected", "protected or direct execution authority")
 	directConfigPath := flag.String("direct-config", directKVMConfigPath, "root-owned direct KVM configuration")
+	directFixtureSourceMap := flag.String("direct-fixture-source-map", directFixtureSourceMapPath, "root-owned direct fixture source map")
 	timeout := flag.Duration("timeout", 2*time.Minute, "bounded protected smoke timeout")
 	flag.Parse()
 	if *reportPath == "" {
@@ -67,7 +70,7 @@ func main() {
 	}
 
 	record := report{SchemaVersion: "firecracker.smoke-evidence/v2", ProofLevel: firecracker.ProofLevelLinuxKVME2E, Result: firecracker.EvidenceBlocked, Preflight: firecracker.InspectLocalKVMPreflight()}
-	err := run(recordRunnerConfig{fixtureLockPath: *fixtureLockPath, reportPath: *reportPath, vmID: *vmID, uid: *uid, gid: *gid, cgroupParent: *cgroupParent, stackResource: *stackResource, externalOwner: *externalOwner, executionMode: *executionMode, directConfigPath: *directConfigPath, timeout: *timeout}, &record)
+	err := run(recordRunnerConfig{fixtureLockPath: *fixtureLockPath, reportPath: *reportPath, vmID: *vmID, uid: *uid, gid: *gid, cgroupParent: *cgroupParent, stackResource: *stackResource, externalOwner: *externalOwner, executionMode: *executionMode, directConfigPath: *directConfigPath, directFixtureSourceMapPath: *directFixtureSourceMap, timeout: *timeout}, &record)
 	write := writeReport
 	if *executionMode == directExecutionMode {
 		write = writeDirectReport
@@ -83,9 +86,9 @@ func main() {
 }
 
 type recordRunnerConfig struct {
-	fixtureLockPath, reportPath, vmID, cgroupParent, stackResource, externalOwner, executionMode, directConfigPath string
-	uid, gid                                                                                                       uint64
-	timeout                                                                                                        time.Duration
+	fixtureLockPath, reportPath, vmID, cgroupParent, stackResource, externalOwner, executionMode, directConfigPath, directFixtureSourceMapPath string
+	uid, gid                                                                                                                                   uint64
+	timeout                                                                                                                                    time.Duration
 }
 
 func run(config recordRunnerConfig, record *report) (err error) {
@@ -99,10 +102,13 @@ func run(config recordRunnerConfig, record *report) (err error) {
 	if config.executionMode == "protected" && os.Getenv("FIRECRACKER_RUNNER_CONTRACT") != runnerContract {
 		return block(record, "protected self-hosted KVM runner contract is absent")
 	}
+	var fetcher firecracker.FixtureFetcher = lockedHTTPSFetcher{}
 	if config.executionMode == directExecutionMode {
-		if err := validateDirectExecutionBinding(config, record); err != nil {
+		localFetcher, err := validateDirectExecutionBinding(config, record)
+		if err != nil {
 			return block(record, err.Error())
 		}
+		fetcher = localFetcher
 	}
 	if config.executionMode != "protected" && config.executionMode != directExecutionMode {
 		return block(record, "execution mode must be protected or direct")
@@ -140,7 +146,7 @@ func run(config recordRunnerConfig, record *report) (err error) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), config.timeout)
 	defer cancel()
-	fixtures, err := firecracker.ProvisionFixtures(ctx, lock, lockedHTTPSFetcher{}, filepath.Join(workDirectory, "fixtures"))
+	fixtures, err := firecracker.ProvisionFixtures(ctx, lock, fetcher, filepath.Join(workDirectory, "fixtures"))
 	if err != nil {
 		return block(record, "verified fixture provisioning failed")
 	}
@@ -202,41 +208,48 @@ type directExecutionBinding struct {
 // exactly the root-owned direct authority, rather than trusting repeated shell
 // arguments. The preflight has already verified ownership, directories, KVM,
 // and fixture provenance before this binding is read.
-func validateDirectExecutionBinding(config recordRunnerConfig, record *report) error {
+func validateDirectExecutionBinding(config recordRunnerConfig, record *report) (firecracker.FixtureFetcher, error) {
 	if config.directConfigPath != directKVMConfigPath {
-		return errors.New("direct Firecracker config path does not match the reviewed authority")
+		return nil, errors.New("direct Firecracker config path does not match the reviewed authority")
 	}
 	info, err := os.Stat(config.directConfigPath)
 	if err != nil || validateRootOwnedDirect(info) != nil {
-		return errors.New("root-owned direct KVM config is unavailable after preflight")
+		return nil, errors.New("root-owned direct KVM config is unavailable after preflight")
 	}
 	contents, err := os.ReadFile(config.directConfigPath)
 	if err != nil {
-		return errors.New("root-owned direct KVM config is unavailable after preflight")
+		return nil, errors.New("root-owned direct KVM config is unavailable after preflight")
 	}
 	decoder := json.NewDecoder(bytes.NewReader(contents))
 	decoder.DisallowUnknownFields()
 	var binding directExecutionBinding
 	if err := decoder.Decode(&binding); err != nil {
-		return errors.New("root-owned direct KVM config is invalid after preflight")
+		return nil, errors.New("root-owned direct KVM config is invalid after preflight")
 	}
 	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
-		return errors.New("root-owned direct KVM config has trailing data after preflight")
+		return nil, errors.New("root-owned direct KVM config has trailing data after preflight")
 	}
 	if binding.Version != "agent-runtime.firecracker-direct-kvm/v1" || !validDirectName(binding.ExecutionNamespace) || !validDirectEvidenceDirectory(binding.EvidenceDirectory) || binding.JailerChrootBaseDir != "/srv/agent-runtime/jailer" || !validDirectRelativePath(binding.CgroupParent) || !validDirectName(binding.StackResource) || !validDirectName(binding.ExternalOwner) || binding.JailerUID == 0 || binding.JailerGID == 0 || config.uid != uint64(binding.JailerUID) || config.gid != uint64(binding.JailerGID) || config.cgroupParent != binding.CgroupParent || config.stackResource != binding.StackResource || config.externalOwner != binding.ExternalOwner || !strings.HasPrefix(config.vmID, binding.ExecutionNamespace+"-") {
-		return errors.New("direct smoke inputs do not match the root-owned direct KVM authority")
+		return nil, errors.New("direct smoke inputs do not match the root-owned direct KVM authority")
 	}
 	for _, path := range []string{binding.JailerChrootBaseDir, binding.EvidenceDirectory, filepath.Join("/sys/fs/cgroup", binding.CgroupParent)} {
 		info, err := os.Stat(path)
 		if err != nil || !info.IsDir() || validateRootOwnedDirect(info) != nil {
-			return errors.New("root-owned direct KVM directories changed after preflight")
+			return nil, errors.New("root-owned direct KVM directories changed after preflight")
 		}
 	}
 	if filepath.Dir(config.reportPath) != binding.EvidenceDirectory || !validDirectEvidenceReportPath(config.reportPath) {
-		return errors.New("direct smoke report does not use the root-owned configured evidence directory")
+		return nil, errors.New("direct smoke report does not use the root-owned configured evidence directory")
+	}
+	if config.fixtureLockPath != directFixtureLockPath {
+		return nil, errors.New("direct fixture lock does not use the root-owned direct fixture authority")
+	}
+	localFetcher, err := loadDirectFixtureSourceMap(config.directFixtureSourceMapPath, config.fixtureLockPath)
+	if err != nil {
+		return nil, err
 	}
 	record.directEvidenceDirectory = binding.EvidenceDirectory
-	return nil
+	return localFetcher, nil
 }
 
 func validateRootOwnedDirect(info os.FileInfo) error {

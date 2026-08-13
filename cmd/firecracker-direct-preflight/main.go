@@ -23,6 +23,7 @@ const (
 	directConfigVersion = "agent-runtime.firecracker-direct-kvm/v1"
 	directConfigPath    = "/etc/agent-runtime/firecracker-direct-kvm.json"
 	directEvidenceRoot  = "/var/lib/agent-runtime/firecracker-evidence"
+	directFixtureLock   = "/var/lib/agent-runtime/firecracker-fixtures/home-server/fixtures.lock"
 	fixtureLockVersion  = "firecracker.fixtures/v2"
 )
 
@@ -43,7 +44,7 @@ type directConfig struct {
 
 func main() {
 	configPath := flag.String("config", directConfigPath, "root-owned direct KVM configuration")
-	fixtureLockPath := flag.String("fixture-lock", "tools/firecracker/fixtures.lock", "reviewed Firecracker fixture lock")
+	fixtureLockPath := flag.String("fixture-lock", directFixtureLock, "root-owned direct Firecracker fixture lock")
 	flag.Parse()
 	if flag.NArg() != 0 {
 		fmt.Fprintln(os.Stderr, "firecracker-direct-preflight: arguments are not accepted")
@@ -139,8 +140,8 @@ func validateKVM(stat func(string) (os.FileInfo, error)) error {
 }
 
 func validateFixtureLock(path string) error {
-	if path != "tools/firecracker/fixtures.lock" {
-		return errors.New("fixture lock path does not match the reviewed authority")
+	if path != directFixtureLock {
+		return errors.New("fixture lock path does not match the direct evidence authority")
 	}
 	file, err := os.Open(path)
 	if err != nil {
@@ -161,11 +162,6 @@ func validateFixtureLock(path string) error {
 	for _, source := range lock.Sources {
 		if _, ok := required[source.ID]; ok {
 			required[source.ID] = true
-		}
-		if source.ID == "kernel" || source.ID == "rootfs" || source.ID == "guest-agent" {
-			if source.Kind != firecracker.FixtureSourceProjectReleaseAsset || !strings.HasPrefix(source.Reference, "commit:") {
-				return fmt.Errorf("reviewed fixture lock %s source must be a commit-pinned project release asset", source.ID)
-			}
 		}
 	}
 	for id, present := range required {
