@@ -68,21 +68,28 @@ render() {
       {id:"direct-live-lab-egress-proxy-deny",kind:"kubernetes",owner:"security-operator",scope:"namespace",dependencies:["egress-proxy"],retention:{policy:"ephemeral",days:0},backup_restore_owner:"none",delete_behavior:"delete",external_controller:false,kubernetes:{api_version:"networking.k8s.io/v1",kind:"NetworkPolicy",name:"direct-live-lab-egress-proxy-deny",network:{default_deny:true,subject:"egress-proxy",allowed_egress:[]}}}
     ])
   ' | jq '
-    # Keep the namespace limit quota large enough for the complete rendered
-    # workload set.  This lab is intentionally ephemeral, but ResourceQuota
-    # admission still accounts for every desired deployment before any of
-    # them can become ready.  Deriving this lower bound prevents a newly added
-    # workload from silently making the lab impossible to apply.
-    ([.profiles.ci.resources[]
+    # Keep the namespace quota large enough for every desired pod, plus a
+    # bounded 1-core rollout allowance. ResourceQuota admission accounts for
+    # replicas, not merely workload definitions: a Deployment with three
+    # replicas consumes its limit three times. The fixed allowance leaves room
+    # for a controlled replacement without making this disposable lab
+    # unbounded.
+    def workloads:
+      .profiles.ci.resources[]
       | select(.kind == "kubernetes" and
           (.kubernetes.kind == "Deployment" or
            .kubernetes.kind == "StatefulSet" or
-           .kubernetes.kind == "Job"))
-      | .kubernetes.compute.limit_milli_cpu] | add) as $workload_limit_milli_cpu |
+           .kubernetes.kind == "Job"));
+    def replica_count: (.kubernetes.replicas // 1);
+    1000 as $rollout_headroom_milli_cpu |
+    ([workloads | replica_count * .kubernetes.compute.request_milli_cpu] | add) as $workload_request_milli_cpu |
+    ([workloads | replica_count * .kubernetes.compute.limit_milli_cpu] | add) as $workload_limit_milli_cpu |
     .profiles.ci.resources |= map(
       if .kind == "kubernetes" and .kubernetes.kind == "ResourceQuota" then
+        .kubernetes.compute.request_milli_cpu |=
+          if . < ($workload_request_milli_cpu + $rollout_headroom_milli_cpu) then $workload_request_milli_cpu + $rollout_headroom_milli_cpu else . end |
         .kubernetes.compute.limit_milli_cpu |=
-          if . < $workload_limit_milli_cpu then $workload_limit_milli_cpu else . end
+          if . < ($workload_limit_milli_cpu + $rollout_headroom_milli_cpu) then $workload_limit_milli_cpu + $rollout_headroom_milli_cpu else . end
       else . end
     )
   ' >"$output"
@@ -103,18 +110,23 @@ validate() {
     and ([.profiles.ci.resources[] | select(.kind == "kubernetes" and .kubernetes.kind == "PersistentVolumeClaim") | .kubernetes.storage[] | .class] | all(. == "local-lvm"))
   ' "$stack_file" >/dev/null || fail "direct lab requires namespace-local secret references and immutable images"
   jq -e '
-    ([.profiles.ci.resources[]
+    def workloads:
+      .profiles.ci.resources[]
       | select(.kind == "kubernetes" and
           (.kubernetes.kind == "Deployment" or
            .kubernetes.kind == "StatefulSet" or
-           .kubernetes.kind == "Job"))
-      | .kubernetes.compute.limit_milli_cpu] | add) as $workload_limit_milli_cpu |
+           .kubernetes.kind == "Job"));
+    def replica_count: (.kubernetes.replicas // 1);
+    1000 as $rollout_headroom_milli_cpu |
+    ([workloads | replica_count * .kubernetes.compute.request_milli_cpu] | add) as $workload_request_milli_cpu |
+    ([workloads | replica_count * .kubernetes.compute.limit_milli_cpu] | add) as $workload_limit_milli_cpu |
     ([.profiles.ci.resources[]
       | select(.kind == "kubernetes" and .kubernetes.kind == "ResourceQuota")
-      | .kubernetes.compute.limit_milli_cpu]) as $quota_limit_milli_cpu |
-    ($quota_limit_milli_cpu | length) == 1 and
-    $quota_limit_milli_cpu[0] >= $workload_limit_milli_cpu
-  ' "$stack_file" >/dev/null || fail "direct lab CPU limit quota is smaller than its rendered workload limits"
+      | .kubernetes.compute]) as $quota_compute |
+    ($quota_compute | length) == 1 and
+    $quota_compute[0].request_milli_cpu >= ($workload_request_milli_cpu + $rollout_headroom_milli_cpu) and
+    $quota_compute[0].limit_milli_cpu >= ($workload_limit_milli_cpu + $rollout_headroom_milli_cpu)
+  ' "$stack_file" >/dev/null || fail "direct lab CPU quota does not cover every rendered replica plus rollout headroom"
   rendered="$(go run "$root/cmd/stackctl" render --stack-file "$stack_file" --profile ci)"
   manifests="$(go run "$root/cmd/stackctl" manifests --stack-file "$stack_file" --profile ci)"
   printf '%s' "$rendered" | jq -e --arg name "$name" --arg namespace "$namespace" '.stack==$name and .profile=="ci" and .namespace==$namespace and ([.resources[]|select(.kind=="kubernetes" and .kubernetes.kind=="ResourceQuota")]|length)==1 and (([.resources[]|select(.kind=="kubernetes" and (.kubernetes.kind=="Deployment" or .kubernetes.kind=="StatefulSet" or .kubernetes.kind=="Job"))|.id])-([.resources[]|select(.kind=="kubernetes" and .kubernetes.kind=="NetworkPolicy" and .kubernetes.network.default_deny==true)|.kubernetes.network.subject]))==[]' >/dev/null || fail "direct lab requires quota and default-deny policy for every workload"
@@ -125,6 +137,17 @@ validate() {
 self_test() {
   local tmp="$(mktemp)"
   render --name agent-runtime-direct-live-lab-test --context home-server --output "$tmp" >/dev/null
+  jq -e '
+    def workloads:
+      .profiles.ci.resources[]
+      | select(.kind == "kubernetes" and
+          (.kubernetes.kind == "Deployment" or
+           .kubernetes.kind == "StatefulSet" or
+           .kubernetes.kind == "Job"));
+    ([workloads | (.kubernetes.replicas // 1) * .kubernetes.compute.limit_milli_cpu] | add) as $limit_milli_cpu |
+    ([.profiles.ci.resources[] | select(.kind == "kubernetes" and .kubernetes.kind == "ResourceQuota") | .kubernetes.compute.limit_milli_cpu]) as $quota_limit_milli_cpu |
+    $limit_milli_cpu == 9600 and $quota_limit_milli_cpu == [10600]
+  ' "$tmp" >/dev/null || fail "replica-aware quota derivation regressed"
   jq '.profiles.ci.resources[0].secret_reference.provider="external-secrets"' "$tmp" >"$tmp.bad"
   if (validate --stack-file "$tmp.bad") >/dev/null 2>&1; then fail "accepted a cluster-wide secret controller"; fi
   echo "direct live-lab manifest rejects ExternalSecrets and accepts only isolated ephemeral inputs"
