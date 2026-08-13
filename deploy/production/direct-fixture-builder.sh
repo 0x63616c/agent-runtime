@@ -191,7 +191,7 @@ spec:
         - name: inputs
           hostPath: { path: /var/lib/agent-runtime/firecracker-fixture-inputs/home-server, type: Directory }
         - name: fixtures
-          hostPath: { path: /var/lib/agent-runtime/firecracker-fixtures, type: Directory }
+          hostPath: { path: /var/lib/agent-runtime/firecracker-fixtures, type: DirectoryOrCreate }
         - name: direct-config
           hostPath: { path: /etc/agent-runtime, type: DirectoryOrCreate }
 EOF
@@ -210,7 +210,7 @@ self_test() {
   grep -Fqx '    pod-security.kubernetes.io/enforce: privileged' "$manifest"
   grep -Fqx '        kubernetes.io/os: linux' "$manifest"
   grep -Fqx '        kubernetes.io/arch: amd64' "$manifest"
-  grep -Fqx '          hostPath: { path: /var/lib/agent-runtime/firecracker-fixtures, type: Directory }' "$manifest"
+  grep -Fqx '          hostPath: { path: /var/lib/agent-runtime/firecracker-fixtures, type: DirectoryOrCreate }' "$manifest"
   grep -Fq '/workspace/tools/firecracker/assemble-fixtures.sh "$work/assembled"' "$manifest"
   grep -Fq '/workspace/tools/firecracker/write-direct-fixture-source-map.sh /var/lib/agent-runtime/firecracker-fixtures/home-server /etc/agent-runtime/firecracker-direct-fixtures.json' "$manifest"
   if "$0" render --run-id bad_ID --image "ghcr.io/0x63616c/agent-runtime-firecracker-fixture-builder@sha256:$digest" --revision "$(git rev-parse HEAD)" --firecracker-version v1.16.1 --kernel-url https://example.invalid/vmlinux?versionId=abc --kernel-version-id abc --source-date-epoch 1704067200 --rootfs-bytes 16777216 --rootfs-uuid 00000000-0000-0000-0000-000000000001 --output "$tmp/bad.yaml" >/dev/null 2>&1; then fail 'accepted invalid run ID'; fi
