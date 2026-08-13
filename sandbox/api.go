@@ -165,6 +165,11 @@ type OperationAdmissionPolicy struct {
 // admission. It contains safe metadata only; secret values and backend handles
 // are never part of this value.
 type ResolvedOperation struct {
+	// Request is the immutable, canonical request after admission has resolved
+	// every finite default. Control stores persist this exact value for a later
+	// authenticated host dispatch; they must not reconstruct it from caller
+	// input after policy changes.
+	Request   OperationRequest
 	Operation Operation
 	// ResourceLimits are the immutable finite values resolved at admission.
 	// Private control storage persists the output retention ceiling separately

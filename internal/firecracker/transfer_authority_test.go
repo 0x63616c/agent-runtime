@@ -134,6 +134,91 @@ func TestTransferExecutionAuthorityRefusesCrossSandboxBeforeEffect(t *testing.T)
 	}
 }
 
+func TestTransferExecutionAuthorityExecutesTheResolvedPublicCopyRequest(t *testing.T) {
+	now := time.Date(2026, 8, 13, 1, 2, 3, 0, time.UTC)
+	sourceClock, _ := clock.NewFake(now)
+	root := t.TempDir()
+	binding, err := sandboxtransfer.BindGuestWorkspace("sbx_001", root, 1<<20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	journal, err := sandboxhostjournal.Open(filepath.Join(t.TempDir(), "receipts.json"), 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = journal.Close() }()
+	data := []byte("admitted immutable artifact")
+	request := sandbox.OperationRequest{ID: "op_public_transfer", Kind: sandbox.OperationCopyIn, CopyIn: &sandbox.CopyInRequest{SandboxID: "sbx_001", Source: transferArtifact("art_001", "text/plain", data), Destination: "/workspace/input.txt", Options: sandbox.TransferOptions{Overwrite: sandbox.OverwriteFailIfExists}}}
+	resolved, err := sandbox.ResolveControlOperationRequest(mustEncodeControlRequest(t, request), now, now.Add(time.Hour), sandbox.OperationAdmissionPolicy{Defaults: sandbox.ResourceLimits{MilliCPU: 1, MemoryBytes: 1, RootDiskBytes: 1, TmpfsBytes: 1, PIDs: 1, ProcessCount: 1, OpenFiles: 1, Inodes: 1, Files: 1, Lifetime: time.Second, ProducedOutputBytes: 1, RetainedOutputBytes: 1, TransferBytes: 1, NetworkConnections: 1, VolumeBytes: 1, SnapshotBytes: 1}, Maximum: sandbox.ResourceLimits{MilliCPU: 2, MemoryBytes: 2, RootDiskBytes: 2, TmpfsBytes: 2, PIDs: 2, ProcessCount: 2, OpenFiles: 2, Inodes: 2, Files: 2, Lifetime: 2 * time.Second, ProducedOutputBytes: 2, RetainedOutputBytes: 2, TransferBytes: 2, NetworkConnections: 2, VolumeBytes: 2, SnapshotBytes: 2}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload := mustEncodeControlRequest(t, resolved.Request)
+	envelope := transferEnvelope(t, now, *resolved.Request.CopyIn)
+	envelope.SandboxID, envelope.OperationKind, envelope.Payload, envelope.PayloadDigest = string(resolved.Request.CopyIn.SandboxID), string(sandbox.OperationCopyIn), payload, sandboxhostprotocol.Digest(payload)
+	if _, _, err := journal.Accept(envelope, sandboxhostprotocol.Digest([]byte("control-envelope"))); err != nil {
+		t.Fatal(err)
+	}
+	if err := journal.StageStarted(envelope, []byte(`{"state":"started"}`)); err != nil {
+		t.Fatal(err)
+	}
+	source := &transferSource{data: data}
+	authority, err := NewTransferExecutionAuthority(binding, source, &transferSink{}, journal, sourceClock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	receipt, err := authority.Execute(context.Background(), envelope, func(context.Context, []byte) error { return nil })
+	if err != nil || receipt.Kind != "copy-in" || source.opens != 1 {
+		t.Fatalf("Execute(resolved public copy-in) = %#v, %v; source opens=%d", receipt, err, source.opens)
+	}
+	contents, err := os.ReadFile(filepath.Join(root, "input.txt"))
+	if err != nil || string(contents) != string(data) {
+		t.Fatalf("resolved public copy-in materialization = %q, %v", contents, err)
+	}
+}
+
+func TestTransferExecutionAuthorityRefusesPublicCopyDirectionSwapBeforeEffect(t *testing.T) {
+	now := time.Date(2026, 8, 13, 1, 2, 3, 0, time.UTC)
+	sourceClock, _ := clock.NewFake(now)
+	binding, err := sandboxtransfer.BindGuestWorkspace("sbx_001", t.TempDir(), 1<<20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	journal, err := sandboxhostjournal.Open(filepath.Join(t.TempDir(), "receipts.json"), 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = journal.Close() }()
+	data := []byte("immutable artifact")
+	copyOut := sandbox.OperationRequest{ID: "op_public_copy_out", Kind: sandbox.OperationCopyOut, CopyOut: &sandbox.CopyOutRequest{SandboxID: "sbx_001", Source: "/workspace/output.txt", MediaType: "text/plain", Options: sandbox.TransferOptions{Overwrite: sandbox.OverwriteFailIfExists}}}
+	payload := mustEncodeControlRequest(t, copyOut)
+	envelope := transferEnvelope(t, now, sandbox.CopyInRequest{SandboxID: "sbx_001", Source: transferArtifact("art_001", "text/plain", data), Destination: "/workspace/input.txt", Options: sandbox.TransferOptions{Overwrite: sandbox.OverwriteFailIfExists}})
+	envelope.SandboxID, envelope.OperationKind, envelope.Payload, envelope.PayloadDigest = "sbx_001", string(sandbox.OperationCopyIn), payload, sandboxhostprotocol.Digest(payload)
+	if _, _, err := journal.Accept(envelope, sandboxhostprotocol.Digest([]byte("control-envelope"))); err != nil {
+		t.Fatal(err)
+	}
+	if err := journal.StageStarted(envelope, []byte(`{"state":"started"}`)); err != nil {
+		t.Fatal(err)
+	}
+	source := &transferSource{data: data}
+	authority, err := NewTransferExecutionAuthority(binding, source, &transferSink{}, journal, sourceClock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := authority.Execute(context.Background(), envelope, func(context.Context, []byte) error { return nil }); !errors.Is(err, ErrCapabilityUnavailable) || source.opens != 0 {
+		t.Fatalf("Execute(swapped public transfer direction) = %v; source opens=%d", err, source.opens)
+	}
+}
+
+func mustEncodeControlRequest(t *testing.T, request sandbox.OperationRequest) []byte {
+	t.Helper()
+	wire, err := sandbox.EncodeControlOperationRequest(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return wire
+}
+
 func TestTransferExecutionAuthorityArchiveInReplaysReceiptWithoutSecondExtraction(t *testing.T) {
 	now := time.Date(2026, 8, 10, 1, 2, 3, 0, time.UTC)
 	sourceClock, _ := clock.NewFake(now)

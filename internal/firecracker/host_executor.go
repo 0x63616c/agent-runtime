@@ -208,13 +208,14 @@ func (executor HostProcessExecutor) ExecuteAuthenticatedWithDataPlaneReceipt(ctx
 	if err := sandboxhostprotocol.ValidateAuthenticatedEnvelopeWire(authenticatedEnvelope, envelope); err != nil {
 		return fmt.Errorf("execute Firecracker data-plane receipt: exact canonical envelope is required: %w", ErrCapabilityUnavailable)
 	}
-	switch envelope.OperationKind {
-	case GuestTransferOperationKind:
+	if guestTransferOperationKind(envelope.OperationKind) {
 		if executor.Transfer == nil {
 			return fmt.Errorf("execute Firecracker transfer receipt: %w", ErrCapabilityUnavailable)
 		}
 		_, err := executor.Host.DispatchAuthenticatedTransfer(ctx, envelope, authenticatedEnvelope, executor.Transfer, func(receiptCtx context.Context, wire []byte) error { return emit(receiptCtx, "transfer", wire) })
 		return err
+	}
+	switch envelope.OperationKind {
 	case GuestSnapshotRestoreOperationKind:
 		if executor.Restore == nil {
 			return fmt.Errorf("execute Firecracker snapshot restore receipt: %w", ErrCapabilityUnavailable)
@@ -240,17 +241,18 @@ func (executor HostProcessExecutor) ReapAuthenticated(ctx context.Context, envel
 	if executor.Host == nil || sandboxhostprotocol.ValidateAuthenticatedEnvelopeWire(authenticatedEnvelope, envelope) != nil {
 		return fmt.Errorf("reap authenticated Firecracker command: exact canonical envelope is required: %w", ErrCapabilityUnavailable)
 	}
+	if guestTransferOperationKind(envelope.OperationKind) {
+		if executor.Transfer == nil {
+			return fmt.Errorf("reap authenticated Firecracker transfer: %w", ErrCapabilityUnavailable)
+		}
+		return executor.Transfer.Reap(envelope)
+	}
 	switch envelope.OperationKind {
 	case GuestSecretCommandOperationKind:
 		if executor.Secrets == nil {
 			return fmt.Errorf("reap authenticated Firecracker secret command: %w", ErrCapabilityUnavailable)
 		}
 		return executor.Secrets.AbandonAfterLostContact(ctx, envelope.ProcessID)
-	case GuestTransferOperationKind:
-		if executor.Transfer == nil {
-			return fmt.Errorf("reap authenticated Firecracker transfer: %w", ErrCapabilityUnavailable)
-		}
-		return executor.Transfer.Reap(envelope)
 	case GuestSnapshotRestoreOperationKind:
 		return executor.ReapAuthenticatedSnapshotRestore(ctx, envelope)
 	case GuestMountOperationKind:

@@ -345,7 +345,7 @@ func (host *LinuxJailerHost) DispatchAuthenticatedTransfer(ctx context.Context, 
 	if err := contextError(ctx); err != nil {
 		return TransferReceipt{}, err
 	}
-	if host == nil || authority == nil || emit == nil || len(authenticatedEnvelope) == 0 || envelope.OperationKind != GuestTransferOperationKind || envelope.HostID == "" || envelope.AssignmentID == "" || envelope.FencingToken == 0 || envelope.CapabilityDigest == "" {
+	if host == nil || authority == nil || emit == nil || len(authenticatedEnvelope) == 0 || !guestTransferOperationKind(envelope.OperationKind) || envelope.HostID == "" || envelope.AssignmentID == "" || envelope.FencingToken == 0 || envelope.CapabilityDigest == "" {
 		return TransferReceipt{}, fmt.Errorf("%w: authenticated fenced transfer command is required", ErrCapabilityUnavailable)
 	}
 	if err := sandboxhostprotocol.ValidateAuthenticatedEnvelopeWire(authenticatedEnvelope, envelope); err != nil {

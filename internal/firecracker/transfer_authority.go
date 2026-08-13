@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"strings"
 	"time"
 
@@ -131,28 +132,43 @@ func DecodeGuestTransferCommand(payload []byte) (GuestTransferCommand, error) {
 	decoder := json.NewDecoder(bytes.NewReader(payload))
 	decoder.DisallowUnknownFields()
 	var command GuestTransferCommand
-	if err := decoder.Decode(&command); err != nil {
+	if err := decoder.Decode(&command); err == nil {
+		var trailing any
+		if decoder.Decode(&trailing) == io.EOF {
+			requestCount := 0
+			if command.CopyIn != nil {
+				requestCount++
+			}
+			if command.ArchiveIn != nil {
+				requestCount++
+			}
+			if command.CopyOut != nil {
+				requestCount++
+			}
+			canonical, marshalErr := json.Marshal(command)
+			if marshalErr == nil && bytes.Equal(canonical, payload) && command.Version == GuestTransferOperationKind && requestCount == 1 {
+				return command, nil
+			}
+		}
+	}
+	// The durable host envelope carries the canonical public control request,
+	// not an invented parallel data-plane operation. Convert only its exact
+	// admitted copy request to the narrow private descriptor command.
+	request, err := sandbox.DecodeControlOperationRequest(payload)
+	if err != nil {
 		return GuestTransferCommand{}, fmt.Errorf("decode guest transfer command: %w", ErrCapabilityUnavailable)
 	}
-	var trailing any
-	if err := decoder.Decode(&trailing); err == nil {
-		return GuestTransferCommand{}, fmt.Errorf("decode guest transfer command: %w", ErrCapabilityUnavailable)
+	switch request.Kind {
+	case sandbox.OperationCopyIn:
+		if request.CopyIn != nil {
+			return GuestTransferCommand{Version: GuestTransferOperationKind, CopyIn: request.CopyIn}, nil
+		}
+	case sandbox.OperationCopyOut:
+		if request.CopyOut != nil {
+			return GuestTransferCommand{Version: GuestTransferOperationKind, CopyOut: request.CopyOut}, nil
+		}
 	}
-	requestCount := 0
-	if command.CopyIn != nil {
-		requestCount++
-	}
-	if command.ArchiveIn != nil {
-		requestCount++
-	}
-	if command.CopyOut != nil {
-		requestCount++
-	}
-	canonical, err := json.Marshal(command)
-	if err != nil || !bytes.Equal(canonical, payload) || command.Version != GuestTransferOperationKind || requestCount != 1 {
-		return GuestTransferCommand{}, fmt.Errorf("decode guest transfer command: %w", ErrCapabilityUnavailable)
-	}
-	return command, nil
+	return GuestTransferCommand{}, fmt.Errorf("decode guest transfer command: %w", ErrCapabilityUnavailable)
 }
 
 // DecodeGuestSnapshotRestoreCommand accepts only one canonical, reference-only
@@ -186,7 +202,7 @@ func (authority *TransferExecutionAuthority) Execute(ctx context.Context, envelo
 		return TransferReceipt{}, fmt.Errorf("execute guest transfer authority: %w", ErrCapabilityUnavailable)
 	}
 	command, err := DecodeGuestTransferCommand(envelope.Payload)
-	if err != nil || envelope.OperationKind != GuestTransferOperationKind || envelope.ExpiresAt.IsZero() || !authority.clock.Now().UTC().Before(envelope.ExpiresAt) {
+	if err != nil || !exactTransferOperationKind(command, envelope.OperationKind) || envelope.ExpiresAt.IsZero() || !authority.clock.Now().UTC().Before(envelope.ExpiresAt) {
 		return TransferReceipt{}, fmt.Errorf("execute guest transfer authority: %w", ErrCapabilityUnavailable)
 	}
 	if entry, exists := authority.journal.Entry(envelope); exists && entry.TransferReceiptDigest != "" {
@@ -363,6 +379,26 @@ func exactTransferCommand(command GuestTransferCommand, envelope sandboxhostprot
 		return nil
 	}
 	return ErrCapabilityUnavailable
+}
+
+func guestTransferOperationKind(kind string) bool {
+	return kind == GuestTransferOperationKind || kind == string(sandbox.OperationCopyIn) || kind == string(sandbox.OperationCopyOut)
+}
+
+// exactTransferOperationKind prevents a signed delivery from relabelling an
+// admitted public copy direction. The legacy private command remains explicit
+// because it is the sole representation that can carry archive materialization.
+func exactTransferOperationKind(command GuestTransferCommand, kind string) bool {
+	switch kind {
+	case GuestTransferOperationKind:
+		return command.Version == GuestTransferOperationKind
+	case string(sandbox.OperationCopyIn):
+		return command.CopyIn != nil && command.ArchiveIn == nil && command.CopyOut == nil
+	case string(sandbox.OperationCopyOut):
+		return command.CopyIn == nil && command.ArchiveIn == nil && command.CopyOut != nil
+	default:
+		return false
+	}
 }
 
 func exactTransferReceipt(receipt TransferReceipt, envelope sandboxhostprotocol.Envelope) bool {

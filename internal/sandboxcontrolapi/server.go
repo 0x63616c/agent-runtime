@@ -298,7 +298,12 @@ func (server *server) submit(writer http.ResponseWriter, request *http.Request) 
 		writeError(writer, err)
 		return
 	}
-	operation := toRecord(identity.Tenant, identity.Principal, body, resolved)
+	dispatchBody, encodeErr := sandbox.EncodeControlOperationRequest(resolved.Request)
+	if encodeErr != nil {
+		writeUnavailable(writer)
+		return
+	}
+	operation := toRecord(identity.Tenant, identity.Principal, dispatchBody, resolved)
 	var stored sandboxcontrol.Operation
 	if resolved.Operation.Kind == sandbox.OperationCreateVolume {
 		resourceStore, ok := server.config.Store.(sandboxcontrol.ResourceAdmissionStore)

@@ -129,6 +129,26 @@ func TestControlHandlerRejectsChangedInputOtherPrincipalAndBindingMismatch(t *te
 	}
 }
 
+func TestControlHandlerPersistsResolvedCopyDispatchRatherThanCallerInput(t *testing.T) {
+	now := time.Date(2030, 8, 7, 2, 0, 0, 0, time.UTC)
+	fakeClock, _ := clock.NewFake(now)
+	store := sandboxcontrol.NewMemoryLedger()
+	server := newTestServer(t, testServerConfig(store, mapAuthenticator{"Bearer token": {Authority: "issuer", Tenant: "tenant", Subject: "subject", Principal: "tenant:subject"}}, fakeClock, bytes.Repeat([]byte{0x26}, 32)))
+	client := newPublicClient(t, server, "token")
+	request := sandbox.OperationRequest{ID: "op_resolved_copy", Kind: sandbox.OperationCopyIn, CopyIn: &sandbox.CopyInRequest{SandboxID: "sbx_001", Source: sandbox.ArtifactRef{ID: "art_001", MediaType: "text/plain", SizeBytes: 1, Digest: "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"}, Destination: "/workspace/input.txt"}}
+	if _, err := client.Submit(context.Background(), request); err != nil {
+		t.Fatalf("Submit(copy-in) = %v", err)
+	}
+	stored, err := store.Get(context.Background(), "tenant:subject", string(request.ID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	dispatch, err := sandbox.DecodeControlOperationRequest([]byte(stored.DispatchBody))
+	if err != nil || dispatch.CopyIn == nil || dispatch.CopyIn.Options.Overwrite != sandbox.OverwriteFailIfExists {
+		t.Fatalf("durable resolved copy dispatch = %#v, %v", dispatch, err)
+	}
+}
+
 func TestControlHandlerAdmitsStableOpaqueVolumeProjection(t *testing.T) {
 	now := time.Date(2030, 8, 7, 2, 0, 0, 0, time.UTC)
 	fakeClock, _ := clock.NewFake(now)
