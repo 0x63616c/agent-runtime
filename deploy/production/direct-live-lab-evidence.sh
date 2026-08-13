@@ -52,7 +52,7 @@ preflight() {
   local present rendered manifests nodes
   present="$(kubectl --kubeconfig "$kubeconfig" --context "$context_value" get "namespace/$namespace" --ignore-not-found -o json)"
   [[ -z "${present//[[:space:]]/}" ]] || fail "namespace already exists; direct lab will not take it over"
-  kubectl --kubeconfig "$kubeconfig" --context "$context_value" api-resources --api-group networking.k8s.io -o name | grep -Fx networkpolicies >/dev/null || fail "NetworkPolicy API is unavailable"
+  kubectl --kubeconfig "$kubeconfig" --context "$context_value" api-resources --api-group networking.k8s.io -o name | grep -Ex 'networkpolicies(\.networking\.k8s\.io)?' >/dev/null || fail "NetworkPolicy API is unavailable"
   rendered="$(go run "$root/cmd/stackctl" render --stack-file "$stack_file" --profile ci)"
   manifests="$(go run "$root/cmd/stackctl" manifests --stack-file "$stack_file" --profile ci)"
   printf '%s' "$rendered" | jq -e --arg stack "$stack_name" --arg namespace "$namespace" '
