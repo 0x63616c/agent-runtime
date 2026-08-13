@@ -182,6 +182,7 @@ self_test() {
   grep -Fqx '          -report /var/lib/agent-runtime/firecracker-evidence/home-server/smoke-test.json' "$manifest"
   if "$0" render --run-id upperCase --image "ghcr.io/0x63616c/agent-runtime-direct-runner@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" --output "$tmp/bad" >/dev/null 2>&1; then fail "accepted invalid run ID"; fi
   if "$0" render --run-id smoke-test --image "example.invalid/unpinned:latest" --output "$tmp/bad" >/dev/null 2>&1; then fail "accepted unreviewed image"; fi
+  if "$0" execute --run-id smoke-test --image "ghcr.io/0x63616c/agent-runtime-direct-runner@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" --kubeconfig /dev/null --context home-server --evidence-file "$tmp/evidence.json" >/dev/null 2>&1; then fail "execute accepted no explicit authorization flag"; fi
   echo "direct KVM runner renders one pinned-image, privileged, no-network disposable namespace and refuses unpinned inputs"
 }
 
