@@ -142,13 +142,26 @@ func (app *App) Download(ctx context.Context, artifactID agentruntime.ArtifactID
 		if err != nil {
 			return Dossier{}, err
 		}
-		body, readErr := io.ReadAll(stream.Body)
+		if stream.Body == nil {
+			return Dossier{}, errors.New("download Research Dossier: Artifact stream body is required")
+		}
+		if stream.Artifact.ID != artifactID || stream.Artifact.SizeBytes < 1 {
+			closeErr := stream.Body.Close()
+			if closeErr != nil {
+				return Dossier{}, fmt.Errorf("download Research Dossier: close invalid Artifact stream: %w", closeErr)
+			}
+			return Dossier{}, errors.New("download Research Dossier: stream metadata does not match the requested Artifact")
+		}
+		body, readErr := io.ReadAll(io.LimitReader(stream.Body, stream.Artifact.SizeBytes+1))
 		closeErr := stream.Body.Close()
 		if readErr != nil {
 			return Dossier{}, fmt.Errorf("download Research Dossier: read Artifact stream: %w", readErr)
 		}
 		if closeErr != nil {
 			return Dossier{}, fmt.Errorf("download Research Dossier: close Artifact stream: %w", closeErr)
+		}
+		if int64(len(body)) != stream.Artifact.SizeBytes {
+			return Dossier{}, errors.New("download Research Dossier: stream bytes do not match the declared Artifact size")
 		}
 		return Dossier{Artifact: stream.Artifact, Body: append([]byte(nil), body...), Citations: ExtractCitations(body)}, nil
 	}

@@ -49,8 +49,9 @@ func TestDossierRunsResearchAndRecoversProgressUsingOnlyPublicContract(t *testin
 }
 
 func TestDossierDownloadsStreamingPublicArtifacts(t *testing.T) {
-	artifact := agentruntime.ArtifactReference{ID: "art_0000000000000001", MediaType: "text/markdown", SizeBytes: 68, SHA256: strings.Repeat("a", 64)}
-	body := &recordingReadCloser{Reader: strings.NewReader("# Research Dossier\n\nEvidence: https://example.com/stream")}
+	streamBody := "# Research Dossier\n\nEvidence: https://example.com/stream"
+	artifact := agentruntime.ArtifactReference{ID: "art_0000000000000001", MediaType: "text/markdown", SizeBytes: int64(len(streamBody)), SHA256: strings.Repeat("a", 64)}
+	body := &recordingReadCloser{Reader: strings.NewReader(streamBody)}
 	client := &streamingRecordingClient{recordingClient: recordingClient{download: agentruntime.ArtifactDownload{Artifact: artifact, Body: []byte("legacy body")}}, stream: agentruntime.ArtifactStream{Artifact: artifact, Body: body}}
 	app, err := NewApp(client, fixedKeys{})
 	if err != nil {
@@ -72,6 +73,31 @@ func TestDossierReportsStreamingCloseFailure(t *testing.T) {
 	}
 	if _, err := app.Download(context.Background(), artifact.ID); err == nil || !body.closed {
 		t.Fatalf("stream close failure = %v, closed=%t", err, body.closed)
+	}
+}
+
+func TestDossierRejectsStreamingArtifactMetadataAndByteMismatches(t *testing.T) {
+	artifact := agentruntime.ArtifactReference{ID: "art_0000000000000001", MediaType: "text/markdown", SizeBytes: 5, SHA256: strings.Repeat("a", 64)}
+	for _, test := range []struct {
+		name   string
+		stream agentruntime.ArtifactStream
+	}{
+		{name: "wrong artifact", stream: agentruntime.ArtifactStream{Artifact: agentruntime.ArtifactReference{ID: "art_0000000000000002", SizeBytes: 5}, Body: &recordingReadCloser{Reader: strings.NewReader("bytes")}}},
+		{name: "missing body", stream: agentruntime.ArtifactStream{Artifact: artifact}},
+		{name: "zero declared bytes", stream: agentruntime.ArtifactStream{Artifact: agentruntime.ArtifactReference{ID: artifact.ID, SizeBytes: 0}, Body: &recordingReadCloser{Reader: strings.NewReader("bytes")}}},
+		{name: "short stream", stream: agentruntime.ArtifactStream{Artifact: artifact, Body: &recordingReadCloser{Reader: strings.NewReader("tiny")}}},
+		{name: "oversized stream", stream: agentruntime.ArtifactStream{Artifact: artifact, Body: &recordingReadCloser{Reader: strings.NewReader("excess")}}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			body, _ := test.stream.Body.(*recordingReadCloser)
+			app, err := NewApp(&streamingRecordingClient{stream: test.stream}, fixedKeys{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := app.Download(context.Background(), artifact.ID); err == nil || (body != nil && !body.closed) {
+				t.Fatalf("download mismatch error = %v, closed=%t", err, body != nil && body.closed)
+			}
+		})
 	}
 }
 
