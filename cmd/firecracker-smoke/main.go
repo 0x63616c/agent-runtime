@@ -11,6 +11,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"io/fs"
 	"math"
 	"net"
 	"net/http"
@@ -208,6 +209,8 @@ func smokeObservationFailureReason(err error) string {
 	}
 	message := err.Error()
 	switch {
+	case strings.Contains(message, "start Jailer:") && errors.Is(err, fs.ErrPermission):
+		return prefix + ": Jailer executable was denied by the host"
 	case strings.Contains(message, "prepare jailed rootfs:"):
 		return prefix + ": Jailer fixture staging failed"
 	case strings.Contains(message, "await Firecracker API socket"):

@@ -2,6 +2,8 @@ package main
 
 import (
 	"errors"
+	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"testing"
@@ -19,6 +21,7 @@ func TestSmokeObservationFailureReasonRetainsOnlyTheFailedProofBoundary(t *testi
 		{name: "stage", err: errors.New("prepare jailed rootfs: arbitrary host path /private/secret"), want: prefix + ": Jailer fixture staging failed"},
 		{name: "api readiness", err: errors.New("launch jailer: await Firecracker API socket: arbitrary Jailer diagnostic"), want: prefix + ": Firecracker API socket was not observed"},
 		{name: "launch", err: errors.New("launch jailer: arbitrary Jailer diagnostic"), want: prefix + ": Jailer or Firecracker launch failed"},
+		{name: "jailer permission", err: fmt.Errorf("launch jailer: start Jailer: %w", fs.ErrPermission), want: prefix + ": Jailer executable was denied by the host"},
 		{name: "serial", err: errors.New("await guest serial marker: context deadline exceeded"), want: prefix + ": guest serial boot marker was not observed"},
 		{name: "control", err: errors.New("guest control channel: arbitrary guest wire"), want: prefix + ": private guest control handshake failed"},
 		{name: "cleanup", err: errors.New("cleanup protected Firecracker resources: arbitrary cleanup output"), want: prefix + ": Jailer cleanup proof failed"},
