@@ -130,6 +130,22 @@ var _ = Describe("Operator role configuration", func() {
 		Expect(err).NotTo(MatchError(ContainSubstring("present")))
 	})
 
+	It("refuses secret-bearing URL components in declared dependency endpoints", func() {
+		for _, endpoint := range []string{
+			"postgres://operator:password@state.agent-runtime.svc:5432/agent_runtime",
+			"https://model.example.invalid/v1?api_key=secret",
+			"http://telemetry.agent-runtime.svc:4318/#token",
+			"http://telemetry.agent-runtime.svc:4318?",
+		} {
+			configuration := strings.Replace(orchestrationConfig, "postgres://state.agent-runtime.svc:5432/agent_runtime", endpoint, 1)
+			_, err := roles.Parse(strings.NewReader(configuration))
+			Expect(err).To(MatchError(ContainSubstring("endpoint must be an explicit non-secret URL or host:port")), endpoint)
+		}
+
+		_, err := roles.Parse(strings.NewReader(orchestrationConfig))
+		Expect(err).NotTo(HaveOccurred())
+	})
+
 	It("rejects every known credential that is not entitled to the selected role", func() {
 		for _, fixture := range roleFixtures {
 			config, err := roles.Parse(strings.NewReader(fixture.configuration))

@@ -467,7 +467,16 @@ func validEndpoint(endpoint string) bool {
 		return false
 	}
 	if strings.Contains(endpoint, "://") {
-		return strings.HasPrefix(endpoint, "https://") || strings.HasPrefix(endpoint, "http://") || strings.HasPrefix(endpoint, "postgres://")
+		parsed, err := url.Parse(endpoint)
+		if err != nil || parsed.Host == "" || parsed.User != nil || parsed.RawQuery != "" || parsed.ForceQuery || parsed.Fragment != "" {
+			return false
+		}
+		switch parsed.Scheme {
+		case "https", "http", "postgres":
+			return true
+		default:
+			return false
+		}
 	}
 	_, port, err := net.SplitHostPort(endpoint)
 	return err == nil && port != ""
