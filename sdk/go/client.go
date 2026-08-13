@@ -543,7 +543,7 @@ func doJSON[Response any](client *Client, ctx context.Context, method, path, ide
 	if err != nil || mediaType != "application/json" {
 		return zero, errors.New("read Agent Runtime response: content type is not application/json")
 	}
-	limited := io.LimitReader(response.Body, client.maxArtifactBytes+1)
+	limited := io.LimitReader(response.Body, client.maxResponseBytes+1)
 	data, err := io.ReadAll(limited)
 	if err != nil {
 		return zero, errors.Wrap(err, "read Agent Runtime response")
