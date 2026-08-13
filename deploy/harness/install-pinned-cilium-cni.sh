@@ -71,22 +71,25 @@ trap cleanup EXIT INT TERM
 
 cli_archive="$installer_tmp/cilium-${platform}.tar.gz"
 chart_archive="$installer_tmp/cilium-${CILIUM_VERSION#v}.tgz"
+cli_dir="$installer_tmp/bin"
+chart_dir="$installer_tmp/chart"
+mkdir -p "$cli_dir" "$chart_dir"
 "$curl_bin" -fsSLo "$cli_archive" "https://github.com/cilium/cilium-cli/releases/download/${CILIUM_CLI_VERSION}/cilium-${platform}.tar.gz"
 verify_sha256 "$cli_sha256" "$cli_archive"
-tar -xzf "$cli_archive" -C "$installer_tmp" cilium
+tar -xzf "$cli_archive" -C "$cli_dir" cilium
 
 "$curl_bin" -fsSLo "$chart_archive" "https://helm.cilium.io/cilium-${CILIUM_VERSION#v}.tgz"
 verify_sha256 "$CILIUM_CHART_SHA256" "$chart_archive"
-tar -xzf "$chart_archive" -C "$installer_tmp"
+tar -xzf "$chart_archive" -C "$chart_dir"
 
-"$installer_tmp/cilium" install \
+"$cli_dir/cilium" install \
   --kubeconfig "$kubeconfig_path" \
   --context "$context" \
-  --chart-directory "$installer_tmp/cilium" \
+	--chart-directory "$chart_dir/cilium" \
   --version "$CILIUM_VERSION" \
   --wait \
   --wait-duration 5m
-"$installer_tmp/cilium" status \
+"$cli_dir/cilium" status \
   --kubeconfig "$kubeconfig_path" \
   --context "$context" \
   --wait \
