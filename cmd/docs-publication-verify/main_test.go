@@ -67,6 +67,19 @@ func TestRunRejectsDuplicateTitle(t *testing.T) {
 	}
 }
 
+func TestRunRejectsCanonicalLinkWithoutHref(t *testing.T) {
+	root, manifest := fixtureWebsite(t)
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		_, _ = w.Write([]byte(`<link rel="canonical"><main><h1>Start here</h1></main>`))
+	}))
+	defer server.Close()
+	err := run(context.Background(), options{BaseURL: server.URL + "/agent-runtime", ExpectedSHA: publishedSHA, ManifestPath: manifest, WebsiteRoot: root}, server.Client())
+	if err == nil || !strings.Contains(err.Error(), "canonical URL") {
+		t.Fatalf("run() error = %v, want missing canonical href refusal", err)
+	}
+}
+
 func TestRunCanReportAbsenceOfOptionalMarker(t *testing.T) {
 	root, manifest := fixtureWebsite(t)
 	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
