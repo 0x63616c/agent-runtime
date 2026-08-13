@@ -17,8 +17,12 @@ reference, source and member/output SHA-256 and size, Linux/amd64 architecture,
 SPDX/license data, and the rootfs/agent build recipe, source revision,
 toolchain, input-manifest and SBOM member SHA-256/size pairs. Release archives use an exact
 `release:vX.Y.Z` URL identity, object sources use the URL's exact
-`version-id:...`. When a versioned upstream kernel object cannot be fetched
-anonymously, a reviewer may first retain those exact verified bytes as the
+`version-id:...`. Firecracker's public CI bucket is the one documented
+assembly exception: it publishes an exact build-scoped kernel object and
+returns its version ID in a response header, but rejects an anonymous GET with
+that version-ID query. The assembler accepts only that canonical object path
+while recording the observed version ID in its input manifests. A reviewer may
+then retain those exact verified bytes as the
 sole `kernel-vmlinux` asset on this project's `commit:<40-lowercase-hex>`
 release. That project-controlled release asset is an immutable mirror, not a
 rebuilt kernel, and is accepted only for the kernel. Project build outputs use
@@ -106,7 +110,10 @@ and derives every candidate lock digest/size from those bytes. It never fetches
 a floating artifact, uploads an asset, changes `fixtures.lock`, or starts a
 guest.
 
-Run it on Linux with GNU tar and e2fsprogs, using an empty output directory:
+Run it on Linux with GNU tar and e2fsprogs, using an empty output directory.
+For a normal versioned object, use its exact query URL. For the Firecracker CI
+bucket exception, use the canonical query-free object URL and the exact
+`x-amz-version-id` observed from its HTTPS response:
 
 ```text
 SOURCE_DATE_EPOCH=1704067200 ./tools/firecracker/build-rootfs.sh ...

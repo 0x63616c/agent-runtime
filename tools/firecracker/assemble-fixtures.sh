@@ -34,8 +34,19 @@ fi
 if ! [[ "$kernel_version_id" =~ ^[A-Za-z0-9._~-]+$ ]] || [[ "$kernel_version_id" == "main" || "$kernel_version_id" == "latest" ]]; then
   echo "KERNEL-VERSION-ID must be an immutable object version identifier" >&2; exit 2
 fi
-if [[ "$kernel_url" != https://*"?versionId=$kernel_version_id" ]]; then
-  echo "KERNEL-URL must be HTTPS and contain exactly the supplied versionId" >&2; exit 2
+# A normal versioned-object endpoint must be fetched through the version ID.
+# Firecracker's public CI bucket is a narrow exception: it exposes the current
+# object body and its VersionId response header, but rejects anonymous GETs
+# with that versionId query. The final lock never trusts that mutable download
+# URL: it pins the independently reviewed byte-identical project release asset.
+# Keep the observed VersionId in the input manifest so reviewers can reconcile
+# the upstream object that produced the retained bytes.
+if [[ "$kernel_url" == https://*"?versionId=$kernel_version_id" ]]; then
+  :
+elif [[ "$kernel_url" =~ ^https://s3\.amazonaws\.com/spec\.ccfc\.min/firecracker-ci/[0-9]{8}-[0-9a-f]{12}-[0-9]+/x86_64/vmlinux-[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+  :
+else
+  echo "KERNEL-URL must be HTTPS with exactly the supplied versionId, or the canonical public Firecracker CI kernel object" >&2; exit 2
 fi
 if [[ "$source_date_epoch" =~ [^0-9] ]] || [ -z "$source_date_epoch" ]; then
   echo "SOURCE-DATE-EPOCH must be an integer" >&2; exit 2
