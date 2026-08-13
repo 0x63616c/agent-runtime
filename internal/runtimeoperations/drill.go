@@ -142,6 +142,9 @@ func loadConfig(getenv func(string) string, requireProtectedContract bool) (Conf
 			return Config{}, fmt.Errorf("runtime operations drill: %s is required", name)
 		}
 	}
+	if !validCommitSHA(config.SourceRevision) {
+		return Config{}, errors.New("runtime operations drill: immutable source revision is required")
+	}
 	if !validAuthorityID(config.RetentionAuthorization) || !validAuthorityID(config.PITRAuthorization) {
 		return Config{}, errors.New("runtime operations drill: bounded authorization identifiers are required")
 	}
@@ -440,7 +443,7 @@ func inspectRestore(ctx context.Context, config Config) (int64, bool, error) {
 
 // Validate checks the retained schema before a report is written or accepted.
 func (evidence Evidence) Validate() error {
-	if evidence.SchemaVersion != SchemaVersion || evidence.ProofLevel != "protected_authorized_operational_drill" || evidence.Result != "passed" || evidence.SourceRevision == "" {
+	if evidence.SchemaVersion != SchemaVersion || evidence.ProofLevel != "protected_authorized_operational_drill" || evidence.Result != "passed" || !validCommitSHA(evidence.SourceRevision) {
 		return errors.New("validate operational evidence: required identity is invalid")
 	}
 	if _, err := time.Parse(time.RFC3339, evidence.OccurredAt); err != nil {
@@ -467,7 +470,7 @@ func (evidence Evidence) Validate() error {
 // Validate checks the direct-lab schema without accepting it as protected
 // operational evidence.
 func (evidence DirectLabEvidence) Validate() error {
-	if evidence.SchemaVersion != DirectLabSchemaVersion || evidence.ProofLevel != DirectLabProofLevel || evidence.Result != "passed" || evidence.SourceRevision == "" || evidence.Environment != "disposable_local_or_home_lab" {
+	if evidence.SchemaVersion != DirectLabSchemaVersion || evidence.ProofLevel != DirectLabProofLevel || evidence.Result != "passed" || !validCommitSHA(evidence.SourceRevision) || evidence.Environment != "disposable_local_or_home_lab" {
 		return errors.New("validate direct-lab evidence: required identity is invalid")
 	}
 	if _, err := time.Parse(time.RFC3339, evidence.OccurredAt); err != nil {
