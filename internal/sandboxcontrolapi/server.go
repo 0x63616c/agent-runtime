@@ -25,6 +25,7 @@ const (
 	controlVersion        = "sandbox.control/v1"
 	bindPath              = "/sandbox.control/v1/bind"
 	operationsPath        = "/sandbox.control/v1/operations"
+	capabilitiesPath      = "/sandbox.control/v1/capabilities"
 	bindingHeader         = "Sandbox-Binding"
 	maxRequestBytes       = 1 << 20
 	maxAssertionBytes     = 2048
@@ -78,6 +79,7 @@ func NewHandler(config Config) (http.Handler, error) {
 	mux.HandleFunc("GET "+operationsPath+"/{id}", server.get)
 	mux.HandleFunc("GET "+operationsPath+"/{id}/wait", server.wait)
 	mux.HandleFunc("GET "+operationsPath+"/{id}/events", server.watch)
+	mux.HandleFunc("GET "+capabilitiesPath, server.capabilities)
 	return http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		writer.Header().Set("Cache-Control", "no-store")
 		writer.Header().Set("X-Content-Type-Options", "nosniff")
@@ -119,6 +121,12 @@ type operationEventsResponse struct {
 	Events  []sandbox.OperationEvent `json:"events"`
 }
 
+type capabilitiesResponse struct {
+	Version      string                     `json:"version"`
+	Kind         string                     `json:"kind"`
+	Capabilities sandbox.CapabilitySnapshot `json:"capabilities"`
+}
+
 type failureResponse struct {
 	Version string          `json:"version"`
 	Kind    string          `json:"kind"`
@@ -153,6 +161,18 @@ func (server *server) bind(writer http.ResponseWriter, request *http.Request) {
 		return
 	}
 	writeJSON(writer, http.StatusOK, bindResponse{Version: controlVersion, Kind: "bind-response", Assertion: assertion, ExpiresAt: expiresAt})
+}
+
+func (server *server) capabilities(writer http.ResponseWriter, request *http.Request) {
+	if _, ok := server.authenticateBound(writer, request); !ok {
+		return
+	}
+	capabilities, err := sandbox.AdmissionCapabilities(server.config.Admission)
+	if err != nil {
+		writeUnavailable(writer)
+		return
+	}
+	writeJSON(writer, http.StatusOK, capabilitiesResponse{Version: controlVersion, Kind: "capabilities-response", Capabilities: capabilities})
 }
 
 func (server *server) submit(writer http.ResponseWriter, request *http.Request) {

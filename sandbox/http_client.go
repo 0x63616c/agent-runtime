@@ -15,8 +15,9 @@ import (
 const bindRouteV1 = "/sandbox.control/v1/bind"
 
 const (
-	operationsRouteV1 = "/sandbox.control/v1/operations"
-	bindingHeaderV1   = "Sandbox-Binding"
+	operationsRouteV1   = "/sandbox.control/v1/operations"
+	capabilitiesRouteV1 = "/sandbox.control/v1/capabilities"
+	bindingHeaderV1     = "Sandbox-Binding"
 )
 
 var bindRequestV1 = []byte(`{"version":"sandbox.control/v1","kind":"bind-request"}`)
@@ -217,8 +218,16 @@ func (client *httpControlClient) WatchOperation(ctx context.Context, id Operatio
 	}
 	return &sliceOperationStream{events: events}, nil
 }
-func (client *httpControlClient) Capabilities(context.Context) (CapabilitySnapshot, error) {
-	return CapabilitySnapshot{}, newFailure(FailureUnavailable, "sandbox capability transport is not implemented", RetryAfterReconcile)
+func (client *httpControlClient) Capabilities(ctx context.Context) (CapabilitySnapshot, error) {
+	response, err := client.do(ctx, http.MethodGet, capabilitiesRouteV1, nil)
+	if err != nil {
+		return CapabilitySnapshot{}, err
+	}
+	capabilities, err := decodeCapabilitiesResponseV1(response)
+	if err != nil {
+		return CapabilitySnapshot{}, newFailure(FailureUnavailable, "sandbox capabilities response is invalid", RetryAfterReconcile)
+	}
+	return capabilities, nil
 }
 func (client *httpControlClient) GetSandbox(context.Context, SandboxID) (SandboxInfo, error) {
 	return SandboxInfo{}, newFailure(FailureUnavailable, "sandbox resource transport is not implemented", RetryAfterReconcile)

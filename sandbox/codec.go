@@ -14,9 +14,10 @@ import (
 const operationRequestKind = "operation-request"
 
 const (
-	operationResponseKind = "operation-response"
-	operationEventsKind   = "operation-events"
-	failureResponseKind   = "failure-response"
+	operationResponseKind    = "operation-response"
+	operationEventsKind      = "operation-events"
+	capabilitiesResponseKind = "capabilities-response"
+	failureResponseKind      = "failure-response"
 )
 
 const (
@@ -41,6 +42,12 @@ type operationEventsEnvelope struct {
 	Version string           `json:"version"`
 	Kind    string           `json:"kind"`
 	Events  []OperationEvent `json:"events"`
+}
+
+type capabilitiesResponseEnvelope struct {
+	Version      string             `json:"version"`
+	Kind         string             `json:"kind"`
+	Capabilities CapabilitySnapshot `json:"capabilities"`
 }
 
 type failureResponseEnvelope struct {
@@ -132,6 +139,17 @@ func decodeOperationEventsV1(data []byte) ([]OperationEvent, error) {
 		}
 	}
 	return envelope.Events, nil
+}
+
+func decodeCapabilitiesResponseV1(data []byte) (CapabilitySnapshot, error) {
+	var envelope capabilitiesResponseEnvelope
+	if err := decodeControlV1(data, capabilitiesResponseKind, &envelope); err != nil {
+		return CapabilitySnapshot{}, err
+	}
+	if !validCapabilitySnapshot(envelope.Capabilities) {
+		return CapabilitySnapshot{}, newFailure(FailureInvalidArgument, "capabilities response violates sandbox.control/v1", RetryNever)
+	}
+	return copyCapabilitySnapshot(envelope.Capabilities), nil
 }
 
 func decodeFailureResponseV1(data []byte) (Failure, error) {

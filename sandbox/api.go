@@ -193,6 +193,18 @@ func DecodeControlOperationRequest(input []byte) (OperationRequest, error) {
 	return decodeOperationRequestV1(input)
 }
 
+// AdmissionCapabilities returns the canonical immutable capability profile
+// derived from an admission policy. The same profile is bound into every
+// accepted Effective Spec, so a client can discover actual authority before
+// submitting work without treating a label as evidence.
+func AdmissionCapabilities(policy OperationAdmissionPolicy) (CapabilitySnapshot, error) {
+	limits := freezeLimitPolicy(normalizedLimitPolicy(limitPolicyFromAdmission(policy)))
+	if !validLimitPolicy(limits) {
+		return CapabilitySnapshot{}, newFailure(FailureInvalidArgument, "operation admission policy requires finite defaults and maximums", RetryNever)
+	}
+	return copyCapabilitySnapshot(limits.capabilities), nil
+}
+
 type CreateSandboxRequest struct{ Spec SandboxSpec }
 type RestoreSandboxRequest struct {
 	SnapshotID SnapshotID

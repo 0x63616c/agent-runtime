@@ -30,6 +30,15 @@ func TestControlHandlerPersistsSubmitGetAndWatchAcrossProcessRestart(t *testing.
 	key := bytes.Repeat([]byte{0x42}, 32)
 	first := newTestServer(t, testServerConfig(store, authenticator, fakeClock, key))
 	clientA := newPublicClient(t, first, "principal-a-token")
+	capabilities, err := clientA.Capabilities(context.Background())
+	if err != nil || capabilities.SchemaVersion == "" || capabilities.Digest == "" || capabilities.ControlProtocol.ContractVersion == "" {
+		t.Fatalf("Capabilities() = %#v, %v", capabilities, err)
+	}
+	capabilities.ControlProtocol.LimitPrecision = append(capabilities.ControlProtocol.LimitPrecision, "caller-mutation")
+	again, err := clientA.Capabilities(context.Background())
+	if err != nil || len(again.ControlProtocol.LimitPrecision) != 0 {
+		t.Fatalf("Capabilities() returned mutable service state: %#v, %v", again, err)
+	}
 
 	request := sandbox.OperationRequest{ID: "op_durable", Kind: sandbox.OperationCloseSandbox, CloseSandbox: &sandbox.CloseSandboxRequest{SandboxID: "sbx_durable"}}
 	ref, err := clientA.Submit(context.Background(), request)
@@ -39,6 +48,9 @@ func TestControlHandlerPersistsSubmitGetAndWatchAcrossProcessRestart(t *testing.
 	operation, err := clientA.GetOperation(context.Background(), request.ID)
 	if err != nil || operation.Ref != ref || operation.State != sandbox.OperationAccepted || operation.Target.SandboxID != "sbx_durable" || operation.LatestCursor != "operation:1" {
 		t.Fatalf("GetOperation() = %#v, %v", operation, err)
+	}
+	if operation.CapabilityDigest != again.Digest {
+		t.Fatalf("operation capability digest = %q, want advertised %q", operation.CapabilityDigest, again.Digest)
 	}
 	stream, err := clientA.WatchOperation(context.Background(), request.ID, "")
 	if err != nil {
