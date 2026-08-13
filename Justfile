@@ -37,6 +37,11 @@ research-dossier-e2e:
 runtime-api-durable-e2e:
     deploy/runtimeapi/run-durable-integration.sh --runtime-api-binary-only
 
+# Renders and validates a separately named production-profile live lab without
+# contacting Kubernetes. Applying it requires a later reviewed operator run.
+live-lab-manifest name="agent-runtime-live-lab-review" context="home-server" output="/tmp/agent-runtime-live-lab-stack.json":
+    deploy/production/live-lab-manifest.sh render --name "{{name}}" --context "{{context}}" --output "{{output}}"
+
 # Requires the protected self-hosted Linux/x86_64/KVM runner contract and always
 # retains a redacted blocked report rather than treating a local machine as proof.
 firecracker-smoke report="evidence/firecracker-smoke.json" vm_id="" uid="0" gid="0" cgroup_parent="" stack_resource="" external_owner="" fixture_lock="tools/firecracker/fixtures.lock":
