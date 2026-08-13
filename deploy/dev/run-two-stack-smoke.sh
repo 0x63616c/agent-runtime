@@ -551,12 +551,12 @@ verify_registry_plan() {
 		remove_local_state "$stack"
 		return 1
 	fi
-	if ! jq -e --arg prefix "agent-runtime-dev/$stack/" --arg registry_host "$ci_registry_host" --arg registry_host_from_cluster "$ci_registry_host_from_cluster" '
+	if ! jq -e --arg prefix "agent-runtime-dev/$stack/" --arg registry_host "$ci_registry_host" --arg registry_host_from_cluster "$ci_registry_host_from_cluster" --argjson expected_image_targets '["api","blob-role","codec","egress-proxy","model","orchestration","sandbox-control","sandbox-host","sandbox-host-bootstrap","tool"]' '
 		.DefaultRegistry.host == $registry_host and
 		.DefaultRegistry.hostFromContainerRuntime == $registry_host_from_cluster and
 		.CISettings.readinessTimeout == "12m0s" and
-		([.Manifests[]?.ImageTargets[]?.selector] | length) == 9 and
-		all(.Manifests[]?.ImageTargets[]?.selector; startswith($prefix)) and
+		([.Manifests[]?.ImageTargets[]?.selector] | all(startswith($prefix))) and
+		([.Manifests[]?.ImageTargets[]?.selector | ltrimstr($prefix)] | sort) == ($expected_image_targets | sort) and
 		((tostring | contains("docker.io/agent-runtime-dev")) | not)
 	' "$plan" >/dev/null; then
 		rm -f -- "$plan"
