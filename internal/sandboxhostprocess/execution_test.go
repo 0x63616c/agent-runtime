@@ -87,6 +87,51 @@ func TestExecuteEnvelopeStagesAndAcknowledgesOutputBeforeTerminalResult(t *testi
 	}
 }
 
+func TestExecuteEnvelopeSignsOnlyTheHostReportedTerminalObservation(t *testing.T) {
+	envelope, now := executionEnvelope()
+	envelope.SandboxID = "sandbox_01"
+	envelope.ProcessID = "process_01"
+	journal := executionJournal(t, envelope)
+	reporter := terminalObservationExecutor{observation: &sandboxhostprotocol.Observation{
+		Sandbox: sandboxhostprotocol.SandboxObservation{ID: envelope.SandboxID, ActualState: "ready"},
+		Process: &sandboxhostprotocol.ProcessObservation{
+			ID: envelope.ProcessID, SandboxID: envelope.SandboxID, State: "terminal",
+			Result: &sandboxhostprotocol.ProcessResult{StartedAt: now, FinishedAt: now, ExitCode: ptrInt32(0), Reason: "exited", Cleanup: "confirmed", Usage: sandboxhostprotocol.ResourceUsage{CPUTimeMillis: 9, PeakMemoryBytes: 1024, ReadBytes: 3, WrittenBytes: 5}},
+			Stdout: sandboxhostprotocol.OutputRetention{EarliestCursor: "output_01", RetainedBytes: 7},
+			Stderr: sandboxhostprotocol.OutputRetention{Truncated: true},
+		},
+	}}
+	var sent [][]byte
+	if err := executeEnvelope(context.Background(), envelope, now, journal, executionPrivateKey(), reporter, func(_ context.Context, wire []byte) error {
+		sent = append(sent, append([]byte(nil), wire...))
+		return nil
+	}, func(ctx context.Context, _ time.Time) (context.Context, context.CancelFunc) { return ctx, func() {} }); err != nil {
+		t.Fatalf("executeEnvelope() error = %v", err)
+	}
+	if len(sent) != 2 {
+		t.Fatalf("sent = %d, want started and terminal", len(sent))
+	}
+	terminal, err := sandboxhostprotocol.VerifyResult(sent[1], now.Add(time.Minute), executionPrivateKey().Public().(ed25519.PublicKey))
+	if err != nil || terminal.State != "succeeded" || terminal.Observation == nil || terminal.Observation.Sandbox.ID != envelope.SandboxID || terminal.Observation.Process == nil || terminal.Observation.Process.ID != envelope.ProcessID || terminal.Observation.Process.Result == nil || terminal.Observation.Process.Result.Usage.WrittenBytes != 5 || terminal.Observation.Process.Stdout.RetainedBytes != 7 || !terminal.Observation.Process.Stderr.Truncated {
+		t.Fatalf("terminal observation = %#v, %v", terminal.Observation, err)
+	}
+}
+
+func TestExecuteEnvelopeRefusesSuccessWhenHostObservationCannotBeReported(t *testing.T) {
+	envelope, now := executionEnvelope()
+	journal := executionJournal(t, envelope)
+	var sent [][]byte
+	if err := executeEnvelope(context.Background(), envelope, now, journal, executionPrivateKey(), terminalObservationExecutor{err: errors.New("cgroup counter unavailable")}, func(_ context.Context, wire []byte) error {
+		sent = append(sent, append([]byte(nil), wire...))
+		return nil
+	}, func(ctx context.Context, _ time.Time) (context.Context, context.CancelFunc) { return ctx, func() {} }); err != nil {
+		t.Fatalf("executeEnvelope() error = %v", err)
+	}
+	if len(sent) != 2 || resultState(t, sent[1]) != "uncertain" {
+		t.Fatalf("terminal result = %q, want uncertain", resultState(t, sent[len(sent)-1]))
+	}
+}
+
 func TestExecuteEnvelopeRequiresDurablePublicDataReceiptAckBeforeSuccess(t *testing.T) {
 	envelope, now := executionEnvelope()
 	journal := executionJournal(t, envelope)
@@ -175,6 +220,21 @@ type outputReportingExecutor struct {
 type dataPlaneReceiptReportingExecutor struct {
 	emit func(context.Context, DataPlaneReceiptEmitter) error
 }
+
+type terminalObservationExecutor struct {
+	observation *sandboxhostprotocol.Observation
+	err         error
+}
+
+func (executor terminalObservationExecutor) Execute(context.Context, sandboxhostprotocol.Envelope) error {
+	return nil
+}
+
+func (executor terminalObservationExecutor) TerminalObservation(_ context.Context, _ sandboxhostprotocol.Envelope, _ string, _ time.Time) (*sandboxhostprotocol.Observation, error) {
+	return executor.observation, executor.err
+}
+
+func ptrInt32(value int32) *int32 { return &value }
 
 func (executor dataPlaneReceiptReportingExecutor) Execute(context.Context, sandboxhostprotocol.Envelope) error {
 	return nil

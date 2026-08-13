@@ -42,6 +42,19 @@ type AuthenticatedHostReaper interface {
 	ReapAuthenticated(context.Context, sandboxhostprotocol.Envelope, []byte) error
 }
 
+// TerminalObservationReporter returns a bounded observation that the host
+// itself recorded while executing one exact envelope. It is deliberately an
+// optional, result-only seam: sandboxhostprocess does not manufacture
+// resource, output-retention, or backend facts from an admitted request.
+//
+// A reporter is called only after the executor has returned and only for the
+// terminal result that will be signed. Returning nil records no observation.
+// Reporters must return a complete protocol observation; the protocol signer
+// rejects partial or out-of-contract values.
+type TerminalObservationReporter interface {
+	TerminalObservation(context.Context, sandboxhostprotocol.Envelope, string, time.Time) (*sandboxhostprotocol.Observation, error)
+}
+
 // ExecutionOutput is one bounded guest chunk before it is signed and durably
 // acknowledged through the private host-control output owner.
 type ExecutionOutput = sandboxhostprotocol.GuestOutput
@@ -199,7 +212,7 @@ func executeEnvelopeWithOutputAfterTerminalSend(ctx context.Context, envelope sa
 		return err
 	}
 	if journal.ExecutionStarted(envelope) {
-		return stageAndSendTerminal(ctx, envelope, now, journal, privateKey, "uncertain", send, afterTerminalSend)
+		return stageAndSendTerminal(ctx, envelope, now, journal, privateKey, "uncertain", nil, send, afterTerminalSend)
 	}
 	started, err := signExecutionResult(envelope, "started", now, privateKey)
 	if err != nil {
@@ -268,7 +281,21 @@ func executeEnvelopeWithOutputAfterTerminalSend(ctx context.Context, envelope sa
 			reapCancel()
 		}
 	}
-	return stageAndSendTerminal(ctx, envelope, now, journal, privateKey, state, send, afterTerminalSend)
+	observation, observationErr := terminalObservation(ctx, executor, envelope, state, now)
+	if observationErr != nil {
+		// An observation source that cannot produce a safe bounded snapshot must
+		// not turn a completed host effect into a success claim.
+		state, observation = "uncertain", nil
+	}
+	return stageAndSendTerminal(ctx, envelope, now, journal, privateKey, state, observation, send, afterTerminalSend)
+}
+
+func terminalObservation(ctx context.Context, executor HostExecutor, envelope sandboxhostprotocol.Envelope, state string, observedAt time.Time) (*sandboxhostprotocol.Observation, error) {
+	reporter, ok := executor.(TerminalObservationReporter)
+	if !ok {
+		return nil, nil
+	}
+	return reporter.TerminalObservation(ctx, envelope, state, observedAt.UTC())
 }
 
 func signDataPlaneReceipt(envelope sandboxhostprotocol.Envelope, kind string, receipt []byte, privateKey ed25519.PrivateKey) ([]byte, error) {
@@ -287,8 +314,8 @@ func signExecutionOutput(envelope sandboxhostprotocol.Envelope, output Execution
 	return sandboxhostprotocol.SignOutput(sandboxhostprotocol.Output{ProtocolVersion: sandboxhostprotocol.Version, OutputID: "output_" + sandboxhostprotocol.Digest([]byte(envelope.DeliveryID + "\x00" + output.Stream + "\x00" + string(output.Data)))[7:39], HostID: envelope.HostID, HostGeneration: envelope.HostGeneration, AssignmentID: envelope.AssignmentID, LeaseEpoch: envelope.LeaseEpoch, FencingToken: envelope.FencingToken, Principal: envelope.Principal, OperationID: envelope.OperationID, Stream: output.Stream, Sequence: sequence, ChunkDigest: sandboxhostprotocol.Digest(output.Data), SizeBytes: uint32(len(output.Data)), ObservedAt: observedAt.UTC()}, privateKey)
 }
 
-func stageAndSendTerminal(ctx context.Context, envelope sandboxhostprotocol.Envelope, now time.Time, journal *sandboxhostjournal.Journal, privateKey ed25519.PrivateKey, state string, send resultSender, afterTerminalSend func() error) error {
-	terminal, err := signExecutionResult(envelope, state, now, privateKey)
+func stageAndSendTerminal(ctx context.Context, envelope sandboxhostprotocol.Envelope, now time.Time, journal *sandboxhostjournal.Journal, privateKey ed25519.PrivateKey, state string, observation *sandboxhostprotocol.Observation, send resultSender, afterTerminalSend func() error) error {
+	terminal, err := signExecutionResultWithObservation(envelope, state, now, observation, privateKey)
 	if err != nil {
 		return err
 	}
@@ -311,7 +338,11 @@ func stageAndSendTerminal(ctx context.Context, envelope sandboxhostprotocol.Enve
 }
 
 func signExecutionResult(envelope sandboxhostprotocol.Envelope, state string, observedAt time.Time, privateKey ed25519.PrivateKey) ([]byte, error) {
-	return sandboxhostprotocol.SignResult(sandboxhostprotocol.Result{ProtocolVersion: sandboxhostprotocol.Version, ResultID: executionResultID(state, envelope.DeliveryID), HostID: envelope.HostID, HostGeneration: envelope.HostGeneration, AssignmentID: envelope.AssignmentID, LeaseEpoch: envelope.LeaseEpoch, FencingToken: envelope.FencingToken, Principal: envelope.Principal, OperationID: envelope.OperationID, EffectiveSpecDigest: envelope.EffectiveSpecDigest, CapabilityDigest: envelope.CapabilityDigest, State: state, ObservedAt: observedAt.UTC()}, privateKey)
+	return signExecutionResultWithObservation(envelope, state, observedAt, nil, privateKey)
+}
+
+func signExecutionResultWithObservation(envelope sandboxhostprotocol.Envelope, state string, observedAt time.Time, observation *sandboxhostprotocol.Observation, privateKey ed25519.PrivateKey) ([]byte, error) {
+	return sandboxhostprotocol.SignResult(sandboxhostprotocol.Result{ProtocolVersion: sandboxhostprotocol.Version, ResultID: executionResultID(state, envelope.DeliveryID), HostID: envelope.HostID, HostGeneration: envelope.HostGeneration, AssignmentID: envelope.AssignmentID, LeaseEpoch: envelope.LeaseEpoch, FencingToken: envelope.FencingToken, Principal: envelope.Principal, OperationID: envelope.OperationID, EffectiveSpecDigest: envelope.EffectiveSpecDigest, CapabilityDigest: envelope.CapabilityDigest, State: state, ObservedAt: observedAt.UTC(), Observation: observation}, privateKey)
 }
 
 func signRecoveredUncertain(started sandboxhostprotocol.Result, observedAt time.Time, privateKey ed25519.PrivateKey) ([]byte, error) {

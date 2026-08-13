@@ -163,6 +163,7 @@ func validateProtectedRunner(getenv func(string) string) error {
 		"RUNNER_OS":                             "Linux",
 		"RUNNER_ARCH":                           "X64",
 		"RUNTIME_OPERATIONS_GITHUB_ENVIRONMENT": "runtime-operations",
+		"RUNTIME_OPERATIONS_RUNNER_LABELS":      "self-hosted,linux,x64,runtime-operations-protected",
 	} {
 		if getenv(name) != want {
 			return fmt.Errorf("runtime operations drill: protected runner %s=%q is required", name, want)

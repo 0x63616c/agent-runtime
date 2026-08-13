@@ -9,7 +9,10 @@ permissions:
 jobs:
   drill:
     name: protected-runtime-operations-drill
-    runs-on: [self-hosted, linux, x64]
+    # This dedicated label prevents the protected drill from landing on a
+    # general-purpose self-hosted runner. Its bootstrap contract is checked by
+    # the command before it can write retained evidence.
+    runs-on: [self-hosted, linux, x64, runtime-operations-protected]
     environment: runtime-operations
     timeout-minutes: 20
     steps:
@@ -32,6 +35,7 @@ jobs:
           # These assertions are validated by the binary so an operator cannot
           # mistake a developer shell or hosted runner for the protected lane.
           RUNTIME_OPERATIONS_GITHUB_ENVIRONMENT: runtime-operations
+          RUNTIME_OPERATIONS_RUNNER_LABELS: self-hosted,linux,x64,runtime-operations-protected
           AR_RUNTIME_OPERATIONS_DATABASE_DSN: ${{ secrets.RUNTIME_OPERATIONS_DATABASE_DSN }}
           AR_RUNTIME_OPERATIONS_PITR_RESTORE_DSN: ${{ secrets.RUNTIME_OPERATIONS_PITR_RESTORE_DSN }}
           AR_RUNTIME_OPERATIONS_AUDIT_SINK_URL: ${{ secrets.RUNTIME_OPERATIONS_AUDIT_SINK_URL }}

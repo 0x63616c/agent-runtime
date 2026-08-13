@@ -1,0 +1,36 @@
+{
+  "version": 1,
+  "purpose": "Protected operational-drill runner bootstrap contract",
+  "github_environment": "runtime-operations",
+  "runner": {
+    "required_labels": [
+      "self-hosted",
+      "linux",
+      "x64",
+      "runtime-operations-protected"
+    ],
+    "required_workflow": "runtime-operations-drill",
+    "protected_ref_required": true
+  },
+  "required_environment_assertions": {
+    "RUNTIME_OPERATIONS_RUNNER_CONTRACT": "protected-runtime-operations-v1",
+    "RUNTIME_OPERATIONS_GITHUB_ENVIRONMENT": "runtime-operations",
+    "RUNTIME_OPERATIONS_RUNNER_LABELS": "self-hosted,linux,x64,runtime-operations-protected"
+  },
+  "required_github_secrets": [
+    "RUNTIME_OPERATIONS_DATABASE_DSN",
+    "RUNTIME_OPERATIONS_PITR_RESTORE_DSN",
+    "RUNTIME_OPERATIONS_AUDIT_SINK_URL",
+    "RUNTIME_OPERATIONS_AUDIT_RETENTION_URL",
+    "RUNTIME_OPERATIONS_RETENTION_AUTHORIZATION_ID",
+    "RUNTIME_OPERATIONS_PITR_AUTHORIZATION_ID"
+  ],
+  "required_github_variables": [
+    "RUNTIME_OPERATIONS_RETENTION_TENANT",
+    "RUNTIME_OPERATIONS_PITR_TENANT",
+    "RUNTIME_OPERATIONS_PITR_RECOVERY_POINT",
+    "RUNTIME_OPERATIONS_PITR_EXPECTED_GENERATION"
+  ],
+  "secret_values_in_repository": false,
+  "provisioning_status": "not_provisioned"
+}

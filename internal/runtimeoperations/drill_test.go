@@ -18,6 +18,7 @@ func TestLoadConfigFailsClosedWithoutProtectedAuthorityAndAcceptsCompleteBounded
 		"RUNNER_OS":                                        "Linux",
 		"RUNNER_ARCH":                                      "X64",
 		"RUNTIME_OPERATIONS_GITHUB_ENVIRONMENT":            "runtime-operations",
+		"RUNTIME_OPERATIONS_RUNNER_LABELS":                 "self-hosted,linux,x64,runtime-operations-protected",
 		"AR_RUNTIME_OPERATIONS_DATABASE_DSN":               "postgres://operator@db.example.invalid/runtime_source?sslmode=require",
 		"AR_RUNTIME_OPERATIONS_PITR_RESTORE_DSN":           "postgres://operator@db.example.invalid/runtime_restore?sslmode=require",
 		"AR_RUNTIME_OPERATIONS_AUDIT_SINK_URL":             "https://audit.example.invalid/v1/facts",
@@ -28,7 +29,7 @@ func TestLoadConfigFailsClosedWithoutProtectedAuthorityAndAcceptsCompleteBounded
 		"AR_RUNTIME_OPERATIONS_PITR_AUTHORIZATION_ID":      "pitr-authorization-00000001",
 		"AR_RUNTIME_OPERATIONS_PITR_RECOVERY_POINT":        "2026-08-11T12:00:00Z",
 		"AR_RUNTIME_OPERATIONS_PITR_EXPECTED_GENERATION":   "7",
-		"GITHUB_SHA":                                       "abcdef0123456789abcdef0123456789abcdef01",
+		"GITHUB_SHA": "abcdef0123456789abcdef0123456789abcdef01",
 	}
 	get := func(key string) string { return values[key] }
 	config, err := LoadConfig(get)
@@ -53,6 +54,11 @@ func TestLoadConfigFailsClosedWithoutProtectedAuthorityAndAcceptsCompleteBounded
 		t.Fatal("hosted runner loaded as protected")
 	}
 	values["RUNNER_ENVIRONMENT"] = "self-hosted"
+	values["RUNTIME_OPERATIONS_RUNNER_LABELS"] = "self-hosted,linux,x64"
+	if _, err := LoadConfig(get); err == nil {
+		t.Fatal("runner without the dedicated protected label loaded")
+	}
+	values["RUNTIME_OPERATIONS_RUNNER_LABELS"] = "self-hosted,linux,x64,runtime-operations-protected"
 	values["GITHUB_SHA"] = "not-a-commit"
 	if _, err := LoadConfig(get); err == nil {
 		t.Fatal("non-immutable source revision loaded")
