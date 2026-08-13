@@ -104,11 +104,15 @@ var _ = Describe("M1 deployment safety boundaries", func() {
 		for _, required := range []string{
 			`--flannel-backend=none@server:0`,
 			`--disable-network-policy@server:0`,
+			`get --raw=/readyz`,
 			`Install pinned policy-enforcing Cilium CNI`,
 			`deploy/harness/install-pinned-cilium-cni.sh "$KUBECONFIG" "${AGENT_RUNTIME_CI_CONTEXT:?}"`,
+			`wait --for=condition=Ready node --all --timeout=5m`,
 		} {
 			Expect(workflow).To(ContainSubstring(required))
 		}
+		Expect(strings.Index(workflow, "get --raw=/readyz")).To(BeNumerically("<", strings.Index(workflow, "Install pinned policy-enforcing Cilium CNI")))
+		Expect(strings.Index(workflow, "Install pinned policy-enforcing Cilium CNI")).To(BeNumerically("<", strings.Index(workflow, "wait --for=condition=Ready node --all --timeout=5m")))
 		Expect(strings.Index(workflow, "Install pinned policy-enforcing Cilium CNI")).To(BeNumerically("<", strings.Index(workflow, "Prove two isolated full Stack instances")))
 	})
 

@@ -278,8 +278,7 @@ jobs:
             --k3s-arg '--flannel-backend=none@server:0' \
             --k3s-arg '--disable-network-policy@server:0' \
             --k3s-arg '--disable=traefik@server:0' \
-            --k3s-arg '--disable=servicelb@server:0' \
-            --wait --timeout 5m; then
+            --k3s-arg '--disable=servicelb@server:0'; then
             cluster_create_succeeded=true
             cluster_server_container_id="$(docker container inspect --format '{{.Id}}' "$cluster_server_container")"
             [[ "$cluster_server_container_id" =~ ^[a-f0-9]{64}$ ]]
@@ -295,7 +294,16 @@ jobs:
           [[ "$api_endpoint" == "https://127.0.0.1:$api_port" ]]
           [[ "$api_port" =~ ^[1-9][0-9]{0,4}$ ]]
           (( api_port <= 65535 ))
-          kubectl --context "$context" wait --for=condition=Ready node --all --timeout=5m
+          for attempt in $(seq 1 60); do
+            if kubectl --context "$context" --request-timeout=5s get --raw=/readyz >/dev/null; then
+              break
+            fi
+            if [[ "$attempt" == 60 ]]; then
+              echo "Kubernetes API did not become ready before Cilium installation" >&2
+              exit 1
+            fi
+            sleep 1
+          done
           {
             echo "KUBECONFIG=$kubeconfig"
             echo "AGENT_RUNTIME_CI_RUN_IDENTITY=$run_identity"
@@ -310,6 +318,7 @@ jobs:
         run: |
           set -euo pipefail
           deploy/harness/install-pinned-cilium-cni.sh "$KUBECONFIG" "${AGENT_RUNTIME_CI_CONTEXT:?}"
+          kubectl --context "${AGENT_RUNTIME_CI_CONTEXT:?}" wait --for=condition=Ready node --all --timeout=5m
       - name: Preload and prove the local-path helper image
         shell: bash
         run: |
