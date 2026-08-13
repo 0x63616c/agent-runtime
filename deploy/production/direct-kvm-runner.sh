@@ -139,6 +139,11 @@ spec:
         - name: $registry_secret_name
       restartPolicy: Never
       terminationGracePeriodSeconds: 5
+      # Firecracker's KVM and Jailer contract is Linux/amd64 only.  Selecting
+      # it explicitly also prevents a failed pull/schedule on arm workers.
+      nodeSelector:
+        kubernetes.io/os: linux
+        kubernetes.io/arch: amd64
       containers:
         - name: firecracker
           image: $image
@@ -172,31 +177,33 @@ spec:
           volumeMounts:
             - { name: tmp, mountPath: /tmp }
             - { name: kvm, mountPath: /dev/kvm }
-            - { name: direct-config, mountPath: /var/lib/agent-runtime/firecracker-direct/kvm-config.json, readOnly: true }
-            - { name: fixture-map, mountPath: /var/lib/agent-runtime/firecracker-direct/fixture-source-map.json, readOnly: true }
-            - { name: fixtures, mountPath: /var/lib/agent-runtime/firecracker-fixtures/home-server, readOnly: true }
-            - { name: evidence, mountPath: /var/lib/agent-runtime/firecracker-evidence/home-server }
+            # Talos rejects nested file hostPath mounts beneath a mounted
+            # parent.  Each dedicated parent is mounted at its authoritative
+            # absolute path, so the binaries see precisely the reviewed paths
+            # without exposing /var/lib/agent-runtime wholesale.
+            - { name: direct-authority, mountPath: /var/lib/agent-runtime/firecracker-direct, readOnly: true }
+            - { name: fixtures, mountPath: /var/lib/agent-runtime/firecracker-fixtures, readOnly: true }
+            - { name: evidence, mountPath: /var/lib/agent-runtime/firecracker-evidence }
             - { name: jailer, mountPath: /var/lib/agent-runtime/firecracker-jailer }
-            # Bind only the delegated parent. The Jailer can create and remove its
-            # own per-VM child, but cannot inspect or modify sibling/host cgroups.
-            - { name: cgroup, mountPath: /sys/fs/cgroup/agent-runtime/firecracker-direct, readOnly: false }
+            # Bind only the delegated agent-runtime parent. The Jailer can
+            # create and remove its own firecracker-direct child, but cannot
+            # inspect or modify other host cgroup trees.
+            - { name: cgroup, mountPath: /sys/fs/cgroup/agent-runtime, readOnly: false }
       volumes:
         - name: tmp
           emptyDir: { sizeLimit: 2Gi }
         - name: kvm
           hostPath: { path: /dev/kvm, type: CharDevice }
-        - name: direct-config
-          hostPath: { path: /var/lib/agent-runtime/firecracker-direct/kvm-config.json, type: File }
-        - name: fixture-map
-          hostPath: { path: /var/lib/agent-runtime/firecracker-direct/fixture-source-map.json, type: File }
+        - name: direct-authority
+          hostPath: { path: /var/lib/agent-runtime/firecracker-direct, type: Directory }
         - name: fixtures
-          hostPath: { path: /var/lib/agent-runtime/firecracker-fixtures/home-server, type: Directory }
+          hostPath: { path: /var/lib/agent-runtime/firecracker-fixtures, type: Directory }
         - name: evidence
-          hostPath: { path: /var/lib/agent-runtime/firecracker-evidence/home-server, type: Directory }
+          hostPath: { path: /var/lib/agent-runtime/firecracker-evidence, type: Directory }
         - name: jailer
           hostPath: { path: /var/lib/agent-runtime/firecracker-jailer, type: Directory }
         - name: cgroup
-          hostPath: { path: /sys/fs/cgroup/agent-runtime/firecracker-direct, type: Directory }
+          hostPath: { path: /sys/fs/cgroup/agent-runtime, type: Directory }
 EOF
 }
 
@@ -247,14 +254,22 @@ self_test() {
   grep -Fqx '  suspend: true' "$manifest"
   grep -Fqx "        - name: $registry_secret_name" "$manifest"
   grep -Fqx '      automountServiceAccountToken: false' "$manifest"
+  grep -Fqx '        kubernetes.io/os: linux' "$manifest"
+  grep -Fqx '        kubernetes.io/arch: amd64' "$manifest"
   grep -Fqx '          imagePullPolicy: Always' "$manifest"
   grep -Fqx '            - { name: tmp, mountPath: /tmp }' "$manifest"
   grep -Fqx '          emptyDir: { sizeLimit: 2Gi }' "$manifest"
   grep -Fqx '          hostPath: { path: /dev/kvm, type: CharDevice }' "$manifest"
-  grep -Fqx '          hostPath: { path: /var/lib/agent-runtime/firecracker-direct/kvm-config.json, type: File }' "$manifest"
+  grep -Fqx '            - { name: direct-authority, mountPath: /var/lib/agent-runtime/firecracker-direct, readOnly: true }' "$manifest"
+  grep -Fqx '            - { name: fixtures, mountPath: /var/lib/agent-runtime/firecracker-fixtures, readOnly: true }' "$manifest"
+  grep -Fqx '            - { name: evidence, mountPath: /var/lib/agent-runtime/firecracker-evidence }' "$manifest"
   grep -Fqx '            - { name: jailer, mountPath: /var/lib/agent-runtime/firecracker-jailer }' "$manifest"
-  grep -Fqx '            - { name: cgroup, mountPath: /sys/fs/cgroup/agent-runtime/firecracker-direct, readOnly: false }' "$manifest"
+  grep -Fqx '            - { name: cgroup, mountPath: /sys/fs/cgroup/agent-runtime, readOnly: false }' "$manifest"
+  grep -Fqx '          hostPath: { path: /var/lib/agent-runtime/firecracker-direct, type: Directory }' "$manifest"
+  grep -Fqx '          hostPath: { path: /var/lib/agent-runtime/firecracker-fixtures, type: Directory }' "$manifest"
+  grep -Fqx '          hostPath: { path: /var/lib/agent-runtime/firecracker-evidence, type: Directory }' "$manifest"
   grep -Fqx '          hostPath: { path: /var/lib/agent-runtime/firecracker-jailer, type: Directory }' "$manifest"
+  grep -Fqx '          hostPath: { path: /sys/fs/cgroup/agent-runtime, type: Directory }' "$manifest"
   grep -Fqx '              -report /var/lib/agent-runtime/firecracker-evidence/home-server/smoke-test.json' "$manifest"
   if "$0" render --run-id upperCase --image "ghcr.io/0x63616c/agent-runtime-direct-runner@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" --output "$tmp/bad" >/dev/null 2>&1; then fail "accepted invalid run ID"; fi
   if "$0" render --run-id smoke-test --image "example.invalid/unpinned:latest" --output "$tmp/bad" >/dev/null 2>&1; then fail "accepted unreviewed image"; fi
