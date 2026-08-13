@@ -272,6 +272,15 @@ current reference digest predates the codec worker and therefore remains on
 the generic role until that publish-and-pin handoff occurs. Never hand-convert
 this desired state into untracked manifests.
 
+The checked-in `deploy/production/run-kubernetes-smoke.sh` is an
+**OrbStack-only disposable harness**. It refuses every Kubernetes context other
+than `orbstack`: it generates ephemeral local credentials, uses the fixed local
+namespace, creates a credential-rejection matrix, and relies on a locally built
+image with `imagePullPolicy: Never`. It must not be repointed at a live cluster.
+A home-server proof requires a separate reviewed live-lab harness with a unique
+namespace, registry-published image, declared external credential provider,
+explicit capacity reservation, and a retention/cleanup evidence contract.
+
 The committed main-CI workflow is configured to create a disposable k3d `v5.9.0` cluster with the multi-architecture
 K3s image pinned as
 `rancher/k3s:v1.33.9-k3s1@sha256:f17e43023cce2b9c613e198f26e73637bf734b5156d37c9f44819d97bac4d655`.

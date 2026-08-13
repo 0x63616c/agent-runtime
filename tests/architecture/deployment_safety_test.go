@@ -23,6 +23,8 @@ var _ = Describe("M1 deployment safety boundaries", func() {
 			`AGENT_RUNTIME_SMOKE_AUDIT:?`,
 			`AGENT_RUNTIME_SMOKE_EVIDENCE:?`,
 			`profile="local"`,
+			`context" != "orbstack"`,
+			`dedicated reviewed live-lab harness`,
 			`stackctl" bootstrap`,
 			`stackctl" apply`,
 			`stackctl" teardown`,

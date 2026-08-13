@@ -60,6 +60,15 @@ if [[ "$kubeconfig" != /* || "$audit_file" != /* || "$evidence_file" != /* ]]; t
   echo "smoke kubeconfig, audit, and evidence file paths must be absolute" >&2
   exit 1
 fi
+# This is a disposable OrbStack-only proof. It generates ephemeral
+# credentials, creates the fixed local namespace, and runs a large
+# credential-rejection matrix. An explicit Kubernetes target must not make it
+# possible to point that work at a live cluster. A live-lab proof needs its own
+# reviewed namespace, image distribution, credential, and evidence contract.
+if [[ "$context" != "orbstack" ]]; then
+  echo "Kubernetes smoke only permits the disposable orbstack context; a live cluster requires a dedicated reviewed live-lab harness" >&2
+  exit 1
+fi
 for executable in docker git jq kubectl openssl shasum; do
   command -v "$executable" >/dev/null || {
     echo "required smoke executable is unavailable: $executable" >&2
