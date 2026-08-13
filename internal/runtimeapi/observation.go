@@ -40,6 +40,7 @@ type RequestObservation struct {
 	Duration             time.Duration
 	TenantCorrelation    string
 	PrincipalCorrelation string
+	Correlation          CorrelationEnvelope
 }
 
 // RequestObserver receives exactly one completed request observation.
@@ -64,6 +65,10 @@ type Observability struct {
 	Clock              Clock
 	Observer           RequestObserver
 	IdentityCorrelator IdentityCorrelator
+	// CorrelationProvider may add validated durable runtime references after a
+	// request completes. It is intentionally optional: route-derived safe IDs
+	// remain useful without coupling the HTTP role to a runtime implementation.
+	CorrelationProvider RequestCorrelationProvider
 }
 
 // HMACIdentityCorrelator derives stable, keyed, bounded identity correlations.
@@ -98,6 +103,7 @@ type requestObservability struct {
 	clock      Clock
 	observer   RequestObserver
 	correlator IdentityCorrelator
+	provider   RequestCorrelationProvider
 }
 
 func newRequestObservability(config Observability) (requestObservability, error) {
@@ -107,7 +113,7 @@ func newRequestObservability(config Observability) (requestObservability, error)
 	if dependencyMissing(config.Clock) || dependencyMissing(config.Observer) || dependencyMissing(config.IdentityCorrelator) {
 		return requestObservability{}, errors.New("create runtime API: observability clock, observer, and identity correlator are required together")
 	}
-	return requestObservability{clock: config.Clock, observer: config.Observer, correlator: config.IdentityCorrelator}, nil
+	return requestObservability{clock: config.Clock, observer: config.Observer, correlator: config.IdentityCorrelator, provider: config.CorrelationProvider}, nil
 }
 
 func (observability requestObservability) enabled() bool { return observability.observer != nil }
@@ -127,11 +133,14 @@ func (observability requestObservability) complete(request *http.Request, operat
 	if request.Context().Err() != nil {
 		outcome = RequestOutcomeCancelled
 	}
-	observation := RequestObservation{RequestID: requestID, Operation: operation, Status: status, Outcome: outcome, StartedAt: started, Duration: duration, FailureCode: failureCodeForStatus(status)}
+	observation := RequestObservation{RequestID: requestID, Operation: operation, Status: status, Outcome: outcome, StartedAt: started, Duration: duration, FailureCode: failureCodeForStatus(status), Correlation: requestRouteCorrelation(request.URL.Path)}
 	if identity != nil {
 		correlation := observability.correlator.Correlate(*identity)
 		observation.TenantCorrelation = correlation.Tenant
 		observation.PrincipalCorrelation = correlation.Principal
+	}
+	if observability.provider != nil {
+		observation.Correlation = observation.Correlation.merge(observability.provider.CorrelateRequest(request.Context(), observation))
 	}
 	observability.observer.ObserveRequest(request.Context(), observation)
 }

@@ -85,5 +85,23 @@ func requestTraceAttributes(observation runtimeapi.RequestObservation) []attribu
 	if observation.PrincipalCorrelation != "" {
 		attributes = append(attributes, attribute.String("runtime.principal.correlation", observation.PrincipalCorrelation))
 	}
+	correlation := observation.Correlation.Values()
+	for _, field := range []struct{ key, value string }{
+		{"runtime.agent.id", correlation.AgentID},
+		{"runtime.agent.revision.id", correlation.AgentRevisionID},
+		{"runtime.session.id", correlation.SessionID},
+		{"runtime.turn.id", correlation.TurnID},
+		{"runtime.invocation.id", correlation.InvocationID},
+		{"runtime.tool.call.id", correlation.ToolCallID},
+		{"runtime.tool.execution.id", correlation.ToolExecutionID},
+		{"runtime.approval.id", correlation.ApprovalID},
+		{"runtime.sandbox.id", correlation.SandboxID},
+		{"runtime.process.id", correlation.ProcessID},
+		{"runtime.operation.id", correlation.OperationID},
+	} {
+		if field.value != "" {
+			attributes = append(attributes, attribute.String(field.key, field.value))
+		}
+	}
 	return attributes
 }

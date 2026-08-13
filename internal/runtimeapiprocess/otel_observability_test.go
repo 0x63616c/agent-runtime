@@ -31,6 +31,13 @@ func TestOTelRequestObserverEmitsSafeBoundedMetricsAndCorrelatedTrace(t *testing
 	}
 
 	requestContext, parent := tracerProvider.Tracer(runtimeAPIInstrumentationScope).Start(context.Background(), "ingress")
+	correlation, err := runtimeapi.NewCorrelationEnvelope(runtimeapi.CorrelationValues{
+		SessionID:  "sess_1234567890ABCDEF",
+		ToolCallID: "toolcall_123",
+	})
+	if err != nil {
+		t.Fatalf("NewCorrelationEnvelope(): %v", err)
+	}
 	observer.ObserveRequest(requestContext, runtimeapi.RequestObservation{
 		RequestID:            agentruntime.RequestID("req_0000000000000001"),
 		Operation:            "create_session",
@@ -40,6 +47,7 @@ func TestOTelRequestObserverEmitsSafeBoundedMetricsAndCorrelatedTrace(t *testing
 		Duration:             17*time.Millisecond + 500*time.Microsecond,
 		TenantCorrelation:    "hmac-sha256:tenant-correlation",
 		PrincipalCorrelation: "hmac-sha256:principal-correlation",
+		Correlation:          correlation,
 	})
 	parent.End()
 
@@ -65,7 +73,7 @@ func TestOTelRequestObserverEmitsSafeBoundedMetricsAndCorrelatedTrace(t *testing
 	if span.EndTime.Sub(span.StartTime) != 17*time.Millisecond+500*time.Microsecond {
 		t.Fatalf("span duration = %s", span.EndTime.Sub(span.StartTime))
 	}
-	for _, want := range []string{"runtime.request.id", "runtime.tenant.correlation", "runtime.principal.correlation", "runtime.operation"} {
+	for _, want := range []string{"runtime.request.id", "runtime.tenant.correlation", "runtime.principal.correlation", "runtime.operation", "runtime.session.id", "runtime.tool.call.id"} {
 		if !spanHasAttribute(span.Attributes, want) {
 			t.Fatalf("span attributes = %#v, missing %q", span.Attributes, want)
 		}
