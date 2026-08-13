@@ -2,7 +2,6 @@ package runtimeapiprocess
 
 import (
 	"context"
-	"net"
 	"net/http"
 	"strings"
 	"testing"
@@ -23,10 +22,6 @@ func TestRuntimeAPIProcessExportsBoundedRequestTelemetry(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse process configuration: %v", err)
 	}
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("listen: %v", err)
-	}
 	reader := metric.NewManualReader()
 	meterProvider := metric.NewMeterProvider(metric.WithReader(reader))
 	defer func() { _ = meterProvider.Shutdown(context.Background()) }()
@@ -37,13 +32,13 @@ func TestRuntimeAPIProcessExportsBoundedRequestTelemetry(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	done := make(chan error, 1)
+	ready := make(chan string, 1)
 	go func() {
-		done <- ServeWithTelemetry(ctx, config, telemetryProcessSecrets, TelemetryProviders{
+		done <- RunWithTelemetry(ctx, config, telemetryProcessSecrets, TelemetryProviders{
 			MeterProvider: meterProvider, TracerProvider: tracerProvider,
-		}, listener)
+		}, func(address string) { ready <- address })
 	}()
-	baseURL := "http://" + listener.Addr().String()
-	awaitTelemetryHealth(t, baseURL)
+	baseURL := "http://" + awaitTelemetryProcess(t, ready, "runtime API telemetry readiness")
 
 	request, err := http.NewRequestWithContext(context.Background(), http.MethodGet, baseURL+"/v1/sessions/sess_1234567890ABCDEF", nil)
 	if err != nil {
@@ -55,7 +50,7 @@ func TestRuntimeAPIProcessExportsBoundedRequestTelemetry(t *testing.T) {
 	if err != nil {
 		t.Fatalf("perform public request: %v", err)
 	}
-	defer response.Body.Close()
+	defer func() { _ = response.Body.Close() }()
 	if response.StatusCode != http.StatusNotFound {
 		t.Fatalf("public request status = %d, want %d", response.StatusCode, http.StatusNotFound)
 	}
@@ -83,13 +78,8 @@ func TestRuntimeAPIProcessExportsBoundedRequestTelemetry(t *testing.T) {
 	}
 
 	cancel()
-	select {
-	case err := <-done:
-		if err != nil {
-			t.Fatalf("stop runtime API process: %v", err)
-		}
-	case <-time.After(5 * time.Second):
-		t.Fatal("timed out stopping runtime API process")
+	if err := awaitTelemetryProcess(t, done, "runtime API telemetry shutdown"); err != nil {
+		t.Fatalf("stop runtime API process: %v", err)
 	}
 }
 
@@ -102,20 +92,18 @@ func telemetryProcessSecrets(name string) (string, bool) {
 	return value, found
 }
 
-func awaitTelemetryHealth(t *testing.T, baseURL string) {
+func awaitTelemetryProcess[T any](t *testing.T, value <-chan T, description string) T {
 	t.Helper()
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
-		response, err := http.Get(baseURL + "/healthz")
-		if err == nil {
-			response.Body.Close()
-			if response.StatusCode == http.StatusOK {
-				return
-			}
-		}
-		time.Sleep(10 * time.Millisecond)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	select {
+	case received := <-value:
+		return received
+	case <-ctx.Done():
+		t.Fatalf("timed out waiting for %s: %v", description, ctx.Err())
+		var zero T
+		return zero
 	}
-	t.Fatal("runtime API process did not become healthy")
 }
 
 func assertProcessRequestMetricData(t *testing.T, collected metricdata.ResourceMetrics) {

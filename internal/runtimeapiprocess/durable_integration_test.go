@@ -3,6 +3,7 @@
 package runtimeapiprocess_test
 
 import (
+	"bufio"
 	"context"
 	"errors"
 	"fmt"
@@ -140,10 +141,29 @@ func TestDurableRuntimeAPIBinaryUsesProductionStyleConfig(t *testing.T) {
 	process := exec.CommandContext(ctx, binary, "--config-env", "RUNTIME_API_CONFIG")
 	process.Env = append(os.Environ(), secrets...)
 	var output strings.Builder
-	process.Stdout, process.Stderr = &output, &output
+	stdout, err := process.StdoutPipe()
+	if err != nil {
+		t.Fatalf("capture durable API binary stdout: %v", err)
+	}
+	process.Stderr = &output
 	if err := process.Start(); err != nil {
 		t.Fatalf("start durable API binary: %v", err)
 	}
+	ready := make(chan error, 1)
+	go func() {
+		scanner := bufio.NewScanner(stdout)
+		for scanner.Scan() {
+			if strings.Contains(scanner.Text(), `"msg":"runtime API ready"`) {
+				ready <- nil
+				return
+			}
+		}
+		if err := scanner.Err(); err != nil {
+			ready <- fmt.Errorf("read durable API binary readiness: %w", err)
+			return
+		}
+		ready <- errors.New("durable API binary exited before announcing readiness")
+	}()
 	defer func() {
 		if process.ProcessState != nil && process.ProcessState.Exited() {
 			return
@@ -154,22 +174,8 @@ func TestDurableRuntimeAPIBinaryUsesProductionStyleConfig(t *testing.T) {
 		}
 	}()
 	baseURL := "http://" + address
-	for {
-		request, requestErr := http.NewRequestWithContext(ctx, http.MethodGet, baseURL+"/readyz", nil)
-		if requestErr != nil {
-			t.Fatalf("construct durable API readiness request: %v", requestErr)
-		}
-		response, requestErr := http.DefaultClient.Do(request)
-		if requestErr == nil {
-			_ = response.Body.Close()
-			if response.StatusCode == http.StatusOK {
-				break
-			}
-		}
-		if ctx.Err() != nil {
-			t.Fatalf("durable API binary never became ready: %v: %s", ctx.Err(), output.String())
-		}
-		time.Sleep(10 * time.Millisecond)
+	if err := awaitProcessReadiness(t, ready, "durable API binary readiness"); err != nil {
+		t.Fatalf("durable API binary never became ready: %v: %s", err, output.String())
 	}
 	admin := durableProcessClient(t, baseURL, "api-binary-admin-token", &durableRequestIDs{})
 	if _, err := admin.CreateAgent(ctx, agentruntime.CreateAgentRequest{IdempotencyKey: "api-binary-agent", Name: "binary-api", ModelProfile: "balanced", Instructions: "prove deployed composition"}); err != nil {

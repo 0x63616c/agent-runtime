@@ -66,7 +66,7 @@ func run(lockPath string, files map[string]string) error {
 	if err != nil {
 		return fmt.Errorf("create private staging: %w", err)
 	}
-	defer os.RemoveAll(staging)
+	defer func() { _ = os.RemoveAll(staging) }()
 	_, err = firecracker.ProvisionFixtures(context.Background(), lock, localFetcher{files: urls}, filepath.Join(staging, "fixtures"))
 	if err != nil {
 		return fmt.Errorf("provision candidate fixtures: %w", err)
