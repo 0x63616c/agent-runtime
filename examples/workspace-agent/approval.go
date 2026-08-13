@@ -1,6 +1,6 @@
 // Package workspaceagent is the public-contract Workspace Agent application.
 // Its approval inbox consumes only the SDK; sandbox execution remains visibly
-// unavailable until a protected Workspace profile has retained M4 evidence.
+// unavailable until a protected Workspace profile has retained isolation evidence.
 package workspaceagent
 
 import (
@@ -72,5 +72,5 @@ func HTML(approval agentruntime.Approval) string {
 // SandboxStatus is the truthful Workspace execution status. No UI path treats
 // this text as a successful Firecracker workspace.
 func SandboxStatus() string {
-	return "Workspace sandbox execution is unavailable until the protected Firecracker profile and Linux/KVM evidence are enrolled."
+	return "Workspace sandbox execution is unavailable until the protected Firecracker profile has retained Linux/KVM evidence."
 }

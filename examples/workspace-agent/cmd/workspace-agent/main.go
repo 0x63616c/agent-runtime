@@ -46,14 +46,18 @@ func run(ctx context.Context, arguments []string, lookup func(string) (string, b
 	if err != nil {
 		return err
 	}
+	app, err := workspaceagent.NewApp(client, workspaceagent.RandomKeys{})
+	if err != nil {
+		return err
+	}
 	if *mode == "terminal" {
-		return workspaceagent.RunTerminal(ctx, inbox, input, output)
+		return workspaceagent.RunWorkspaceTerminal(ctx, app, inbox, input, output)
 	}
 	host, _, err := net.SplitHostPort(*listen)
 	if err != nil || net.ParseIP(host) == nil || !net.ParseIP(host).IsLoopback() {
 		return fmt.Errorf("serve Workspace Agent web: listen address must be explicit loopback")
 	}
-	handler, err := workspaceagent.NewWebHandler(inbox)
+	handler, err := workspaceagent.NewWorkspaceWebHandler(app, inbox)
 	if err != nil {
 		return err
 	}
