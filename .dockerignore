@@ -10,6 +10,10 @@
 !cmd/egress-proxy/**
 !cmd/agent-runtime-api/
 !cmd/agent-runtime-api/**
+!cmd/firecracker-direct-preflight/
+!cmd/firecracker-direct-preflight/**
+!cmd/firecracker-smoke/
+!cmd/firecracker-smoke/**
 !internal/
 !internal/**
 !sandbox/
@@ -21,10 +25,14 @@
 !deploy/
 !deploy/production/
 !deploy/production/Dockerfile
+!deploy/production/Dockerfile.direct-kvm-runner
+!deploy/production/build-direct-kvm-runner-image.sh
 
 # Deliberately excluded from the production image build context.
 deploy/*
 !deploy/production/Dockerfile
+!deploy/production/Dockerfile.direct-kvm-runner
+!deploy/production/build-direct-kvm-runner-image.sh
 docs/
 website/
 evidence/

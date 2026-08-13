@@ -1,0 +1,43 @@
+# The direct KVM runner is deliberately separate from the application image.
+# It contains only static verification/harness binaries; fixtures, authority
+# files, /dev/kvm, cgroups, and the evidence directory are mounted by the
+# one-use runner manifest and never enter this image.
+FROM --platform=$BUILDPLATFORM golang:1.26.0-alpine3.23@sha256:d4c4845f5d60c6a974c6000ce58ae079328d03ab7f721a0734277e69905473e5 AS build
+
+ARG TARGETOS
+ARG TARGETARCH
+ARG SOURCE_REVISION
+ARG SOURCE_DATE_EPOCH=0
+
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN go mod download && go mod verify
+COPY cmd/firecracker-direct-preflight ./cmd/firecracker-direct-preflight
+COPY cmd/firecracker-smoke ./cmd/firecracker-smoke
+COPY internal ./internal
+COPY sandbox ./sandbox
+
+# Build VCS metadata is disabled: SOURCE_REVISION is retained as an OCI label
+# below, while the binaries are reproducible from the declared build context.
+RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH SOURCE_DATE_EPOCH=$SOURCE_DATE_EPOCH \
+    go build -mod=readonly -trimpath -buildvcs=false -ldflags='-buildid= -s -w' \
+    -o /out/firecracker-direct-preflight ./cmd/firecracker-direct-preflight
+RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH SOURCE_DATE_EPOCH=$SOURCE_DATE_EPOCH \
+    go build -mod=readonly -trimpath -buildvcs=false -ldflags='-buildid= -s -w' \
+    -o /out/firecracker-smoke ./cmd/firecracker-smoke
+
+# Alpine is used only because direct-kvm-runner.sh invokes /bin/sh explicitly.
+# Its digest is pinned; this image does not install packages or fetch at runtime.
+FROM docker.io/library/alpine:3.23@sha256:fd791d74b68913cbb027c6546007b3f0d3bc45125f797758156952bc2d6daf40
+
+ARG SOURCE_REVISION
+LABEL org.opencontainers.image.source="https://github.com/0x63616c/agent-runtime" \
+      org.opencontainers.image.revision="${SOURCE_REVISION}" \
+      org.opencontainers.image.title="agent-runtime-direct-runner"
+
+COPY --from=build /out/firecracker-direct-preflight /usr/local/bin/firecracker-direct-preflight
+COPY --from=build /out/firecracker-smoke /usr/local/bin/firecracker-smoke
+
+# The disposable manifest needs uid 0 to read operator-owned configuration and
+# run the upstream Jailer with its separately configured unprivileged uid/gid.
+USER 0:0
