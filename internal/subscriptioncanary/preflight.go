@@ -106,7 +106,7 @@ func validEnvironmentName(value string) bool {
 		return false
 	}
 	for index, character := range value {
-		if !(character == '_' || character >= 'A' && character <= 'Z' || index > 0 && character >= '0' && character <= '9') {
+		if character != '_' && (character < 'A' || character > 'Z') && (index == 0 || character < '0' || character > '9') {
 			return false
 		}
 	}
@@ -118,7 +118,7 @@ func validIdentifier(value string) bool {
 		return false
 	}
 	for _, character := range value {
-		if !(character >= 'a' && character <= 'z' || character >= '0' && character <= '9' || character == '-' || character == '_') {
+		if (character < 'a' || character > 'z') && (character < '0' || character > '9') && character != '-' && character != '_' {
 			return false
 		}
 	}
@@ -134,7 +134,7 @@ func validRevision(value string) bool {
 		return false
 	}
 	for _, character := range value {
-		if !(character >= '0' && character <= '9' || character >= 'a' && character <= 'f') {
+		if (character < '0' || character > '9') && (character < 'a' || character > 'f') {
 			return false
 		}
 	}
