@@ -106,7 +106,40 @@ func run(ctx context.Context, arguments []string, lookup func(string) (string, b
 	if worker := config.LocalDemoWorker(); worker != nil && worker.Enabled {
 		return serveLocalDemoWorker(ctx, config, plan, listener, lookup, logger)
 	}
+	if config.Role() == roles.RoleTool {
+		return serveToolTrigger(ctx, config, plan, listener, lookup)
+	}
 	return roles.Serve(ctx, plan, listener)
+}
+
+func serveToolTrigger(ctx context.Context, config roles.Config, plan roles.Plan, listener net.Listener, lookup func(string) (string, bool)) error {
+	declaration := config.ToolTrigger()
+	endpoint, declared := config.DependencyEndpoint("tool-broker")
+	token, tokenFound := lookup("TOOL_BROKER_TOKEN")
+	if declaration == nil || !declared || !tokenFound {
+		return fmt.Errorf("compose tool trigger role: validated trigger configuration is required")
+	}
+	client, err := tooldispatch.NewTrustedClient(endpoint, token, declaration.ServerName, declaration.TrustBundlePath)
+	if err != nil {
+		return fmt.Errorf("compose tool trigger role: %w", err)
+	}
+	roleContext, cancel := context.WithCancel(ctx)
+	defer cancel()
+	results := make(chan error, 2)
+	go func() { results <- roles.Serve(roleContext, plan, listener) }()
+	go func() {
+		results <- tooldispatch.RunTriggerLoop(roleContext, client, tooldispatch.NewRealtimeTriggerScheduler(), time.Duration(declaration.IntervalSeconds)*time.Second)
+	}()
+	firstErr := <-results
+	cancel()
+	secondErr := <-results
+	if firstErr != nil && !errors.Is(firstErr, context.Canceled) {
+		return fmt.Errorf("serve tool trigger role: %w", firstErr)
+	}
+	if secondErr != nil && !errors.Is(secondErr, context.Canceled) {
+		return fmt.Errorf("serve tool trigger role: %w", secondErr)
+	}
+	return nil
 }
 
 func serveToolDispatch(ctx context.Context, config roles.Config, listener net.Listener, lookup func(string) (string, bool)) error {

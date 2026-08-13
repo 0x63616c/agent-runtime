@@ -3,11 +3,15 @@ package tooldispatch
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"errors"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
+	"time"
 )
 
 // Client is the trigger-only RoleTool authority. It has no execution request
@@ -16,6 +20,24 @@ type Client struct {
 	endpoint string
 	token    string
 	http     *http.Client
+}
+
+// NewTrustedClient creates the production trigger client from one mounted CA
+// bundle. RoleTool cannot substitute ambient roots or skip hostname checks.
+func NewTrustedClient(endpoint, token, serverName, trustPath string) (*Client, error) {
+	if serverName == "" || trustPath == "" {
+		return nil, errors.New("create trusted tool dispatch client: declared trust is required")
+	}
+	pem, err := os.ReadFile(trustPath)
+	if err != nil || len(pem) == 0 {
+		return nil, errors.New("create trusted tool dispatch client: declared trust is unavailable")
+	}
+	roots := x509.NewCertPool()
+	if !roots.AppendCertsFromPEM(pem) {
+		return nil, errors.New("create trusted tool dispatch client: declared trust is invalid")
+	}
+	transport := &http.Transport{TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS13, ServerName: serverName, RootCAs: roots}}
+	return NewClient(endpoint, token, &http.Client{Transport: transport, Timeout: 20 * time.Second})
 }
 
 func NewClient(endpoint, token string, client *http.Client) (*Client, error) {

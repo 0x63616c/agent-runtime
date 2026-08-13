@@ -443,6 +443,20 @@ func validateProfileTopology(profiles Profiles) error {
 		resources []Resource
 	}{{ProfileCI, profiles.CI.Resources}, {ProfileProduction, profiles.Production.Resources}} {
 		resources := profileResources(candidate.resources)
+		// The local Stack is deliberately a demo-only fixture: it must not
+		// compose the private dispatch worker or its authority-bearing secrets.
+		// CI and production retain this bounded non-local topology addition.
+		for id := range resources {
+			if nonlocalToolDispatchResource(id) {
+				delete(resources, id)
+			}
+		}
+		// The local Tool fixture has deliberately different authority and egress
+		// from the non-local trigger-only Tool role.
+		delete(reference, "tool")
+		delete(reference, "tool-egress")
+		delete(resources, "tool")
+		delete(resources, "tool-egress")
 		if candidate.name == ProfileProduction {
 			for id := range reference {
 				if localCIOnlyBootstrapResource(id) {
@@ -468,6 +482,10 @@ func validateProfileTopology(profiles Profiles) error {
 // operator authority; it must never render a generated bootstrap Job.
 func localCIOnlyBootstrapResource(id ResourceID) bool {
 	return id == "sandbox-host-bootstrap" || id == "sandbox-host-bootstrap-config" || id == "sandbox-host-bootstrap-egress"
+}
+
+func nonlocalToolDispatchResource(id ResourceID) bool {
+	return id == "tool-dispatch" || id == "tool-dispatch-service" || id == "tool-dispatch-account" || id == "tool-dispatch-egress" || id == "tool-dispatch-secret" || id == "tool-dispatch-tls-secret" || id == "tool-dispatch-trust-secret"
 }
 
 func sameResourceTopologyForProfile(left, right Resource, profile Profile) bool {

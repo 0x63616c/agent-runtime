@@ -673,6 +673,11 @@ func materializeSecretsForProfile(stackName, profile, root string, reader io.Rea
 	if err := materializeSandboxPKI(state.Values, references, reader); err != nil {
 		return nil, err
 	}
+	if profile != "local" {
+		if err := materializeToolDispatchCredentials(state.Values, references, stackName, profile, reader); err != nil {
+			return nil, err
+		}
+	}
 	encodedState, err := json.Marshal(state)
 	if err != nil {
 		return nil, fmt.Errorf("encode local development secret state: %w", err)
@@ -693,6 +698,43 @@ func materializeSecretsForProfile(stackName, profile, root string, reader io.Rea
 		return nil, fmt.Errorf("encode local development Secret manifests: %w", err)
 	}
 	return encoded, nil
+}
+
+// materializeToolDispatchCredentials creates the dedicated local trigger TLS
+// trust domain and copies only reviewed connection material into the
+// dispatch-owned Secret. The trigger role receives the CA, never this Secret.
+func materializeToolDispatchCredentials(values map[string]map[string]string, references []localSecretReference, stackName, profile string, reader io.Reader) error {
+	dispatch, dispatchOK := secretReferenceByID(references, "tool-dispatch-secret")
+	tlsSecret, tlsOK := secretReferenceByID(references, "tool-dispatch-tls-secret")
+	trust, trustOK := secretReferenceByID(references, "tool-dispatch-trust-secret")
+	state, stateOK := secretReferenceByID(references, "state-db-secret")
+	blob, blobOK := secretReferenceByID(references, "blob-storage-secret")
+	control, controlOK := secretReferenceByID(references, "sandbox-control-secret")
+	host, hostOK := secretReferenceByID(references, "sandbox-host-identity-secret")
+	if !dispatchOK || !tlsOK || !trustOK || !stateOK || !blobOK || !controlOK || !hostOK {
+		return fmt.Errorf("materialize local tool dispatch credentials: reviewed Stack is missing required secret references")
+	}
+	if strings.HasPrefix(values[tlsSecret.name]["TOOL_DISPATCH_TLS_CERT"], "-----BEGIN CERTIFICATE-----") {
+		return nil
+	}
+	authority, authorityKey, err := localCertificateAuthority(reader)
+	if err != nil {
+		return err
+	}
+	namespace := profileNamespace(stackName, profile)
+	certificate, private, err := localCertificate(reader, authority, authorityKey, []string{"tool-dispatch", "tool-dispatch." + namespace + ".svc"}, false, nil)
+	if err != nil {
+		return err
+	}
+	values[dispatch.name]["TOOL_DISPATCH_STATE_DSN"] = values[state.name]["STATE_DATABASE_DSN"]
+	values[dispatch.name]["TOOL_DISPATCH_CONTENT_ACCESS_KEY"] = values[blob.name]["MINIO_ROOT_USER"]
+	values[dispatch.name]["TOOL_DISPATCH_CONTENT_SECRET_KEY"] = values[blob.name]["MINIO_ROOT_PASSWORD"]
+	values[dispatch.name]["TOOL_DISPATCH_CONTROL_TOKEN"] = values[control.name]["SANDBOX_AUTHORIZATION"]
+	values[tlsSecret.name]["TOOL_DISPATCH_TLS_CERT"] = string(certificate)
+	values[tlsSecret.name]["TOOL_DISPATCH_TLS_KEY"] = string(private)
+	values[trust.name]["TOOL_DISPATCH_SERVER_CA"] = string(authority)
+	values[trust.name]["SANDBOX_CONTROL_CA"] = values[host.name]["SANDBOX_CONTROL_CA"]
+	return nil
 }
 
 // materializeSandboxPKI creates a disposable local/CI trust domain only after

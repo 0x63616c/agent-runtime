@@ -90,12 +90,20 @@ var _ = Describe("Self-hosted production Stack", func() {
 		Expect(err).NotTo(HaveOccurred())
 		ci, err := stack.Render(spec, stack.ProfileCI)
 		Expect(err).NotTo(HaveOccurred())
-		Expect(normalizedProfile(local.Resources(), "ar-agent-runtime", true)).To(Equal(normalizedProfile(production.Resources(), "agent-runtime", false)))
+		// Local is an intentionally reduced demo-only topology; CI and production
+		// must retain the complete private dispatch topology.
 		Expect(normalizedProfile(ci.Resources(), "ar-ci-agent-runtime", false)).To(Equal(normalizedProfile(production.Resources(), "agent-runtime", false)))
 		localAPIConfig, found := environmentValue(findResource(local.Resources(), "api"), "RUNTIME_API_CONFIG")
 		Expect(found).To(BeTrue())
 		Expect(localAPIConfig).To(ContainSubstring(`"endpoint":"http://blob.ar-agent-runtime.svc:9000"`))
 		Expect(localAPIConfig).To(ContainSubstring(`"profile":"local"`))
+		for _, resource := range local.Resources() {
+			Expect(resource.ID).NotTo(Equal(stack.ResourceID("tool-dispatch")), "local fixture must not compose private tool dispatch")
+		}
+		localToolConfig, found := environmentValue(findResource(local.Resources(), "tool"), "RUNTIME_ROLE_CONFIG")
+		Expect(found).To(BeTrue())
+		Expect(localToolConfig).To(ContainSubstring(`"local_demo_worker"`))
+		Expect(localToolConfig).NotTo(ContainSubstring(`"tool_trigger"`))
 		for _, rendered := range []stack.Rendered{local, ci} {
 			for _, resource := range rendered.Resources() {
 				if resource.Kind != stack.ResourceSecretReference {
@@ -210,13 +218,13 @@ var _ = Describe("Self-hosted production Stack", func() {
 			stack.ResourceID("blob-role"), stack.ResourceID("codec"), stack.ResourceID("sandbox-control"), stack.ResourceID("sandbox-host"),
 		))
 		for _, role := range []stack.ResourceID{"api", "orchestration", "model", "tool", "blob-role", "codec", "sandbox-control", "sandbox-host"} {
-			Expect(findResource(resources, stack.ResourceID(string(role)+"-egress")).Kubernetes.Network.AllowedEgress).To(ContainElement(stack.ResourceID("otel-collector")), role)
+			Expect(findResource(resources, stack.ResourceID(string(role)+"-egress")).Kubernetes.Network.AllowedEgress).To(ContainElement(stack.ResourceID("otel-collector")), string(role))
 		}
 		Expect(findResource(resources, "migration-runner").Kubernetes.Image).To(Equal("postgres@sha256:e5507c984377515b8c9922b0eb19f55aba2063fdc7bccf268cefd53133f97054"))
 		expectedRoleConfigs := map[stack.ResourceID]string{
 			"orchestration": `{"version":1,"role":"orchestration-codec","namespace":"agent-runtime","listen_address":"0.0.0.0:8081","dependencies":[{"name":"state","endpoint":"postgres://state.agent-runtime.svc:5432/agent_runtime","secret_environment":"STATE_DATABASE_DSN"},{"name":"telemetry","endpoint":"http://otel-collector:4318"},{"name":"temporal","endpoint":"temporal.agent-runtime.svc:7233","secret_environment":"TEMPORAL_AUTH_TOKEN"},{"name":"payload-blob","endpoint":"http://blob.agent-runtime.svc:9000","secret_environment":"ORCHESTRATION_PAYLOAD_BLOB_ACCESS_KEY"},{"name":"payload-blob-secret","endpoint":"http://blob.agent-runtime.svc:9000","secret_environment":"ORCHESTRATION_PAYLOAD_BLOB_SECRET_KEY"}],"worker":{"task_queue":"agent-runtime-session-v1","payload_blob_endpoint":"http://blob.agent-runtime.svc:9000","payload_blob_bucket":"agent-runtime-temporal-payload","payload_blob_prefix":"temporal-payload","payload_access_key_environment":"ORCHESTRATION_PAYLOAD_BLOB_ACCESS_KEY","payload_secret_key_environment":"ORCHESTRATION_PAYLOAD_BLOB_SECRET_KEY"}}`,
 			"model":         `{"version":1,"role":"model","namespace":"agent-runtime","listen_address":"0.0.0.0:8082","dependencies":[{"name":"conversation","endpoint":"http://api.agent-runtime.svc:8080","secret_environment":"CONVERSATION_ACCESS_TOKEN"},{"name":"egress-proxy","endpoint":"http://egress-proxy.agent-runtime.svc:8088"},{"name":"model","endpoint":"https://model-provider.example.invalid","secret_environment":"MODEL_API_KEY"},{"name":"telemetry","endpoint":"http://otel-collector:4318"}]}`,
-			"tool":          `{"version":1,"role":"tool","namespace":"agent-runtime","listen_address":"0.0.0.0:8083","dependencies":[{"name":"telemetry","endpoint":"http://otel-collector:4318"},{"name":"tool-broker","endpoint":"http://api.agent-runtime.svc:8080","secret_environment":"TOOL_BROKER_TOKEN"}]}`,
+			"tool":          `{"version":1,"role":"tool","namespace":"agent-runtime","listen_address":"0.0.0.0:8083","dependencies":[{"name":"telemetry","endpoint":"http://otel-collector:4318"},{"name":"tool-broker","endpoint":"https://tool-dispatch.agent-runtime.svc:8089","secret_environment":"TOOL_BROKER_TOKEN"}],"tool_trigger":{"server_name":"tool-dispatch.agent-runtime.svc","trust_bundle_ref":"trust/tool-dispatch","trust_bundle_path":"/run/tool-dispatch-client/ca.crt","interval_seconds":5}}`,
 			"blob-role":     `{"version":1,"role":"blob","namespace":"agent-runtime","listen_address":"0.0.0.0:8084","dependencies":[{"name":"storage","endpoint":"http://blob.agent-runtime.svc:9000","secret_environment":"BLOB_STORAGE_CREDENTIAL"},{"name":"telemetry","endpoint":"http://otel-collector:4318"}]}`,
 			"codec":         `{"version":1,"role":"codec","namespace":"agent-runtime","listen_address":"0.0.0.0:8085","dependencies":[{"name":"blob","endpoint":"http://blob.agent-runtime.svc:9000","secret_environment":"CODEC_BLOB_CREDENTIAL"},{"name":"telemetry","endpoint":"http://otel-collector:4318"}]}`,
 		}
@@ -231,6 +239,26 @@ var _ = Describe("Self-hosted production Stack", func() {
 			Expect(secretEnvironmentNames(findResource(resources, role))).To(ConsistOf(plan.SecretEnvironmentNames()), "resource %s", role)
 		}
 		Expect(expectedRoleConfigs).To(HaveLen(5))
+		dispatch := findResource(resources, "tool-dispatch")
+		Expect(dispatch.Kubernetes.ServiceAccount).To(Equal("tool-dispatch-account"))
+		dispatchConfig, found := environmentValue(dispatch, "RUNTIME_ROLE_CONFIG")
+		Expect(found).To(BeTrue())
+		parsedDispatch, parseErr := roles.Parse(strings.NewReader(dispatchConfig))
+		Expect(parseErr).NotTo(HaveOccurred())
+		Expect(parsedDispatch.Role()).To(Equal(roles.RoleToolDispatch))
+		dispatchPlan, prepareErr := roles.Prepare(context.Background(), parsedDispatch, architectureFixtureSecrets{})
+		Expect(prepareErr).NotTo(HaveOccurred())
+		Expect(secretEnvironmentNames(dispatch)).To(ConsistOf(dispatchPlan.SecretEnvironmentNames()))
+		Expect(secretEnvironmentNames(findResource(resources, "tool"))).To(ConsistOf("TOOL_BROKER_TOKEN"))
+		Expect(secretEnvironmentNames(dispatch)).To(ConsistOf("TOOL_BROKER_TOKEN", "TOOL_DISPATCH_STATE_DSN", "TOOL_DISPATCH_CONTENT_ACCESS_KEY", "TOOL_DISPATCH_CONTENT_SECRET_KEY", "TOOL_DISPATCH_CONTROL_TOKEN"))
+		Expect(findResource(resources, "tool").Kubernetes.SecretMounts).To(ConsistOf(stack.SecretMount{Secret: "tool-dispatch-trust-secret", Key: "TOOL_DISPATCH_SERVER_CA", Path: "/run/tool-dispatch-client/ca.crt"}))
+		Expect(dispatch.Kubernetes.SecretMounts).To(ConsistOf(
+			stack.SecretMount{Secret: "tool-dispatch-tls-secret", Key: "TOOL_DISPATCH_TLS_CERT", Path: "/run/tool-dispatch/tls/tls.crt"},
+			stack.SecretMount{Secret: "tool-dispatch-tls-secret", Key: "TOOL_DISPATCH_TLS_KEY", Path: "/run/tool-dispatch/tls/tls.key"},
+			stack.SecretMount{Secret: "tool-dispatch-trust-secret", Key: "SANDBOX_CONTROL_CA", Path: "/run/tool-dispatch/trust/sandbox-control-ca.crt"},
+		))
+		Expect(findResource(resources, "tool-egress").Kubernetes.Network.AllowedEgress).To(ConsistOf(stack.ResourceID("tool-dispatch"), stack.ResourceID("otel-collector")))
+		Expect(findResource(resources, "tool-dispatch-egress").Kubernetes.Network.AllowedIngress).To(ConsistOf(stack.ResourceID("tool")))
 		apiConfig, found := environmentValue(api, "RUNTIME_API_CONFIG")
 		Expect(found).To(BeTrue())
 		Expect(apiConfig).To(Equal(`{"version":1,"listen_address":"0.0.0.0:8080","public_listen":true,"storage":{"mode":"postgres","database_dsn_environment":"STATE_DATABASE_DSN","content":{"endpoint":"https://blob.agent-runtime.svc:9000","access_key_environment":"RUNTIME_API_CONTENT_ACCESS_KEY","secret_key_environment":"RUNTIME_API_CONTENT_SECRET_KEY","bucket":"agent-runtime","ca_file":"/etc/agent-runtime/blob-ca.crt"}},"model_profiles":["balanced"],"max_request_bytes":4194304,"observability":{"identity_correlation_key_environment":"OBSERVABILITY_CORRELATION_KEY","otlp_grpc_endpoint":"otel-collector:4317"},"principals":[{"tenant":"public","principal":"admin","admin":true,"bearer_token_environment":"RUNTIME_API_ADMIN_TOKEN"},{"tenant":"public","principal":"developer","admin":false,"bearer_token_environment":"RUNTIME_API_DEVELOPER_TOKEN"}],"profile":"production"}`))
@@ -303,7 +331,7 @@ func findResource(resources []stack.Resource, id stack.ResourceID) stack.Resourc
 func normalizedProfile(resources []stack.Resource, namespace string, localFixture bool) []byte {
 	normalized := make([]stack.Resource, 0, len(resources))
 	for _, resource := range resources {
-		if resource.ID == "sandbox-host-bootstrap" || resource.ID == "sandbox-host-bootstrap-config" || resource.ID == "sandbox-host-bootstrap-egress" {
+		if resource.ID == "sandbox-host-bootstrap" || resource.ID == "sandbox-host-bootstrap-config" || resource.ID == "sandbox-host-bootstrap-egress" || resource.ID == "tool-dispatch" || resource.ID == "tool-dispatch-service" || resource.ID == "tool-dispatch-account" || resource.ID == "tool-dispatch-egress" || resource.ID == "tool-dispatch-secret" || resource.ID == "tool-dispatch-tls-secret" || resource.ID == "tool-dispatch-trust-secret" {
 			continue
 		}
 		resource.Dependencies = removeBootstrapDependencies(resource.Dependencies)
@@ -330,6 +358,14 @@ func normalizedProfile(resources []stack.Resource, namespace string, localFixtur
 			resource.Blob.Prefix = "<namespace>/payloads"
 		}
 		if resource.Kubernetes != nil {
+			if resource.ID == "tool" {
+				resource.Dependencies = removeToolDispatchDependencies(resource.Dependencies)
+				resource.Kubernetes.SecretMounts = nil
+			}
+			if resource.ID == "tool-egress" {
+				resource.Dependencies = removeToolDispatchDependencies(resource.Dependencies)
+				resource.Kubernetes.Network.AllowedEgress = []stack.ResourceID{"api", "blob", "otel-collector", "state"}
+			}
 			if resource.ID == "blob" {
 				// The local profile is deliberately HTTP-only. CI and production
 				// enable MinIO's reviewed TLS certificate directory instead.
@@ -357,6 +393,14 @@ func normalizedProfile(resources []stack.Resource, namespace string, localFixtur
 				var document any
 				Expect(json.Unmarshal([]byte(environment.Value), &document)).To(Succeed())
 				if object, ok := document.(map[string]any); ok {
+					if object["role"] == "tool" {
+						delete(object, "tool_trigger")
+						for _, dependency := range object["dependencies"].([]any) {
+							if value, ok := dependency.(map[string]any); ok && value["name"] == "tool-broker" {
+								value["endpoint"] = "http://api.<namespace>.svc:8080"
+							}
+						}
+					}
 					if environment.Name == "RUNTIME_API_CONFIG" {
 						storage := object["storage"].(map[string]any)
 						content := storage["content"].(map[string]any)
@@ -371,6 +415,9 @@ func normalizedProfile(resources []stack.Resource, namespace string, localFixtur
 							content["endpoint"] = strings.Replace(content["endpoint"].(string), "http://", "https://", 1)
 						}
 					}
+					if dispatch, found := object["tool_dispatch"].(map[string]any); found {
+						dispatch["content_bucket"] = "<namespace>"
+					}
 				}
 				document = normalizeNamespaceStrings(document, namespace)
 				encoded, err := json.Marshal(document)
@@ -382,6 +429,16 @@ func normalizedProfile(resources []stack.Resource, namespace string, localFixtur
 	encoded, err := json.Marshal(normalized)
 	Expect(err).NotTo(HaveOccurred())
 	return bytes.TrimSpace(encoded)
+}
+
+func removeToolDispatchDependencies(values []stack.ResourceID) []stack.ResourceID {
+	filtered := make([]stack.ResourceID, 0, len(values))
+	for _, value := range values {
+		if value != "tool-dispatch" && value != "tool-dispatch-service" && value != "tool-dispatch-trust-secret" {
+			filtered = append(filtered, value)
+		}
+	}
+	return filtered
 }
 
 func removeBootstrapDependencies(values []stack.ResourceID) []stack.ResourceID {

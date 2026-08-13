@@ -75,6 +75,7 @@ type Config struct {
 	dependencies  []dependency
 	worker        *WorkerConfig
 	toolDispatch  *ToolDispatchConfig
+	toolTrigger   *ToolTriggerConfig
 	localDemo     *LocalDemoWorkerConfig
 }
 
@@ -93,6 +94,15 @@ type ToolDispatchConfig struct {
 	ServerCertificatePath        string `json:"server_certificate_path"`
 	ServerPrivateKeyPath         string `json:"server_private_key_path"`
 	PeerPolicy                   string `json:"peer_policy"`
+}
+
+// ToolTriggerConfig declares the distinct trust bundle held by RoleTool to
+// invoke the dispatch service. It deliberately contains no worker authority.
+type ToolTriggerConfig struct {
+	ServerName      string `json:"server_name"`
+	TrustBundleRef  string `json:"trust_bundle_ref"`
+	TrustBundlePath string `json:"trust_bundle_path"`
+	IntervalSeconds int    `json:"interval_seconds"`
 }
 
 // LocalDemoWorker returns the explicitly declared local-only fixture
@@ -220,6 +230,7 @@ type document struct {
 	Dependencies  []Dependency           `json:"dependencies"`
 	Worker        *WorkerConfig          `json:"worker,omitempty"`
 	ToolDispatch  *ToolDispatchConfig    `json:"tool_dispatch,omitempty"`
+	ToolTrigger   *ToolTriggerConfig     `json:"tool_trigger,omitempty"`
 	LocalDemo     *LocalDemoWorkerConfig `json:"local_demo_worker,omitempty"`
 }
 
@@ -341,10 +352,22 @@ func Parse(input io.Reader) (Config, error) {
 	if err := validateToolDispatch(decoded.Role, decoded.ToolDispatch); err != nil {
 		return Config{}, err
 	}
-	if err := validateToolDispatchDependencies(decoded.Role, dependencies, decoded.ToolDispatch); err != nil {
+	if err := validateToolTrigger(decoded.Role, decoded.ToolTrigger, decoded.LocalDemo); err != nil {
 		return Config{}, err
 	}
-	return Config{role: decoded.Role, namespace: decoded.Namespace, listenAddress: decoded.ListenAddress, dependencies: dependencies, worker: decoded.Worker, toolDispatch: decoded.ToolDispatch, localDemo: decoded.LocalDemo}, nil
+	if err := validateToolDispatchDependencies(decoded.Role, dependencies, decoded.ToolDispatch, decoded.ToolTrigger); err != nil {
+		return Config{}, err
+	}
+	return Config{role: decoded.Role, namespace: decoded.Namespace, listenAddress: decoded.ListenAddress, dependencies: dependencies, worker: decoded.Worker, toolDispatch: decoded.ToolDispatch, toolTrigger: decoded.ToolTrigger, localDemo: decoded.LocalDemo}, nil
+}
+
+// ToolTrigger returns the bounded dispatch trigger capability for RoleTool.
+func (config Config) ToolTrigger() *ToolTriggerConfig {
+	if config.toolTrigger == nil {
+		return nil
+	}
+	clone := *config.toolTrigger
+	return &clone
 }
 
 func (config Config) ToolDispatch() *ToolDispatchConfig {
@@ -368,9 +391,28 @@ func validateToolDispatch(role Role, config *ToolDispatchConfig) error {
 	return nil
 }
 
-func validateToolDispatchDependencies(role Role, dependencies []dependency, config *ToolDispatchConfig) error {
+func validateToolTrigger(role Role, config *ToolTriggerConfig, localDemo *LocalDemoWorkerConfig) error {
+	if role != RoleTool {
+		if config != nil {
+			return errors.New("validate runtime role configuration: tool trigger is only allowed for tool")
+		}
+		return nil
+	}
+	if config == nil {
+		if localDemo != nil && localDemo.Enabled {
+			return nil
+		}
+		return errors.New("validate runtime role configuration: tool trigger capability is required unless local demo worker is enabled")
+	}
+	if config.ServerName == "" || config.TrustBundleRef == "" || !filepath.IsAbs(config.TrustBundlePath) || config.IntervalSeconds < 1 || config.IntervalSeconds > 300 {
+		return errors.New("validate runtime role configuration: tool trigger capability is incomplete")
+	}
+	return nil
+}
+
+func validateToolDispatchDependencies(role Role, dependencies []dependency, config *ToolDispatchConfig, trigger *ToolTriggerConfig) error {
 	for _, dependency := range dependencies {
-		if dependency.name == "tool-broker" && !validHTTPSOrigin(dependency.endpoint) {
+		if dependency.name == "tool-broker" && (role != RoleTool || trigger != nil) && !validHTTPSOrigin(dependency.endpoint) {
 			return errors.New("validate runtime role configuration: tool broker requires an HTTPS origin")
 		}
 		if role == RoleToolDispatch && dependency.name == "content" && (config == nil || dependency.endpoint != config.ContentEndpoint) {
@@ -383,6 +425,12 @@ func validateToolDispatchDependencies(role Role, dependencies []dependency, conf
 			endpoint, err := url.Parse(dependency.endpoint)
 			if err != nil || config == nil || endpoint.Hostname() != config.ServerName {
 				return errors.New("validate runtime role configuration: tool dispatch server name must equal tool broker host")
+			}
+		}
+		if role == RoleTool && dependency.name == "tool-broker" {
+			endpoint, err := url.Parse(dependency.endpoint)
+			if trigger != nil && (err != nil || endpoint.Hostname() != trigger.ServerName) {
+				return errors.New("validate runtime role configuration: tool trigger server name must equal tool broker host")
 			}
 		}
 	}

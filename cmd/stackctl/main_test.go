@@ -135,14 +135,14 @@ var _ = Describe("render and check", func() {
 	It("emits canonical role configurations from Stack desired state without a second file source", func() {
 		resources := []stack.Resource{
 			{ID: "api", Kubernetes: &stack.KubernetesResource{Environment: []stack.EnvironmentVariable{{Name: "RUNTIME_ROLE_CONFIG", Value: `{"version":1,"role":"api","namespace":"runtime","listen_address":"127.0.0.1:8080","dependencies":[{"name":"state","endpoint":"http://state:8080"},{"name":"telemetry","endpoint":"http://telemetry:4318"}]}`}}}},
-			{ID: "tool", Kubernetes: &stack.KubernetesResource{Environment: []stack.EnvironmentVariable{{Name: "RUNTIME_ROLE_CONFIG", Value: `{"version":1,"role":"tool","namespace":"runtime","listen_address":"127.0.0.1:8081","dependencies":[{"name":"telemetry","endpoint":"http://telemetry:4318"},{"name":"tool-broker","endpoint":"http://broker:8080","secret_environment":"TOOL_BROKER_TOKEN"}]}`}}}},
+			{ID: "tool", Kubernetes: &stack.KubernetesResource{Environment: []stack.EnvironmentVariable{{Name: "RUNTIME_ROLE_CONFIG", Value: `{"version":1,"role":"tool","namespace":"runtime","listen_address":"127.0.0.1:8081","dependencies":[{"name":"telemetry","endpoint":"http://telemetry:4318"},{"name":"tool-broker","endpoint":"https://broker:8080","secret_environment":"TOOL_BROKER_TOKEN"}],"tool_trigger":{"server_name":"broker","trust_bundle_ref":"trust/tool-dispatch","trust_bundle_path":"/run/tool-dispatch/ca.crt","interval_seconds":5}}`}}}},
 		}
 
 		configurations, err := extractRoleConfigurations(resources)
 		Expect(err).NotTo(HaveOccurred())
 		encoded, err := json.Marshal(configurations)
 		Expect(err).NotTo(HaveOccurred())
-		Expect(string(encoded)).To(Equal(`{"api":{"version":1,"role":"api","namespace":"runtime","listen_address":"127.0.0.1:8080","dependencies":[{"name":"state","endpoint":"http://state:8080"},{"name":"telemetry","endpoint":"http://telemetry:4318"}]},"tool":{"version":1,"role":"tool","namespace":"runtime","listen_address":"127.0.0.1:8081","dependencies":[{"name":"telemetry","endpoint":"http://telemetry:4318"},{"name":"tool-broker","endpoint":"http://broker:8080","secret_environment":"TOOL_BROKER_TOKEN"}]}}`))
+		Expect(string(encoded)).To(Equal(`{"api":{"version":1,"role":"api","namespace":"runtime","listen_address":"127.0.0.1:8080","dependencies":[{"name":"state","endpoint":"http://state:8080"},{"name":"telemetry","endpoint":"http://telemetry:4318"}]},"tool":{"version":1,"role":"tool","namespace":"runtime","listen_address":"127.0.0.1:8081","dependencies":[{"name":"telemetry","endpoint":"http://telemetry:4318"},{"name":"tool-broker","endpoint":"https://broker:8080","secret_environment":"TOOL_BROKER_TOKEN"}],"tool_trigger":{"server_name":"broker","trust_bundle_ref":"trust/tool-dispatch","trust_bundle_path":"/run/tool-dispatch/ca.crt","interval_seconds":5}}}`))
 	})
 })
 

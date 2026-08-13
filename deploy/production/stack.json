@@ -1088,7 +1088,8 @@
               "request_memory_bytes": 134217728,
               "limit_memory_bytes": 536870912
             },
-            "storage": []
+            "storage": [],
+            "secret_mounts": []
           }
         },
         {
@@ -4649,7 +4650,9 @@
           "scope": "namespace",
           "dependencies": [
             "tool-account",
-            "tool-broker-secret"
+            "tool-broker-secret",
+            "tool-dispatch-service",
+            "tool-dispatch-trust-secret"
           ],
           "retention": {
             "policy": "ephemeral",
@@ -4677,7 +4680,7 @@
             "environment": [
               {
                 "name": "RUNTIME_ROLE_CONFIG",
-                "value": "{\"version\":1,\"role\":\"tool\",\"namespace\":\"ar-ci-agent-runtime\",\"listen_address\":\"0.0.0.0:8083\",\"dependencies\":[{\"name\":\"telemetry\",\"endpoint\":\"http://otel-collector:4318\"},{\"name\":\"tool-broker\",\"endpoint\":\"http://api.ar-ci-agent-runtime.svc:8080\",\"secret_environment\":\"TOOL_BROKER_TOKEN\"}]}"
+                "value": "{\"version\":1,\"role\":\"tool\",\"namespace\":\"ar-ci-agent-runtime\",\"listen_address\":\"0.0.0.0:8083\",\"dependencies\":[{\"name\":\"telemetry\",\"endpoint\":\"http://otel-collector:4318\"},{\"name\":\"tool-broker\",\"endpoint\":\"https://tool-dispatch.ar-ci-agent-runtime.svc:8089\",\"secret_environment\":\"TOOL_BROKER_TOKEN\"}],\"tool_trigger\":{\"server_name\":\"tool-dispatch.ar-ci-agent-runtime.svc\",\"trust_bundle_ref\":\"trust/tool-dispatch\",\"trust_bundle_path\":\"/run/tool-dispatch-client/ca.crt\",\"interval_seconds\":5}}"
               }
             ],
             "secret_environment": [
@@ -4713,7 +4716,14 @@
               "request_memory_bytes": 134217728,
               "limit_memory_bytes": 536870912
             },
-            "storage": []
+            "storage": [],
+            "secret_mounts": [
+              {
+                "secret": "tool-dispatch-trust-secret",
+                "key": "TOOL_DISPATCH_SERVER_CA",
+                "path": "/run/tool-dispatch-client/ca.crt"
+              }
+            ]
           }
         },
         {
@@ -5873,7 +5883,8 @@
             "blob",
             "otel-collector",
             "state",
-            "tool"
+            "tool",
+            "tool-dispatch"
           ],
           "retention": {
             "policy": "ephemeral",
@@ -5890,7 +5901,7 @@
               "default_deny": true,
               "subject": "tool",
               "allowed_egress": [
-                "api",
+                "tool-dispatch",
                 "otel-collector"
               ],
               "allow_dns": true
@@ -6746,6 +6757,77 @@
           }
         },
         {
+          "id": "tool-dispatch-secret",
+          "kind": "secret_reference",
+          "owner": "security-operator",
+          "scope": "namespace",
+          "dependencies": [],
+          "retention": {
+            "policy": "ephemeral",
+            "days": 0
+          },
+          "backup_restore_owner": "none",
+          "delete_behavior": "delete",
+          "external_controller": true,
+          "secret_reference": {
+            "provider": "local-generated",
+            "reference": "ar-ci-agent-runtime-tool-dispatch-secret",
+            "version": "v1",
+            "keys": [
+              "TOOL_DISPATCH_STATE_DSN",
+              "TOOL_DISPATCH_CONTENT_ACCESS_KEY",
+              "TOOL_DISPATCH_CONTENT_SECRET_KEY",
+              "TOOL_DISPATCH_CONTROL_TOKEN"
+            ]
+          }
+        },
+        {
+          "id": "tool-dispatch-tls-secret",
+          "kind": "secret_reference",
+          "owner": "security-operator",
+          "scope": "namespace",
+          "dependencies": [],
+          "retention": {
+            "policy": "ephemeral",
+            "days": 0
+          },
+          "backup_restore_owner": "none",
+          "delete_behavior": "delete",
+          "external_controller": true,
+          "secret_reference": {
+            "provider": "local-generated",
+            "reference": "ar-ci-agent-runtime-tool-dispatch-tls-secret",
+            "version": "v1",
+            "keys": [
+              "TOOL_DISPATCH_TLS_CERT",
+              "TOOL_DISPATCH_TLS_KEY"
+            ]
+          }
+        },
+        {
+          "id": "tool-dispatch-trust-secret",
+          "kind": "secret_reference",
+          "owner": "security-operator",
+          "scope": "namespace",
+          "dependencies": [],
+          "retention": {
+            "policy": "ephemeral",
+            "days": 0
+          },
+          "backup_restore_owner": "none",
+          "delete_behavior": "delete",
+          "external_controller": true,
+          "secret_reference": {
+            "provider": "local-generated",
+            "reference": "ar-ci-agent-runtime-tool-dispatch-trust-secret",
+            "version": "v1",
+            "keys": [
+              "TOOL_DISPATCH_SERVER_CA",
+              "SANDBOX_CONTROL_CA"
+            ]
+          }
+        },
+        {
           "id": "temporal-state-account",
           "kind": "kubernetes",
           "owner": "platform-operator",
@@ -6762,6 +6844,211 @@
             "api_version": "v1",
             "kind": "ServiceAccount",
             "name": "temporal-state-account",
+            "environment": []
+          }
+        },
+        {
+          "id": "tool-dispatch-account",
+          "kind": "kubernetes",
+          "owner": "platform-operator",
+          "scope": "namespace",
+          "dependencies": [],
+          "retention": {
+            "policy": "ephemeral",
+            "days": 0
+          },
+          "backup_restore_owner": "none",
+          "delete_behavior": "delete",
+          "external_controller": false,
+          "kubernetes": {
+            "api_version": "v1",
+            "kind": "ServiceAccount",
+            "name": "tool-dispatch-account",
+            "environment": []
+          }
+        },
+        {
+          "id": "tool-dispatch",
+          "kind": "kubernetes",
+          "owner": "runtime-operator",
+          "scope": "namespace",
+          "dependencies": [
+            "tool-dispatch-account",
+            "tool-broker-secret",
+            "tool-dispatch-secret",
+            "tool-dispatch-tls-secret",
+            "tool-dispatch-trust-secret"
+          ],
+          "retention": {
+            "policy": "ephemeral",
+            "days": 0
+          },
+          "backup_restore_owner": "none",
+          "delete_behavior": "delete",
+          "external_controller": false,
+          "kubernetes": {
+            "api_version": "apps/v1",
+            "kind": "Deployment",
+            "name": "tool-dispatch",
+            "replicas": 1,
+            "image": "ghcr.io/0x63616c/agent-runtime@sha256:bef38a1e7b268a50db626879ada7e4fc7d9486641dfb76ca8d5d54f21f102603",
+            "service_account": "tool-dispatch-account",
+            "command": [
+              "/runtime"
+            ],
+            "arguments": [
+              "--config-env",
+              "RUNTIME_ROLE_CONFIG",
+              "--role",
+              "tool-dispatch"
+            ],
+            "environment": [
+              {
+                "name": "RUNTIME_ROLE_CONFIG",
+                "value": "{\"version\":1,\"role\":\"tool-dispatch\",\"namespace\":\"ar-ci-agent-runtime\",\"listen_address\":\"0.0.0.0:8089\",\"dependencies\":[{\"name\":\"state\",\"endpoint\":\"postgres://state.ar-ci-agent-runtime.svc:5432/agent_runtime\",\"secret_environment\":\"TOOL_DISPATCH_STATE_DSN\"},{\"name\":\"content\",\"endpoint\":\"https://blob.ar-ci-agent-runtime.svc:9000\",\"secret_environment\":\"TOOL_DISPATCH_CONTENT_ACCESS_KEY\"},{\"name\":\"content-secret\",\"endpoint\":\"https://blob.ar-ci-agent-runtime.svc:9000\",\"secret_environment\":\"TOOL_DISPATCH_CONTENT_SECRET_KEY\"},{\"name\":\"sandbox-control\",\"endpoint\":\"https://sandbox-control.ar-ci-agent-runtime.svc:8086\",\"secret_environment\":\"TOOL_DISPATCH_CONTROL_TOKEN\"},{\"name\":\"tool-broker\",\"endpoint\":\"https://tool-dispatch.ar-ci-agent-runtime.svc:8089\",\"secret_environment\":\"TOOL_BROKER_TOKEN\"},{\"name\":\"telemetry\",\"endpoint\":\"http://otel-collector:4318\"}],\"tool_dispatch\":{\"content_endpoint\":\"https://blob.ar-ci-agent-runtime.svc:9000\",\"content_bucket\":\"ar-ci-agent-runtime\",\"content_access_key_environment\":\"TOOL_DISPATCH_CONTENT_ACCESS_KEY\",\"content_secret_key_environment\":\"TOOL_DISPATCH_CONTENT_SECRET_KEY\",\"control_server_name\":\"sandbox-control.ar-ci-agent-runtime.svc\",\"control_trust_bundle_ref\":\"trust/sandbox-control\",\"control_trust_bundle_path\":\"/run/tool-dispatch/trust/sandbox-control-ca.crt\",\"control_credential_environment\":\"TOOL_DISPATCH_CONTROL_TOKEN\",\"server_name\":\"tool-dispatch.ar-ci-agent-runtime.svc\",\"server_certificate_path\":\"/run/tool-dispatch/tls/tls.crt\",\"server_private_key_path\":\"/run/tool-dispatch/tls/tls.key\",\"peer_policy\":\"bearer-token-v1\"}}"
+              }
+            ],
+            "secret_environment": [
+              {
+                "name": "TOOL_BROKER_TOKEN",
+                "secret": "tool-broker-secret",
+                "key": "TOOL_BROKER_TOKEN"
+              },
+              {
+                "name": "TOOL_DISPATCH_STATE_DSN",
+                "secret": "tool-dispatch-secret",
+                "key": "TOOL_DISPATCH_STATE_DSN"
+              },
+              {
+                "name": "TOOL_DISPATCH_CONTENT_ACCESS_KEY",
+                "secret": "tool-dispatch-secret",
+                "key": "TOOL_DISPATCH_CONTENT_ACCESS_KEY"
+              },
+              {
+                "name": "TOOL_DISPATCH_CONTENT_SECRET_KEY",
+                "secret": "tool-dispatch-secret",
+                "key": "TOOL_DISPATCH_CONTENT_SECRET_KEY"
+              },
+              {
+                "name": "TOOL_DISPATCH_CONTROL_TOKEN",
+                "secret": "tool-dispatch-secret",
+                "key": "TOOL_DISPATCH_CONTROL_TOKEN"
+              }
+            ],
+            "secret_mounts": [
+              {
+                "secret": "tool-dispatch-tls-secret",
+                "key": "TOOL_DISPATCH_TLS_CERT",
+                "path": "/run/tool-dispatch/tls/tls.crt"
+              },
+              {
+                "secret": "tool-dispatch-tls-secret",
+                "key": "TOOL_DISPATCH_TLS_KEY",
+                "path": "/run/tool-dispatch/tls/tls.key"
+              },
+              {
+                "secret": "tool-dispatch-trust-secret",
+                "key": "SANDBOX_CONTROL_CA",
+                "path": "/run/tool-dispatch/trust/sandbox-control-ca.crt"
+              }
+            ],
+            "readiness": {
+              "command": [
+                "/runtime",
+                "--config-env",
+                "RUNTIME_ROLE_CONFIG",
+                "--role",
+                "tool-dispatch",
+                "--check"
+              ],
+              "initial_delay_seconds": 1,
+              "period_seconds": 5,
+              "failure_threshold": 12
+            },
+            "ports": [
+              {
+                "name": "https",
+                "number": 8089,
+                "protocol": "TCP"
+              }
+            ],
+            "compute": {
+              "request_milli_cpu": 100,
+              "limit_milli_cpu": 500,
+              "request_memory_bytes": 134217728,
+              "limit_memory_bytes": 536870912
+            },
+            "storage": []
+          }
+        },
+        {
+          "id": "tool-dispatch-service",
+          "kind": "kubernetes",
+          "owner": "platform-operator",
+          "scope": "namespace",
+          "dependencies": [
+            "tool-dispatch"
+          ],
+          "retention": {
+            "policy": "ephemeral",
+            "days": 0
+          },
+          "backup_restore_owner": "none",
+          "delete_behavior": "delete",
+          "external_controller": false,
+          "kubernetes": {
+            "api_version": "v1",
+            "kind": "Service",
+            "name": "tool-dispatch",
+            "selector": "tool-dispatch",
+            "ports": [
+              {
+                "name": "https",
+                "number": 8089,
+                "protocol": "TCP"
+              }
+            ],
+            "environment": []
+          }
+        },
+        {
+          "id": "tool-dispatch-egress",
+          "kind": "kubernetes",
+          "owner": "security-operator",
+          "scope": "namespace",
+          "dependencies": [
+            "tool-dispatch",
+            "tool",
+            "state",
+            "blob",
+            "sandbox-control",
+            "otel-collector"
+          ],
+          "retention": {
+            "policy": "ephemeral",
+            "days": 0
+          },
+          "backup_restore_owner": "none",
+          "delete_behavior": "delete",
+          "external_controller": false,
+          "kubernetes": {
+            "api_version": "networking.k8s.io/v1",
+            "kind": "NetworkPolicy",
+            "name": "tool-dispatch-egress",
+            "network": {
+              "default_deny": true,
+              "subject": "tool-dispatch",
+              "allow_dns": true,
+              "allowed_egress": [
+                "state",
+                "blob",
+                "sandbox-control",
+                "otel-collector"
+              ],
+              "allowed_ingress": [
+                "tool"
+              ]
+            },
             "environment": []
           }
         },
@@ -8274,7 +8561,9 @@
           "scope": "namespace",
           "dependencies": [
             "tool-account",
-            "tool-broker-secret"
+            "tool-broker-secret",
+            "tool-dispatch-service",
+            "tool-dispatch-trust-secret"
           ],
           "retention": {
             "policy": "persistent",
@@ -8302,7 +8591,7 @@
             "environment": [
               {
                 "name": "RUNTIME_ROLE_CONFIG",
-                "value": "{\"version\":1,\"role\":\"tool\",\"namespace\":\"agent-runtime\",\"listen_address\":\"0.0.0.0:8083\",\"dependencies\":[{\"name\":\"telemetry\",\"endpoint\":\"http://otel-collector:4318\"},{\"name\":\"tool-broker\",\"endpoint\":\"http://api.agent-runtime.svc:8080\",\"secret_environment\":\"TOOL_BROKER_TOKEN\"}]}"
+                "value": "{\"version\":1,\"role\":\"tool\",\"namespace\":\"agent-runtime\",\"listen_address\":\"0.0.0.0:8083\",\"dependencies\":[{\"name\":\"telemetry\",\"endpoint\":\"http://otel-collector:4318\"},{\"name\":\"tool-broker\",\"endpoint\":\"https://tool-dispatch.agent-runtime.svc:8089\",\"secret_environment\":\"TOOL_BROKER_TOKEN\"}],\"tool_trigger\":{\"server_name\":\"tool-dispatch.agent-runtime.svc\",\"trust_bundle_ref\":\"trust/tool-dispatch\",\"trust_bundle_path\":\"/run/tool-dispatch-client/ca.crt\",\"interval_seconds\":5}}"
               }
             ],
             "secret_environment": [
@@ -8338,7 +8627,14 @@
               "request_memory_bytes": 134217728,
               "limit_memory_bytes": 536870912
             },
-            "storage": []
+            "storage": [],
+            "secret_mounts": [
+              {
+                "secret": "tool-dispatch-trust-secret",
+                "key": "TOOL_DISPATCH_SERVER_CA",
+                "path": "/run/tool-dispatch-client/ca.crt"
+              }
+            ]
           }
         },
         {
@@ -9497,7 +9793,8 @@
             "blob",
             "otel-collector",
             "state",
-            "tool"
+            "tool",
+            "tool-dispatch"
           ],
           "retention": {
             "policy": "persistent",
@@ -9514,7 +9811,7 @@
               "default_deny": true,
               "subject": "tool",
               "allowed_egress": [
-                "api",
+                "tool-dispatch",
                 "otel-collector"
               ],
               "allow_dns": true
@@ -10370,6 +10667,77 @@
           }
         },
         {
+          "id": "tool-dispatch-secret",
+          "kind": "secret_reference",
+          "owner": "security-operator",
+          "scope": "namespace",
+          "dependencies": [],
+          "retention": {
+            "policy": "external",
+            "days": 0
+          },
+          "backup_restore_owner": "platform-operator",
+          "delete_behavior": "retain",
+          "external_controller": true,
+          "secret_reference": {
+            "provider": "external-secrets",
+            "reference": "agent-runtime-tool-dispatch-secret",
+            "version": "v1",
+            "keys": [
+              "TOOL_DISPATCH_STATE_DSN",
+              "TOOL_DISPATCH_CONTENT_ACCESS_KEY",
+              "TOOL_DISPATCH_CONTENT_SECRET_KEY",
+              "TOOL_DISPATCH_CONTROL_TOKEN"
+            ]
+          }
+        },
+        {
+          "id": "tool-dispatch-tls-secret",
+          "kind": "secret_reference",
+          "owner": "security-operator",
+          "scope": "namespace",
+          "dependencies": [],
+          "retention": {
+            "policy": "external",
+            "days": 0
+          },
+          "backup_restore_owner": "platform-operator",
+          "delete_behavior": "retain",
+          "external_controller": true,
+          "secret_reference": {
+            "provider": "external-secrets",
+            "reference": "agent-runtime-tool-dispatch-tls-secret",
+            "version": "v1",
+            "keys": [
+              "TOOL_DISPATCH_TLS_CERT",
+              "TOOL_DISPATCH_TLS_KEY"
+            ]
+          }
+        },
+        {
+          "id": "tool-dispatch-trust-secret",
+          "kind": "secret_reference",
+          "owner": "security-operator",
+          "scope": "namespace",
+          "dependencies": [],
+          "retention": {
+            "policy": "external",
+            "days": 0
+          },
+          "backup_restore_owner": "platform-operator",
+          "delete_behavior": "retain",
+          "external_controller": true,
+          "secret_reference": {
+            "provider": "external-secrets",
+            "reference": "agent-runtime-tool-dispatch-trust-secret",
+            "version": "v1",
+            "keys": [
+              "TOOL_DISPATCH_SERVER_CA",
+              "SANDBOX_CONTROL_CA"
+            ]
+          }
+        },
+        {
           "id": "temporal-state-account",
           "kind": "kubernetes",
           "owner": "platform-operator",
@@ -10386,6 +10754,211 @@
             "api_version": "v1",
             "kind": "ServiceAccount",
             "name": "temporal-state-account",
+            "environment": []
+          }
+        },
+        {
+          "id": "tool-dispatch-account",
+          "kind": "kubernetes",
+          "owner": "platform-operator",
+          "scope": "namespace",
+          "dependencies": [],
+          "retention": {
+            "policy": "persistent",
+            "days": 30
+          },
+          "backup_restore_owner": "platform-operator",
+          "delete_behavior": "retain",
+          "external_controller": false,
+          "kubernetes": {
+            "api_version": "v1",
+            "kind": "ServiceAccount",
+            "name": "tool-dispatch-account",
+            "environment": []
+          }
+        },
+        {
+          "id": "tool-dispatch",
+          "kind": "kubernetes",
+          "owner": "runtime-operator",
+          "scope": "namespace",
+          "dependencies": [
+            "tool-dispatch-account",
+            "tool-broker-secret",
+            "tool-dispatch-secret",
+            "tool-dispatch-tls-secret",
+            "tool-dispatch-trust-secret"
+          ],
+          "retention": {
+            "policy": "persistent",
+            "days": 30
+          },
+          "backup_restore_owner": "platform-operator",
+          "delete_behavior": "retain",
+          "external_controller": false,
+          "kubernetes": {
+            "api_version": "apps/v1",
+            "kind": "Deployment",
+            "name": "tool-dispatch",
+            "replicas": 1,
+            "image": "ghcr.io/0x63616c/agent-runtime@sha256:bef38a1e7b268a50db626879ada7e4fc7d9486641dfb76ca8d5d54f21f102603",
+            "service_account": "tool-dispatch-account",
+            "command": [
+              "/runtime"
+            ],
+            "arguments": [
+              "--config-env",
+              "RUNTIME_ROLE_CONFIG",
+              "--role",
+              "tool-dispatch"
+            ],
+            "environment": [
+              {
+                "name": "RUNTIME_ROLE_CONFIG",
+                "value": "{\"version\":1,\"role\":\"tool-dispatch\",\"namespace\":\"agent-runtime\",\"listen_address\":\"0.0.0.0:8089\",\"dependencies\":[{\"name\":\"state\",\"endpoint\":\"postgres://state.agent-runtime.svc:5432/agent_runtime\",\"secret_environment\":\"TOOL_DISPATCH_STATE_DSN\"},{\"name\":\"content\",\"endpoint\":\"https://blob.agent-runtime.svc:9000\",\"secret_environment\":\"TOOL_DISPATCH_CONTENT_ACCESS_KEY\"},{\"name\":\"content-secret\",\"endpoint\":\"https://blob.agent-runtime.svc:9000\",\"secret_environment\":\"TOOL_DISPATCH_CONTENT_SECRET_KEY\"},{\"name\":\"sandbox-control\",\"endpoint\":\"https://sandbox-control.agent-runtime.svc:8086\",\"secret_environment\":\"TOOL_DISPATCH_CONTROL_TOKEN\"},{\"name\":\"tool-broker\",\"endpoint\":\"https://tool-dispatch.agent-runtime.svc:8089\",\"secret_environment\":\"TOOL_BROKER_TOKEN\"},{\"name\":\"telemetry\",\"endpoint\":\"http://otel-collector:4318\"}],\"tool_dispatch\":{\"content_endpoint\":\"https://blob.agent-runtime.svc:9000\",\"content_bucket\":\"agent-runtime\",\"content_access_key_environment\":\"TOOL_DISPATCH_CONTENT_ACCESS_KEY\",\"content_secret_key_environment\":\"TOOL_DISPATCH_CONTENT_SECRET_KEY\",\"control_server_name\":\"sandbox-control.agent-runtime.svc\",\"control_trust_bundle_ref\":\"trust/sandbox-control\",\"control_trust_bundle_path\":\"/run/tool-dispatch/trust/sandbox-control-ca.crt\",\"control_credential_environment\":\"TOOL_DISPATCH_CONTROL_TOKEN\",\"server_name\":\"tool-dispatch.agent-runtime.svc\",\"server_certificate_path\":\"/run/tool-dispatch/tls/tls.crt\",\"server_private_key_path\":\"/run/tool-dispatch/tls/tls.key\",\"peer_policy\":\"bearer-token-v1\"}}"
+              }
+            ],
+            "secret_environment": [
+              {
+                "name": "TOOL_BROKER_TOKEN",
+                "secret": "tool-broker-secret",
+                "key": "TOOL_BROKER_TOKEN"
+              },
+              {
+                "name": "TOOL_DISPATCH_STATE_DSN",
+                "secret": "tool-dispatch-secret",
+                "key": "TOOL_DISPATCH_STATE_DSN"
+              },
+              {
+                "name": "TOOL_DISPATCH_CONTENT_ACCESS_KEY",
+                "secret": "tool-dispatch-secret",
+                "key": "TOOL_DISPATCH_CONTENT_ACCESS_KEY"
+              },
+              {
+                "name": "TOOL_DISPATCH_CONTENT_SECRET_KEY",
+                "secret": "tool-dispatch-secret",
+                "key": "TOOL_DISPATCH_CONTENT_SECRET_KEY"
+              },
+              {
+                "name": "TOOL_DISPATCH_CONTROL_TOKEN",
+                "secret": "tool-dispatch-secret",
+                "key": "TOOL_DISPATCH_CONTROL_TOKEN"
+              }
+            ],
+            "secret_mounts": [
+              {
+                "secret": "tool-dispatch-tls-secret",
+                "key": "TOOL_DISPATCH_TLS_CERT",
+                "path": "/run/tool-dispatch/tls/tls.crt"
+              },
+              {
+                "secret": "tool-dispatch-tls-secret",
+                "key": "TOOL_DISPATCH_TLS_KEY",
+                "path": "/run/tool-dispatch/tls/tls.key"
+              },
+              {
+                "secret": "tool-dispatch-trust-secret",
+                "key": "SANDBOX_CONTROL_CA",
+                "path": "/run/tool-dispatch/trust/sandbox-control-ca.crt"
+              }
+            ],
+            "readiness": {
+              "command": [
+                "/runtime",
+                "--config-env",
+                "RUNTIME_ROLE_CONFIG",
+                "--role",
+                "tool-dispatch",
+                "--check"
+              ],
+              "initial_delay_seconds": 1,
+              "period_seconds": 5,
+              "failure_threshold": 12
+            },
+            "ports": [
+              {
+                "name": "https",
+                "number": 8089,
+                "protocol": "TCP"
+              }
+            ],
+            "compute": {
+              "request_milli_cpu": 100,
+              "limit_milli_cpu": 500,
+              "request_memory_bytes": 134217728,
+              "limit_memory_bytes": 536870912
+            },
+            "storage": []
+          }
+        },
+        {
+          "id": "tool-dispatch-service",
+          "kind": "kubernetes",
+          "owner": "platform-operator",
+          "scope": "namespace",
+          "dependencies": [
+            "tool-dispatch"
+          ],
+          "retention": {
+            "policy": "persistent",
+            "days": 30
+          },
+          "backup_restore_owner": "platform-operator",
+          "delete_behavior": "retain",
+          "external_controller": false,
+          "kubernetes": {
+            "api_version": "v1",
+            "kind": "Service",
+            "name": "tool-dispatch",
+            "selector": "tool-dispatch",
+            "ports": [
+              {
+                "name": "https",
+                "number": 8089,
+                "protocol": "TCP"
+              }
+            ],
+            "environment": []
+          }
+        },
+        {
+          "id": "tool-dispatch-egress",
+          "kind": "kubernetes",
+          "owner": "security-operator",
+          "scope": "namespace",
+          "dependencies": [
+            "tool-dispatch",
+            "tool",
+            "state",
+            "blob",
+            "sandbox-control",
+            "otel-collector"
+          ],
+          "retention": {
+            "policy": "persistent",
+            "days": 30
+          },
+          "backup_restore_owner": "platform-operator",
+          "delete_behavior": "retain",
+          "external_controller": false,
+          "kubernetes": {
+            "api_version": "networking.k8s.io/v1",
+            "kind": "NetworkPolicy",
+            "name": "tool-dispatch-egress",
+            "network": {
+              "default_deny": true,
+              "subject": "tool-dispatch",
+              "allow_dns": true,
+              "allowed_egress": [
+                "state",
+                "blob",
+                "sandbox-control",
+                "otel-collector"
+              ],
+              "allowed_ingress": [
+                "tool"
+              ]
+            },
             "environment": []
           }
         },
