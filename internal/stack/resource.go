@@ -14,6 +14,7 @@ var environmentNamePattern = regexp.MustCompile(`^[A-Z_][A-Z0-9_]{0,127}$`)
 var blobBucketPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$`)
 var blobPrefixPattern = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._/-]{0,510}[a-zA-Z0-9]$`)
 var databaseNamePattern = regexp.MustCompile(`^[a-z][a-z0-9_]{0,62}$`)
+var temporalSearchAttributeNamePattern = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_]{0,62}$`)
 
 // ResourceID is a stable stack-local desired-resource identity.
 type ResourceID string
@@ -292,6 +293,23 @@ type SearchAttribute struct {
 	// Type is the provider-supported scalar type.
 	Type string `json:"type"`
 }
+
+const (
+	// SearchAttributeTypeText is a full-text indexed Temporal field.
+	SearchAttributeTypeText = "Text"
+	// SearchAttributeTypeKeyword is an exact-match indexed Temporal field.
+	SearchAttributeTypeKeyword = "Keyword"
+	// SearchAttributeTypeInt is an integer indexed Temporal field.
+	SearchAttributeTypeInt = "Int"
+	// SearchAttributeTypeDouble is a floating-point indexed Temporal field.
+	SearchAttributeTypeDouble = "Double"
+	// SearchAttributeTypeBool is a boolean indexed Temporal field.
+	SearchAttributeTypeBool = "Bool"
+	// SearchAttributeTypeDatetime is a timestamp indexed Temporal field.
+	SearchAttributeTypeDatetime = "Datetime"
+	// SearchAttributeTypeKeywordList is a list-of-keywords indexed Temporal field.
+	SearchAttributeTypeKeywordList = "KeywordList"
+)
 
 // Schedule is one explicit operator-owned schedule declaration.
 type Schedule struct {
@@ -621,17 +639,36 @@ func validateOrchestration(resource Resource) error {
 	if declaration.Namespace == "" || declaration.TaskQueuePrefix == "" || len(declaration.TaskQueuePrefix) > 128 || declaration.RetentionDays <= 0 || declaration.SearchAttributes == nil || declaration.Schedules == nil {
 		return errors.Newf("resource %s orchestration declaration is incomplete or unbounded", resource.ID)
 	}
+	attributes := make(map[string]struct{}, len(declaration.SearchAttributes))
 	for _, attribute := range declaration.SearchAttributes {
-		if attribute.Name == "" || attribute.Type == "" {
-			return errors.Newf("resource %s has an incomplete search attribute", resource.ID)
+		if !temporalSearchAttributeNamePattern.MatchString(attribute.Name) || !validSearchAttributeType(attribute.Type) {
+			return errors.Newf("resource %s has an invalid Temporal search attribute", resource.ID)
 		}
+		if _, duplicate := attributes[attribute.Name]; duplicate {
+			return errors.Newf("resource %s declares Temporal search attribute %s more than once", resource.ID, attribute.Name)
+		}
+		attributes[attribute.Name] = struct{}{}
 	}
+	schedules := make(map[string]struct{}, len(declaration.Schedules))
 	for _, schedule := range declaration.Schedules {
-		if schedule.Name == "" || schedule.Cron == "" {
-			return errors.Newf("resource %s has an incomplete schedule", resource.ID)
+		if !resourceIDPattern.MatchString(schedule.Name) || strings.TrimSpace(schedule.Cron) == "" || len(schedule.Cron) > 512 {
+			return errors.Newf("resource %s has an invalid schedule declaration", resource.ID)
 		}
+		if _, duplicate := schedules[schedule.Name]; duplicate {
+			return errors.Newf("resource %s declares schedule %s more than once", resource.ID, schedule.Name)
+		}
+		schedules[schedule.Name] = struct{}{}
 	}
 	return nil
+}
+
+func validSearchAttributeType(value string) bool {
+	switch value {
+	case SearchAttributeTypeText, SearchAttributeTypeKeyword, SearchAttributeTypeInt, SearchAttributeTypeDouble, SearchAttributeTypeBool, SearchAttributeTypeDatetime, SearchAttributeTypeKeywordList:
+		return true
+	default:
+		return false
+	}
 }
 
 func validateBlob(resource Resource) error {

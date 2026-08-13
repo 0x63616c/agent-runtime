@@ -49,6 +49,23 @@ var _ = Describe("Stack specification", func() {
 			Expect(err).To(HaveOccurred(), input)
 		}
 	})
+
+	It("accepts only unique provider-supported orchestration declarations", func() {
+		valid := stackDocument(validOrchestrationResource, validOrchestrationResource, validOrchestrationResource)
+		_, err := stack.Parse(strings.NewReader(valid))
+		Expect(err).NotTo(HaveOccurred())
+
+		for _, input := range []string{
+			strings.Replace(valid, `"type":"Keyword"`, `"type":"MadeUp"`, 1),
+			strings.Replace(valid, `"name":"TenantKey"`, `"name":"9tenant"`, 1),
+			strings.Replace(valid, `[{"name":"TenantKey","type":"Keyword"}]`, `[{"name":"TenantKey","type":"Keyword"},{"name":"TenantKey","type":"Text"}]`, 1),
+			strings.Replace(valid, `[{"name":"retention-sweep","cron":"0 * * * *"}]`, `[{"name":"retention-sweep","cron":"0 * * * *"},{"name":"retention-sweep","cron":"0 0 * * *"}]`, 1),
+			strings.Replace(valid, `"name":"retention-sweep"`, `"name":"RetentionSweep"`, 1),
+		} {
+			_, err := stack.Parse(strings.NewReader(input))
+			Expect(err).To(HaveOccurred(), input)
+		}
+	})
 })
 
 func stackDocument(local, ci, production string) string {
@@ -79,6 +96,27 @@ const validIdentityResourceObject = `{
     "external_controller":true,
     "secret_reference":{"provider":"kubernetes","reference":"ntfy-token","version":"v1"}
   }`
+
+const validOrchestrationResource = `[
+  {
+    "id":"temporal-namespace",
+    "kind":"orchestration",
+    "owner":"orchestration-operator",
+    "scope":"namespace",
+    "dependencies":[],
+    "retention":{"policy":"persistent","days":30},
+    "backup_restore_owner":"platform-operator",
+    "delete_behavior":"retain",
+    "external_controller":false,
+    "orchestration":{
+      "namespace":"feature-a",
+      "task_queue_prefix":"feature-a-",
+      "retention_days":30,
+      "search_attributes":[{"name":"TenantKey","type":"Keyword"}],
+      "schedules":[{"name":"retention-sweep","cron":"0 * * * *"}]
+    }
+  }
+]`
 
 const sandboxQuotaPolicy = `{
   "defaults":{"milli_cpu":500,"memory_bytes":536870912,"root_disk_bytes":4294967296,"tmpfs_bytes":268435456,"pids":128,"process_count":64,"open_files":1024,"inodes":100000,"files":50000,"lifetime_seconds":3600,"produced_output_bytes":67108864,"retained_output_bytes":16777216,"transfer_bytes":1073741824,"network_connections":64,"volume_bytes":10737418240,"snapshot_bytes":10737418240},
