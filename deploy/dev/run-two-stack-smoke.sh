@@ -109,6 +109,46 @@ runtime_role_status() {
   '
 }
 
+# Pod status is useful when Tilt has stopped before a dependent runtime role
+# was even applied, but Kubernetes event messages and container logs can carry
+# arbitrary process output. Retain only fixed Kubernetes state names, numeric
+# restart counts, and readiness counts; no messages, environment, command, or
+# image data is retained.
+runtime_role_startup_status() {
+  jq -c --argjson roles "$runtime_role_ids" '
+    def safe_phase:
+      if . == "Pending" or . == "Running" or . == "Succeeded" or . == "Failed" or . == "Unknown" then . else "unknown" end;
+    def safe_reason:
+      if . == "ContainerCreating" or . == "CrashLoopBackOff" or . == "CreateContainerConfigError" or
+         . == "CreateContainerError" or . == "ErrImageNeverPull" or . == "ErrImagePull" or
+         . == "ImagePullBackOff" or . == "InvalidImageName" or . == "OOMKilled" or
+         . == "PodInitializing" or . == "RunContainerError" or . == "ContainerCannotRun" or
+         . == "Error" or . == "Completed" then . else "other" end;
+    [
+      $roles[] as $id |
+      {
+        id:$id,
+        pods:([
+          .items[] | select(.metadata.labels["agent-runtime.dev/resource"] == $id) |
+          {
+            phase:(.status.phase // "unknown" | safe_phase),
+            ready_containers:([.status.containerStatuses[]? | select(.ready == true)] | length),
+            restart_count:([.status.containerStatuses[]?.restartCount // 0] | add // 0),
+            state_reasons:([
+              .status.initContainerStatuses[]?, .status.containerStatuses[]? |
+              .state.waiting.reason?, .state.terminated.reason? | safe_reason
+            ] | unique | sort)
+          }
+        ])
+      }
+    ]
+  '
+}
+
+empty_runtime_role_startup_status() {
+  jq -nc --argjson roles "$runtime_role_ids" '$roles | map({id:.,pods:[]})'
+}
+
 # Observe only stable identity and configuration metadata from the live Stack.
 # Kubernetes Secret values and workload output are intentionally never read or
 # retained. The strict credential-name mapping proves each runtime role is not
@@ -247,6 +287,7 @@ write_safe_diagnostic_summary() {
   local roles_ready="$6"
   local role_status="$7"
   local tilt_ci_attempts="$8"
+  local startup_status="$9"
   local destination="$diagnostics_dir/$stack.summary.json"
 
   jq -n \
@@ -259,12 +300,13 @@ write_safe_diagnostic_summary() {
     --argjson runtime_roles_ready "$roles_ready" \
     --argjson runtime_role_status "$role_status" \
     --argjson tilt_ci_attempts "$tilt_ci_attempts" \
-    '{kind:"diagnostic-summary/v1",version:1,stack:$stack,namespace:$namespace,profile:$profile,tilt_ci_exit_code:$tilt_ci_exit_code,tilt_ci_attempts:$tilt_ci_attempts,workload_probe:$probe_status,runtime_roles_observed:$runtime_roles_observed,runtime_roles_ready:$runtime_roles_ready,runtime_role_status:$runtime_role_status}' \
+    --argjson runtime_role_startup_status "$startup_status" \
+    '{kind:"diagnostic-summary/v2",version:2,stack:$stack,namespace:$namespace,profile:$profile,tilt_ci_exit_code:$tilt_ci_exit_code,tilt_ci_attempts:$tilt_ci_attempts,workload_probe:$probe_status,runtime_roles_observed:$runtime_roles_observed,runtime_roles_ready:$runtime_roles_ready,runtime_role_status:$runtime_role_status,runtime_role_startup_status:$runtime_role_startup_status}' \
     >"$destination"
 
   jq -e '
-    keys == ["kind","namespace","profile","runtime_role_status","runtime_roles_observed","runtime_roles_ready","stack","tilt_ci_attempts","tilt_ci_exit_code","version","workload_probe"] and
-    .kind == "diagnostic-summary/v1" and .version == 1 and
+    keys == ["kind","namespace","profile","runtime_role_startup_status","runtime_role_status","runtime_roles_observed","runtime_roles_ready","stack","tilt_ci_attempts","tilt_ci_exit_code","version","workload_probe"] and
+    .kind == "diagnostic-summary/v2" and .version == 2 and
     (.stack | type == "string") and (.namespace | type == "string") and (.profile | type == "string") and
     (.tilt_ci_exit_code | type == "number") and (.tilt_ci_attempts | type == "number" and . >= 0 and . <= 2) and (.workload_probe | type == "string") and
     (.runtime_roles_observed | type == "number") and (.runtime_roles_ready | type == "boolean") and
@@ -273,6 +315,16 @@ write_safe_diagnostic_summary() {
       all(.[]; keys == ["available_replicas","id","ready_replicas","replicas"] and
         (.id | type == "string") and (.replicas | type == "number") and
         (.ready_replicas | type == "number") and (.available_replicas | type == "number")))
+    and
+    (.runtime_role_startup_status | type == "array" and length == 8 and
+      ([.[].id] | unique | sort) == ["api","blob-role","codec","model","orchestration","sandbox-control","sandbox-host","tool"] and
+      all(.[]; keys == ["id","pods"] and (.id | type == "string") and
+        (.pods | type == "array" and length <= 4 and all(.[];
+          keys == ["phase","ready_containers","restart_count","state_reasons"] and
+          (.phase == "Pending" or .phase == "Running" or .phase == "Succeeded" or .phase == "Failed" or .phase == "Unknown" or .phase == "unknown") and
+          (.ready_containers | type == "number" and . >= 0) and (.restart_count | type == "number" and . >= 0) and
+          (.state_reasons | type == "array" and all(.[]; . == "ContainerCreating" or . == "CrashLoopBackOff" or . == "CreateContainerConfigError" or . == "CreateContainerError" or . == "ErrImageNeverPull" or . == "ErrImagePull" or . == "ImagePullBackOff" or . == "InvalidImageName" or . == "OOMKilled" or . == "PodInitializing" or . == "RunContainerError" or . == "ContainerCannotRun" or . == "Error" or . == "Completed" or . == "other"))))
+    ))
   ' "$destination" >/dev/null || {
     rm -f -- "$destination"
     echo "refusing to retain a diagnostic summary outside the safe schema" >&2
@@ -286,7 +338,7 @@ write_safe_diagnostic_summary() {
 capture_plan_failure_diagnostics() {
   local stack="$1"
   local namespace="$2"
-  write_safe_diagnostic_summary "$stack" "$namespace" 1 "unavailable" 0 false "$(empty_runtime_role_status)" 0
+  write_safe_diagnostic_summary "$stack" "$namespace" 1 "unavailable" 0 false "$(empty_runtime_role_status)" 0 "$(empty_runtime_role_startup_status)"
 }
 
 if [[ "$diagnostic_self_test" == true ]]; then
@@ -295,8 +347,10 @@ if [[ "$diagnostic_self_test" == true ]]; then
     exit 1
   }
   fixture_role_status="$(empty_runtime_role_status)"
-  write_safe_diagnostic_summary "fixture-stack" "ar-fixture-stack" 7 "unavailable" 0 false "$fixture_role_status" 2
-  for unsafe_value in 'Bearer adversarial-header-token' 'MODEL_API_KEY=adversarial-env-secret' '{"token":"adversarial-json-secret"}'; do
+  pod_status_fixture='{"items":[{"metadata":{"labels":{"agent-runtime.dev/resource":"api"}},"status":{"phase":"Pending","containerStatuses":[{"ready":false,"restartCount":1,"state":{"waiting":{"reason":"adversarial-runtime-detail"}}}]}}]}'
+  fixture_startup_status="$(printf '%s' "$pod_status_fixture" | runtime_role_startup_status)"
+  write_safe_diagnostic_summary "fixture-stack" "ar-fixture-stack" 7 "unavailable" 0 false "$fixture_role_status" 2 "$fixture_startup_status"
+  for unsafe_value in 'Bearer adversarial-header-token' 'MODEL_API_KEY=adversarial-env-secret' '{"token":"adversarial-json-secret"}' 'adversarial-runtime-detail'; do
     if grep -F -- "$unsafe_value" "$diagnostics_dir/fixture-stack.summary.json" >/dev/null; then
       echo "safe diagnostic summary retained an unsafe fixture value" >&2
       exit 1
@@ -307,6 +361,7 @@ if [[ "$diagnostic_self_test" == true ]]; then
     .stack == "preflight-stack" and .namespace == "ar-preflight-stack" and
     .tilt_ci_exit_code == 1 and .tilt_ci_attempts == 0 and .workload_probe == "unavailable" and
     .runtime_roles_observed == 0 and .runtime_roles_ready == false and
+    (.runtime_role_startup_status | length == 8 and all(.[]; (.pods | length) == 0)) and
     (.runtime_role_status | length == 8 and all(.[]; .replicas == 0 and .ready_replicas == 0 and .available_replicas == 0))
   ' "$diagnostics_dir/preflight-stack.summary.json" >/dev/null || {
     echo "preflight diagnostic summary did not retain bounded failed-plan metadata" >&2
@@ -322,6 +377,10 @@ if [[ "$diagnostic_self_test" == true ]]; then
     echo "trust wiring self-test accepted envFrom" >&2
     exit 1
   fi
+  jq -e '.runtime_role_startup_status[] | select(.id == "api") | .pods == [{phase:"Pending",ready_containers:0,restart_count:1,state_reasons:["other"]}]' "$diagnostics_dir/fixture-stack.summary.json" >/dev/null || {
+    echo "safe diagnostic summary did not replace an unapproved pod state reason" >&2
+    exit 1
+  }
   rm -f -- "$diagnostics_dir/fixture-stack.summary.json" "$diagnostics_dir/preflight-stack.summary.json"
   rmdir -- "$diagnostics_dir"
   echo "safe diagnostic summary rejects raw JSON, header, and environment payloads; trust wiring rejects envFrom"
@@ -578,7 +637,9 @@ capture_stack_diagnostics() {
   local roles_observed=0
   local roles_ready=false
   local role_status
+  local startup_status
   local deployment_state
+  local pod_state
 
   if deployment_state="$(kubectl --context "$context" --namespace "$namespace" get deployments -l "app.kubernetes.io/part-of=agent-runtime,agent-runtime.dev/profile=$profile,agent-runtime.dev/stack=$stack" -o json 2>/dev/null)"; then
     probe_status="available"
@@ -590,7 +651,12 @@ capture_stack_diagnostics() {
   else
     role_status="$(empty_runtime_role_status)"
   fi
-  write_safe_diagnostic_summary "$stack" "$namespace" "$ci_status" "$probe_status" "$roles_observed" "$roles_ready" "$role_status" "$tilt_ci_attempts"
+  if pod_state="$(kubectl --context "$context" --namespace "$namespace" get pods -l "app.kubernetes.io/part-of=agent-runtime,agent-runtime.dev/profile=$profile,agent-runtime.dev/stack=$stack" -o json 2>/dev/null)"; then
+    startup_status="$(printf '%s' "$pod_state" | runtime_role_startup_status)"
+  else
+    startup_status="$(empty_runtime_role_startup_status)"
+  fi
+  write_safe_diagnostic_summary "$stack" "$namespace" "$ci_status" "$probe_status" "$roles_observed" "$roles_ready" "$role_status" "$tilt_ci_attempts" "$startup_status"
 }
 
 start_stack() {
