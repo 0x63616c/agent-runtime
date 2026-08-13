@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/ed25519"
 	"crypto/rand"
+	"strings"
 	"testing"
 	"time"
 )
@@ -230,6 +231,80 @@ func TestResultSignatureBindsAssignmentAndFence(t *testing.T) {
 	}
 }
 
+func TestResultOptionalObservationIsSignedAndPreservesLegacyWire(t *testing.T) {
+	t.Parallel()
+
+	publicKey, privateKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 8, 12, 12, 0, 0, 0, time.UTC)
+	legacy := testResult(now)
+	legacyWire, err := SignResult(legacy, privateKey)
+	if err != nil {
+		t.Fatalf("SignResult(legacy) = %v", err)
+	}
+	if strings.Contains(string(legacyWire), `"observation"`) {
+		t.Fatalf("legacy result wire unexpectedly gained observation: %s", legacyWire)
+	}
+	if _, err := VerifyResult(legacyWire, now.Add(time.Second), publicKey); err != nil {
+		t.Fatalf("VerifyResult(legacy) = %v", err)
+	}
+
+	exitCode := int32(0)
+	observed := legacy
+	observed.Observation = &Observation{
+		Sandbox: SandboxObservation{ID: "sbx_01", ActualState: "ready"},
+		Process: &ProcessObservation{
+			ID: "prc_01", SandboxID: "sbx_01", State: "terminal",
+			Result: &ProcessResult{StartedAt: now.Add(-time.Minute), FinishedAt: now, ExitCode: &exitCode, Reason: "exited", Cleanup: "confirmed"},
+			Stdout: OutputRetention{EarliestCursor: "1", RetainedBytes: 12},
+			Stderr: OutputRetention{},
+		},
+	}
+	wire, err := SignResult(observed, privateKey)
+	if err != nil {
+		t.Fatalf("SignResult(observed) = %v", err)
+	}
+	verified, err := VerifyResult(wire, now.Add(time.Second), publicKey)
+	if err != nil || verified.Observation == nil || verified.Observation.Process == nil || verified.Observation.Process.Result == nil || *verified.Observation.Process.Result.ExitCode != 0 {
+		t.Fatalf("VerifyResult(observed) = %#v, %v", verified, err)
+	}
+	changed := verified
+	changed.Observation.Sandbox.ActualState = "lost"
+	changedWire, err := encodeSignedResult(changed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := VerifyResult(changedWire, now.Add(time.Second), publicKey); err == nil {
+		t.Fatal("VerifyResult() accepted an altered signed observation")
+	}
+}
+
+func TestResultObservationRejectsIncoherentOrUnsafeMetadata(t *testing.T) {
+	t.Parallel()
+
+	_, privateKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 8, 12, 12, 0, 0, 0, time.UTC)
+	for name, observation := range map[string]*Observation{
+		"unknown sandbox state":                    {Sandbox: SandboxObservation{ID: "sbx_01", ActualState: "host-private-state"}},
+		"process belongs to another sandbox":       {Sandbox: SandboxObservation{ID: "sbx_01", ActualState: "ready"}, Process: &ProcessObservation{ID: "prc_01", SandboxID: "sbx_02", State: "running"}},
+		"non terminal result":                      {Sandbox: SandboxObservation{ID: "sbx_01", ActualState: "ready"}, Process: &ProcessObservation{ID: "prc_01", SandboxID: "sbx_01", State: "running", Result: &ProcessResult{Reason: "outcome-uncertain"}}},
+		"raw failure is not a safe classification": {Sandbox: SandboxObservation{ID: "sbx_01", ActualState: "failed", Failure: &FailureObservation{Code: "host-error-/var/lib/private", Retry: "never"}}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			result := testResult(now)
+			result.Observation = observation
+			if _, err := SignResult(result, privateKey); err == nil {
+				t.Fatal("SignResult() accepted invalid observation")
+			}
+		})
+	}
+}
+
 func TestOutputSignatureBindsSequenceAndChunkDigest(t *testing.T) {
 	t.Parallel()
 
@@ -292,6 +367,10 @@ func TestDataPlaneReceiptSignatureBindsReferenceAndFence(t *testing.T) {
 func testEnvelope(now time.Time) Envelope {
 	payload := []byte(`{"kind":"close-sandbox"}`)
 	return Envelope{ProtocolVersion: Version, EnvelopeID: "envelope_01", DeliveryID: "delivery_01", Nonce: "nonce_01", IssuedAt: now, ExpiresAt: now.Add(time.Minute), HostID: "host_01", HostGeneration: 7, AssignmentID: "assignment_01", LeaseEpoch: 4, FencingToken: 4, Principal: "tenant_01:subject_01", Tenant: "tenant_01", SandboxID: "sbx_01", OperationID: "op_01", OperationKind: "close-sandbox", EffectiveSpecDigest: digestA, CapabilityDigest: digestB, CanonicalRequestDigest: digestC, PayloadDigest: Digest(payload), SequenceContract: "host-proposed/control-owned-v1", Payload: payload}
+}
+
+func testResult(now time.Time) Result {
+	return Result{ProtocolVersion: Version, ResultID: "result_01", HostID: "host_01", HostGeneration: 7, AssignmentID: "assignment_01", LeaseEpoch: 4, FencingToken: 4, Principal: "tenant_01:subject_01", OperationID: "op_01", EffectiveSpecDigest: digestA, CapabilityDigest: digestB, State: "succeeded", ObservedAt: now}
 }
 
 const (

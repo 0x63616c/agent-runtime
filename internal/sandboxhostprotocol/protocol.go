@@ -87,7 +87,76 @@ type Result struct {
 	CapabilityDigest    string    `json:"capability_digest"`
 	State               string    `json:"state"`
 	ObservedAt          time.Time `json:"observed_at"`
-	Signature           string    `json:"signature"`
+	// Observation is optional dynamic metadata directly observed by the
+	// authenticated host. It intentionally excludes control-owned admitted
+	// image, resource, capability, desired-state, and policy facts. The
+	// omitempty tag preserves the canonical v1 wire for existing result
+	// producers that have no observation source.
+	Observation *Observation `json:"observation,omitempty"`
+	Signature   string       `json:"signature"`
+}
+
+// Observation is the bounded, signed dynamic portion of one resource view.
+// It is a private host-control value: consumers must combine it only with
+// control-owned admitted metadata for a durable SandboxInfo or ProcessInfo
+// projection. It never carries argv, environment, output bytes, guest paths,
+// backend handles, or an unbounded backend error.
+type Observation struct {
+	Sandbox SandboxObservation  `json:"sandbox"`
+	Process *ProcessObservation `json:"process,omitempty"`
+}
+
+// SandboxObservation is the host-observable dynamic state of one sandbox.
+type SandboxObservation struct {
+	ID          string              `json:"id"`
+	ActualState string              `json:"actual_state"`
+	Failure     *FailureObservation `json:"failure,omitempty"`
+}
+
+// FailureObservation is a finite safe failure classification. Message text is
+// deliberately excluded because the host must not turn a backend error into a
+// durable or public detail.
+type FailureObservation struct {
+	Code  string `json:"code"`
+	Retry string `json:"retry"`
+}
+
+// ProcessObservation is the host-observable dynamic state of one process.
+// Result is present exactly for terminal process states; stdout and stderr are
+// bounded retention facts, not output content.
+type ProcessObservation struct {
+	ID        string          `json:"id"`
+	SandboxID string          `json:"sandbox_id"`
+	State     string          `json:"state"`
+	Result    *ProcessResult  `json:"result,omitempty"`
+	Stdout    OutputRetention `json:"stdout"`
+	Stderr    OutputRetention `json:"stderr"`
+}
+
+// ProcessResult is the finite terminal outcome observed by the host.
+type ProcessResult struct {
+	StartedAt  time.Time     `json:"started_at"`
+	FinishedAt time.Time     `json:"finished_at"`
+	ExitCode   *int32        `json:"exit_code,omitempty"`
+	Signal     string        `json:"signal,omitempty"`
+	Reason     string        `json:"reason"`
+	Usage      ResourceUsage `json:"usage"`
+	Cleanup    string        `json:"cleanup"`
+}
+
+// ResourceUsage contains only monotonically bounded resource counters.
+type ResourceUsage struct {
+	CPUTimeMillis   uint64 `json:"cpu_time_millis"`
+	PeakMemoryBytes uint64 `json:"peak_memory_bytes"`
+	ReadBytes       uint64 `json:"read_bytes"`
+	WrittenBytes    uint64 `json:"written_bytes"`
+}
+
+// OutputRetention records the bounded retained window for one stream.
+type OutputRetention struct {
+	EarliestCursor string `json:"earliest_cursor"`
+	RetainedBytes  uint64 `json:"retained_bytes"`
+	Truncated      bool   `json:"truncated"`
 }
 
 // Output is one host-signed bounded output sequence header. Chunk content is
@@ -411,7 +480,103 @@ func validResult(result Result) bool {
 	default:
 		return false
 	}
-	return result.ProtocolVersion == Version && boundedID(result.ResultID, 128) && boundedID(result.HostID, 128) && result.HostGeneration > 0 && boundedID(result.AssignmentID, 128) && result.LeaseEpoch > 0 && result.FencingToken > 0 && boundedID(result.Principal, 512) && boundedID(result.OperationID, 128) && validDigest(result.EffectiveSpecDigest) && validDigest(result.CapabilityDigest) && !result.ObservedAt.IsZero() && result.ObservedAt.Location() == time.UTC && (result.Signature == "" || len(result.Signature) <= 128)
+	return result.ProtocolVersion == Version && boundedID(result.ResultID, 128) && boundedID(result.HostID, 128) && result.HostGeneration > 0 && boundedID(result.AssignmentID, 128) && result.LeaseEpoch > 0 && result.FencingToken > 0 && boundedID(result.Principal, 512) && boundedID(result.OperationID, 128) && validDigest(result.EffectiveSpecDigest) && validDigest(result.CapabilityDigest) && !result.ObservedAt.IsZero() && result.ObservedAt.Location() == time.UTC && validObservation(result.Observation) && (result.Signature == "" || len(result.Signature) <= 128)
+}
+
+func validObservation(observation *Observation) bool {
+	if observation == nil {
+		return true
+	}
+	if !boundedID(observation.Sandbox.ID, 128) || !validSandboxActualState(observation.Sandbox.ActualState) || !validFailureObservation(observation.Sandbox.ActualState, observation.Sandbox.Failure) {
+		return false
+	}
+	return observation.Process == nil || validProcessObservation(observation.Sandbox.ID, *observation.Process)
+}
+
+func validSandboxActualState(state string) bool {
+	switch state {
+	case "pending", "provisioning", "ready", "quiescing", "cleaning", "failed", "unreachable", "lost", "deleted":
+		return true
+	default:
+		return false
+	}
+}
+
+func validFailureObservation(actualState string, failure *FailureObservation) bool {
+	if failure == nil {
+		return true
+	}
+	if actualState != "failed" && actualState != "unreachable" && actualState != "lost" {
+		return false
+	}
+	switch failure.Code {
+	case "unavailable", "deadline-exceeded", "outcome-uncertain", "resource-limit-exceeded", "infrastructure-failed":
+	default:
+		return false
+	}
+	switch failure.Retry {
+	case "never", "after-reconcile", "caller-controlled":
+		return true
+	default:
+		return false
+	}
+}
+
+func validProcessObservation(sandboxID string, process ProcessObservation) bool {
+	if !boundedID(process.ID, 128) || process.SandboxID != sandboxID || !validProcessState(process.State) || !validOutputRetention(process.Stdout) || !validOutputRetention(process.Stderr) {
+		return false
+	}
+	if process.State == "terminal" {
+		return process.Result != nil && validProcessResult(*process.Result)
+	}
+	return process.Result == nil
+}
+
+func validProcessState(state string) bool {
+	switch state {
+	case "accepted", "starting", "running", "terminating", "terminal":
+		return true
+	default:
+		return false
+	}
+}
+
+func validProcessResult(result ProcessResult) bool {
+	if result.StartedAt.IsZero() || result.FinishedAt.IsZero() || result.StartedAt.Location() != time.UTC || result.FinishedAt.Location() != time.UTC || result.FinishedAt.Before(result.StartedAt) || !validTreeCleanupState(result.Cleanup) {
+		return false
+	}
+	switch result.Reason {
+	case "exited":
+		return result.ExitCode != nil && result.Signal == ""
+	case "signaled":
+		return result.ExitCode == nil && validSignal(result.Signal)
+	case "timed-out", "oom-killed", "output-limit", "cancelled", "killed-by-caller", "sandbox-closed", "sandbox-lost", "startup-failed", "infrastructure-failed", "outcome-uncertain":
+		return result.ExitCode == nil && result.Signal == ""
+	default:
+		return false
+	}
+}
+
+func validSignal(signal string) bool {
+	switch signal {
+	case "interrupt", "terminate", "kill", "hangup":
+		return true
+	default:
+		return false
+	}
+}
+
+func validTreeCleanupState(state string) bool {
+	switch state {
+	case "confirmed", "pending", "not-required", "unknown":
+		return true
+	default:
+		return false
+	}
+}
+
+func validOutputRetention(retention OutputRetention) bool {
+	return retention.EarliestCursor == "" || boundedID(retention.EarliestCursor, 128)
 }
 
 func validOutput(output Output) bool {

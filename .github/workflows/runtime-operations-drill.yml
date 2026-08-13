@@ -29,6 +29,9 @@ jobs:
       - name: Run authorized database, audit-sink, and PITR drill
         env:
           RUNTIME_OPERATIONS_RUNNER_CONTRACT: protected-runtime-operations-v1
+          # These assertions are validated by the binary so an operator cannot
+          # mistake a developer shell or hosted runner for the protected lane.
+          RUNTIME_OPERATIONS_GITHUB_ENVIRONMENT: runtime-operations
           AR_RUNTIME_OPERATIONS_DATABASE_DSN: ${{ secrets.RUNTIME_OPERATIONS_DATABASE_DSN }}
           AR_RUNTIME_OPERATIONS_PITR_RESTORE_DSN: ${{ secrets.RUNTIME_OPERATIONS_PITR_RESTORE_DSN }}
           AR_RUNTIME_OPERATIONS_AUDIT_SINK_URL: ${{ secrets.RUNTIME_OPERATIONS_AUDIT_SINK_URL }}

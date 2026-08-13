@@ -25,7 +25,7 @@ for (const route of manifest.routes) {
   if (route.redirect) {
     assertRedirect(route, page);
   } else {
-    assertPage(route, page);
+    await assertPage(route, page);
   }
 }
 
@@ -78,11 +78,13 @@ function canonicalOutput(value) {
   return typeof value === 'string' && value !== '' && !value.startsWith('/') && !value.includes('..') && !value.includes('\\');
 }
 
-function assertPage(route, page) {
+async function assertPage(route, page) {
   if (!page.includes(route.contains)) {
     throw new Error(`documentation route ${route.route} rendered ${route.output} without ${JSON.stringify(route.contains)}`);
   }
   if (route.route.startsWith('/docs/')) {
+    await assertPublishedTitle(route, page);
+    assertPublishedContentBoundary(route, page);
     if (!page.includes('id="starlight__sidebar"')) {
       throw new Error(`documentation route ${route.route} rendered without the Starlight sidebar`);
     }
@@ -91,6 +93,60 @@ function assertPage(route, page) {
     }
     assertHref(page, `${editOrigin}${route.source}`, `documentation edit link on ${route.route}`);
   }
+}
+
+// Checking source MDX prevents the usual duplicate-title mistake, but the
+// release artifact is the authority for what a reader actually sees. Keep the
+// rendered invariant here so a theme or content-pipeline change cannot quietly
+// introduce a second title (or publish delivery-tracking terminology).
+async function assertPublishedTitle(route, page) {
+  const source = await readFile(resolve(root.pathname, route.source), 'utf8');
+  const expected = frontmatter(source, 'title');
+  if (!expected) throw new Error(`documentation source ${route.source} has no title frontmatter`);
+
+  const headings = [...page.matchAll(/<h1\b[^>]*>([\s\S]*?)<\/h1>/gi)];
+  if (headings.length !== 1) {
+    throw new Error(`documentation route ${route.route} rendered ${headings.length} H1 headings; public pages must render exactly one title`);
+  }
+  const rendered = visibleText(headings[0][1]);
+  if (rendered !== expected) {
+    throw new Error(`documentation route ${route.route} rendered H1 ${JSON.stringify(rendered)}, expected frontmatter title ${JSON.stringify(expected)}`);
+  }
+}
+
+function assertPublishedContentBoundary(route, page) {
+  const main = page.match(/<main\b[^>]*>([\s\S]*?)<\/main>/i)?.[1];
+  if (!main) throw new Error(`documentation route ${route.route} rendered without public main content`);
+  const published = visibleText(main);
+  const forbidden = [
+    [/\bM(?:10|[0-9])\b/, 'milestone label'],
+    [/\b(?:API|DAT|DEP|DOC|ENG|EX|HITL|INF|MOD|MON|OBS|OPS-STAT|PAY|SBX|TMP|TOL|TST)-\d{3}\b/, 'internal requirement identifier'],
+    [/\brequirements ledger\b/i, 'internal requirements ledger'],
+  ];
+  for (const [pattern, description] of forbidden) {
+    if (pattern.test(published)) {
+      throw new Error(`documentation route ${route.route} publishes ${description} in its rendered content`);
+    }
+  }
+}
+
+function frontmatter(content, key) {
+  const match = content.match(new RegExp(`^---\\n[\\s\\S]*?^${key}:\\s*(.+?)\\s*$[\\s\\S]*?^---`, 'm'));
+  return match?.[1]?.trim();
+}
+
+function visibleText(html) {
+  return html
+    .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, '')
+    .replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, '')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&(?:amp|#38);/g, '&')
+    .replace(/&(?:lt|#60);/g, '<')
+    .replace(/&(?:gt|#62);/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/\s+/g, ' ')
+    .trim();
 }
 
 function assertRedirect(route, page) {

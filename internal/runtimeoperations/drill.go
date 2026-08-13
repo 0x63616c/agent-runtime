@@ -92,8 +92,10 @@ func LoadRehearsalConfig(getenv func(string) string) (Config, error) {
 }
 
 func loadConfig(getenv func(string) string, requireProtectedContract bool) (Config, error) {
-	if requireProtectedContract && getenv("RUNTIME_OPERATIONS_RUNNER_CONTRACT") != RunnerContract {
-		return Config{}, errors.New("runtime operations drill: protected runner contract is absent")
+	if requireProtectedContract {
+		if err := validateProtectedRunner(getenv); err != nil {
+			return Config{}, err
+		}
 	}
 	config := Config{
 		SourceDSN: getenv("AR_RUNTIME_OPERATIONS_DATABASE_DSN"), RestoreDSN: getenv("AR_RUNTIME_OPERATIONS_PITR_RESTORE_DSN"),
@@ -143,6 +145,45 @@ func loadConfig(getenv func(string) string, requireProtectedContract bool) (Conf
 		return Config{}, errors.New("runtime operations drill: explicit HTTPS audit URLs are required")
 	}
 	return config, nil
+}
+
+// validateProtectedRunner binds the artifact-producing command to the exact
+// GitHub Environment workflow contract. These are runner-provided values plus
+// explicit workflow assertions; a developer shell or disposable rehearsal
+// must use LoadRehearsalConfig instead and can never mint protected evidence.
+func validateProtectedRunner(getenv func(string) string) error {
+	if getenv("RUNTIME_OPERATIONS_RUNNER_CONTRACT") != RunnerContract {
+		return errors.New("runtime operations drill: protected runner contract is absent")
+	}
+	for name, want := range map[string]string{
+		"GITHUB_ACTIONS":                        "true",
+		"GITHUB_REF_PROTECTED":                  "true",
+		"GITHUB_WORKFLOW":                       "runtime-operations-drill",
+		"RUNNER_ENVIRONMENT":                    "self-hosted",
+		"RUNNER_OS":                             "Linux",
+		"RUNNER_ARCH":                           "X64",
+		"RUNTIME_OPERATIONS_GITHUB_ENVIRONMENT": "runtime-operations",
+	} {
+		if getenv(name) != want {
+			return fmt.Errorf("runtime operations drill: protected runner %s=%q is required", name, want)
+		}
+	}
+	if !validCommitSHA(getenv("GITHUB_SHA")) {
+		return errors.New("runtime operations drill: immutable GitHub source revision is required")
+	}
+	return nil
+}
+
+func validCommitSHA(value string) bool {
+	if len(value) != 40 && len(value) != 64 {
+		return false
+	}
+	for _, character := range value {
+		if (character < '0' || character > '9') && (character < 'a' || character > 'f') {
+			return false
+		}
+	}
+	return true
 }
 
 func validTenant(value string) bool {
