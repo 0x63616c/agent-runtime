@@ -3,6 +3,7 @@ package sandbox
 import (
 	"bytes"
 	"sort"
+	"sync"
 )
 
 type literalRedactor struct {
@@ -105,6 +106,7 @@ func (redactor *literalRedactor) replace(value []byte) ([]byte, bool) {
 // bytes once in control-plane order; stdout and stderr share the produced limit
 // while retaining their declared tails independently.
 type processOutputSpool struct {
+	mu            sync.Mutex
 	producedLimit uint64
 	retainedLimit uint64
 	produced      uint64
@@ -138,6 +140,12 @@ func newProcessOutputSpool(producedLimit, retainedLimit uint64, patterns []strin
 }
 
 func (spool *processOutputSpool) Write(stream OutputKind, chunk []byte) error {
+	spool.mu.Lock()
+	defer spool.mu.Unlock()
+	return spool.writeLocked(stream, chunk)
+}
+
+func (spool *processOutputSpool) writeLocked(stream OutputKind, chunk []byte) error {
 	if spool.closed {
 		return newFailure(FailureAlreadyTerminal, "output stream is finalized", RetryNever)
 	}
@@ -155,6 +163,8 @@ func (spool *processOutputSpool) Write(stream OutputKind, chunk []byte) error {
 }
 
 func (spool *processOutputSpool) Close(result ProcessResult) {
+	spool.mu.Lock()
+	defer spool.mu.Unlock()
 	if spool.closed {
 		return
 	}
@@ -234,6 +244,8 @@ func (spool *processOutputSpool) appendEvent(event OutputEvent) {
 }
 
 func (spool *processOutputSpool) Events() []OutputEvent {
+	spool.mu.Lock()
+	defer spool.mu.Unlock()
 	events := make([]OutputEvent, len(spool.events))
 	for index, event := range spool.events {
 		events[index] = copyOutputEvent(event)
@@ -242,5 +254,7 @@ func (spool *processOutputSpool) Events() []OutputEvent {
 }
 
 func (spool *processOutputSpool) Retention(stream OutputKind) OutputRetention {
+	spool.mu.Lock()
+	defer spool.mu.Unlock()
 	return spool.retentions[stream]
 }
