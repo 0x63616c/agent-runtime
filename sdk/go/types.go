@@ -26,6 +26,12 @@ const MaxApprovalsPerPage = 64
 // MaxArtifactsPerSession bounds one owner-scoped Session Artifact index response.
 const MaxArtifactsPerSession = 256
 
+// MaxArtifactBytes is the largest immutable Artifact the public runtime
+// contract can retain and serve. Applications that use ArtifactStreamer must
+// admit this complete contract size by default rather than failing a valid
+// large result at the client boundary.
+const MaxArtifactBytes int64 = 8 << 20
+
 // ToolCallState is the safe public lifecycle of one model Tool intent.
 type ToolCallState string
 

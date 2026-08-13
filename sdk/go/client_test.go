@@ -142,6 +142,38 @@ func TestHTTPClientOpensArtifactWithoutBufferingAndVerifiesTheTrailer(t *testing
 	}
 }
 
+func TestHTTPClientDefaultArtifactLimitAdmitsThePublicLargeArtifactContract(t *testing.T) {
+	credential, _ := agentruntime.NewStaticBearerCredential("test-token-000000")
+	const artifactSize = int64(3 << 20)
+	client, err := agentruntime.NewClient(agentruntime.ClientConfig{
+		BaseURL: "https://runtime.example",
+		HTTPClient: &http.Client{Transport: roundTripperFunc(func(request *http.Request) (*http.Response, error) {
+			header := make(http.Header)
+			header.Set("X-Request-ID", request.Header.Get("X-Request-ID"))
+			header.Set("Content-Type", "text/plain")
+			header.Set("X-Agent-Runtime-Artifact-Size", fmt.Sprintf("%d", artifactSize))
+			header.Set("X-Agent-Runtime-Artifact-SHA256", strings.Repeat("a", 64))
+			return &http.Response{StatusCode: http.StatusOK, Header: header, Body: io.NopCloser(strings.NewReader(""))}, nil
+		})},
+		Credentials:      credential,
+		RequestIDs:       fixedRequestIDs{},
+		MaxResponseBytes: 1024,
+	})
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	stream, err := client.OpenArtifact(context.Background(), "art_0000000000000001")
+	if err != nil {
+		t.Fatalf("OpenArtifact() error = %v, want default Artifact contract limit independent of JSON limit", err)
+	}
+	if stream.Artifact.SizeBytes != artifactSize {
+		t.Fatalf("Artifact size = %d, want %d", stream.Artifact.SizeBytes, artifactSize)
+	}
+	if err := stream.Body.Close(); err != nil {
+		t.Fatalf("close unopened Artifact stream: %v", err)
+	}
+}
+
 func TestHTTPClientReadArtifactRequiresMatchingContentLength(t *testing.T) {
 	t.Parallel()
 	credential, _ := agentruntime.NewStaticBearerCredential("test-token-000000")

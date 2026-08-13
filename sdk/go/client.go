@@ -150,6 +150,10 @@ type ClientConfig struct {
 	Credentials      CredentialSource
 	RequestIDs       RequestIDSource
 	MaxResponseBytes int64
+	// MaxArtifactBytes independently bounds binary Artifact reads. Zero admits
+	// the public contract maximum, while ordinary JSON responses retain their
+	// smaller default limit.
+	MaxArtifactBytes int64
 }
 
 // Client is the concrete HTTP implementation of RuntimeClient.
@@ -159,6 +163,7 @@ type Client struct {
 	credentials      CredentialSource
 	requestIDs       RequestIDSource
 	maxResponseBytes int64
+	maxArtifactBytes int64
 }
 
 // NewClient validates a bounded, explicit public HTTP client configuration.
@@ -181,10 +186,17 @@ func NewClient(config ClientConfig) (*Client, error) {
 	if maximum < 1024 || maximum > 16<<20 {
 		return nil, errors.New("create Agent Runtime client: response limit must be between 1 KiB and 16 MiB")
 	}
+	artifactMaximum := config.MaxArtifactBytes
+	if artifactMaximum == 0 {
+		artifactMaximum = MaxArtifactBytes
+	}
+	if artifactMaximum < 1024 || artifactMaximum > 16<<20 {
+		return nil, errors.New("create Agent Runtime client: Artifact limit must be between 1 KiB and 16 MiB")
+	}
 	baseURL.Path = ""
 	httpClient := *config.HTTPClient
 	httpClient.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
-	return &Client{baseURL: baseURL, httpClient: &httpClient, credentials: config.Credentials, requestIDs: config.RequestIDs, maxResponseBytes: maximum}, nil
+	return &Client{baseURL: baseURL, httpClient: &httpClient, credentials: config.Credentials, requestIDs: config.RequestIDs, maxResponseBytes: maximum, maxArtifactBytes: artifactMaximum}, nil
 }
 
 // CreateAgent creates the first immutable Agent revision through the admin surface.
@@ -307,7 +319,7 @@ func (client *Client) OpenArtifact(ctx context.Context, artifactID ArtifactID) (
 		sizeHeader = resp.Header.Get("Content-Length")
 	}
 	size, err := strconv.ParseInt(sizeHeader, 10, 64)
-	if err != nil || size < 1 || size > client.maxResponseBytes {
+	if err != nil || size < 1 || size > client.maxArtifactBytes {
 		_ = resp.Body.Close()
 		return ArtifactStream{}, errors.New("open Artifact: invalid Artifact size")
 	}
@@ -531,7 +543,7 @@ func doJSON[Response any](client *Client, ctx context.Context, method, path, ide
 	if err != nil || mediaType != "application/json" {
 		return zero, errors.New("read Agent Runtime response: content type is not application/json")
 	}
-	limited := io.LimitReader(response.Body, client.maxResponseBytes+1)
+	limited := io.LimitReader(response.Body, client.maxArtifactBytes+1)
 	data, err := io.ReadAll(limited)
 	if err != nil {
 		return zero, errors.Wrap(err, "read Agent Runtime response")
@@ -593,7 +605,7 @@ func doArtifact(client *Client, ctx context.Context, path string, artifactID Art
 	if err != nil {
 		return ArtifactDownload{}, errors.Wrap(err, "read Artifact")
 	}
-	if int64(len(body)) > client.maxResponseBytes {
+	if int64(len(body)) > client.maxArtifactBytes {
 		return ArtifactDownload{}, errors.New("read Artifact: body exceeds configured limit")
 	}
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
