@@ -121,6 +121,9 @@ func (worker *Worker) ScanOnce(ctx context.Context) error {
 	if worker == nil {
 		return errors.New("scan model invocation outbox: worker is required")
 	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	tenants, err := worker.tenants.ListOutboxTenants(ctx)
 	if err != nil {
 		return err
@@ -136,11 +139,17 @@ func (worker *Worker) ScanOnce(ctx context.Context) error {
 func (worker *Worker) scanTenant(ctx context.Context, tenant runtimecontent.TenantID) error {
 	after := runtimestate.OutboxID("")
 	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		page, err := worker.store.ReadOutbox(ctx, runtimestate.OutboxQuery{Scope: runtimestate.MutationScope{Tenant: tenant, Authority: runtimestate.AuthorityOutboxPublisher}, After: after, Limit: 128})
 		if err != nil {
 			return err
 		}
 		for _, record := range page.Records {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
 			if record.InvocationID == "" || record.EventKind != "" || record.State == runtimestate.OutboxPublished || record.State == runtimestate.OutboxReconcile {
 				continue
 			}
@@ -170,6 +179,9 @@ func (worker *Worker) scanTenant(ctx context.Context, tenant runtimecontent.Tena
 }
 
 func (worker *Worker) process(ctx context.Context, record runtimestate.OutboxRecord, recovering bool) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	state, err := worker.store.LoadRuntimeState(ctx, runtimestate.MutationScope{Tenant: record.Tenant, Authority: runtimestate.AuthorityRuntimeWorker})
 	if err != nil {
 		return err
@@ -196,6 +208,13 @@ func (worker *Worker) process(ctx context.Context, record runtimestate.OutboxRec
 		response, err = worker.adapter.Invoke(ctx, request)
 	}
 	if err != nil {
+		// A caller-owned cancellation is not provider ambiguity. Leave the
+		// claimed record unacknowledged so a later worker reconciles its exact
+		// operation ID; do not manufacture a terminal result while shutdown is
+		// in progress.
+		if cause := ctx.Err(); cause != nil {
+			return cause
+		}
 		response = Response{Failure: &agentruntime.Failure{Code: agentruntime.FailureUnavailable, Message: "model invocation outcome is uncertain"}, Uncertain: true}
 	}
 	if response.Tool != nil {

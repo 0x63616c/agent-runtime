@@ -112,6 +112,44 @@ func TestWorkerFinalizesNewAndRecoveredModelIntentsWithoutBlindReinvoke(t *testi
 	}
 }
 
+func TestWorkerCancellationLeavesClaimedInvocationForExactRecovery(t *testing.T) {
+	now := time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC)
+	content, err := runtimecontent.New("runtime-content", &modelObjects{values: map[string][]byte{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tenant, _ := runtimecontent.ParseTenantID("tenant-a")
+	principal, _ := runtimecontent.ParsePrincipalID("principal-a")
+	compiler, _ := runtimestate.NewCompiler(content)
+	source, _ := clock.NewFake(now)
+	planner, _ := runtimestate.NewRuntimeStatePlanner(source, &modelIDs{})
+	store, _ := runtimestate.NewMemoryRuntimeStateStore(planner)
+	_, _, invocation := createModelIntent(t, context.Background(), content, compiler, store, tenant, principal)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	adapter := &cancellingAdapter{cancel: cancel}
+	worker, err := runtimemodel.NewWorker(runtimemodel.WorkerConfig{Store: store, Tenants: store, Compiler: compiler, Planner: planner, Clock: source, Content: content, Adapter: adapter, Claimer: "model-worker"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := worker.ScanOnce(ctx); !errors.Is(err, context.Canceled) {
+		t.Fatalf("scan cancelled model intent = %v, want context cancellation", err)
+	}
+	if adapter.invocations != 1 || adapter.reconciliations != 0 {
+		t.Fatalf("adapter calls = invoke=%d reconcile=%d", adapter.invocations, adapter.reconciliations)
+	}
+	state, err := store.LoadRuntimeState(context.Background(), runtimestate.MutationScope{Tenant: tenant, Authority: runtimestate.AuthorityRuntimeWorker})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(state.Invocations) != 1 || state.Invocations[0].OperationID != invocation.OperationID || state.Invocations[0].State != runtimestate.InvocationIntent || state.Invocations[0].Failure != nil {
+		t.Fatalf("cancelled invocation was finalized = %#v", state.Invocations)
+	}
+	if record := invocationOutbox(t, context.Background(), store, tenant); record.State != runtimestate.OutboxClaimed || record.ClaimUntil == nil {
+		t.Fatalf("cancelled invocation outbox = %#v, want retained claimed record", record)
+	}
+}
+
 func TestWorkerRoutesNormalizedModelToolThroughBrokerAndPausesTurn(t *testing.T) {
 	ctx := context.Background()
 	now := time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC)
@@ -249,6 +287,23 @@ type recordingAdapter struct {
 	reconciliations int
 	last            runtimemodel.Request
 	err             error
+}
+
+type cancellingAdapter struct {
+	cancel          context.CancelFunc
+	invocations     int
+	reconciliations int
+}
+
+func (adapter *cancellingAdapter) Invoke(_ context.Context, _ runtimemodel.Request) (runtimemodel.Response, error) {
+	adapter.invocations++
+	adapter.cancel()
+	return runtimemodel.Response{}, context.Canceled
+}
+
+func (adapter *cancellingAdapter) Reconcile(_ context.Context, _ runtimemodel.Request) (runtimemodel.Response, error) {
+	adapter.reconciliations++
+	return runtimemodel.Response{}, context.Canceled
 }
 
 func (adapter *recordingAdapter) Invoke(_ context.Context, request runtimemodel.Request) (runtimemodel.Response, error) {
