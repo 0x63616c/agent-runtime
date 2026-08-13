@@ -13,6 +13,7 @@ import (
 	"github.com/0x63616c/agent-runtime/internal/runtimecontent"
 	"github.com/0x63616c/agent-runtime/internal/runtimemodel"
 	"github.com/0x63616c/agent-runtime/internal/runtimestate"
+	agentruntime "github.com/0x63616c/agent-runtime/sdk/go"
 )
 
 func TestHTTPAdapterNormalizesBoundedStreamAndReconcilesWithoutPOST(t *testing.T) {
@@ -96,7 +97,7 @@ func TestHTTPAdapterRejectsRedirectBeforeSendingCredentialToTarget(t *testing.T)
 }
 
 func TestHTTPAdapterParsesOnlyCanonicalSafeToolOutcomes(t *testing.T) {
-	valid := `{"type":"tool","tool":{"tool_call_id":"tcall_1234567890ABCDEF","approval_id":"appr_1234567890ABCDEF","policy_name":"workspace-write","policy_revision":1,"tool_name":"workspace.write","action":{"verb":"write","target":"workspace-service"},"maximum_uses":1,"expires_at":"2026-08-11T13:00:00Z","descriptor":{"path":"notes.txt","kind":"workspace.write"}}}` + "\n"
+	valid := `{"type":"tool","tool":{"tool_call_id":"tcall_1234567890ABCDEF","approval_id":"appr_1234567890ABCDEF","policy_name":"workspace-write","policy_revision":1,"tool_name":"workspace.write","action":{"verb":"write","target":"workspace-service"},"maximum_uses":1,"expires_at":"2026-08-11T13:00:00Z","descriptor":{"path":"notes.txt","kind":"workspace.write"},"arguments":{"path":"notes.txt"}}}` + "\n"
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
 		writer.Header().Set("Content-Type", "application/x-ndjson")
 		if _, err := fmt.Fprint(writer, valid); err != nil {
@@ -108,7 +109,8 @@ func TestHTTPAdapterParsesOnlyCanonicalSafeToolOutcomes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	response, err := adapter.Invoke(context.Background(), runtimemodel.Request{Tenant: "tenant-a", SessionID: "sess_0000000000000001", TurnID: "turn_0000000000000001", OperationID: "op_model_0001"})
+	request := runtimemodel.Request{Tenant: "tenant-a", SessionID: "sess_0000000000000001", TurnID: "turn_0000000000000001", OperationID: "op_model_0001", Tools: []agentruntime.ToolDefinition{{Name: "workspace.write", Description: "write a workspace value", InputSchemaVersion: "agent-runtime.tool-input/v1", InputSchema: []byte(`{"type":"object","properties":{"path":{"type":"string"}},"required":["path"],"additionalProperties":false}`)}}}
+	response, err := adapter.Invoke(context.Background(), request)
 	if err != nil || response.Tool == nil || response.Tool.ToolName != "workspace.write" || response.Tool.Action.Verb != "write" || response.Tool.Action.Target != "workspace-service" || response.Tool.ExpiresAt != time.Date(2026, 8, 11, 13, 0, 0, 0, time.UTC) || string(response.Tool.Descriptor) != `{"kind":"workspace.write","path":"notes.txt"}` || !strings.HasPrefix(response.Tool.ActionDigest, "sha256:") || !strings.HasPrefix(response.Tool.CapabilityDigest, "sha256:") {
 		t.Fatalf("canonical tool response = %#v, %v", response, err)
 	}
@@ -117,6 +119,9 @@ func TestHTTPAdapterParsesOnlyCanonicalSafeToolOutcomes(t *testing.T) {
 		strings.Replace(valid, `"descriptor":{"path":"notes.txt","kind":"workspace.write"}`, `"descriptor":{"token":"must-not-cross"}`, 1),
 		strings.Replace(valid, `"action":{"verb":"write","target":"workspace-service"}`, `"action":{"verb":"write","target":"workspace-service","extra":true}`, 1),
 		strings.Replace(valid, `"tool_name":"workspace.write"`, `"tool_name":"workspace.write","raw_arguments":"never"`, 1),
+		strings.Replace(valid, `"arguments":{"path":"notes.txt"}`, `"arguments":{"path":17}`, 1),
+		strings.Replace(valid, `"arguments":{"path":"notes.txt"}`, `"arguments":{"path":"notes.txt","extra":true}`, 1),
+		strings.Replace(valid, `"tool_name":"workspace.write"`, `"tool_name":"workspace.delete"`, 1),
 	} {
 		server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
 			writer.Header().Set("Content-Type", "application/x-ndjson")
@@ -128,7 +133,7 @@ func TestHTTPAdapterParsesOnlyCanonicalSafeToolOutcomes(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		_, err = adapter.Invoke(context.Background(), runtimemodel.Request{Tenant: "tenant-a", SessionID: "sess_0000000000000001", TurnID: "turn_0000000000000001", OperationID: "op_model_0001"})
+		_, err = adapter.Invoke(context.Background(), request)
 		server.Close()
 		if err == nil {
 			t.Fatalf("unsafe tool stream was accepted: %s", stream)

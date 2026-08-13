@@ -39,6 +39,11 @@ type Request struct {
 	// for deterministic response values that must remain identical during
 	// recovery; it is not the current wall clock.
 	CreatedAt time.Time
+	// Tools is the immutable Agent-revision catalog exposed to the provider for
+	// Tool-call construction. It grants no execution authority; the worker
+	// validates the provider's canonical Tool request against this catalog before
+	// it can reach Broker.
+	Tools []agentruntime.ToolDefinition
 }
 
 // Response is one normalized model outcome. A successful response is stored
@@ -200,7 +205,7 @@ func (worker *Worker) process(ctx context.Context, record runtimestate.OutboxRec
 	if err != nil {
 		return err
 	}
-	request := Request{Tenant: record.Tenant, SessionID: record.SessionID, TurnID: record.TurnID, OperationID: record.OperationID, ModelProfile: specification.ModelProfile, CreatedAt: invocation.CreatedAt}
+	request := Request{Tenant: record.Tenant, SessionID: record.SessionID, TurnID: record.TurnID, OperationID: record.OperationID, ModelProfile: specification.ModelProfile, CreatedAt: invocation.CreatedAt, Tools: modelToolCatalog(specification.Tools)}
 	var response Response
 	if recovering {
 		response, err = worker.adapter.Reconcile(ctx, request)
@@ -246,6 +251,14 @@ func (worker *Worker) process(ctx context.Context, record runtimestate.OutboxRec
 		return admitErr
 	}
 	return worker.finalize(ctx, record, invocation, session, turn, response)
+}
+
+func modelToolCatalog(tools []agentruntime.ToolDefinition) []agentruntime.ToolDefinition {
+	clone := append([]agentruntime.ToolDefinition(nil), tools...)
+	for index := range clone {
+		clone[index].InputSchema = append([]byte(nil), clone[index].InputSchema...)
+	}
+	return clone
 }
 
 func boundToolDigest(descriptor []byte) string {

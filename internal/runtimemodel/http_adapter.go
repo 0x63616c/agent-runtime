@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/0x63616c/agent-runtime/internal/runtimestate"
+	"github.com/0x63616c/agent-runtime/internal/toolschema"
 	agentruntime "github.com/0x63616c/agent-runtime/sdk/go"
 )
 
@@ -89,12 +90,12 @@ func (adapter *HTTPAdapter) Invoke(ctx context.Context, request Request) (Respon
 	if err != nil {
 		return Response{}, fmt.Errorf("encode normalized model invocation: %w", err)
 	}
-	return adapter.exchange(ctx, http.MethodPost, adapter.operationURL(request.OperationID), bytes.NewReader(body))
+	return adapter.exchange(ctx, http.MethodPost, adapter.operationURL(request.OperationID), bytes.NewReader(body), request.Tools)
 }
 
 // Reconcile reads the terminal state of the exact operation. It never POSTs.
 func (adapter *HTTPAdapter) Reconcile(ctx context.Context, request Request) (Response, error) {
-	return adapter.exchange(ctx, http.MethodGet, adapter.operationURL(request.OperationID), nil)
+	return adapter.exchange(ctx, http.MethodGet, adapter.operationURL(request.OperationID), nil, request.Tools)
 }
 
 func (adapter *HTTPAdapter) operationURL(operationID runtimestate.OperationID) string {
@@ -103,7 +104,7 @@ func (adapter *HTTPAdapter) operationURL(operationID runtimestate.OperationID) s
 	return endpoint.String()
 }
 
-func (adapter *HTTPAdapter) exchange(ctx context.Context, method, endpoint string, body io.Reader) (result Response, err error) {
+func (adapter *HTTPAdapter) exchange(ctx context.Context, method, endpoint string, body io.Reader, tools []agentruntime.ToolDefinition) (result Response, err error) {
 	if adapter == nil || adapter.endpoint == nil || adapter.client == nil {
 		return Response{}, errors.New("invoke normalized model stream: adapter is not configured")
 	}
@@ -131,7 +132,7 @@ func (adapter *HTTPAdapter) exchange(ctx context.Context, method, endpoint strin
 	if mediaType := response.Header.Get("Content-Type"); !strings.HasPrefix(strings.ToLower(mediaType), "application/x-ndjson") {
 		return Response{}, errors.New("normalized model response must be application/x-ndjson")
 	}
-	return decodeNormalizedStream(response.Body)
+	return decodeNormalizedStream(response.Body, tools)
 }
 
 type normalizedRequest struct {
@@ -171,7 +172,7 @@ type normalizedAction struct {
 	Target string `json:"target"`
 }
 
-func decodeNormalizedStream(body io.Reader) (Response, error) {
+func decodeNormalizedStream(body io.Reader, tools []agentruntime.ToolDefinition) (Response, error) {
 	if body == nil {
 		return Response{}, errors.New("decode normalized model stream: response body is required")
 	}
@@ -224,7 +225,7 @@ func decodeNormalizedStream(body io.Reader) (Response, error) {
 		if terminal.Failure != nil || output.Len() != 0 || terminal.InputTokens != nil || terminal.OutputTokens != nil {
 			return Response{}, errors.New("decode normalized model stream: tool outcome is invalid")
 		}
-		tool, err := parseNormalizedTool(terminal.Tool)
+		tool, err := parseNormalizedTool(terminal.Tool, tools)
 		if err != nil {
 			return Response{}, err
 		}
@@ -246,7 +247,7 @@ func decodeStrictJSON(raw []byte, target any) error {
 	return nil
 }
 
-func parseNormalizedTool(raw json.RawMessage) (ToolRequest, error) {
+func parseNormalizedTool(raw json.RawMessage, tools []agentruntime.ToolDefinition) (ToolRequest, error) {
 	if len(raw) == 0 || len(raw) > maxToolDescriptor {
 		return ToolRequest{}, errors.New("decode normalized model stream: tool is missing or oversized")
 	}
@@ -261,9 +262,13 @@ func parseNormalizedTool(raw json.RawMessage) (ToolRequest, error) {
 	if err != nil {
 		return ToolRequest{}, err
 	}
-	arguments, err := canonicalToolArguments(tool.Arguments)
+	definition, found := declaredTool(tools, tool.ToolName)
+	if !found {
+		return ToolRequest{}, errors.New("decode normalized model stream: Tool is not declared by the Agent revision")
+	}
+	arguments, err := toolschema.CanonicalArguments(definition.InputSchemaVersion, definition.InputSchema, tool.Arguments)
 	if err != nil {
-		return ToolRequest{}, err
+		return ToolRequest{}, errors.New("decode normalized model stream: Tool arguments do not match the declared input schema")
 	}
 	actionDigest := digestToolBytes(descriptor)
 	capability, err := json.Marshal(struct {
@@ -278,26 +283,6 @@ func parseNormalizedTool(raw json.RawMessage) (ToolRequest, error) {
 		return ToolRequest{}, errors.New("decode normalized model stream: canonicalize tool capability")
 	}
 	return ToolRequest{ToolCallID: tool.ToolCallID, ApprovalID: tool.ApprovalID, PolicyName: tool.PolicyName, PolicyRevision: tool.PolicyRevision, ToolName: tool.ToolName, ActionDigest: actionDigest, CapabilityDigest: digestToolBytes(capability), Action: agentruntime.ApprovalAction{Verb: tool.Action.Verb, Target: tool.Action.Target}, MaximumUses: tool.MaximumUses, ExpiresAt: tool.ExpiresAt, Descriptor: descriptor, Arguments: arguments}, nil
-}
-
-func canonicalToolArguments(raw json.RawMessage) ([]byte, error) {
-	if len(raw) == 0 {
-		return []byte(`{}`), nil
-	}
-	if len(raw) > maxToolDescriptor {
-		return nil, errors.New("decode normalized model stream: tool arguments are oversized")
-	}
-	decoder := json.NewDecoder(bytes.NewReader(raw))
-	decoder.UseNumber()
-	var value map[string]any
-	if err := decoder.Decode(&value); err != nil || decoder.More() || value == nil {
-		return nil, errors.New("decode normalized model stream: tool arguments must be an object")
-	}
-	canonical, err := json.Marshal(value)
-	if err != nil || len(canonical) > maxToolDescriptor {
-		return nil, errors.New("decode normalized model stream: canonical tool arguments are invalid")
-	}
-	return canonical, nil
 }
 
 func canonicalToolDescriptor(raw json.RawMessage) ([]byte, error) {

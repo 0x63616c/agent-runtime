@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"testing"
 )
 
@@ -109,12 +110,18 @@ func TestToolDefinitionContractExposesTheRegisteredInputSchema(t *testing.T) {
 	}
 	properties := object(t, tool, "properties")
 	version, exists := properties["input_schema_version"].(map[string]any)
-	if !exists || !contains(array(t, version, "enum"), "agent-runtime.tool-input/v1") {
+	if !exists || !contains(array(t, version, "enum"), "agent-runtime.tool-input/v1") || !contains(array(t, version, "enum"), "agent-runtime.tool-input/v2") {
 		t.Fatalf("ToolDefinition must expose the supported input-schema version: %#v", version)
+	}
+	if description, _ := version["description"].(string); !strings.Contains(description, "reference-free JSON Schema Draft 2020-12") {
+		t.Fatalf("ToolDefinition must describe v2's fixed dialect and reference rule: %#v", version)
 	}
 	schema, exists := properties["input_schema"].(map[string]any)
 	if !exists || schema["type"] != "object" {
 		t.Fatalf("ToolDefinition must expose the registered input schema object: %#v", schema)
+	}
+	if description, _ := schema["description"].(string); !strings.Contains(description, "rejects $schema, $ref, and $dynamicRef") {
+		t.Fatalf("ToolDefinition must describe v2 reference refusal: %#v", schema)
 	}
 }
 

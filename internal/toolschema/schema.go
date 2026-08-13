@@ -9,10 +9,18 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+
+	"github.com/santhosh-tekuri/jsonschema/v6"
 )
 
 // VersionV1 identifies the supported bounded object-schema profile.
 const VersionV1 = "agent-runtime.tool-input/v1"
+
+// VersionV2 identifies the general JSON Schema draft 2020-12 profile used for
+// registered model-visible tool inputs. Schemas are reference-free so
+// registration and invocation cannot fetch data, select a caller-provided
+// dialect, or recurse through a mutable schema graph.
+const VersionV2 = "agent-runtime.tool-input/v2"
 
 // CanonicalSchema validates and canonicalizes one catalog schema. An omitted
 // schema is the backwards-compatible no-input tool: it accepts only {}.
@@ -20,7 +28,17 @@ func CanonicalSchema(version string, raw []byte) (string, []byte, error) {
 	if version == "" && len(raw) == 0 {
 		return VersionV1, []byte(`{"additionalProperties":false,"type":"object"}`), nil
 	}
-	if version != VersionV1 || len(raw) == 0 || len(raw) > 48<<10 {
+	if len(raw) == 0 || len(raw) > 48<<10 {
+		return "", nil, errors.New("unsupported tool input schema")
+	}
+	if version == VersionV2 {
+		canonical, err := canonicalGeneralSchema(raw)
+		if err != nil {
+			return "", nil, err
+		}
+		return VersionV2, canonical, nil
+	}
+	if version != VersionV1 {
 		return "", nil, errors.New("unsupported tool input schema")
 	}
 	var schema map[string]json.RawMessage
@@ -40,7 +58,7 @@ func CanonicalSchema(version string, raw []byte) (string, []byte, error) {
 // CanonicalArguments validates a single model request against its catalog
 // schema and returns the exact canonical bytes committed into its capability.
 func CanonicalArguments(version string, schemaRaw, argumentsRaw []byte) ([]byte, error) {
-	_, schemaRaw, err := CanonicalSchema(version, schemaRaw)
+	canonicalVersion, schemaRaw, err := CanonicalSchema(version, schemaRaw)
 	if err != nil {
 		return nil, err
 	}
@@ -54,6 +72,26 @@ func CanonicalArguments(version string, schemaRaw, argumentsRaw []byte) ([]byte,
 	if err := json.Unmarshal(argumentsRaw, &arguments); err != nil || arguments == nil {
 		return nil, errors.New("tool arguments must be an object")
 	}
+	if canonicalVersion == VersionV2 {
+		schema, err := compileGeneralSchema(schemaRaw)
+		if err != nil {
+			return nil, err
+		}
+		var generalArguments any
+		argumentsDecoder := json.NewDecoder(bytes.NewReader(argumentsRaw))
+		argumentsDecoder.UseNumber()
+		if err := argumentsDecoder.Decode(&generalArguments); err != nil || argumentsDecoder.More() {
+			return nil, errors.New("tool arguments must be an object")
+		}
+		if err := schema.Validate(generalArguments); err != nil {
+			return nil, errors.New("tool arguments do not match input schema")
+		}
+		canonical, err := json.Marshal(arguments)
+		if err != nil {
+			return nil, errors.New("canonicalize tool arguments")
+		}
+		return canonical, nil
+	}
 	var schema map[string]json.RawMessage
 	if json.Unmarshal(schemaRaw, &schema) != nil {
 		return nil, errors.New("invalid tool input schema")
@@ -66,6 +104,69 @@ func CanonicalArguments(version string, schemaRaw, argumentsRaw []byte) ([]byte,
 		return nil, errors.New("canonicalize tool arguments")
 	}
 	return canonical, nil
+}
+
+func canonicalGeneralSchema(raw []byte) ([]byte, error) {
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.UseNumber()
+	var schema any
+	if err := decoder.Decode(&schema); err != nil || decoder.More() || schema == nil {
+		return nil, errors.New("invalid tool input schema")
+	}
+	if _, ok := schema.(map[string]any); !ok || hasExternalReference(schema) {
+		return nil, errors.New("unsupported tool input schema")
+	}
+	canonical, err := json.Marshal(schema)
+	if err != nil || len(canonical) > 48<<10 {
+		return nil, errors.New("invalid tool input schema")
+	}
+	if _, err := compileGeneralSchema(canonical); err != nil {
+		return nil, errors.New("invalid tool input schema")
+	}
+	return canonical, nil
+}
+
+func compileGeneralSchema(raw []byte) (*jsonschema.Schema, error) {
+	var document any
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.UseNumber()
+	if err := decoder.Decode(&document); err != nil || decoder.More() {
+		return nil, errors.New("invalid tool input schema")
+	}
+	compiler := jsonschema.NewCompiler()
+	compiler.DefaultDraft(jsonschema.Draft2020)
+	if err := compiler.AddResource("urn:agent-runtime:tool-input", document); err != nil {
+		return nil, errors.New("invalid tool input schema")
+	}
+	schema, err := compiler.Compile("urn:agent-runtime:tool-input")
+	if err != nil {
+		return nil, errors.New("invalid tool input schema")
+	}
+	return schema, nil
+}
+
+func hasExternalReference(value any) bool {
+	switch typed := value.(type) {
+	case map[string]any:
+		for key, nested := range typed {
+			if key == "$schema" {
+				return true
+			}
+			if key == "$ref" || key == "$dynamicRef" {
+				return true
+			}
+			if hasExternalReference(nested) {
+				return true
+			}
+		}
+	case []any:
+		for _, nested := range typed {
+			if hasExternalReference(nested) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func validateObjectSchema(schema map[string]json.RawMessage, depth int) error {
