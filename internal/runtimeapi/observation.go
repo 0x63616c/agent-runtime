@@ -1,6 +1,7 @@
 package runtimeapi
 
 import (
+	"context"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
@@ -35,6 +36,7 @@ type RequestObservation struct {
 	Status               int
 	Outcome              RequestOutcome
 	FailureCode          agentruntime.FailureCode
+	StartedAt            time.Time
 	Duration             time.Duration
 	TenantCorrelation    string
 	PrincipalCorrelation string
@@ -42,7 +44,7 @@ type RequestObservation struct {
 
 // RequestObserver receives exactly one completed request observation.
 type RequestObserver interface {
-	ObserveRequest(RequestObservation)
+	ObserveRequest(context.Context, RequestObservation)
 }
 
 // IdentityCorrelation contains non-reversible operator correlation references.
@@ -125,13 +127,13 @@ func (observability requestObservability) complete(request *http.Request, operat
 	if request.Context().Err() != nil {
 		outcome = RequestOutcomeCancelled
 	}
-	observation := RequestObservation{RequestID: requestID, Operation: operation, Status: status, Outcome: outcome, Duration: duration, FailureCode: failureCodeForStatus(status)}
+	observation := RequestObservation{RequestID: requestID, Operation: operation, Status: status, Outcome: outcome, StartedAt: started, Duration: duration, FailureCode: failureCodeForStatus(status)}
 	if identity != nil {
 		correlation := observability.correlator.Correlate(*identity)
 		observation.TenantCorrelation = correlation.Tenant
 		observation.PrincipalCorrelation = correlation.Principal
 	}
-	observability.observer.ObserveRequest(observation)
+	observability.observer.ObserveRequest(request.Context(), observation)
 }
 
 func failureCodeForStatus(status int) agentruntime.FailureCode {
@@ -187,11 +189,21 @@ var requestOperations = []struct {
 	{method: http.MethodPost, path: regexp.MustCompile(`^/v1/admin/agents$`), operation: "create_agent"},
 	{method: http.MethodPost, path: regexp.MustCompile(`^/v1/admin/agents/[^/]+/revisions$`), operation: "revise_agent"},
 	{method: http.MethodGet, path: regexp.MustCompile(`^/v1/admin/agents/[^/]+/revisions/[^/]+$`), operation: "get_agent_revision"},
+	{method: http.MethodPost, path: regexp.MustCompile(`^/v1/admin/policies$`), operation: "create_policy"},
+	{method: http.MethodPost, path: regexp.MustCompile(`^/v1/admin/policies/[^/]+/revisions$`), operation: "revise_policy"},
+	{method: http.MethodGet, path: regexp.MustCompile(`^/v1/admin/policies/[^/]+/revisions/[0-9]+$`), operation: "get_policy"},
+	{method: http.MethodGet, path: regexp.MustCompile(`^/v1/artifacts/[^/]+$`), operation: "read_artifact"},
+	{method: http.MethodGet, path: regexp.MustCompile(`^/v1/approvals$`), operation: "list_approvals"},
+	{method: http.MethodGet, path: regexp.MustCompile(`^/v1/approvals/[^/]+$`), operation: "inspect_approval"},
+	{method: http.MethodPost, path: regexp.MustCompile(`^/v1/approvals/[^/]+/decide$`), operation: "decide_approval"},
+	{method: http.MethodGet, path: regexp.MustCompile(`^/v1/idempotency$`), operation: "get_idempotency_status"},
 	{method: http.MethodPost, path: regexp.MustCompile(`^/v1/sessions$`), operation: "create_session"},
 	{method: http.MethodPost, path: regexp.MustCompile(`^/v1/sessions/[^/]+/inputs$`), operation: "send_input"},
 	{method: http.MethodGet, path: regexp.MustCompile(`^/v1/sessions/[^/]+$`), operation: "inspect_session"},
 	{method: http.MethodGet, path: regexp.MustCompile(`^/v1/sessions/[^/]+/turns/[^/]+$`), operation: "inspect_turn"},
+	{method: http.MethodGet, path: regexp.MustCompile(`^/v1/sessions/[^/]+/turns/[^/]+/tools$`), operation: "inspect_tool_calls"},
 	{method: http.MethodGet, path: regexp.MustCompile(`^/v1/sessions/[^/]+/events$`), operation: "list_events"},
+	{method: http.MethodGet, path: regexp.MustCompile(`^/v1/sessions/[^/]+/artifacts$`), operation: "list_session_artifacts"},
 	{method: http.MethodPost, path: regexp.MustCompile(`^/v1/sessions/[^/]+/turns/[^/]+/cancel$`), operation: "cancel_turn"},
 	{method: http.MethodPost, path: regexp.MustCompile(`^/v1/sessions/[^/]+/close$`), operation: "close_session"},
 	{method: http.MethodPost, path: regexp.MustCompile(`^/v1/sessions/[^/]+/cancel$`), operation: "cancel_session"},

@@ -2,6 +2,7 @@ package runtimeapiprocess
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"log/slog"
 	"testing"
@@ -35,7 +36,7 @@ func TestRequestObservabilityUsesOnlyBoundedRedactedCompletionFields(t *testing.
 		t.Fatalf("requestObservability(configured): %v", err)
 	}
 	correlation := configured.IdentityCorrelator.Correlate(runtimeapi.Identity{Tenant: "tenant-a", Principal: "alice"})
-	configured.Observer.ObserveRequest(runtimeapi.RequestObservation{
+	configured.Observer.ObserveRequest(context.Background(), runtimeapi.RequestObservation{
 		RequestID:            agentruntime.RequestID("req_0000000000000001"),
 		Operation:            "create_session",
 		Status:               201,

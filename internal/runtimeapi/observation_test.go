@@ -53,6 +53,7 @@ var _ = Describe("Runtime request observations", func() {
 		Expect(recorded.Status).To(Equal(http.StatusCreated))
 		Expect(recorded.Outcome).To(Equal(runtimeapi.RequestOutcomeSucceeded))
 		Expect(recorded.FailureCode).To(BeEmpty())
+		Expect(recorded.StartedAt).To(Equal(time.Date(2026, 8, 9, 12, 0, 0, 0, time.UTC)))
 		Expect(recorded.Duration).To(Equal(17 * time.Millisecond))
 		Expect(recorded.TenantCorrelation).NotTo(BeEmpty())
 		Expect(recorded.PrincipalCorrelation).NotTo(BeEmpty())
@@ -109,11 +110,21 @@ var _ = Describe("Runtime request observations", func() {
 			{http.MethodPost, "/v1/admin/agents", "create_agent"},
 			{http.MethodPost, "/v1/admin/agents/agent_1234567890ABCDEF/revisions", "revise_agent"},
 			{http.MethodGet, "/v1/admin/agents/agent_1234567890ABCDEF/revisions/arev_1234567890ABCDEF", "get_agent_revision"},
+			{http.MethodPost, "/v1/admin/policies", "create_policy"},
+			{http.MethodPost, "/v1/admin/policies/approval/revisions", "revise_policy"},
+			{http.MethodGet, "/v1/admin/policies/approval/revisions/2", "get_policy"},
+			{http.MethodGet, "/v1/artifacts/art_1234567890ABCDEF", "read_artifact"},
+			{http.MethodGet, "/v1/approvals", "list_approvals"},
+			{http.MethodGet, "/v1/approvals/apr_1234567890ABCDEF", "inspect_approval"},
+			{http.MethodPost, "/v1/approvals/apr_1234567890ABCDEF/decide", "decide_approval"},
+			{http.MethodGet, "/v1/idempotency", "get_idempotency_status"},
 			{http.MethodPost, "/v1/sessions", "create_session"},
 			{http.MethodPost, "/v1/sessions/sess_1234567890ABCDEF/inputs", "send_input"},
 			{http.MethodGet, "/v1/sessions/sess_1234567890ABCDEF", "inspect_session"},
 			{http.MethodGet, "/v1/sessions/sess_1234567890ABCDEF/turns/turn_1234567890ABCDEF", "inspect_turn"},
+			{http.MethodGet, "/v1/sessions/sess_1234567890ABCDEF/turns/turn_1234567890ABCDEF/tools", "inspect_tool_calls"},
 			{http.MethodGet, "/v1/sessions/sess_1234567890ABCDEF/events", "list_events"},
+			{http.MethodGet, "/v1/sessions/sess_1234567890ABCDEF/artifacts", "list_session_artifacts"},
 			{http.MethodPost, "/v1/sessions/sess_1234567890ABCDEF/turns/turn_1234567890ABCDEF/cancel", "cancel_turn"},
 			{http.MethodPost, "/v1/sessions/sess_1234567890ABCDEF/close", "close_session"},
 			{http.MethodPost, "/v1/sessions/sess_1234567890ABCDEF/cancel", "cancel_session"},
@@ -166,7 +177,7 @@ type recordingRequestObserver struct {
 	values []runtimeapi.RequestObservation
 }
 
-func (observer *recordingRequestObserver) ObserveRequest(observation runtimeapi.RequestObservation) {
+func (observer *recordingRequestObserver) ObserveRequest(_ context.Context, observation runtimeapi.RequestObservation) {
 	observer.mu.Lock()
 	defer observer.mu.Unlock()
 	observer.values = append(observer.values, observation)

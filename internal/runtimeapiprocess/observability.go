@@ -1,10 +1,12 @@
 package runtimeapiprocess
 
 import (
+	"context"
 	"log/slog"
 
 	"github.com/0x63616c/agent-runtime/internal/runtimeapi"
 	"github.com/cockroachdb/errors"
+	"go.opentelemetry.io/otel"
 )
 
 func requestObservability(config Config, lookup SecretLookup, logger *slog.Logger) (runtimeapi.Observability, error) {
@@ -22,12 +24,31 @@ func requestObservability(config Config, lookup SecretLookup, logger *slog.Logge
 	if err != nil {
 		return runtimeapi.Observability{}, errors.Wrap(err, "configure runtime API request observability")
 	}
-	return runtimeapi.Observability{Clock: systemClock{}, Observer: slogRequestObserver{logger: logger}, IdentityCorrelator: correlator}, nil
+	otelObserver, err := newOTelRequestObserver(
+		otel.GetMeterProvider().Meter(runtimeAPIInstrumentationScope),
+		otel.GetTracerProvider().Tracer(runtimeAPIInstrumentationScope),
+	)
+	if err != nil {
+		return runtimeapi.Observability{}, errors.Wrap(err, "configure runtime API request observability")
+	}
+	return runtimeapi.Observability{
+		Clock:              systemClock{},
+		Observer:           requestObservers{slogRequestObserver{logger: logger}, otelObserver},
+		IdentityCorrelator: correlator,
+	}, nil
+}
+
+type requestObservers []runtimeapi.RequestObserver
+
+func (observers requestObservers) ObserveRequest(ctx context.Context, observation runtimeapi.RequestObservation) {
+	for _, observer := range observers {
+		observer.ObserveRequest(ctx, observation)
+	}
 }
 
 type slogRequestObserver struct{ logger *slog.Logger }
 
-func (observer slogRequestObserver) ObserveRequest(observation runtimeapi.RequestObservation) {
+func (observer slogRequestObserver) ObserveRequest(_ context.Context, observation runtimeapi.RequestObservation) {
 	attributes := []any{
 		"request_id", observation.RequestID,
 		"operation", observation.Operation,
