@@ -18,13 +18,20 @@ CILIUM_CLI_VERSION=v0.19.4
 CILIUM_CLI_LINUX_AMD64_SHA256=98ecd554591a592b0ee32f5d73871133bcee06639619f1c032bcba339340dc26
 CILIUM_CLI_DARWIN_ARM64_SHA256=9e58b4b8cb6d926946b2e59eb25fc2fb923965d3e000e00325e0227704fcd318
 
+if [ "${1:-}" = "--evidence-metadata" ]; then
+	test "$#" = 1
+	printf '%s\n' '{"installer":"deploy/harness/install-pinned-cilium-cni.sh","version":"v1.18.11","artifact_sha256":"85ea267d7fb4a7f95fe0775ebad3919658905fb78627541a55e96478c33a8473","configuration":{"transport":"chart","wait_seconds":300}}'
+	exit 0
+fi
+
 if [ "${1:-}" = "--self-test" ]; then
-  test "$#" = 1
+	test "$#" = 1
   test "$CILIUM_VERSION" = "v1.18.11"
   test "$CILIUM_CHART_SHA256" = "85ea267d7fb4a7f95fe0775ebad3919658905fb78627541a55e96478c33a8473"
-  test "$CILIUM_CLI_LINUX_AMD64_SHA256" = "98ecd554591a592b0ee32f5d73871133bcee06639619f1c032bcba339340dc26"
-  test "$CILIUM_CLI_DARWIN_ARM64_SHA256" = "9e58b4b8cb6d926946b2e59eb25fc2fb923965d3e000e00325e0227704fcd318"
-  exit 0
+	test "$CILIUM_CLI_LINUX_AMD64_SHA256" = "98ecd554591a592b0ee32f5d73871133bcee06639619f1c032bcba339340dc26"
+	test "$CILIUM_CLI_DARWIN_ARM64_SHA256" = "9e58b4b8cb6d926946b2e59eb25fc2fb923965d3e000e00325e0227704fcd318"
+	test "$("$0" --evidence-metadata)" = '{"installer":"deploy/harness/install-pinned-cilium-cni.sh","version":"v1.18.11","artifact_sha256":"85ea267d7fb4a7f95fe0775ebad3919658905fb78627541a55e96478c33a8473","configuration":{"transport":"chart","wait_seconds":300}}'
+	exit 0
 fi
 
 kubeconfig_path=${1:-}

@@ -12,11 +12,18 @@ usage() {
 CALICO_VERSION=v3.32.1
 CALICO_MANIFEST_SHA256=a1df919d9721cf667accdc3e72848911b0cb25cfab7d2478ad0c996302c95744
 
+if [ "${1:-}" = "--evidence-metadata" ]; then
+	test "$#" = 1
+	printf '%s\n' '{"installer":"deploy/harness/install-pinned-calico-cni.sh","version":"v3.32.1","artifact_sha256":"a1df919d9721cf667accdc3e72848911b0cb25cfab7d2478ad0c996302c95744","configuration":{"dataplane":"iptables","felix_bpf_enabled":false,"ebpf_bootstrap_removed":true}}'
+	exit 0
+fi
+
 if [ "${1:-}" = "--self-test" ]; then
-  test "$#" = 1
-  test "$CALICO_VERSION" = "v3.32.1"
-  test "$CALICO_MANIFEST_SHA256" = "a1df919d9721cf667accdc3e72848911b0cb25cfab7d2478ad0c996302c95744"
-  exit 0
+	test "$#" = 1
+	test "$CALICO_VERSION" = "v3.32.1"
+	test "$CALICO_MANIFEST_SHA256" = "a1df919d9721cf667accdc3e72848911b0cb25cfab7d2478ad0c996302c95744"
+	test "$("$0" --evidence-metadata)" = '{"installer":"deploy/harness/install-pinned-calico-cni.sh","version":"v3.32.1","artifact_sha256":"a1df919d9721cf667accdc3e72848911b0cb25cfab7d2478ad0c996302c95744","configuration":{"dataplane":"iptables","felix_bpf_enabled":false,"ebpf_bootstrap_removed":true}}'
+	exit 0
 fi
 
 kubeconfig_path=${1:-}

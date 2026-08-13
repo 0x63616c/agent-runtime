@@ -57,14 +57,23 @@ var _ = Describe("M1 deployment safety boundaries", func() {
 		script := read("deploy/harness/run-k3s-networkpolicy-evidence.sh")
 		for _, required := range []string{
 			`--flannel-backend=none --disable-network-policy`,
-			`install-pinned-cilium-cni.sh" "$kubeconfig_path" "$K3S_CONTEXT"`,
-			`install-pinned-calico-cni.sh" "$kubeconfig_path" "$K3S_CONTEXT"`,
+			`cni_installer="$repo_root/deploy/harness/install-pinned-cilium-cni.sh"`,
+			`cni_installer="$repo_root/deploy/harness/install-pinned-calico-cni.sh"`,
+			`"$cni_installer" "$kubeconfig_path" "$K3S_CONTEXT"`,
 			`policy_engine=calico-iptables`,
 			`bootstrap_capability_file="$harness_tmp/bootstrap-capability.json"`,
 			`stackctl bootstrap --stack-file "$v1" --stack issue10-work --profile ci --bootstrap-capability-file "$bootstrap_capability_file"`,
 			`stackctl apply --stack-file "$v1" --stack issue10-work --profile ci --bootstrap-capability-file "$bootstrap_capability_file"`,
 			`stackctl transition --stack-file "$v2" --current-stack-file "$v1" --stack issue10-work --profile ci --bootstrap-capability-file "$bootstrap_capability_file"`,
 			`stackctl apply --stack-file "$v2" --stack issue10-work --profile ci --bootstrap-capability-file "$bootstrap_capability_file"`,
+			`if [ "${1:-}" = "--self-test" ]; then`,
+			`implementation_revision=$(git rev-parse HEAD)`,
+			`harness_sha256=$(sha256_file "$0")`,
+			`cni_metadata=$("$cni_installer" --evidence-metadata)`,
+			`v1_render_sha256=$(sha256_file "$v1")`,
+			`v2_render_sha256=$(sha256_file "$v2")`,
+			`audit_sha256=$(sha256_file "$audit_path")`,
+			`cleanup:{container_absent:true,tempdir_absent:true}`,
 		} {
 			Expect(script).To(ContainSubstring(required))
 		}
@@ -81,6 +90,8 @@ var _ = Describe("M1 deployment safety boundaries", func() {
 			`set env daemonset/calico-node FELIX_BPFENABLED=false`,
 			`rollout status daemonset/calico-node --timeout=5m`,
 			`rollout status deployment/calico-kube-controllers --timeout=5m`,
+			`--evidence-metadata`,
+			`"dataplane":"iptables"`,
 		} {
 			Expect(installer).To(ContainSubstring(required))
 		}
@@ -96,6 +107,7 @@ var _ = Describe("M1 deployment safety boundaries", func() {
 			`--wait-duration 5m`,
 			`rollout status daemonset/cilium --timeout=5m`,
 			`rollout status deployment/cilium-operator --timeout=5m`,
+			`--evidence-metadata`,
 		} {
 			Expect(installer).To(ContainSubstring(required))
 		}
