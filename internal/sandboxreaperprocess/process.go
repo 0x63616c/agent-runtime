@@ -117,22 +117,46 @@ func Loop(ctx context.Context, store Store, source clock.Clock, interval time.Du
 	if ctx == nil || store == nil || source == nil || wait == nil || observe == nil || interval <= 0 || interval > time.Minute || pageSize <= 0 || pageSize > 1000 {
 		return errors.New("run sandbox reaper loop: explicit finite authority is required")
 	}
+	failures := 0
 	for {
 		summary, err := ReconcileOnce(ctx, store, source.Now().UTC(), pageSize)
 		if err != nil {
 			if errors.Is(err, context.Canceled) {
 				return nil
 			}
-			return err
+			failures++
+		} else {
+			failures = 0
+			observe(summary)
 		}
-		observe(summary)
-		if err := wait(ctx, interval); err != nil {
+		if err := wait(ctx, retryDelay(interval, failures)); err != nil {
 			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) && ctx.Err() != nil {
 				return nil
 			}
 			return errors.Wrap(err, "wait for sandbox reaper interval")
 		}
 	}
+}
+
+// retryDelay gives reconciliation failures an explicit finite exponential
+// backoff. A successful pass resets it to the configured cadence. The cap is
+// deliberately independent from the deployment interval so a bad store cannot
+// create an unbounded silent retry period.
+func retryDelay(interval time.Duration, failures int) time.Duration {
+	if failures <= 1 {
+		return interval
+	}
+	delay := interval
+	for attempt := 1; attempt < failures && delay < time.Minute; attempt++ {
+		if delay > time.Minute/2 {
+			return time.Minute
+		}
+		delay *= 2
+	}
+	if delay > time.Minute {
+		return time.Minute
+	}
+	return delay
 }
 
 // ReconcileOnce invokes every durable recovery owner in fixed order.

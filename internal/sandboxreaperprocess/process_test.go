@@ -53,17 +53,55 @@ func TestLoopUsesInjectedClockAndWait(t *testing.T) {
 	}
 }
 
+func TestLoopRetriesFailuresWithBoundedBackoffAndResetsAfterSuccess(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 8, 7, 12, 0, 0, 0, time.UTC)
+	source, _ := clock.NewFake(now)
+	store := &recordingStore{recoverErrors: []error{context.DeadlineExceeded, context.DeadlineExceeded}}
+	var waits []time.Duration
+	observed := 0
+	err := Loop(context.Background(), store, source, time.Second, 7, func(_ context.Context, delay time.Duration) error {
+		waits = append(waits, delay)
+		if len(waits) == 3 {
+			return context.Canceled
+		}
+		return nil
+	}, func(Summary) { observed++ })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if store.recovered != 3 || observed != 1 {
+		t.Fatalf("recovered=%d observed=%d, want 3 and 1", store.recovered, observed)
+	}
+	if got, want := waits, []time.Duration{time.Second, 2 * time.Second, time.Second}; !sameDurations(got, want) {
+		t.Fatalf("waits=%v, want %v", got, want)
+	}
+}
+
+func TestRetryDelayIsBounded(t *testing.T) {
+	t.Parallel()
+
+	if got := retryDelay(time.Second, 100); got != time.Minute {
+		t.Fatalf("retryDelay() = %s, want %s", got, time.Minute)
+	}
+}
+
 type recordingStore struct {
-	recovered int
-	claimed   int
-	reaped    int
-	now       time.Time
-	pageSize  int
+	recovered     int
+	claimed       int
+	reaped        int
+	now           time.Time
+	pageSize      int
+	recoverErrors []error
 }
 
 func (store *recordingStore) RecoverExpiredAssignments(_ context.Context, now time.Time, pageSize int) ([]sandboxcontrol.Operation, error) {
 	store.recovered++
 	store.now, store.pageSize = now, pageSize
+	if index := store.recovered - 1; index < len(store.recoverErrors) {
+		return nil, store.recoverErrors[index]
+	}
 	return nil, nil
 }
 
@@ -75,4 +113,16 @@ func (store *recordingStore) ClaimExpiredCleanup(_ context.Context, _ time.Time,
 func (store *recordingStore) Reap(_ context.Context, _ time.Time, _ int) ([]sandboxcontrol.Operation, error) {
 	store.reaped++
 	return nil, nil
+}
+
+func sameDurations(got, want []time.Duration) bool {
+	if len(got) != len(want) {
+		return false
+	}
+	for index := range got {
+		if got[index] != want[index] {
+			return false
+		}
+	}
+	return true
 }
