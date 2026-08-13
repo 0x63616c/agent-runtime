@@ -140,7 +140,11 @@ func TestHTTPClientReplaysAuthenticatedBoundedOutputAfterCursor(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReplayOutput() error = %v", err)
 	}
-	defer stream.Close()
+	t.Cleanup(func() {
+		if closeErr := stream.Close(); closeErr != nil {
+			t.Errorf("close replay stream: %v", closeErr)
+		}
+	})
 	event, err := stream.Next(context.Background())
 	if err != nil || event.Cursor != events[0].Cursor || string(event.Chunk.Bytes) != "[REDACTED]" || !event.Chunk.Redacted {
 		t.Fatalf("ReplayOutput() event = %#v, %v", event, err)
