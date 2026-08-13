@@ -311,9 +311,14 @@ func TestGuestCommandRunnerUsesTypedArgvAndBoundsTheGuestProcessTreeOutput(t *te
 	if err != nil || string(result.stdout) != "typed-output\n" || len(result.stderr) != 0 {
 		t.Fatalf("runGuestCommand() = (%q, %q, %v)", result.stdout, result.stderr, err)
 	}
-	unsafe, _ := json.Marshal(guestCommand{Version: guestCommandVersion, Argv: []string{"/bin/echo", "x"}, WorkingDirectory: "/proc"})
-	if _, err := runGuestCommand(context.Background(), unsafe); err == nil {
-		t.Fatal("runGuestCommand() accepted a reserved process workdir")
+	for _, workingDirectory := range []string{"/proc", "/proc/self", "/sys", "/sys/kernel", "/dev", "/dev/shm", "/run", "/run/lock"} {
+		unsafe, err := json.Marshal(guestCommand{Version: guestCommandVersion, Argv: []string{"/bin/echo", "x"}, WorkingDirectory: workingDirectory})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := runGuestCommand(context.Background(), unsafe); err == nil {
+			t.Fatalf("runGuestCommand() accepted reserved workdir %q", workingDirectory)
+		}
 	}
 }
 

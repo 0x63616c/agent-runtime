@@ -94,7 +94,15 @@ func decodeGuestCommand(payload []byte) (guestCommand, error) {
 }
 
 func validGuestWorkdir(directory string) bool {
-	return filepath.IsAbs(directory) && filepath.Clean(directory) == directory && directory != "/" && !strings.HasPrefix(directory, "/proc/") && !strings.HasPrefix(directory, "/sys/") && !strings.HasPrefix(directory, "/dev/") && !strings.HasPrefix(directory, "/run/")
+	if !filepath.IsAbs(directory) || filepath.Clean(directory) != directory || directory == "/" {
+		return false
+	}
+	for _, reserved := range []string{"/proc", "/sys", "/dev", "/run"} {
+		if directory == reserved || strings.HasPrefix(directory, reserved+"/") {
+			return false
+		}
+	}
+	return true
 }
 
 type boundedGuestOutput struct {
