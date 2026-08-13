@@ -1,6 +1,9 @@
 package firecracker
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestCompileProtectedSmokePlanBindsEveryVerifiedFixtureAndExternalOwner(t *testing.T) {
 	fixtures := verifiedPlanFixtures(mustCompile(t, validProfile()))
@@ -50,6 +53,20 @@ func TestCompileDirectSmokePlanUsesTalosWritableJailerBaseWithoutChangingProtect
 	}
 	if got := jailerArgumentValue(protectedPlan.JailerArguments(), "--chroot-base-dir"); got != declaredJailerBaseDirectory {
 		t.Fatalf("protected chroot base = %q, want unchanged %q", got, declaredJailerBaseDirectory)
+	}
+}
+
+func TestCompileDirectSmokePlanRefusesAnUnreachableHostVisibleAPISocket(t *testing.T) {
+	fixtures := verifiedPlanFixtures(mustCompile(t, validProfile()))
+	config := ProtectedSmokeConfig{
+		VMID:          "a" + strings.Repeat("b", 62),
+		UID:           1001,
+		GID:           1002,
+		ExternalOwner: "firecracker-direct-limits",
+		Cgroup:        JailerCgroupAssignment{Version: "firecracker.jailer-cgroup/v1", StackResource: "firecracker-direct-kvm", Parent: "agent-runtime/firecracker-direct"},
+	}
+	if _, _, err := CompileDirectSmokePlan(config, fixtures); err == nil || !strings.Contains(err.Error(), "host-visible Firecracker API socket path exceeds Linux limit") {
+		t.Fatalf("CompileDirectSmokePlan() error = %v, want Unix socket path limit refusal", err)
 	}
 }
 

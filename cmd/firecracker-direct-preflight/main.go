@@ -104,7 +104,7 @@ func readConfig(path string) (directConfig, error) {
 }
 
 func validateConfig(configured directConfig, stat func(string) (os.FileInfo, error)) error {
-	if configured.Version != directConfigVersion || !validName(configured.ExecutionNamespace) || !validEvidenceDirectory(configured.EvidenceDirectory) || configured.JailerChrootBaseDir != "/var/lib/agent-runtime/firecracker-jailer" || !validRelativePath(configured.CgroupParent) || !validName(configured.StackResource) || !validName(configured.ExternalOwner) || configured.JailerUID == 0 || configured.JailerGID == 0 {
+	if configured.Version != directConfigVersion || !validName(configured.ExecutionNamespace) || !validEvidenceDirectory(configured.EvidenceDirectory) || configured.JailerChrootBaseDir != "/var/lib/f" || !validRelativePath(configured.CgroupParent) || !validName(configured.StackResource) || !validName(configured.ExternalOwner) || configured.JailerUID == 0 || configured.JailerGID == 0 {
 		return errors.New("root-owned direct config has invalid namespace, evidence, jailer, or cgroup authority")
 	}
 	for description, path := range map[string]string{

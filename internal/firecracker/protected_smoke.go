@@ -29,7 +29,18 @@ func CompileProtectedSmokePlan(config ProtectedSmokeConfig, fixtures FixtureSet)
 // for the separately reviewed Talos direct-run authority. The jailer base is
 // fixed here rather than taken from any command line or operator input.
 func CompileDirectSmokePlan(config ProtectedSmokeConfig, fixtures FixtureSet) (Plan, JailerExecutionAuthority, error) {
-	return compileSmokePlan(config, fixtures, directJailerBaseDirectory)
+	plan, authority, err := compileSmokePlan(config, fixtures, directJailerBaseDirectory)
+	if err != nil {
+		return Plan{}, JailerExecutionAuthority{}, err
+	}
+	// Linux sockaddr_un reserves one byte of its 108-byte sun_path field for
+	// NUL. The Jailer receives a chroot-visible socket path, whereas the host
+	// reaches the same socket through its complete Jailer root. Refuse a plan
+	// that could launch a healthy VMM but leave its API unreachable.
+	if len(hostJailedPath(expectedJailRoot(plan), fixedFirecrackerAPISocket)) > 107 {
+		return Plan{}, JailerExecutionAuthority{}, fmt.Errorf("compile direct smoke plan: %w: host-visible Firecracker API socket path exceeds Linux limit", ErrSmokeUnavailable)
+	}
+	return plan, authority, nil
 }
 
 func compileSmokePlan(config ProtectedSmokeConfig, fixtures FixtureSet, jailerBaseDirectory string) (Plan, JailerExecutionAuthority, error) {

@@ -80,7 +80,10 @@ identity() {
   namespace="agent-runtime-direct-kvm-$run_id"
   pod="firecracker-direct-kvm"
   [[ ${#namespace} -le 63 ]] || fail "derived namespace is too long"
-  vm_id="agent-runtime-direct-$run_id"
+  # Keep the host-visible Jailer API socket beneath Linux's 107-byte Unix
+  # socket pathname limit. The namespace remains the full disposable run
+  # identity; only the private Jailer VM ID needs this compact form.
+  vm_id="fc-$run_id"
   report_path="/var/lib/agent-runtime/firecracker-evidence/home-server/${run_id}.json"
 }
 
@@ -192,7 +195,7 @@ spec:
             - { name: direct-authority, mountPath: /var/lib/agent-runtime/firecracker-direct, readOnly: true }
             - { name: fixtures, mountPath: /var/lib/agent-runtime/firecracker-fixtures, readOnly: true }
             - { name: evidence, mountPath: /var/lib/agent-runtime/firecracker-evidence }
-            - { name: jailer, mountPath: /var/lib/agent-runtime/firecracker-jailer }
+            - { name: jailer, mountPath: /var/lib/f }
             # Bind only the delegated agent-runtime parent. The Jailer can
             # create and remove its own firecracker-direct child, but cannot
             # inspect or modify other host cgroup trees.
@@ -211,7 +214,7 @@ spec:
         - name: evidence
           hostPath: { path: /var/lib/agent-runtime/firecracker-evidence, type: Directory }
         - name: jailer
-          hostPath: { path: /var/lib/agent-runtime/firecracker-jailer, type: Directory }
+          hostPath: { path: /var/lib/f, type: Directory }
         - name: cgroup
           hostPath: { path: /sys/fs/cgroup/agent-runtime, type: Directory }
 EOF
@@ -275,14 +278,15 @@ self_test() {
   grep -Fqx '            - { name: direct-authority, mountPath: /var/lib/agent-runtime/firecracker-direct, readOnly: true }' "$manifest"
   grep -Fqx '            - { name: fixtures, mountPath: /var/lib/agent-runtime/firecracker-fixtures, readOnly: true }' "$manifest"
   grep -Fqx '            - { name: evidence, mountPath: /var/lib/agent-runtime/firecracker-evidence }' "$manifest"
-  grep -Fqx '            - { name: jailer, mountPath: /var/lib/agent-runtime/firecracker-jailer }' "$manifest"
+  grep -Fqx '            - { name: jailer, mountPath: /var/lib/f }' "$manifest"
   grep -Fqx '            - { name: cgroup, mountPath: /sys/fs/cgroup/agent-runtime, readOnly: false }' "$manifest"
   grep -Fqx '          hostPath: { path: /var/lib/agent-runtime/firecracker-direct, type: Directory }' "$manifest"
   grep -Fqx '          hostPath: { path: /var/lib/agent-runtime/firecracker-fixtures, type: Directory }' "$manifest"
   grep -Fqx '          hostPath: { path: /var/lib/agent-runtime/firecracker-evidence, type: Directory }' "$manifest"
-  grep -Fqx '          hostPath: { path: /var/lib/agent-runtime/firecracker-jailer, type: Directory }' "$manifest"
+  grep -Fqx '          hostPath: { path: /var/lib/f, type: Directory }' "$manifest"
   grep -Fqx '          hostPath: { path: /sys/fs/cgroup/agent-runtime, type: Directory }' "$manifest"
   grep -Fqx '              -report /var/lib/agent-runtime/firecracker-evidence/home-server/smoke-test.json' "$manifest"
+  grep -Fqx '              -vm-id fc-smoke-test' "$manifest"
   if "$0" render --run-id upperCase --image "ghcr.io/0x63616c/agent-runtime-direct-runner@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" --output "$tmp/bad" >/dev/null 2>&1; then fail "accepted invalid run ID"; fi
   if "$0" render --run-id smoke-test --image "example.invalid/unpinned:latest" --output "$tmp/bad" >/dev/null 2>&1; then fail "accepted unreviewed image"; fi
   if "$0" execute --run-id smoke-test --image "ghcr.io/0x63616c/agent-runtime-direct-runner@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" --kubeconfig /dev/null --context home-server --registry-docker-config /dev/null --evidence-file "$tmp/evidence.json" >/dev/null 2>&1; then fail "execute accepted no explicit authorization flag"; fi
