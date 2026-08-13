@@ -3,6 +3,8 @@ package runtimemodel
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
@@ -200,15 +202,42 @@ func (worker *Worker) process(ctx context.Context, record runtimestate.OutboxRec
 		if validateErr != nil {
 			return fmt.Errorf("admit model tool request: arguments do not match declared input schema: %w", validateErr)
 		}
-		_ = arguments // Canonical validation is complete before any broker state exists.
-		handoff, stageErr := worker.content.StageToolActionDescriptor(ctx, record.Tenant, response.Tool.Descriptor)
+		// The model's canonical arguments must survive approval and recovery with
+		// the exact private action they were validated for. Bind them before
+		// staging, rather than treating schema validation as a throw-away check.
+		boundDescriptor, bindErr := runtimecontent.BindToolActionDescriptor(response.Tool.Descriptor, arguments)
+		if bindErr != nil {
+			return fmt.Errorf("admit model tool request: bind validated arguments: %w", bindErr)
+		}
+		handoff, stageErr := worker.content.StageToolActionDescriptor(ctx, record.Tenant, boundDescriptor)
 		if stageErr != nil {
 			return stageErr
 		}
-		_, admitErr := worker.broker.Admit(ctx, runtimetool.AdmissionRequest{Tenant: record.Tenant, Principal: record.Principal, SessionID: record.SessionID, TurnID: record.TurnID, ToolCallID: response.Tool.ToolCallID, ApprovalID: agentruntime.ApprovalID(response.Tool.ApprovalID), PolicyName: response.Tool.PolicyName, PolicyRevision: response.Tool.PolicyRevision, ToolName: response.Tool.ToolName, ActionDigest: response.Tool.ActionDigest, CapabilityDigest: response.Tool.CapabilityDigest, Action: response.Tool.Action, MaximumUses: response.Tool.MaximumUses, ExpiresAt: response.Tool.ExpiresAt, Descriptor: handoff, IdempotencyKey: fmt.Sprintf("model-tool-%s-%d", record.OperationID, invocation.Fence)})
+		actionDigest := boundToolDigest(boundDescriptor)
+		capabilityDigest := boundCapabilityDigest(response.Tool.CapabilityDigest, actionDigest)
+		_, admitErr := worker.broker.Admit(ctx, runtimetool.AdmissionRequest{Tenant: record.Tenant, Principal: record.Principal, SessionID: record.SessionID, TurnID: record.TurnID, ToolCallID: response.Tool.ToolCallID, ApprovalID: agentruntime.ApprovalID(response.Tool.ApprovalID), PolicyName: response.Tool.PolicyName, PolicyRevision: response.Tool.PolicyRevision, ToolName: response.Tool.ToolName, ActionDigest: actionDigest, CapabilityDigest: capabilityDigest, Action: response.Tool.Action, MaximumUses: response.Tool.MaximumUses, ExpiresAt: response.Tool.ExpiresAt, Descriptor: handoff, IdempotencyKey: fmt.Sprintf("model-tool-%s-%d", record.OperationID, invocation.Fence)})
 		return admitErr
 	}
 	return worker.finalize(ctx, record, invocation, session, turn, response)
+}
+
+func boundToolDigest(descriptor []byte) string {
+	sum := sha256.Sum256(descriptor)
+	return fmt.Sprintf("sha256:%x", sum)
+}
+
+// boundCapabilityDigest prevents a grant issued for one private action and
+// validated input from being reused for a different sealed descriptor.
+func boundCapabilityDigest(providerDigest, actionDigest string) string {
+	encoded, err := json.Marshal(struct {
+		Version        string `json:"version"`
+		ProviderDigest string `json:"provider_digest"`
+		ActionDigest   string `json:"action_digest"`
+	}{Version: "agent-runtime.tool-capability/v1", ProviderDigest: providerDigest, ActionDigest: actionDigest})
+	if err != nil {
+		panic("canonical bound tool capability")
+	}
+	return boundToolDigest(encoded)
 }
 
 func (worker *Worker) agentSpecification(ctx context.Context, tenant runtimecontent.TenantID, session runtimestate.SessionRecord) (agentruntime.AgentSpecification, error) {

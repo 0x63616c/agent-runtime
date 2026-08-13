@@ -105,6 +105,17 @@ func (broker *Broker) Admit(ctx context.Context, request AdmissionRequest) (Admi
 			}
 			return Admission{}, ErrDenied
 		}
+		// Recovered model workers must acknowledge an admission that committed
+		// before their outbox acknowledgement, even when a newer runtime version
+		// now seals additional private descriptor fields. The pre-existing pending
+		// intent remains the only executable action; this path never replaces it.
+		receipt, receiptErr := broker.store.GetMutationReceipt(ctx, runtimestate.MutationReceiptQuery{Scope: scope, IdempotencyKey: request.IdempotencyKey})
+		if receiptErr == nil && receipt.Command == string(runtimestate.CommandAdmitToolApproval) && alreadyAdmitted(state, request, policy.Digest) {
+			return Admission{ToolCallID: request.ToolCallID, ApprovalID: request.ApprovalID}, nil
+		}
+		if receiptErr != nil && !errors.Is(receiptErr, runtimestate.ErrNotFoundOrDenied) {
+			return Admission{}, receiptErr
+		}
 		mutation, err := broker.compiler.CompileAdmitToolApproval(runtimestate.AdmitToolApprovalCommand{
 			Scope: scope, IdempotencyKey: request.IdempotencyKey, SessionID: request.SessionID, TurnID: request.TurnID,
 			ToolCallID: request.ToolCallID, ToolName: request.ToolName, ApprovalID: request.ApprovalID.String(),
@@ -128,6 +139,25 @@ func (broker *Broker) Admit(ctx context.Context, request AdmissionRequest) (Admi
 		return Admission{ToolCallID: request.ToolCallID, ApprovalID: request.ApprovalID}, nil
 	}
 	return Admission{}, runtimestate.ErrConflict
+}
+
+func alreadyAdmitted(state runtimestate.RuntimeState, request AdmissionRequest, policyDigest string) bool {
+	intentFound := false
+	for _, intent := range state.ToolIntents {
+		if intent.Tenant == request.Tenant && intent.Principal == request.Principal && intent.SessionID == request.SessionID && intent.TurnID == request.TurnID && intent.ToolCallID == request.ToolCallID && intent.ToolName == request.ToolName && intent.PolicyRevisionDigest == policyDigest {
+			intentFound = true
+			break
+		}
+	}
+	if !intentFound {
+		return false
+	}
+	for _, approval := range state.Approvals {
+		if approval.Tenant == request.Tenant && approval.Principal == request.Principal && approval.SessionID == request.SessionID && approval.TurnID == request.TurnID && approval.ToolCallID == request.ToolCallID && approval.ApprovalID == request.ApprovalID.String() && approval.PolicyRevisionDigest == policyDigest && approval.State == string(agentruntime.ApprovalPending) {
+			return true
+		}
+	}
+	return false
 }
 
 // unavailablePolicyRevisionDigest is a bounded commitment to the policy

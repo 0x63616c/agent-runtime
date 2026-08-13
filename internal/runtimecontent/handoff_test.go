@@ -261,6 +261,30 @@ func TestToolActionDescriptorReaderRequiresExactWorkerProvenanceAndIntegrity(t *
 	}
 }
 
+func TestBoundToolActionDescriptorSealsCanonicalArgumentsAndKeepsLegacyReadable(t *testing.T) {
+	descriptor := []byte(`{"kind":"workspace.write","path":"report.txt"}`)
+	bound, err := runtimecontent.BindToolActionDescriptor(descriptor, []byte(`{"mode":"safe","path":"report.txt"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	restoredDescriptor, arguments, err := runtimecontent.UnbindToolActionDescriptor(bound)
+	if err != nil || string(restoredDescriptor) != string(descriptor) || string(arguments) != `{"mode":"safe","path":"report.txt"}` {
+		t.Fatalf("unbind bound action = descriptor=%q arguments=%q err=%v", restoredDescriptor, arguments, err)
+	}
+	legacyDescriptor, legacyArguments, err := runtimecontent.UnbindToolActionDescriptor(descriptor)
+	if err != nil || string(legacyDescriptor) != string(descriptor) || legacyArguments != nil {
+		t.Fatalf("unbind legacy action = descriptor=%q arguments=%q err=%v", legacyDescriptor, legacyArguments, err)
+	}
+	for _, invalid := range [][]byte{
+		[]byte(`{"version":"agent-runtime.bound-tool-action/v1","descriptor_b64":"not_base64","arguments":{}}`),
+		[]byte(`{"version":"agent-runtime.bound-tool-action/v1","descriptor_b64":"YQ","arguments":{},"unexpected":true}`),
+	} {
+		if _, _, err := runtimecontent.UnbindToolActionDescriptor(invalid); err == nil {
+			t.Fatalf("malformed bound action was accepted: %s", invalid)
+		}
+	}
+}
+
 func TestInputEnvelopeReaderAuthorizesAndHydratesExactInputMetadata(t *testing.T) {
 	store, _, tenant, _ := testStore(t)
 	principal := testPrincipalID(t, "alice")

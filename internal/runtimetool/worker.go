@@ -34,7 +34,10 @@ type Request struct {
 	// Descriptor is the exact verified immutable sandbox-control action. It is
 	// supplied only after the worker's state authorization succeeds.
 	Descriptor []byte
-	dispatch   *dispatchCapability
+	// Arguments are the exact canonical model input sealed with Descriptor at
+	// admission. They are private to the authorized adapter dispatch path.
+	Arguments []byte
+	dispatch  *dispatchCapability
 }
 
 // dispatchCapability is created only by Worker after it has loaded the
@@ -475,14 +478,18 @@ func (w *Worker) process(ctx context.Context, r runtimestate.OutboxRecord, recov
 	if !w.executionDispatchAllowed(s, x) {
 		return w.recordDispatchRefusal(ctx, r, lease)
 	}
-	descriptor, err := w.descriptorReader.ReadToolActionDescriptor(ctx, r.Tenant, r.Principal, r.SessionID, r.TurnID, r.ToolCallID)
+	boundDescriptor, err := w.descriptorReader.ReadToolActionDescriptor(ctx, r.Tenant, r.Principal, r.SessionID, r.TurnID, r.ToolCallID)
 	if err != nil {
 		if ctx.Err() != nil || errors.Is(err, runtimecontent.ErrUnavailable) {
 			return err
 		}
 		return w.recordDescriptorFailure(ctx, r, lease)
 	}
-	q := Request{Tenant: r.Tenant, SessionID: r.SessionID, TurnID: r.TurnID, ToolCallID: r.ToolCallID, OperationID: r.OperationID, Descriptor: descriptor, dispatch: w.dispatch}
+	descriptor, arguments, err := runtimecontent.UnbindToolActionDescriptor(boundDescriptor)
+	if err != nil {
+		return w.recordDescriptorFailure(ctx, r, lease)
+	}
+	q := Request{Tenant: r.Tenant, SessionID: r.SessionID, TurnID: r.TurnID, ToolCallID: r.ToolCallID, OperationID: r.OperationID, Descriptor: descriptor, Arguments: arguments, dispatch: w.dispatch}
 	var out Response
 	if recover {
 		out, e = w.adapter.Reconcile(ctx, q)

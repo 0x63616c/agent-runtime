@@ -5,7 +5,9 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
+	"encoding/json"
 	"io"
 	"strings"
 	"time"
@@ -674,6 +676,72 @@ func (store *Store) StageToolActionDescriptor(ctx context.Context, tenant Tenant
 		return ContentHandoff{}, err
 	}
 	return ContentHandoff{issuer: store, tenant: tenant, reference: reference, kind: contentKindToolActionDescriptor}, nil
+}
+
+// BindToolActionDescriptor seals canonical model arguments to one opaque
+// adapter descriptor before it is staged. The wrapper is private runtime
+// content: it is never used as an Approval summary or exposed through the
+// public API. Descriptor bytes are base64 encoded because concrete adapters
+// are allowed to use non-JSON descriptor formats.
+func BindToolActionDescriptor(descriptor, arguments []byte) ([]byte, error) {
+	if len(descriptor) == 0 || len(descriptor) > maximumConversationEntryBytes || len(arguments) == 0 || len(arguments) > 48<<10 {
+		return nil, errors.New("bind tool action descriptor: invalid bounded descriptor or arguments")
+	}
+	var decoded map[string]json.RawMessage
+	if err := json.Unmarshal(arguments, &decoded); err != nil || decoded == nil {
+		return nil, errors.New("bind tool action descriptor: arguments must be canonical object JSON")
+	}
+	canonicalArguments, err := json.Marshal(decoded)
+	if err != nil || len(canonicalArguments) == 0 {
+		return nil, errors.New("bind tool action descriptor: canonicalize arguments")
+	}
+	bound, err := json.Marshal(struct {
+		Version    string          `json:"version"`
+		Descriptor string          `json:"descriptor_b64"`
+		Arguments  json.RawMessage `json:"arguments"`
+	}{Version: "agent-runtime.bound-tool-action/v1", Descriptor: base64.RawStdEncoding.EncodeToString(descriptor), Arguments: canonicalArguments})
+	if err != nil || len(bound) == 0 || len(bound) > maximumConversationEntryBytes {
+		return nil, errors.New("bind tool action descriptor: canonicalize bound action")
+	}
+	return bound, nil
+}
+
+// UnbindToolActionDescriptor restores the exact adapter descriptor and its
+// immutable canonical arguments. Legacy opaque descriptors remain readable
+// for recovery and intentionally report no model arguments.
+func UnbindToolActionDescriptor(body []byte) (descriptor, arguments []byte, err error) {
+	var header struct {
+		Version string `json:"version"`
+	}
+	if json.Unmarshal(body, &header) != nil || header.Version != "agent-runtime.bound-tool-action/v1" {
+		return append([]byte(nil), body...), nil, nil
+	}
+	var envelope struct {
+		Version    string          `json:"version"`
+		Descriptor string          `json:"descriptor_b64"`
+		Arguments  json.RawMessage `json:"arguments"`
+	}
+	decoder := json.NewDecoder(bytes.NewReader(body))
+	decoder.DisallowUnknownFields()
+	if decodeErr := decoder.Decode(&envelope); decodeErr != nil || envelope.Version != "agent-runtime.bound-tool-action/v1" {
+		return nil, nil, errors.New("unbind tool action descriptor: malformed bound action")
+	}
+	if decodeErr := decoder.Decode(&struct{}{}); decodeErr != io.EOF || envelope.Descriptor == "" || len(envelope.Arguments) == 0 {
+		return nil, nil, errors.New("unbind tool action descriptor: malformed bound action")
+	}
+	descriptor, err = base64.RawStdEncoding.DecodeString(envelope.Descriptor)
+	if err != nil || len(descriptor) == 0 || len(descriptor) > maximumConversationEntryBytes {
+		return nil, nil, errors.New("unbind tool action descriptor: invalid descriptor")
+	}
+	var decoded map[string]json.RawMessage
+	if err := json.Unmarshal(envelope.Arguments, &decoded); err != nil || decoded == nil {
+		return nil, nil, errors.New("unbind tool action descriptor: invalid arguments")
+	}
+	arguments, err = json.Marshal(decoded)
+	if err != nil || len(arguments) == 0 || len(arguments) > 48<<10 {
+		return nil, nil, errors.New("unbind tool action descriptor: canonicalize arguments")
+	}
+	return descriptor, arguments, nil
 }
 func (store *Store) ValidateToolActionDescriptorHandoff(h ContentHandoff) (ToolActionDescriptorCommitment, error) {
 	if store == nil || h.issuer != store || h.kind != contentKindToolActionDescriptor || !validTenantID(h.tenant) || h.reference.MediaType != ToolActionDescriptorMediaTypeV1 || h.reference.SizeBytes <= 0 || h.reference.SizeBytes > maximumConversationEntryBytes || !validDigest(h.reference.Digest) {
