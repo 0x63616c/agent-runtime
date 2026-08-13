@@ -127,6 +127,12 @@ type KubernetesMigrationAdapter interface {
 	Rollback(context.Context, OperatorTarget, Rendered, Rendered, BootstrapAuthority) error
 }
 
+// KubernetesPostMigrationAdapter applies the explicitly marked one-shot Jobs
+// only after a successful migration phase.
+type KubernetesPostMigrationAdapter interface {
+	ApplyPostMigration(context.Context, OperatorTarget, KubernetesManifests, BootstrapAuthority) (KubernetesObservation, error)
+}
+
 // OrchestrationAdapter reconciles only reviewed durable orchestration declarations.
 type OrchestrationAdapter interface {
 	ReconcileOrchestration(context.Context, OperatorTarget, Rendered, BootstrapAuthority) ([]ResourceID, error)
@@ -273,6 +279,13 @@ func (operator KubernetesOperator) Apply(ctx context.Context, request OperatorRe
 	}
 	if migrationErr := operator.upgradeMigrations(ctx, request.Target, rendered, document, request.BootstrapAuthority); migrationErr != nil {
 		return KubernetesObservation{}, operator.recordFailure(ctx, request, document, OperatorActionApply, migrationErr)
+	}
+	if deferred, ok := operator.adapter.(KubernetesPostMigrationAdapter); ok {
+		postObservation, postErr := deferred.ApplyPostMigration(ctx, request.Target, manifests, request.BootstrapAuthority)
+		if postErr != nil {
+			return KubernetesObservation{}, operator.recordFailure(ctx, request, document, OperatorActionApply, postErr)
+		}
+		observation.ObjectIDs = append(observation.ObjectIDs, postObservation.ObjectIDs...)
 	}
 	if operator.orchestration != nil {
 		if _, orchestrationErr := operator.orchestration.ReconcileOrchestration(ctx, request.Target, rendered, request.BootstrapAuthority); orchestrationErr != nil {

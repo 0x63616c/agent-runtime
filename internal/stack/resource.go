@@ -151,6 +151,9 @@ type KubernetesResource struct {
 	SecretMounts []SecretMount `json:"secret_mounts,omitempty"`
 	// Readiness is the explicit workload health probe when an operator must await service readiness.
 	Readiness *ReadinessProbe `json:"readiness,omitempty"`
+	// PostMigration defers a one-shot Job until every declared database migration
+	// has completed. It is only valid for local/CI bootstrap Jobs.
+	PostMigration bool `json:"post_migration,omitempty"`
 	// Ports is explicit, including an empty array for workloads with no ports.
 	Ports []Port `json:"ports,omitempty"`
 	// Compute contains finite requests and limits for workloads.
@@ -368,7 +371,8 @@ type DatabaseResource struct {
 	// ConnectionReference names a SecretReference resource.
 	ConnectionReference ResourceID `json:"connection_reference"`
 	// MigrationTarget names the declared Kubernetes workload that executes reviewed migration artifacts.
-	MigrationTarget ResourceID `json:"migration_target"`
+	MigrationTarget    ResourceID `json:"migration_target"`
+	MigrationAuthority string     `json:"migration_authority,omitempty"`
 	// Migrations is an ordered reversible migration set.
 	Migrations []Migration `json:"migrations"`
 }
@@ -507,6 +511,9 @@ func validateKubernetes(resource Resource, namespace string, profile Profile) er
 		}
 		if !imageDigestPattern.MatchString(object.Image) {
 			return errors.Newf("resource %s workload image must use an immutable sha256 digest", resource.ID)
+		}
+		if object.PostMigration && object.Kind != "Job" {
+			return errors.Newf("resource %s post_migration is valid only for a Job", resource.ID)
 		}
 		if object.ServiceAccount == "" || object.Ports == nil || object.Storage == nil {
 			return errors.Newf("resource %s workload must explicitly declare service account, ports, and storage", resource.ID)

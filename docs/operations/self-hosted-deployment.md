@@ -16,8 +16,14 @@ this configuration, the operator must provision the named API tokens and a
 content-store identity restricted to the declared bucket/prefix, grant the
 runtime database login its reviewed non-superuser role, and retain the live
 Kubernetes/Temporal/blob deployment evidence separately. Model/tool/approval
-execution and Firecracker host-agent production operation are not yet live
-deployment claims.
+execution and Firecracker guest execution are not yet live deployment claims.
+The Stack does compose the real `sandbox-control` and `sandbox-host` daemons:
+local and CI derive a short-lived, stack-scoped mTLS trust domain, while
+production names externally owned Secret references. The disposable PostgreSQL
+integration suite exercises authenticated enrollment, operation pull,
+fencing/revocation and journal recovery between those daemon processes. That
+is protocol-composition proof, not a deployed cluster or Linux/KVM execution
+claim.
 
 Agent Runtime is self-hosted as explicit, separately deployable processes. An
 operator applies a reviewed typed Stack with `stackctl`; no runtime binary,
@@ -47,17 +53,20 @@ credentials would destroy the trust boundary.
 | `orchestration` | state, telemetry, Temporal | `STATE_DATABASE_DSN`, `TEMPORAL_AUTH_TOKEN` | Model, tool, blob, sandbox-host secrets |
 | `orchestration-codec` | state metadata, telemetry, Temporal, dedicated temporal-payload bucket/prefix and task queue; optional HTTPS audit sink | `STATE_DATABASE_DSN`, `TEMPORAL_AUTH_TOKEN`, `ORCHESTRATION_PAYLOAD_BLOB_ACCESS_KEY`, `ORCHESTRATION_PAYLOAD_BLOB_SECRET_KEY` | Public/API credentials, runtime-content bucket/prefix, model, tool, sandbox-host secrets. This source role is not selected by the current Stack image pin until its current-SHA image is published and attested. |
 | `model` | conversation, egress proxy, model, telemetry | `CONVERSATION_ACCESS_TOKEN`, `MODEL_API_KEY` | Temporal, state DB, tool, storage, host secrets |
-| `tool` | sandbox control, telemetry, tool broker | `SANDBOX_CONTROL_TOKEN`, `TOOL_BROKER_TOKEN` | Temporal, model, state DB, blob credentials |
+| `tool` | telemetry, tool broker | `TOOL_BROKER_TOKEN` | Temporal, model, state DB, blob, and sandbox-control credentials. The generic Tool process is intentionally disconnected from the sandbox-control protocol; it is not a Tool-to-sandbox integration path. |
 | `blob` | storage, telemetry | `BLOB_STORAGE_CREDENTIAL` | Temporal, model, tool and sandbox credentials |
 | `codec` | blob, telemetry | `CODEC_BLOB_CREDENTIAL` | Temporal client credentials and model/tool credentials |
-| `sandbox-control` | host CA, sandbox state, telemetry | `SANDBOX_HOST_CA`, `SANDBOX_STATE_DSN` | Model, tool, Temporal and storage credentials |
-| `sandbox-host` | host identity, sandbox control, telemetry | `SANDBOX_HOST_IDENTITY`, `SANDBOX_CONTROL_TOKEN` | Model, tool, Temporal, DB and blob credentials |
+| `sandbox-control` | PostgreSQL control ledger, public TLS identity, host-mTLS identity/CA, signed control trust | `SANDBOX_STATE_DSN`, `SANDBOX_AUTHORIZATION`, `SANDBOX_ASSERTION_KEY`, `SANDBOX_CONTROL_SIGNING_KEY` | Model, tool, Temporal and storage credentials |
+| `sandbox-host` | control mTLS client identity/CA, mounted control-trust snapshot, persistent receipt journal | `SANDBOX_HOST_SIGNING_KEY` | Model, tool, Temporal, DB and blob credentials |
 
-The M1 health-only `sandbox-control` role is explicitly plain HTTP on Service
-port `8086`; the tool and sandbox-host placeholders use that exact address, and
-the Kubernetes smoke proves the tool egress identity can reach `/readyz` there.
-It is not the M3 private control protocol. M3 owns a separate TLS 1.3 endpoint
-on port `9443`, with its own trust, enrollment, and Linux/KVM evidence.
+`sandbox-control` exposes public TLS on Service port `8086` and the private
+host mTLS protocol on port `9443`. The host has no generic runtime role
+configuration or HTTP placeholder: it starts `/sandbox-host` with a strict
+mounted configuration, verifies the control server name and CA, and retains
+only its receipt journal on its PVC. The generic Tool role carries neither a
+sandbox-control token nor a declared endpoint or egress route. A future
+Tool-to-control bridge must be explicit, mutually authenticated, and
+separately evidenced.
 
 The production Stack fixture is required to give each role its own Kubernetes
 ServiceAccount, only the narrowly declared RBAC binding (or no Kubernetes API

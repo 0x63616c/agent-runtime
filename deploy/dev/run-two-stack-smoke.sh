@@ -156,14 +156,18 @@ empty_runtime_role_startup_status() {
 # copying arbitrary output into the CI artifact or log.
 classify_tilt_ci_failure() {
   local output="$1"
-  if grep -Eiq '(^|[^[:alpha:]])(tiltfile|go run ./tools/dev render|stackctl manifests|tools/dev secrets)([^[:alpha:]]|$)' "$output"; then
-    printf '%s' render
+  # A successful Tilt invocation normally prints the word "Tiltfile", so it
+  # is not evidence of a render failure. Match only an error/failure adjacent
+  # to a renderer operation, and prefer a terminal readiness timeout when it
+  # is present alongside earlier routine Tiltfile output.
+  if grep -Eiq '(^|[^[:alpha:]])(timed out waiting|readiness|resource .* failed)([^[:alpha:]]|$)' "$output"; then
+    printf '%s' readiness
   elif grep -Eiq '(^|[^[:alpha:]])(docker build|build failed|failed to solve|error building image)([^[:alpha:]]|$)' "$output"; then
     printf '%s' image_build
   elif grep -Eiq '(^|[^[:alpha:]])(error from server|apply failed|failed to apply|unable to recognize)([^[:alpha:]]|$)' "$output"; then
     printf '%s' kubernetes_apply
-  elif grep -Eiq '(^|[^[:alpha:]])(timed out waiting|readiness|resource .* failed)([^[:alpha:]]|$)' "$output"; then
-    printf '%s' readiness
+  elif grep -Eiq '(tiltfile.*(error|failed)|error.*tiltfile|go run ./tools/dev render.*(error|failed)|stackctl manifests.*(error|failed)|tools/dev secrets.*(error|failed))' "$output"; then
+    printf '%s' render
   else
     printf '%s' unknown
   fi
@@ -397,6 +401,21 @@ if [[ "$diagnostic_self_test" == true ]]; then
   printf '%s\n' 'Build Failed: MODEL_API_KEY=adversarial-env-secret' >"$tilt_fixture"
   if [[ "$(classify_tilt_ci_failure "$tilt_fixture")" != image_build ]]; then
     echo "Tilt failure classifier did not classify a build failure" >&2
+    exit 1
+  fi
+  printf '%s\n' 'Loading Tiltfile at: /workspace/Tiltfile' >"$tilt_fixture"
+  if [[ "$(classify_tilt_ci_failure "$tilt_fixture")" != unknown ]]; then
+    echo "Tilt failure classifier treated routine Tiltfile output as a render failure" >&2
+    exit 1
+  fi
+  printf '%s\n' 'Error: Tiltfile execution failed while rendering manifests' >"$tilt_fixture"
+  if [[ "$(classify_tilt_ci_failure "$tilt_fixture")" != render ]]; then
+    echo "Tilt failure classifier did not classify a render failure" >&2
+    exit 1
+  fi
+  printf '%s\n' 'timed out waiting for resource api to become ready' >"$tilt_fixture"
+  if [[ "$(classify_tilt_ci_failure "$tilt_fixture")" != readiness ]]; then
+    echo "Tilt failure classifier did not classify a readiness failure" >&2
     exit 1
   fi
   printf '%s\n' 'unrecognized failure Bearer adversarial-header-token' >"$tilt_fixture"

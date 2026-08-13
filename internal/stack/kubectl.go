@@ -70,10 +70,38 @@ func (adapter KubectlAdapter) Apply(ctx context.Context, target OperatorTarget, 
 	if err := adapter.verifyBootstrapAuthority(ctx, target, manifests, authority); err != nil {
 		return KubernetesObservation{}, err
 	}
-	if err := adapter.runSuccess(ctx, target, []string{"apply", "--server-side", "--field-manager=agent-runtime-stackctl", "-f", "-"}, manifests.JSON()); err != nil {
+	early, err := manifests.withoutPostMigration()
+	if err != nil {
+		return KubernetesObservation{}, err
+	}
+	if err := adapter.runSuccess(ctx, target, []string{"apply", "--server-side", "--field-manager=agent-runtime-stackctl", "-f", "-"}, early.JSON()); err != nil {
 		return KubernetesObservation{}, errors.Wrap(err, "apply rendered Kubernetes manifests")
 	}
-	return adapter.Observe(ctx, target, manifests)
+	return adapter.Observe(ctx, target, early)
+}
+
+// ApplyPostMigration applies only Stack Jobs explicitly marked for the
+// post-migration phase and waits for their finite completion.
+func (adapter KubectlAdapter) ApplyPostMigration(ctx context.Context, target OperatorTarget, manifests KubernetesManifests, authority BootstrapAuthority) (KubernetesObservation, error) {
+	if err := adapter.verifyBootstrapAuthority(ctx, target, manifests, authority); err != nil {
+		return KubernetesObservation{}, err
+	}
+	post, err := manifests.onlyPostMigration()
+	if err != nil || len(post.objects) == 0 {
+		return KubernetesObservation{}, err
+	}
+	if err := adapter.runSuccess(ctx, target, []string{"apply", "--server-side", "--field-manager=agent-runtime-stackctl", "-f", "-"}, post.JSON()); err != nil {
+		return KubernetesObservation{}, errors.Wrap(err, "apply post-migration Kubernetes Jobs")
+	}
+	for _, object := range post.objects {
+		if object.Kind != "Job" {
+			return KubernetesObservation{}, errors.New("apply post-migration Kubernetes Jobs: only Jobs are allowed")
+		}
+		if err := adapter.runSuccess(ctx, target, []string{"wait", "--for=condition=complete", "Job/" + object.Metadata.Name, "--namespace", post.namespace.Metadata.Name, "--timeout=120s"}, nil); err != nil {
+			return KubernetesObservation{}, errors.Wrapf(err, "wait for post-migration Job %s", object.Resource)
+		}
+	}
+	return adapter.Observe(ctx, target, post)
 }
 
 // BootstrapNamespace atomically creates only an absent rendered Namespace and then re-observes its identity.
@@ -356,8 +384,16 @@ func (adapter KubectlAdapter) runMigrations(ctx context.Context, target Operator
 		if rollback && previousMigrationMatches(*previous, migration) {
 			continue
 		}
-		if !rollback && migration.Version > 1 {
-			recorded, recordedErr := adapter.migrationRecorded(ctx, target, namespace, targetResource.Kubernetes, database.Database, user, migration.Version)
+		if !rollback && database.MigrationAuthority != "" {
+			recorded, recordedErr := adapter.migrationRecorded(ctx, target, namespace, targetResource.Kubernetes, database.Database, user, migrationAuthority(resource), migration.Version, migration.UpgradeDigest)
+			if recordedErr != nil {
+				return errors.Wrapf(recordedErr, "observe declared database migration %s version %d", resource.ID, migration.Version)
+			}
+			if recorded {
+				continue
+			}
+		} else if !rollback && migration.Version > 1 {
+			recorded, recordedErr := adapter.legacyMigrationRecorded(ctx, target, namespace, targetResource.Kubernetes, database.Database, user, migration.Version)
 			if recordedErr != nil {
 				return errors.Wrapf(recordedErr, "observe declared database migration %s version %d", resource.ID, migration.Version)
 			}
@@ -375,6 +411,18 @@ func (adapter KubectlAdapter) runMigrations(ctx context.Context, target Operator
 		if err != nil {
 			return errors.Wrapf(err, "run database migration %s version %d", resource.ID, migration.Version)
 		}
+		// The SQL artifact and its authority journal transition share one psql
+		// transaction. This prevents a concurrent reconciler from observing a
+		// successfully applied artifact with no durable digest record (or the
+		// inverse). The preflight read above gives a clear conflict before SQL;
+		// the in-transaction guard closes the race after that read.
+		if database.MigrationAuthority != "" {
+			if rollback {
+				sql = journalRollbackSQL(sql, migrationAuthority(resource), migration.Version, migration.UpgradeDigest)
+			} else {
+				sql = journalUpgradeSQL(sql, migrationAuthority(resource), migration.Version, migration.UpgradeDigest)
+			}
+		}
 		arguments := []string{"exec", targetResource.Kubernetes.Kind + "/" + targetResource.Kubernetes.Name, "--namespace", namespace, "-i", "--", "psql", "-v", "ON_ERROR_STOP=1", "-U", user, "-d", database.Database, "-f", "-"}
 		manifests, manifestErr := RenderKubernetes(authorityRendered)
 		if manifestErr != nil {
@@ -390,17 +438,59 @@ func (adapter KubectlAdapter) runMigrations(ctx context.Context, target Operator
 	return nil
 }
 
+func (adapter KubectlAdapter) legacyMigrationRecorded(ctx context.Context, target OperatorTarget, namespace string, workload *KubernetesResource, database, user string, version int) (bool, error) {
+	if workload == nil || version < 2 {
+		return false, errors.New("observe declared database migration: workload and version two or later are required")
+	}
+	arguments := []string{"exec", workload.Kind + "/" + workload.Name, "--namespace", namespace, "--", "psql", "-At", "-v", "ON_ERROR_STOP=1", "-U", user, "-d", database, "-c", "SELECT to_regclass('runtime.schema_migrations') IS NOT NULL"}
+	result, err := adapter.run(ctx, target, arguments, nil)
+	if err != nil {
+		return false, err
+	}
+	if result.ExitCode != 0 {
+		return false, kubectlExitError("observe database migration", result.ExitCode)
+	}
+	if strings.TrimSpace(string(result.Output)) == "f" {
+		return false, nil
+	}
+	if strings.TrimSpace(string(result.Output)) != "t" {
+		return false, errors.New("observe declared database migration: relation probe returned an invalid state")
+	}
+	arguments[len(arguments)-1] = fmt.Sprintf("SELECT EXISTS (SELECT 1 FROM runtime.schema_migrations WHERE migration_version = %d)", version)
+	result, err = adapter.run(ctx, target, arguments, nil)
+	if err != nil {
+		return false, err
+	}
+	if result.ExitCode != 0 {
+		return false, kubectlExitError("observe database migration", result.ExitCode)
+	}
+	if strings.TrimSpace(string(result.Output)) == "t" {
+		return true, nil
+	}
+	if strings.TrimSpace(string(result.Output)) == "f" {
+		return false, nil
+	}
+	return false, errors.New("observe declared database migration: journal returned an invalid state")
+}
+
 // migrationRecorded checks the durable migration journal before replaying a
 // historical migration. Version one creates the schema that owns this journal,
 // so it remains safely repeatable. Later migration artifacts can contain a
 // point-in-time schema assertion which a newer reviewed migration deliberately
 // changes; replaying such an artifact would turn a healthy upgraded database
 // into a false failure.
-func (adapter KubectlAdapter) migrationRecorded(ctx context.Context, target OperatorTarget, namespace string, workload *KubernetesResource, database, user string, version int) (bool, error) {
-	if workload == nil || version < 2 {
-		return false, errors.New("observe declared database migration: workload and version two or later are required")
+func migrationAuthority(resource Resource) string {
+	if resource.Database.MigrationAuthority != "" {
+		return resource.Database.MigrationAuthority
 	}
-	existsQuery := "SELECT to_regclass('runtime.schema_migrations') IS NOT NULL"
+	return string(resource.ID)
+}
+
+func (adapter KubectlAdapter) migrationRecorded(ctx context.Context, target OperatorTarget, namespace string, workload *KubernetesResource, database, user, authority string, version int, digest string) (bool, error) {
+	if workload == nil || version < 1 {
+		return false, errors.New("observe declared database migration: workload and positive version are required")
+	}
+	existsQuery := "SELECT to_regclass('public.stack_migration_journal') IS NOT NULL"
 	arguments := []string{"exec", workload.Kind + "/" + workload.Name, "--namespace", namespace, "--", "psql", "-At", "-v", "ON_ERROR_STOP=1", "-U", user, "-d", database, "-c", existsQuery}
 	result, err := adapter.run(ctx, target, arguments, nil)
 	if err != nil {
@@ -417,7 +507,7 @@ func (adapter KubectlAdapter) migrationRecorded(ctx context.Context, target Oper
 		// migration table in the same statement as a to_regclass guard therefore
 		// still fails before migration v2 creates that table. Only address the
 		// relation after this independent existence probe succeeds.
-		query := fmt.Sprintf("SELECT EXISTS (SELECT 1 FROM runtime.schema_migrations WHERE migration_version = %d)", version)
+		query := fmt.Sprintf("SELECT COALESCE((SELECT upgrade_digest FROM public.stack_migration_journal WHERE migration_authority = %s AND migration_version = %d), '')", sqlLiteral(authority), version)
 		arguments[len(arguments)-1] = query
 		result, err = adapter.run(ctx, target, arguments, nil)
 		if err != nil {
@@ -426,17 +516,65 @@ func (adapter KubectlAdapter) migrationRecorded(ctx context.Context, target Oper
 		if result.ExitCode != 0 {
 			return false, kubectlExitError("observe database migration", result.ExitCode)
 		}
-		switch strings.TrimSpace(string(result.Output)) {
-		case "t":
+		recordedDigest := strings.TrimSpace(string(result.Output))
+		switch recordedDigest {
+		case digest:
 			return true, nil
-		case "f":
+		case "":
 			return false, nil
 		default:
-			return false, errors.New("observe declared database migration: journal returned an invalid state")
+			return false, errors.New("observe declared database migration: journal digest conflicts with reviewed artifact")
 		}
 	default:
 		return false, errors.New("observe declared database migration: relation probe returned an invalid state")
 	}
+}
+
+func sqlLiteral(value string) string { return "'" + strings.ReplaceAll(value, "'", "''") + "'" }
+
+func journalUpgradeSQL(artifact []byte, authority string, version int, digest string) []byte {
+	// Avoid interpolating any secret: authority and digest are reviewed Stack
+	// values. PostgreSQL dollar quotes make the failure deterministic and roll
+	// back the artifact if a concurrent writer recorded a different digest.
+	createJournal := `CREATE TABLE IF NOT EXISTS public.stack_migration_journal (
+  migration_authority text NOT NULL,
+  migration_version bigint NOT NULL,
+  upgrade_digest text NOT NULL,
+  applied_at timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (migration_authority, migration_version)
+);
+`
+	journal := fmt.Sprintf(`
+INSERT INTO public.stack_migration_journal (migration_authority,migration_version,upgrade_digest)
+VALUES (%s,%d,%s)
+ON CONFLICT (migration_authority,migration_version) DO UPDATE
+SET upgrade_digest = EXCLUDED.upgrade_digest
+WHERE public.stack_migration_journal.upgrade_digest = EXCLUDED.upgrade_digest;
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM public.stack_migration_journal WHERE migration_authority = %s AND migration_version = %d AND upgrade_digest = %s) THEN
+    RAISE EXCEPTION 'stack migration journal digest conflicts with reviewed artifact';
+  END IF;
+END $$;
+`, sqlLiteral(authority), version, sqlLiteral(digest), sqlLiteral(authority), version, sqlLiteral(digest))
+	// The journal is created before v1's artifact, but all three effects share
+	// one transaction so an artifact failure cannot leave a durable record.
+	sql := append([]byte("BEGIN;\n"), []byte(createJournal)...)
+	sql = append(sql, artifact...)
+	sql = append(sql, []byte(journal)...)
+	return append(sql, []byte("COMMIT;\n")...)
+}
+
+func journalRollbackSQL(artifact []byte, authority string, version int, digest string) []byte {
+	journal := fmt.Sprintf(`
+DELETE FROM public.stack_migration_journal
+WHERE migration_authority = %s AND migration_version = %d AND upgrade_digest = %s;
+DO $$ BEGIN
+  IF EXISTS (SELECT 1 FROM public.stack_migration_journal WHERE migration_authority = %s AND migration_version = %d) THEN
+    RAISE EXCEPTION 'stack migration journal rollback did not remove reviewed artifact';
+  END IF;
+END $$;
+`, sqlLiteral(authority), version, sqlLiteral(digest), sqlLiteral(authority), version)
+	return append(append([]byte("BEGIN;\n"), artifact...), append([]byte(journal), []byte("COMMIT;\n")...)...)
 }
 
 // waitForDatabase closes the brief initdb gap after a workload becomes ready.

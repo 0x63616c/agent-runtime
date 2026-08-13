@@ -86,7 +86,7 @@ func runWithProbeAndOperator(ctx context.Context, arguments []string, output io.
 		defer func() { _ = observed.Close() }()
 		return stack.Check(rendered, observed)
 	case "manifests":
-		stackPath, profile, _, err := parseArguments("manifests", arguments[1:], false)
+		stackPath, profile, phase, err := parseManifestArguments(arguments[1:])
 		if err != nil {
 			return err
 		}
@@ -97,6 +97,12 @@ func runWithProbeAndOperator(ctx context.Context, arguments []string, output io.
 		manifests, err := stack.RenderKubernetes(rendered)
 		if err != nil {
 			return err
+		}
+		if phase == "initial" {
+			manifests, err = manifests.WithoutPostMigration()
+			if err != nil {
+				return err
+			}
 		}
 		if _, err := output.Write(manifests.JSON()); err != nil {
 			return errors.Wrap(err, "write rendered Kubernetes manifests")
@@ -266,6 +272,21 @@ func runWithProbeAndOperator(ctx context.Context, arguments []string, output io.
 	default:
 		return errors.Newf("run stack operator command: unknown command %q", arguments[0])
 	}
+}
+
+func parseManifestArguments(arguments []string) (string, stack.Profile, string, error) {
+	flags := flag.NewFlagSet("manifests", flag.ContinueOnError)
+	flags.SetOutput(io.Discard)
+	stackPath := flags.String("stack-file", "", "path to the sole Stack document")
+	profile := flags.String("profile", "", "local, ci, or production")
+	phase := flags.String("phase", "all", "all or initial")
+	if err := flags.Parse(arguments); err != nil {
+		return "", "", "", errors.Wrap(err, "parse manifests arguments")
+	}
+	if flags.NArg() != 0 || *stackPath == "" || *profile == "" || (*phase != "all" && *phase != "initial") {
+		return "", "", "", errors.New("parse manifests arguments: --stack-file and --profile are required; --phase must be all or initial")
+	}
+	return *stackPath, stack.Profile(*profile), *phase, nil
 }
 
 func systemOperator(auditPath string) (stackOperator, error) {

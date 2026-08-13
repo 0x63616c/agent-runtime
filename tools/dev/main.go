@@ -6,21 +6,29 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/sha256"
+	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
+	"encoding/pem"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
+	"math/big"
 	"net"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/0x63616c/agent-runtime/internal/roles"
 	"github.com/0x63616c/agent-runtime/internal/stack"
@@ -532,7 +540,7 @@ func attachLocalFixtureScenario(resources []json.RawMessage, scenario localFixtu
 
 func tiltBuiltResource(id stack.ResourceID) bool {
 	switch id {
-	case "api", "orchestration", "model", "tool", "blob-role", "codec", "sandbox-control", "sandbox-host", "egress-proxy":
+	case "api", "orchestration", "model", "tool", "blob-role", "codec", "sandbox-control", "sandbox-host", "sandbox-host-bootstrap", "egress-proxy":
 		return true
 	default:
 		return false
@@ -662,6 +670,16 @@ func materializeSecretsForProfile(stackName, profile, root string, reader io.Rea
 			state.Values[reference.name]["LOCAL_DEMO_CONTENT_SECRET_KEY"] = state.Values[blobReference.name]["MINIO_ROOT_PASSWORD"]
 		}
 	}
+	if err := materializeSandboxPKI(state.Values, references, reader); err != nil {
+		return nil, err
+	}
+	encodedState, err := json.Marshal(state)
+	if err != nil {
+		return nil, fmt.Errorf("encode local development secret state: %w", err)
+	}
+	if err := writePrivate(path, append(encodedState, '\n')); err != nil {
+		return nil, err
+	}
 	metadata, err := localSecretControllerMetadata(stackName, profile, root)
 	if err != nil {
 		return nil, err
@@ -675,6 +693,138 @@ func materializeSecretsForProfile(stackName, profile, root string, reader io.Rea
 		return nil, fmt.Errorf("encode local development Secret manifests: %w", err)
 	}
 	return encoded, nil
+}
+
+// materializeSandboxPKI creates a disposable local/CI trust domain only after
+// the reviewed Stack has declared its complete key inventory. Production never
+// calls this local controller: its Secret references remain externally owned.
+func materializeSandboxPKI(values map[string]map[string]string, references []localSecretReference, reader io.Reader) error {
+	control, controlOK := secretReferenceByID(references, "sandbox-control-secret")
+	ca, caOK := secretReferenceByID(references, "sandbox-host-ca-secret")
+	host, hostOK := secretReferenceByID(references, "sandbox-host-identity-secret")
+	if !controlOK || !caOK || !hostOK {
+		return fmt.Errorf("materialize local sandbox PKI: reviewed Stack is missing sandbox secret references")
+	}
+	for _, required := range []struct {
+		name string
+		keys []string
+	}{
+		{control.name, []string{"SANDBOX_AUTHORIZATION", "SANDBOX_ASSERTION_KEY", "SANDBOX_CONTROL_SIGNING_KEY", "SANDBOX_PUBLIC_TLS_CERT", "SANDBOX_PUBLIC_TLS_KEY", "SANDBOX_HOST_TLS_CERT", "SANDBOX_HOST_TLS_KEY"}},
+		{ca.name, []string{"SANDBOX_HOST_CLIENT_CA"}},
+		{host.name, []string{"SANDBOX_HOST_TLS_CERT", "SANDBOX_HOST_TLS_KEY", "SANDBOX_HOST_SIGNING_KEY", "SANDBOX_CONTROL_CA", "SANDBOX_CONTROL_TRUST"}},
+	} {
+		for _, key := range required.keys {
+			if _, ok := values[required.name][key]; !ok {
+				return fmt.Errorf("materialize local sandbox PKI: reviewed Stack is missing %s/%s", required.name, key)
+			}
+		}
+	}
+	if strings.HasPrefix(values[control.name]["SANDBOX_PUBLIC_TLS_CERT"], "-----BEGIN CERTIFICATE-----") &&
+		strings.HasPrefix(values[host.name]["SANDBOX_CONTROL_TRUST"], "{") {
+		return nil
+	}
+	certificateAuthority, authorityKey, err := localCertificateAuthority(reader)
+	if err != nil {
+		return err
+	}
+	controlCertificate, controlKey, err := localCertificate(reader, certificateAuthority, authorityKey, []string{"sandbox-control", "localhost"}, false, nil)
+	if err != nil {
+		return err
+	}
+	hostIdentity, err := url.Parse("spiffe://agent-runtime/sandbox-host/sandbox-host-01/generation/1")
+	if err != nil {
+		return fmt.Errorf("materialize local sandbox PKI: parse fixed host identity: %w", err)
+	}
+	hostCertificate, hostKey, err := localCertificate(reader, certificateAuthority, authorityKey, nil, true, hostIdentity)
+	if err != nil {
+		return err
+	}
+	_, controlSigning, err := ed25519.GenerateKey(reader)
+	if err != nil {
+		return fmt.Errorf("materialize local sandbox PKI: generate control signing key: %w", err)
+	}
+	_, hostSigning, err := ed25519.GenerateKey(reader)
+	if err != nil {
+		return fmt.Errorf("materialize local sandbox PKI: generate host signing key: %w", err)
+	}
+	values[control.name]["SANDBOX_AUTHORIZATION"] = randomValue(reader)
+	values[control.name]["SANDBOX_ASSERTION_KEY"] = hex.EncodeToString(randomBytes(reader, 32))
+	values[control.name]["SANDBOX_CONTROL_SIGNING_KEY"] = base64.RawStdEncoding.EncodeToString(controlSigning)
+	values[control.name]["SANDBOX_PUBLIC_TLS_CERT"] = string(controlCertificate)
+	values[control.name]["SANDBOX_PUBLIC_TLS_KEY"] = string(controlKey)
+	values[control.name]["SANDBOX_HOST_TLS_CERT"] = string(controlCertificate)
+	values[control.name]["SANDBOX_HOST_TLS_KEY"] = string(controlKey)
+	values[ca.name]["SANDBOX_HOST_CLIENT_CA"] = string(certificateAuthority)
+	values[host.name]["SANDBOX_HOST_TLS_CERT"] = string(hostCertificate)
+	values[host.name]["SANDBOX_HOST_TLS_KEY"] = string(hostKey)
+	values[host.name]["SANDBOX_HOST_SIGNING_KEY"] = base64.RawStdEncoding.EncodeToString(hostSigning)
+	values[host.name]["SANDBOX_CONTROL_CA"] = string(certificateAuthority)
+	values[host.name]["SANDBOX_CONTROL_TRUST"] = localControlTrust(controlSigning)
+	return nil
+}
+
+func randomBytes(reader io.Reader, count int) []byte {
+	value := make([]byte, count)
+	if _, err := io.ReadFull(reader, value); err != nil {
+		panic(fmt.Sprintf("read local development random material: %v", err))
+	}
+	return value
+}
+
+func localCertificateAuthority(reader io.Reader) ([]byte, ed25519.PrivateKey, error) {
+	public, private, err := ed25519.GenerateKey(reader)
+	if err != nil {
+		return nil, nil, fmt.Errorf("materialize local sandbox PKI: generate CA key: %w", err)
+	}
+	now := time.Now().UTC()
+	template := x509.Certificate{SerialNumber: big.NewInt(1), Subject: pkix.Name{CommonName: "agent-runtime-local-sandbox-ca"}, NotBefore: now.Add(-time.Minute), NotAfter: now.Add(24 * time.Hour), IsCA: true, BasicConstraintsValid: true, KeyUsage: x509.KeyUsageCertSign | x509.KeyUsageDigitalSignature}
+	der, err := x509.CreateCertificate(reader, &template, &template, public, private)
+	if err != nil {
+		return nil, nil, fmt.Errorf("materialize local sandbox PKI: sign CA certificate: %w", err)
+	}
+	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}), private, nil
+}
+
+func localCertificate(reader io.Reader, authorityPEM []byte, authorityKey ed25519.PrivateKey, names []string, client bool, identity *url.URL) ([]byte, []byte, error) {
+	block, _ := pem.Decode(authorityPEM)
+	if block == nil {
+		return nil, nil, fmt.Errorf("materialize local sandbox PKI: decode generated CA certificate")
+	}
+	authority, err := x509.ParseCertificate(block.Bytes)
+	if err != nil {
+		return nil, nil, fmt.Errorf("materialize local sandbox PKI: parse generated CA certificate: %w", err)
+	}
+	public, private, err := ed25519.GenerateKey(reader)
+	if err != nil {
+		return nil, nil, fmt.Errorf("materialize local sandbox PKI: generate leaf key: %w", err)
+	}
+	now := time.Now().UTC()
+	template := x509.Certificate{SerialNumber: big.NewInt(now.UnixNano()), Subject: pkix.Name{CommonName: "agent-runtime-local-sandbox"}, NotBefore: now.Add(-time.Minute), NotAfter: now.Add(24 * time.Hour), KeyUsage: x509.KeyUsageDigitalSignature, DNSNames: names}
+	if client {
+		template.ExtKeyUsage = []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth}
+		if identity == nil || identity.Scheme != "spiffe" || identity.Host != "agent-runtime" {
+			return nil, nil, fmt.Errorf("materialize local sandbox PKI: client identity must be one agent-runtime SPIFFE URI")
+		}
+		template.URIs = []*url.URL{identity}
+	} else {
+		if identity != nil {
+			return nil, nil, fmt.Errorf("materialize local sandbox PKI: server identity must not carry a client URI")
+		}
+		template.ExtKeyUsage = []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}
+	}
+	der, err := x509.CreateCertificate(reader, &template, authority, public, authorityKey)
+	if err != nil {
+		return nil, nil, fmt.Errorf("materialize local sandbox PKI: sign leaf certificate: %w", err)
+	}
+	privateDER, err := x509.MarshalPKCS8PrivateKey(private)
+	if err != nil {
+		return nil, nil, fmt.Errorf("materialize local sandbox PKI: encode leaf key: %w", err)
+	}
+	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}), pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: privateDER}), nil
+}
+
+func localControlTrust(private ed25519.PrivateKey) string {
+	return fmt.Sprintf(`{"version":1,"revocation_epoch":1,"current":{"id":"sandbox_control_2026_01","version":1,"public_key":%q,"not_before":"2026-01-01T00:00:00Z","not_after":"2036-01-01T00:00:00Z"}}`, base64.RawStdEncoding.EncodeToString(private.Public().(ed25519.PublicKey)))
 }
 
 type localSecretMetadata struct {
@@ -912,8 +1062,8 @@ func reconcile(ctx context.Context, stack, root string, output io.Writer) error 
 			return fmt.Errorf("wait for verified local Stack %s readiness: %w", deployment, err)
 		}
 	}
-	if err := runStackctl(ctx, root, output, "reconcile", state); err != nil {
-		return fmt.Errorf("reconcile verified local Stack providers: %w", err)
+	if err := runStackctl(ctx, root, output, "apply", state); err != nil {
+		return fmt.Errorf("apply verified local Stack migrations and post-migration Jobs: %w", err)
 	}
 	// Tilt owns the orchestration Deployment and intentionally waits for this
 	// local resource first. Waiting for that Deployment here would form a
@@ -965,9 +1115,6 @@ func runStackctl(ctx context.Context, root string, output io.Writer, action stri
 		"--audit-file", operatorAuditPath(root, state.Stack),
 		"--migration-root", filepath.Join(root, "deploy", "production"),
 		"--bootstrap-capability-file", bootstrapCapabilityPath(root, state.Stack),
-	}
-	if action == "reconcile" {
-		arguments = append(arguments, "--providers-only")
 	}
 	command := exec.CommandContext(ctx, "go", arguments...)
 	command.Dir, command.Stdout, command.Stderr = root, output, output

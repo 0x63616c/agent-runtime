@@ -68,12 +68,13 @@ type kubernetesSubject struct {
 
 // KubernetesManifests is an immutable, canonical Kubernetes List for one rendered Stack profile.
 type KubernetesManifests struct {
-	namespace KubernetesManifest
-	objects   []KubernetesManifest
-	data      []byte
-	stack     string
-	profile   Profile
-	digest    string
+	namespace     KubernetesManifest
+	objects       []KubernetesManifest
+	data          []byte
+	stack         string
+	profile       Profile
+	digest        string
+	postMigration map[ResourceID]bool
 }
 
 // Namespace returns a copy of the explicitly rendered profile Namespace manifest.
@@ -103,6 +104,49 @@ func (manifests KubernetesManifests) JSON() []byte {
 	return append([]byte(nil), manifests.data...)
 }
 
+// WithoutPostMigration returns the initial manifest phase.  It deliberately
+// excludes one-shot Jobs whose creation is owned by KubernetesOperator after
+// the reviewed database migrations complete.
+func (manifests KubernetesManifests) WithoutPostMigration() (KubernetesManifests, error) {
+	return manifests.withoutPostMigration()
+}
+
+func (manifests KubernetesManifests) withoutPostMigration() (KubernetesManifests, error) {
+	objects := make([]KubernetesManifest, 0, len(manifests.objects))
+	for _, object := range manifests.objects {
+		if !manifests.postMigration[object.Resource] {
+			objects = append(objects, object)
+		}
+	}
+	return manifests.withObjects(objects)
+}
+
+func (manifests KubernetesManifests) onlyPostMigration() (KubernetesManifests, error) {
+	objects := make([]KubernetesManifest, 0, len(manifests.objects))
+	for _, object := range manifests.objects {
+		if manifests.postMigration[object.Resource] {
+			objects = append(objects, object)
+		}
+	}
+	return manifests.withObjects(objects)
+}
+
+func (manifests KubernetesManifests) withObjects(objects []KubernetesManifest) (KubernetesManifests, error) {
+	list := struct {
+		APIVersion string               `json:"apiVersion"`
+		Kind       string               `json:"kind"`
+		Items      []KubernetesManifest `json:"items"`
+	}{APIVersion: "v1", Kind: "List", Items: append([]KubernetesManifest{manifests.namespace}, objects...)}
+	encoded, err := json.MarshalIndent(list, "", "  ")
+	if err != nil {
+		return KubernetesManifests{}, fmt.Errorf("render Kubernetes manifest phase: marshal canonical list: %w", err)
+	}
+	copy := manifests
+	copy.objects = append([]KubernetesManifest(nil), objects...)
+	copy.data = append(encoded, '\n')
+	return copy, nil
+}
+
 // RenderKubernetes converts typed rendered desired state into canonical typed Kubernetes manifests.
 // It reads no provider, credentials, environment, or clock state.
 func RenderKubernetes(rendered Rendered) (KubernetesManifests, error) {
@@ -116,6 +160,7 @@ func RenderKubernetes(rendered Rendered) (KubernetesManifests, error) {
 		Metadata: KubernetesMetadata{Name: document.Namespace, Labels: labels},
 	}
 	objects := make([]KubernetesManifest, 0)
+	postMigration := make(map[ResourceID]bool)
 	resources := make(map[ResourceID]Resource, len(document.Resources))
 	for _, resource := range document.Resources {
 		resources[resource.ID] = resource
@@ -132,6 +177,7 @@ func RenderKubernetes(rendered Rendered) (KubernetesManifests, error) {
 			return KubernetesManifests{}, manifestErr
 		}
 		objects = append(objects, manifest)
+		postMigration[resource.ID] = resource.Kubernetes.PostMigration
 	}
 	sort.Slice(objects, func(left, right int) bool { return objects[left].Resource < objects[right].Resource })
 	list := struct {
@@ -143,7 +189,7 @@ func RenderKubernetes(rendered Rendered) (KubernetesManifests, error) {
 	if err != nil {
 		return KubernetesManifests{}, fmt.Errorf("render Kubernetes manifests: marshal canonical list: %w", err)
 	}
-	return KubernetesManifests{namespace: namespace, objects: objects, data: append(encoded, '\n'), stack: document.Stack, profile: document.Profile, digest: document.Digest}, nil
+	return KubernetesManifests{namespace: namespace, objects: objects, data: append(encoded, '\n'), stack: document.Stack, profile: document.Profile, digest: document.Digest, postMigration: postMigration}, nil
 }
 
 func renderKubernetesResource(resource Resource, namespace, stack string, profile Profile, resources map[ResourceID]Resource) (KubernetesManifest, error) {

@@ -205,7 +205,14 @@
             "reference": "ar-agent-runtime-sandbox-control-secret",
             "version": "v1",
             "keys": [
-              "SANDBOX_CONTROL_TOKEN"
+              "SANDBOX_CONTROL_TOKEN",
+              "SANDBOX_AUTHORIZATION",
+              "SANDBOX_ASSERTION_KEY",
+              "SANDBOX_CONTROL_SIGNING_KEY",
+              "SANDBOX_PUBLIC_TLS_CERT",
+              "SANDBOX_PUBLIC_TLS_KEY",
+              "SANDBOX_HOST_TLS_CERT",
+              "SANDBOX_HOST_TLS_KEY"
             ]
           }
         },
@@ -296,7 +303,8 @@
             "reference": "ar-agent-runtime-sandbox-host-ca-secret",
             "version": "v1",
             "keys": [
-              "SANDBOX_HOST_CA"
+              "SANDBOX_HOST_CA",
+              "SANDBOX_HOST_CLIENT_CA"
             ]
           }
         },
@@ -340,8 +348,86 @@
             "reference": "ar-agent-runtime-sandbox-host-identity-secret",
             "version": "v1",
             "keys": [
-              "SANDBOX_HOST_IDENTITY"
+              "SANDBOX_HOST_IDENTITY",
+              "SANDBOX_HOST_TLS_CERT",
+              "SANDBOX_HOST_TLS_KEY",
+              "SANDBOX_HOST_SIGNING_KEY",
+              "SANDBOX_CONTROL_CA",
+              "SANDBOX_CONTROL_TRUST"
             ]
+          }
+        },
+        {
+          "id": "sandbox-control-config",
+          "kind": "kubernetes",
+          "owner": "runtime-operator",
+          "scope": "namespace",
+          "dependencies": [],
+          "retention": {
+            "policy": "ephemeral",
+            "days": 0
+          },
+          "backup_restore_owner": "none",
+          "delete_behavior": "delete",
+          "external_controller": false,
+          "kubernetes": {
+            "api_version": "v1",
+            "kind": "ConfigMap",
+            "name": "sandbox-control-config",
+            "data": {
+              "config.json": "{\"version\":2,\"listen_address\":\"0.0.0.0:8086\",\"tls_certificate_file\":\"/run/sandbox-control/public/tls.crt\",\"tls_private_key_file\":\"/run/sandbox-control/public/tls.key\",\"database_dsn_environment\":\"SANDBOX_STATE_DSN\",\"authorization_environment\":\"SANDBOX_AUTHORIZATION\",\"assertion_key_environment\":\"SANDBOX_ASSERTION_KEY\",\"identity\":{\"authority\":\"agent-runtime\",\"tenant\":\"public\",\"subject\":\"sandbox-control\",\"principal\":\"public:sandbox-control\"},\"binding_lifetime_seconds\":300,\"retention_seconds\":86400,\"wait_interval_millis\":25,\"admission\":{\"version\":\"sandbox-control/v1\",\"canonicalizer_version\":\"sandbox.control/v1\",\"capability_version\":\"capabilities/v1\",\"image_admission_version\":\"images/v1\",\"defaults\":{\"milli_cpu\":100,\"memory_bytes\":134217728,\"root_disk_bytes\":1073741824,\"tmpfs_bytes\":67108864,\"pids\":64,\"process_count\":32,\"open_files\":1024,\"inodes\":100000,\"files\":100000,\"lifetime_seconds\":900,\"produced_output_bytes\":67108864,\"retained_output_bytes\":16777216,\"transfer_bytes\":1073741824,\"network_connections\":64,\"volume_bytes\":10737418240,\"snapshot_bytes\":10737418240},\"maximum\":{\"milli_cpu\":4000,\"memory_bytes\":8589934592,\"root_disk_bytes\":107374182400,\"tmpfs_bytes\":2147483648,\"pids\":4096,\"process_count\":2048,\"open_files\":65536,\"inodes\":10000000,\"files\":10000000,\"lifetime_seconds\":86400,\"produced_output_bytes\":1073741824,\"retained_output_bytes\":268435456,\"transfer_bytes\":107374182400,\"network_connections\":4096,\"volume_bytes\":1099511627776,\"snapshot_bytes\":1099511627776},\"capabilities\":{},\"admitted_images\":{}},\"host_control\":{\"listen_address\":\"0.0.0.0:9443\",\"tls_certificate_file\":\"/run/sandbox-control/host/tls.crt\",\"tls_private_key_file\":\"/run/sandbox-control/host/tls.key\",\"client_ca_file\":\"/run/sandbox-control/host-client-ca/ca.crt\",\"control_trust_version\":1,\"control_revocation_epoch\":1,\"control_key_id\":\"sandbox_control_2026_01\",\"control_key_version\":1,\"control_key_not_before\":\"2026-01-01T00:00:00Z\",\"control_key_not_after\":\"2036-01-01T00:00:00Z\",\"control_signing_key_environment\":\"SANDBOX_CONTROL_SIGNING_KEY\",\"lease_seconds\":60}}"
+            },
+            "environment": []
+          }
+        },
+        {
+          "id": "sandbox-host-config",
+          "kind": "kubernetes",
+          "owner": "runtime-operator",
+          "scope": "namespace",
+          "dependencies": [],
+          "retention": {
+            "policy": "ephemeral",
+            "days": 0
+          },
+          "backup_restore_owner": "none",
+          "delete_behavior": "delete",
+          "external_controller": false,
+          "kubernetes": {
+            "api_version": "v1",
+            "kind": "ConfigMap",
+            "name": "sandbox-host-config",
+            "data": {
+              "config.json": "{\"version\":2,\"control_url\":\"https://sandbox-control:9443\",\"server_name\":\"sandbox-control\",\"trust_bundle_file\":\"/run/sandbox-host/control-ca.crt\",\"client_certificate_file\":\"/run/sandbox-host/tls.crt\",\"client_private_key_file\":\"/run/sandbox-host/tls.key\",\"control_trust_file\":\"/run/sandbox-host/control-trust.json\",\"host_id\":\"sandbox-host-01\",\"host_generation\":1,\"journal_file\":\"/var/lib/sandbox-host/receipts.json\",\"maximum_receipts\":10000,\"host_signing_key_environment\":\"SANDBOX_HOST_SIGNING_KEY\",\"request_timeout_seconds\":10,\"test_fault_after_journal\":false,\"test_fault_after_receipt\":false,\"test_fault_after_result_send\":false}"
+            },
+            "environment": []
+          }
+        },
+        {
+          "id": "sandbox-host-journal",
+          "kind": "kubernetes",
+          "owner": "runtime-operator",
+          "scope": "namespace",
+          "dependencies": [],
+          "retention": {
+            "policy": "ephemeral",
+            "days": 0
+          },
+          "backup_restore_owner": "none",
+          "delete_behavior": "delete",
+          "external_controller": false,
+          "kubernetes": {
+            "api_version": "v1",
+            "kind": "PersistentVolumeClaim",
+            "name": "sandbox-host-journal",
+            "storage": [
+              {
+                "name": "journal",
+                "size_bytes": 1073741824,
+                "class": "local-path"
+              }
+            ],
+            "environment": []
           }
         },
         {
@@ -923,7 +1009,6 @@
           "scope": "namespace",
           "dependencies": [
             "tool-account",
-            "sandbox-control-secret",
             "tool-broker-secret"
           ],
           "retention": {
@@ -952,15 +1037,10 @@
             "environment": [
               {
                 "name": "RUNTIME_ROLE_CONFIG",
-                "value": "{\"version\":1,\"role\":\"tool\",\"namespace\":\"ar-agent-runtime\",\"listen_address\":\"0.0.0.0:8083\",\"dependencies\":[{\"name\":\"sandbox-control\",\"endpoint\":\"http://sandbox-control.ar-agent-runtime.svc:8086\",\"secret_environment\":\"SANDBOX_CONTROL_TOKEN\"},{\"name\":\"telemetry\",\"endpoint\":\"http://otel-collector:4318\"},{\"name\":\"tool-broker\",\"endpoint\":\"http://api.ar-agent-runtime.svc:8080\",\"secret_environment\":\"TOOL_BROKER_TOKEN\"}],\"local_demo_worker\":{\"enabled\":true,\"mode\":\"local-demo-v1\",\"fixture\":\"workspace-approval-v1\",\"fixture_scenario\":\"workspace-approval-reset-v1\",\"state_dsn_environment\":\"LOCAL_DEMO_STATE_DSN\",\"content_endpoint\":\"blob.ar-agent-runtime.svc:9000\",\"content_access_key_environment\":\"LOCAL_DEMO_CONTENT_ACCESS_KEY\",\"content_secret_key_environment\":\"LOCAL_DEMO_CONTENT_SECRET_KEY\",\"content_bucket\":\"ar-agent-runtime\"}}"
+                "value": "{\"version\":1,\"role\":\"tool\",\"namespace\":\"ar-agent-runtime\",\"listen_address\":\"0.0.0.0:8083\",\"dependencies\":[{\"name\":\"telemetry\",\"endpoint\":\"http://otel-collector:4318\"},{\"name\":\"tool-broker\",\"endpoint\":\"http://api.ar-agent-runtime.svc:8080\",\"secret_environment\":\"TOOL_BROKER_TOKEN\"}],\"local_demo_worker\":{\"enabled\":true,\"mode\":\"local-demo-v1\",\"fixture\":\"workspace-approval-v1\",\"fixture_scenario\":\"workspace-approval-reset-v1\",\"state_dsn_environment\":\"LOCAL_DEMO_STATE_DSN\",\"content_endpoint\":\"blob.ar-agent-runtime.svc:9000\",\"content_access_key_environment\":\"LOCAL_DEMO_CONTENT_ACCESS_KEY\",\"content_secret_key_environment\":\"LOCAL_DEMO_CONTENT_SECRET_KEY\",\"content_bucket\":\"ar-agent-runtime\"}}"
               }
             ],
             "secret_environment": [
-              {
-                "name": "SANDBOX_CONTROL_TOKEN",
-                "secret": "sandbox-control-secret",
-                "key": "SANDBOX_CONTROL_TOKEN"
-              },
               {
                 "name": "TOOL_BROKER_TOKEN",
                 "secret": "tool-broker-secret",
@@ -1170,6 +1250,8 @@
           "scope": "namespace",
           "dependencies": [
             "sandbox-control-account",
+            "sandbox-control-config",
+            "sandbox-control-secret",
             "sandbox-host-ca-secret",
             "sandbox-state-secret"
           ],
@@ -1188,25 +1270,27 @@
             "image": "ghcr.io/0x63616c/agent-runtime@sha256:bef38a1e7b268a50db626879ada7e4fc7d9486641dfb76ca8d5d54f21f102603",
             "service_account": "sandbox-control-account",
             "command": [
-              "/runtime"
+              "/sandbox-control"
             ],
             "arguments": [
-              "--config-env",
-              "RUNTIME_ROLE_CONFIG",
-              "--role",
-              "sandbox-control"
-            ],
-            "environment": [
-              {
-                "name": "RUNTIME_ROLE_CONFIG",
-                "value": "{\"version\":1,\"role\":\"sandbox-control\",\"namespace\":\"ar-agent-runtime\",\"listen_address\":\"0.0.0.0:8086\",\"dependencies\":[{\"name\":\"host-ca\",\"endpoint\":\"https://host-ca.example.invalid\",\"secret_environment\":\"SANDBOX_HOST_CA\"},{\"name\":\"sandbox-state\",\"endpoint\":\"postgres://state.ar-agent-runtime.svc:5432/sandbox\",\"secret_environment\":\"SANDBOX_STATE_DSN\"},{\"name\":\"telemetry\",\"endpoint\":\"http://otel-collector:4318\"}]}"
-              }
+              "--config",
+              "/etc/sandbox-control/config.json"
             ],
             "secret_environment": [
               {
-                "name": "SANDBOX_HOST_CA",
-                "secret": "sandbox-host-ca-secret",
-                "key": "SANDBOX_HOST_CA"
+                "name": "SANDBOX_AUTHORIZATION",
+                "secret": "sandbox-control-secret",
+                "key": "SANDBOX_AUTHORIZATION"
+              },
+              {
+                "name": "SANDBOX_ASSERTION_KEY",
+                "secret": "sandbox-control-secret",
+                "key": "SANDBOX_ASSERTION_KEY"
+              },
+              {
+                "name": "SANDBOX_CONTROL_SIGNING_KEY",
+                "secret": "sandbox-control-secret",
+                "key": "SANDBOX_CONTROL_SIGNING_KEY"
               },
               {
                 "name": "SANDBOX_STATE_DSN",
@@ -1214,23 +1298,15 @@
                 "key": "SANDBOX_STATE_DSN"
               }
             ],
-            "readiness": {
-              "command": [
-                "/runtime",
-                "--config-env",
-                "RUNTIME_ROLE_CONFIG",
-                "--role",
-                "sandbox-control",
-                "--check"
-              ],
-              "initial_delay_seconds": 1,
-              "period_seconds": 5,
-              "failure_threshold": 12
-            },
             "ports": [
               {
-                "name": "http",
+                "name": "public-tls",
                 "number": 8086,
+                "protocol": "TCP"
+              },
+              {
+                "name": "host-mtls",
+                "number": 9443,
                 "protocol": "TCP"
               }
             ],
@@ -1240,7 +1316,42 @@
               "request_memory_bytes": 134217728,
               "limit_memory_bytes": 536870912
             },
-            "storage": []
+            "storage": [],
+            "config_map_mounts": [
+              {
+                "config_map": "sandbox-control-config",
+                "key": "config.json",
+                "path": "/etc/sandbox-control/config.json"
+              }
+            ],
+            "secret_mounts": [
+              {
+                "secret": "sandbox-control-secret",
+                "key": "SANDBOX_PUBLIC_TLS_CERT",
+                "path": "/run/sandbox-control/public/tls.crt"
+              },
+              {
+                "secret": "sandbox-control-secret",
+                "key": "SANDBOX_PUBLIC_TLS_KEY",
+                "path": "/run/sandbox-control/public/tls.key"
+              },
+              {
+                "secret": "sandbox-control-secret",
+                "key": "SANDBOX_HOST_TLS_CERT",
+                "path": "/run/sandbox-control/host/tls.crt"
+              },
+              {
+                "secret": "sandbox-control-secret",
+                "key": "SANDBOX_HOST_TLS_KEY",
+                "path": "/run/sandbox-control/host/tls.key"
+              },
+              {
+                "secret": "sandbox-host-ca-secret",
+                "key": "SANDBOX_HOST_CLIENT_CA",
+                "path": "/run/sandbox-control/host-client-ca/ca.crt"
+              }
+            ],
+            "environment": []
           }
         },
         {
@@ -1250,8 +1361,10 @@
           "scope": "namespace",
           "dependencies": [
             "sandbox-host-account",
+            "sandbox-host-bootstrap",
+            "sandbox-host-config",
             "sandbox-host-identity-secret",
-            "sandbox-control-secret"
+            "sandbox-host-journal"
           ],
           "retention": {
             "policy": "ephemeral",
@@ -1268,59 +1381,67 @@
             "image": "ghcr.io/0x63616c/agent-runtime@sha256:bef38a1e7b268a50db626879ada7e4fc7d9486641dfb76ca8d5d54f21f102603",
             "service_account": "sandbox-host-account",
             "command": [
-              "/runtime"
+              "/sandbox-host"
             ],
             "arguments": [
-              "--config-env",
-              "RUNTIME_ROLE_CONFIG",
-              "--role",
-              "sandbox-host"
-            ],
-            "environment": [
-              {
-                "name": "RUNTIME_ROLE_CONFIG",
-                "value": "{\"version\":1,\"role\":\"sandbox-host\",\"namespace\":\"ar-agent-runtime\",\"listen_address\":\"0.0.0.0:8087\",\"dependencies\":[{\"name\":\"host-identity\",\"endpoint\":\"https://host-identity.example.invalid\",\"secret_environment\":\"SANDBOX_HOST_IDENTITY\"},{\"name\":\"sandbox-control\",\"endpoint\":\"http://sandbox-control.ar-agent-runtime.svc:8086\",\"secret_environment\":\"SANDBOX_CONTROL_TOKEN\"},{\"name\":\"telemetry\",\"endpoint\":\"http://otel-collector:4318\"}]}"
-              }
+              "--config",
+              "/etc/sandbox-host/config.json",
+              "--poll-interval",
+              "1s",
+              "--firecracker-control"
             ],
             "secret_environment": [
               {
-                "name": "SANDBOX_HOST_IDENTITY",
+                "name": "SANDBOX_HOST_SIGNING_KEY",
                 "secret": "sandbox-host-identity-secret",
-                "key": "SANDBOX_HOST_IDENTITY"
-              },
-              {
-                "name": "SANDBOX_CONTROL_TOKEN",
-                "secret": "sandbox-control-secret",
-                "key": "SANDBOX_CONTROL_TOKEN"
+                "key": "SANDBOX_HOST_SIGNING_KEY"
               }
             ],
-            "readiness": {
-              "command": [
-                "/runtime",
-                "--config-env",
-                "RUNTIME_ROLE_CONFIG",
-                "--role",
-                "sandbox-host",
-                "--check"
-              ],
-              "initial_delay_seconds": 1,
-              "period_seconds": 5,
-              "failure_threshold": 12
-            },
-            "ports": [
-              {
-                "name": "http",
-                "number": 8087,
-                "protocol": "TCP"
-              }
-            ],
+            "ports": [],
             "compute": {
               "request_milli_cpu": 100,
               "limit_milli_cpu": 500,
               "request_memory_bytes": 134217728,
               "limit_memory_bytes": 536870912
             },
-            "storage": []
+            "storage": [],
+            "volume_mounts": [
+              {
+                "claim": "sandbox-host-journal",
+                "path": "/var/lib/sandbox-host",
+                "read_only": false
+              }
+            ],
+            "config_map_mounts": [
+              {
+                "config_map": "sandbox-host-config",
+                "key": "config.json",
+                "path": "/etc/sandbox-host/config.json"
+              }
+            ],
+            "secret_mounts": [
+              {
+                "secret": "sandbox-host-identity-secret",
+                "key": "SANDBOX_CONTROL_CA",
+                "path": "/run/sandbox-host/control-ca.crt"
+              },
+              {
+                "secret": "sandbox-host-identity-secret",
+                "key": "SANDBOX_HOST_TLS_CERT",
+                "path": "/run/sandbox-host/tls.crt"
+              },
+              {
+                "secret": "sandbox-host-identity-secret",
+                "key": "SANDBOX_HOST_TLS_KEY",
+                "path": "/run/sandbox-host/tls.key"
+              },
+              {
+                "secret": "sandbox-host-identity-secret",
+                "key": "SANDBOX_CONTROL_TRUST",
+                "path": "/run/sandbox-host/control-trust.json"
+              }
+            ],
+            "environment": []
           }
         },
         {
@@ -1935,8 +2056,13 @@
             "selector": "sandbox-control",
             "ports": [
               {
-                "name": "http",
+                "name": "public-tls",
                 "number": 8086,
+                "protocol": "TCP"
+              },
+              {
+                "name": "host-mtls",
+                "number": 9443,
                 "protocol": "TCP"
               }
             ],
@@ -2123,7 +2249,6 @@
             "api",
             "blob",
             "otel-collector",
-            "sandbox-control",
             "state",
             "tool"
           ],
@@ -2145,7 +2270,6 @@
                 "api",
                 "blob",
                 "otel-collector",
-                "sandbox-control",
                 "state"
               ],
               "allow_dns": true
@@ -2510,6 +2634,137 @@
           }
         },
         {
+          "id": "sandbox-control-database",
+          "kind": "database",
+          "owner": "database-operator",
+          "scope": "namespace",
+          "dependencies": [
+            "sandbox-state-secret",
+            "state"
+          ],
+          "retention": {
+            "policy": "ephemeral",
+            "days": 0
+          },
+          "backup_restore_owner": "none",
+          "delete_behavior": "delete",
+          "external_controller": false,
+          "database": {
+            "database": "agent_runtime",
+            "schema": "runtime",
+            "connection_reference": "sandbox-state-secret",
+            "migration_target": "state",
+            "migrations": [
+              {
+                "version": 1,
+                "upgrade_digest": "sha256:a35506b46fd8e354be84ed1eebbfd5c6660241e2d1e8bb631db1f4e020e98c06",
+                "rollback_digest": "sha256:f71eed76263a0dd1e86be6c3ea97bdf63e86a9e0440c8365b2529918a04a9d4a",
+                "upgrade_artifact": "migrations/sandboxcontrol-v1.up.sql",
+                "rollback_artifact": "migrations/sandboxcontrol-v1.down.sql"
+              },
+              {
+                "version": 2,
+                "upgrade_digest": "sha256:8366bfedac0e952adb567c752e9c82ee14924e9ae085d09388751e846f94e4dc",
+                "rollback_digest": "sha256:7069c872c70c47b4badcdeea8e585279a50972267e974c0478cb91fe3589b407",
+                "upgrade_artifact": "migrations/sandboxcontrol-v2.up.sql",
+                "rollback_artifact": "migrations/sandboxcontrol-v2.down.sql"
+              },
+              {
+                "version": 3,
+                "upgrade_digest": "sha256:6b4e74e759bd443ffe5a79909c2e6ff9b116c42a6ba969ef074ea5d3537de475",
+                "rollback_digest": "sha256:4013662fb5d0944f87ee444bc20ea7e517d1b4b6f2d15f997e2a55208d37db5d",
+                "upgrade_artifact": "migrations/sandboxcontrol-v3.up.sql",
+                "rollback_artifact": "migrations/sandboxcontrol-v3.down.sql"
+              },
+              {
+                "version": 4,
+                "upgrade_digest": "sha256:210036e6babb6500f8e36e07e4518634572b5e55de89236b5b147298625a1f7f",
+                "rollback_digest": "sha256:608011b0efc3c532e626279812afde11a5be8aa3c2a9c792c7e71b36a12ffbfb",
+                "upgrade_artifact": "migrations/sandboxcontrol-v4.up.sql",
+                "rollback_artifact": "migrations/sandboxcontrol-v4.down.sql"
+              },
+              {
+                "version": 5,
+                "upgrade_digest": "sha256:884f126f9a0dc0a1815c399ea648d7131fa60a3deb4cae8b13757ed71f9d9044",
+                "rollback_digest": "sha256:8d02d1ef4eb8b9281f9bda7fe9f80819f53ec85509175e7d2762028f1c028c4f",
+                "upgrade_artifact": "migrations/sandboxcontrol-v5.up.sql",
+                "rollback_artifact": "migrations/sandboxcontrol-v5.down.sql"
+              },
+              {
+                "version": 6,
+                "upgrade_digest": "sha256:61adc65985e35b779d83458cd1c2c3288859b842d43d6ccbca077a379ec09247",
+                "rollback_digest": "sha256:aa536c71a464414c8e6aee3ec9018d45839e4531f2a1361265ff1d63455d229d",
+                "upgrade_artifact": "migrations/sandboxcontrol-v6.up.sql",
+                "rollback_artifact": "migrations/sandboxcontrol-v6.down.sql"
+              },
+              {
+                "version": 7,
+                "upgrade_digest": "sha256:4ff6eb405a28a2c03819106784397c74bbbc981680e6cb628cfca25f996c6294",
+                "rollback_digest": "sha256:541729cac78db641cbad0ef74dd77a91a808b021097c5dd0dcafb93b8b316f60",
+                "upgrade_artifact": "migrations/sandboxcontrol-v7.up.sql",
+                "rollback_artifact": "migrations/sandboxcontrol-v7.down.sql"
+              },
+              {
+                "version": 8,
+                "upgrade_digest": "sha256:fdb5bb89e3dfc6955f2b3c3d1cd52acf6aaf99c27a0f13d045764126b6e5db35",
+                "rollback_digest": "sha256:4b123fa034ef9bfc3ec5903e0695ff40226bb74f4b86d1a8d95738265d5b340b",
+                "upgrade_artifact": "migrations/sandboxcontrol-v8.up.sql",
+                "rollback_artifact": "migrations/sandboxcontrol-v8.down.sql"
+              },
+              {
+                "version": 9,
+                "upgrade_digest": "sha256:78f85d98ff750477e1527a603c5f82b9487df21f87d94eb3c1af58c6c055b452",
+                "rollback_digest": "sha256:d45625b3bf49a566184325fa6d50ca14b49ebd3ab41f512655d9620f4369d6ea",
+                "upgrade_artifact": "migrations/sandboxcontrol-v9.up.sql",
+                "rollback_artifact": "migrations/sandboxcontrol-v9.down.sql"
+              },
+              {
+                "version": 10,
+                "upgrade_digest": "sha256:4dd10142d3e551f340288ccd701a6f1ed140685882019143ba467c4d9790aebe",
+                "rollback_digest": "sha256:f5497a47041bff655101a9b00c17489f96b1a6bce3ec571b53dbf40ea0e756bc",
+                "upgrade_artifact": "migrations/sandboxcontrol-v10.up.sql",
+                "rollback_artifact": "migrations/sandboxcontrol-v10.down.sql"
+              },
+              {
+                "version": 11,
+                "upgrade_digest": "sha256:2ef041d644e451e78b7b448cf8222a5596ae0fd34e24e47b90fd1f50f7e1d0a0",
+                "rollback_digest": "sha256:d24217b31ee5a0d965f8bb54db444c3e68b6d82147b6aedcd3ca5bb4c2f98738",
+                "upgrade_artifact": "migrations/sandboxcontrol-v11.up.sql",
+                "rollback_artifact": "migrations/sandboxcontrol-v11.down.sql"
+              },
+              {
+                "version": 12,
+                "upgrade_digest": "sha256:956d54dd8c492981f9575ac34cb51a3270f7d758ea143be9c725ee00bdf4138f",
+                "rollback_digest": "sha256:1ff1fbe8ee9c401ee31689b7ce80db847f539eaf34bfb170b4a5dbc7768127e7",
+                "upgrade_artifact": "migrations/sandboxcontrol-v12.up.sql",
+                "rollback_artifact": "migrations/sandboxcontrol-v12.down.sql"
+              },
+              {
+                "version": 13,
+                "upgrade_digest": "sha256:cea15e13ec668dc9ab456e4fe91784c061b20501502e0e6284cd413c56cf09d0",
+                "rollback_digest": "sha256:9a2c00b5a28c05058c9ba0c23a42081f00419a4c8c51b4a5d733fa465d5c329c",
+                "upgrade_artifact": "migrations/sandboxcontrol-v13.up.sql",
+                "rollback_artifact": "migrations/sandboxcontrol-v13.down.sql"
+              },
+              {
+                "version": 14,
+                "upgrade_digest": "sha256:8dd7ada64b84b799792ad1837563cc02ac5605326f5f96e64f495632ec2e7eca",
+                "rollback_digest": "sha256:8e48d5110bf544eac9c5a5c679409910a7aa31edbdec2dbfef9b8d3c4998f3a9",
+                "upgrade_artifact": "migrations/sandboxcontrol-v14.up.sql",
+                "rollback_artifact": "migrations/sandboxcontrol-v14.down.sql"
+              },
+              {
+                "version": 15,
+                "upgrade_digest": "sha256:f677f42b98532420a3543c97de65e11d1fffdf46ca1b8ae428c5a051a4a9d17f",
+                "rollback_digest": "sha256:474f67863c9000ebc3ae0256c8c36e28ff90ea41f417ef2a744f81bb91319f92",
+                "upgrade_artifact": "migrations/sandboxcontrol-v15.up.sql",
+                "rollback_artifact": "migrations/sandboxcontrol-v15.down.sql"
+              }
+            ],
+            "migration_authority": "sandbox-control"
+          }
+        },
+        {
           "id": "runtime-database",
           "kind": "database",
           "owner": "database-operator",
@@ -2566,7 +2821,8 @@
                 "upgrade_artifact": "migrations/runtime-v5.up.sql",
                 "rollback_artifact": "migrations/runtime-v5.down.sql"
               }
-            ]
+            ],
+            "migration_authority": "runtime"
           }
         },
         {
@@ -3280,6 +3536,129 @@
             "migration_target": "temporal-state",
             "migrations": []
           }
+        },
+        {
+          "id": "sandbox-host-bootstrap-config",
+          "kind": "kubernetes",
+          "owner": "runtime-operator",
+          "scope": "namespace",
+          "dependencies": [],
+          "retention": {
+            "policy": "ephemeral",
+            "days": 0
+          },
+          "backup_restore_owner": "none",
+          "delete_behavior": "delete",
+          "external_controller": false,
+          "kubernetes": {
+            "api_version": "v1",
+            "kind": "ConfigMap",
+            "name": "sandbox-host-bootstrap-config",
+            "data": {
+              "config.json": "{\"version\":1,\"database_dsn_environment\":\"SANDBOX_STATE_DSN\",\"host_id\":\"sandbox-host-01\",\"tenant\":\"public\",\"pool\":\"local-ci-reference\",\"generation\":1,\"certificate_file\":\"/run/sandbox-host/tls.crt\",\"signing_key_file\":\"/run/sandbox-host/signing.key\",\"capability_digest\":\"sha256:ae18609e688c7ebaaa4fb083f199cdc096067a21a71dadaa0346a74e0ed5b762\",\"expires_at\":\"2030-01-01T00:00:00Z\"}"
+            },
+            "environment": []
+          }
+        },
+        {
+          "id": "sandbox-host-bootstrap",
+          "kind": "kubernetes",
+          "owner": "runtime-operator",
+          "scope": "namespace",
+          "dependencies": [
+            "sandbox-control-database",
+            "sandbox-host-bootstrap-config",
+            "sandbox-host-identity-secret",
+            "sandbox-state-secret"
+          ],
+          "retention": {
+            "policy": "ephemeral",
+            "days": 0
+          },
+          "backup_restore_owner": "none",
+          "delete_behavior": "delete",
+          "external_controller": false,
+          "kubernetes": {
+            "api_version": "batch/v1",
+            "kind": "Job",
+            "name": "sandbox-host-bootstrap",
+            "post_migration": true,
+            "image": "ghcr.io/0x63616c/agent-runtime@sha256:bef38a1e7b268a50db626879ada7e4fc7d9486641dfb76ca8d5d54f21f102603",
+            "service_account": "sandbox-host-account",
+            "command": [
+              "/sandbox-host-bootstrap"
+            ],
+            "arguments": [
+              "--config",
+              "/etc/sandbox-host-bootstrap/config.json"
+            ],
+            "secret_environment": [
+              {
+                "name": "SANDBOX_STATE_DSN",
+                "secret": "sandbox-state-secret",
+                "key": "SANDBOX_STATE_DSN"
+              }
+            ],
+            "ports": [],
+            "compute": {
+              "request_milli_cpu": 100,
+              "limit_milli_cpu": 250,
+              "request_memory_bytes": 67108864,
+              "limit_memory_bytes": 134217728
+            },
+            "storage": [],
+            "config_map_mounts": [
+              {
+                "config_map": "sandbox-host-bootstrap-config",
+                "key": "config.json",
+                "path": "/etc/sandbox-host-bootstrap/config.json"
+              }
+            ],
+            "secret_mounts": [
+              {
+                "secret": "sandbox-host-identity-secret",
+                "key": "SANDBOX_HOST_TLS_CERT",
+                "path": "/run/sandbox-host/tls.crt"
+              },
+              {
+                "secret": "sandbox-host-identity-secret",
+                "key": "SANDBOX_HOST_SIGNING_KEY",
+                "path": "/run/sandbox-host/signing.key"
+              }
+            ],
+            "environment": []
+          }
+        },
+        {
+          "id": "sandbox-host-bootstrap-egress",
+          "kind": "kubernetes",
+          "owner": "security-operator",
+          "scope": "namespace",
+          "dependencies": [
+            "sandbox-host-bootstrap",
+            "state"
+          ],
+          "retention": {
+            "policy": "ephemeral",
+            "days": 0
+          },
+          "backup_restore_owner": "none",
+          "delete_behavior": "delete",
+          "external_controller": false,
+          "kubernetes": {
+            "api_version": "networking.k8s.io/v1",
+            "kind": "NetworkPolicy",
+            "name": "sandbox-host-bootstrap-egress",
+            "network": {
+              "default_deny": true,
+              "subject": "sandbox-host-bootstrap",
+              "allow_dns": true,
+              "allowed_egress": [
+                "state"
+              ]
+            },
+            "environment": []
+          }
         }
       ]
     },
@@ -3480,7 +3859,14 @@
             "reference": "ar-ci-agent-runtime-sandbox-control-secret",
             "version": "v1",
             "keys": [
-              "SANDBOX_CONTROL_TOKEN"
+              "SANDBOX_CONTROL_TOKEN",
+              "SANDBOX_AUTHORIZATION",
+              "SANDBOX_ASSERTION_KEY",
+              "SANDBOX_CONTROL_SIGNING_KEY",
+              "SANDBOX_PUBLIC_TLS_CERT",
+              "SANDBOX_PUBLIC_TLS_KEY",
+              "SANDBOX_HOST_TLS_CERT",
+              "SANDBOX_HOST_TLS_KEY"
             ]
           }
         },
@@ -3571,7 +3957,8 @@
             "reference": "ar-ci-agent-runtime-sandbox-host-ca-secret",
             "version": "v1",
             "keys": [
-              "SANDBOX_HOST_CA"
+              "SANDBOX_HOST_CA",
+              "SANDBOX_HOST_CLIENT_CA"
             ]
           }
         },
@@ -3615,8 +4002,86 @@
             "reference": "ar-ci-agent-runtime-sandbox-host-identity-secret",
             "version": "v1",
             "keys": [
-              "SANDBOX_HOST_IDENTITY"
+              "SANDBOX_HOST_IDENTITY",
+              "SANDBOX_HOST_TLS_CERT",
+              "SANDBOX_HOST_TLS_KEY",
+              "SANDBOX_HOST_SIGNING_KEY",
+              "SANDBOX_CONTROL_CA",
+              "SANDBOX_CONTROL_TRUST"
             ]
+          }
+        },
+        {
+          "id": "sandbox-control-config",
+          "kind": "kubernetes",
+          "owner": "runtime-operator",
+          "scope": "namespace",
+          "dependencies": [],
+          "retention": {
+            "policy": "ephemeral",
+            "days": 0
+          },
+          "backup_restore_owner": "none",
+          "delete_behavior": "delete",
+          "external_controller": false,
+          "kubernetes": {
+            "api_version": "v1",
+            "kind": "ConfigMap",
+            "name": "sandbox-control-config",
+            "data": {
+              "config.json": "{\"version\":2,\"listen_address\":\"0.0.0.0:8086\",\"tls_certificate_file\":\"/run/sandbox-control/public/tls.crt\",\"tls_private_key_file\":\"/run/sandbox-control/public/tls.key\",\"database_dsn_environment\":\"SANDBOX_STATE_DSN\",\"authorization_environment\":\"SANDBOX_AUTHORIZATION\",\"assertion_key_environment\":\"SANDBOX_ASSERTION_KEY\",\"identity\":{\"authority\":\"agent-runtime\",\"tenant\":\"public\",\"subject\":\"sandbox-control\",\"principal\":\"public:sandbox-control\"},\"binding_lifetime_seconds\":300,\"retention_seconds\":86400,\"wait_interval_millis\":25,\"admission\":{\"version\":\"sandbox-control/v1\",\"canonicalizer_version\":\"sandbox.control/v1\",\"capability_version\":\"capabilities/v1\",\"image_admission_version\":\"images/v1\",\"defaults\":{\"milli_cpu\":100,\"memory_bytes\":134217728,\"root_disk_bytes\":1073741824,\"tmpfs_bytes\":67108864,\"pids\":64,\"process_count\":32,\"open_files\":1024,\"inodes\":100000,\"files\":100000,\"lifetime_seconds\":900,\"produced_output_bytes\":67108864,\"retained_output_bytes\":16777216,\"transfer_bytes\":1073741824,\"network_connections\":64,\"volume_bytes\":10737418240,\"snapshot_bytes\":10737418240},\"maximum\":{\"milli_cpu\":4000,\"memory_bytes\":8589934592,\"root_disk_bytes\":107374182400,\"tmpfs_bytes\":2147483648,\"pids\":4096,\"process_count\":2048,\"open_files\":65536,\"inodes\":10000000,\"files\":10000000,\"lifetime_seconds\":86400,\"produced_output_bytes\":1073741824,\"retained_output_bytes\":268435456,\"transfer_bytes\":107374182400,\"network_connections\":4096,\"volume_bytes\":1099511627776,\"snapshot_bytes\":1099511627776},\"capabilities\":{},\"admitted_images\":{}},\"host_control\":{\"listen_address\":\"0.0.0.0:9443\",\"tls_certificate_file\":\"/run/sandbox-control/host/tls.crt\",\"tls_private_key_file\":\"/run/sandbox-control/host/tls.key\",\"client_ca_file\":\"/run/sandbox-control/host-client-ca/ca.crt\",\"control_trust_version\":1,\"control_revocation_epoch\":1,\"control_key_id\":\"sandbox_control_2026_01\",\"control_key_version\":1,\"control_key_not_before\":\"2026-01-01T00:00:00Z\",\"control_key_not_after\":\"2036-01-01T00:00:00Z\",\"control_signing_key_environment\":\"SANDBOX_CONTROL_SIGNING_KEY\",\"lease_seconds\":60}}"
+            },
+            "environment": []
+          }
+        },
+        {
+          "id": "sandbox-host-config",
+          "kind": "kubernetes",
+          "owner": "runtime-operator",
+          "scope": "namespace",
+          "dependencies": [],
+          "retention": {
+            "policy": "ephemeral",
+            "days": 0
+          },
+          "backup_restore_owner": "none",
+          "delete_behavior": "delete",
+          "external_controller": false,
+          "kubernetes": {
+            "api_version": "v1",
+            "kind": "ConfigMap",
+            "name": "sandbox-host-config",
+            "data": {
+              "config.json": "{\"version\":2,\"control_url\":\"https://sandbox-control:9443\",\"server_name\":\"sandbox-control\",\"trust_bundle_file\":\"/run/sandbox-host/control-ca.crt\",\"client_certificate_file\":\"/run/sandbox-host/tls.crt\",\"client_private_key_file\":\"/run/sandbox-host/tls.key\",\"control_trust_file\":\"/run/sandbox-host/control-trust.json\",\"host_id\":\"sandbox-host-01\",\"host_generation\":1,\"journal_file\":\"/var/lib/sandbox-host/receipts.json\",\"maximum_receipts\":10000,\"host_signing_key_environment\":\"SANDBOX_HOST_SIGNING_KEY\",\"request_timeout_seconds\":10,\"test_fault_after_journal\":false,\"test_fault_after_receipt\":false,\"test_fault_after_result_send\":false}"
+            },
+            "environment": []
+          }
+        },
+        {
+          "id": "sandbox-host-journal",
+          "kind": "kubernetes",
+          "owner": "runtime-operator",
+          "scope": "namespace",
+          "dependencies": [],
+          "retention": {
+            "policy": "ephemeral",
+            "days": 0
+          },
+          "backup_restore_owner": "none",
+          "delete_behavior": "delete",
+          "external_controller": false,
+          "kubernetes": {
+            "api_version": "v1",
+            "kind": "PersistentVolumeClaim",
+            "name": "sandbox-host-journal",
+            "storage": [
+              {
+                "name": "journal",
+                "size_bytes": 1073741824,
+                "class": "local-path"
+              }
+            ],
+            "environment": []
           }
         },
         {
@@ -4183,7 +4648,6 @@
           "scope": "namespace",
           "dependencies": [
             "tool-account",
-            "sandbox-control-secret",
             "tool-broker-secret"
           ],
           "retention": {
@@ -4212,15 +4676,10 @@
             "environment": [
               {
                 "name": "RUNTIME_ROLE_CONFIG",
-                "value": "{\"version\":1,\"role\":\"tool\",\"namespace\":\"ar-ci-agent-runtime\",\"listen_address\":\"0.0.0.0:8083\",\"dependencies\":[{\"name\":\"sandbox-control\",\"endpoint\":\"http://sandbox-control.ar-ci-agent-runtime.svc:8086\",\"secret_environment\":\"SANDBOX_CONTROL_TOKEN\"},{\"name\":\"telemetry\",\"endpoint\":\"http://otel-collector:4318\"},{\"name\":\"tool-broker\",\"endpoint\":\"http://api.ar-ci-agent-runtime.svc:8080\",\"secret_environment\":\"TOOL_BROKER_TOKEN\"}]}"
+                "value": "{\"version\":1,\"role\":\"tool\",\"namespace\":\"ar-ci-agent-runtime\",\"listen_address\":\"0.0.0.0:8083\",\"dependencies\":[{\"name\":\"telemetry\",\"endpoint\":\"http://otel-collector:4318\"},{\"name\":\"tool-broker\",\"endpoint\":\"http://api.ar-ci-agent-runtime.svc:8080\",\"secret_environment\":\"TOOL_BROKER_TOKEN\"}]}"
               }
             ],
             "secret_environment": [
-              {
-                "name": "SANDBOX_CONTROL_TOKEN",
-                "secret": "sandbox-control-secret",
-                "key": "SANDBOX_CONTROL_TOKEN"
-              },
               {
                 "name": "TOOL_BROKER_TOKEN",
                 "secret": "tool-broker-secret",
@@ -4415,6 +4874,8 @@
           "scope": "namespace",
           "dependencies": [
             "sandbox-control-account",
+            "sandbox-control-config",
+            "sandbox-control-secret",
             "sandbox-host-ca-secret",
             "sandbox-state-secret"
           ],
@@ -4433,25 +4894,27 @@
             "image": "ghcr.io/0x63616c/agent-runtime@sha256:bef38a1e7b268a50db626879ada7e4fc7d9486641dfb76ca8d5d54f21f102603",
             "service_account": "sandbox-control-account",
             "command": [
-              "/runtime"
+              "/sandbox-control"
             ],
             "arguments": [
-              "--config-env",
-              "RUNTIME_ROLE_CONFIG",
-              "--role",
-              "sandbox-control"
-            ],
-            "environment": [
-              {
-                "name": "RUNTIME_ROLE_CONFIG",
-                "value": "{\"version\":1,\"role\":\"sandbox-control\",\"namespace\":\"ar-ci-agent-runtime\",\"listen_address\":\"0.0.0.0:8086\",\"dependencies\":[{\"name\":\"host-ca\",\"endpoint\":\"https://host-ca.example.invalid\",\"secret_environment\":\"SANDBOX_HOST_CA\"},{\"name\":\"sandbox-state\",\"endpoint\":\"postgres://state.ar-ci-agent-runtime.svc:5432/sandbox\",\"secret_environment\":\"SANDBOX_STATE_DSN\"},{\"name\":\"telemetry\",\"endpoint\":\"http://otel-collector:4318\"}]}"
-              }
+              "--config",
+              "/etc/sandbox-control/config.json"
             ],
             "secret_environment": [
               {
-                "name": "SANDBOX_HOST_CA",
-                "secret": "sandbox-host-ca-secret",
-                "key": "SANDBOX_HOST_CA"
+                "name": "SANDBOX_AUTHORIZATION",
+                "secret": "sandbox-control-secret",
+                "key": "SANDBOX_AUTHORIZATION"
+              },
+              {
+                "name": "SANDBOX_ASSERTION_KEY",
+                "secret": "sandbox-control-secret",
+                "key": "SANDBOX_ASSERTION_KEY"
+              },
+              {
+                "name": "SANDBOX_CONTROL_SIGNING_KEY",
+                "secret": "sandbox-control-secret",
+                "key": "SANDBOX_CONTROL_SIGNING_KEY"
               },
               {
                 "name": "SANDBOX_STATE_DSN",
@@ -4459,23 +4922,15 @@
                 "key": "SANDBOX_STATE_DSN"
               }
             ],
-            "readiness": {
-              "command": [
-                "/runtime",
-                "--config-env",
-                "RUNTIME_ROLE_CONFIG",
-                "--role",
-                "sandbox-control",
-                "--check"
-              ],
-              "initial_delay_seconds": 1,
-              "period_seconds": 5,
-              "failure_threshold": 12
-            },
             "ports": [
               {
-                "name": "http",
+                "name": "public-tls",
                 "number": 8086,
+                "protocol": "TCP"
+              },
+              {
+                "name": "host-mtls",
+                "number": 9443,
                 "protocol": "TCP"
               }
             ],
@@ -4485,7 +4940,42 @@
               "request_memory_bytes": 134217728,
               "limit_memory_bytes": 536870912
             },
-            "storage": []
+            "storage": [],
+            "config_map_mounts": [
+              {
+                "config_map": "sandbox-control-config",
+                "key": "config.json",
+                "path": "/etc/sandbox-control/config.json"
+              }
+            ],
+            "secret_mounts": [
+              {
+                "secret": "sandbox-control-secret",
+                "key": "SANDBOX_PUBLIC_TLS_CERT",
+                "path": "/run/sandbox-control/public/tls.crt"
+              },
+              {
+                "secret": "sandbox-control-secret",
+                "key": "SANDBOX_PUBLIC_TLS_KEY",
+                "path": "/run/sandbox-control/public/tls.key"
+              },
+              {
+                "secret": "sandbox-control-secret",
+                "key": "SANDBOX_HOST_TLS_CERT",
+                "path": "/run/sandbox-control/host/tls.crt"
+              },
+              {
+                "secret": "sandbox-control-secret",
+                "key": "SANDBOX_HOST_TLS_KEY",
+                "path": "/run/sandbox-control/host/tls.key"
+              },
+              {
+                "secret": "sandbox-host-ca-secret",
+                "key": "SANDBOX_HOST_CLIENT_CA",
+                "path": "/run/sandbox-control/host-client-ca/ca.crt"
+              }
+            ],
+            "environment": []
           }
         },
         {
@@ -4495,8 +4985,10 @@
           "scope": "namespace",
           "dependencies": [
             "sandbox-host-account",
+            "sandbox-host-bootstrap",
+            "sandbox-host-config",
             "sandbox-host-identity-secret",
-            "sandbox-control-secret"
+            "sandbox-host-journal"
           ],
           "retention": {
             "policy": "ephemeral",
@@ -4513,59 +5005,67 @@
             "image": "ghcr.io/0x63616c/agent-runtime@sha256:bef38a1e7b268a50db626879ada7e4fc7d9486641dfb76ca8d5d54f21f102603",
             "service_account": "sandbox-host-account",
             "command": [
-              "/runtime"
+              "/sandbox-host"
             ],
             "arguments": [
-              "--config-env",
-              "RUNTIME_ROLE_CONFIG",
-              "--role",
-              "sandbox-host"
-            ],
-            "environment": [
-              {
-                "name": "RUNTIME_ROLE_CONFIG",
-                "value": "{\"version\":1,\"role\":\"sandbox-host\",\"namespace\":\"ar-ci-agent-runtime\",\"listen_address\":\"0.0.0.0:8087\",\"dependencies\":[{\"name\":\"host-identity\",\"endpoint\":\"https://host-identity.example.invalid\",\"secret_environment\":\"SANDBOX_HOST_IDENTITY\"},{\"name\":\"sandbox-control\",\"endpoint\":\"http://sandbox-control.ar-ci-agent-runtime.svc:8086\",\"secret_environment\":\"SANDBOX_CONTROL_TOKEN\"},{\"name\":\"telemetry\",\"endpoint\":\"http://otel-collector:4318\"}]}"
-              }
+              "--config",
+              "/etc/sandbox-host/config.json",
+              "--poll-interval",
+              "1s",
+              "--firecracker-control"
             ],
             "secret_environment": [
               {
-                "name": "SANDBOX_HOST_IDENTITY",
+                "name": "SANDBOX_HOST_SIGNING_KEY",
                 "secret": "sandbox-host-identity-secret",
-                "key": "SANDBOX_HOST_IDENTITY"
-              },
-              {
-                "name": "SANDBOX_CONTROL_TOKEN",
-                "secret": "sandbox-control-secret",
-                "key": "SANDBOX_CONTROL_TOKEN"
+                "key": "SANDBOX_HOST_SIGNING_KEY"
               }
             ],
-            "readiness": {
-              "command": [
-                "/runtime",
-                "--config-env",
-                "RUNTIME_ROLE_CONFIG",
-                "--role",
-                "sandbox-host",
-                "--check"
-              ],
-              "initial_delay_seconds": 1,
-              "period_seconds": 5,
-              "failure_threshold": 12
-            },
-            "ports": [
-              {
-                "name": "http",
-                "number": 8087,
-                "protocol": "TCP"
-              }
-            ],
+            "ports": [],
             "compute": {
               "request_milli_cpu": 100,
               "limit_milli_cpu": 500,
               "request_memory_bytes": 134217728,
               "limit_memory_bytes": 536870912
             },
-            "storage": []
+            "storage": [],
+            "volume_mounts": [
+              {
+                "claim": "sandbox-host-journal",
+                "path": "/var/lib/sandbox-host",
+                "read_only": false
+              }
+            ],
+            "config_map_mounts": [
+              {
+                "config_map": "sandbox-host-config",
+                "key": "config.json",
+                "path": "/etc/sandbox-host/config.json"
+              }
+            ],
+            "secret_mounts": [
+              {
+                "secret": "sandbox-host-identity-secret",
+                "key": "SANDBOX_CONTROL_CA",
+                "path": "/run/sandbox-host/control-ca.crt"
+              },
+              {
+                "secret": "sandbox-host-identity-secret",
+                "key": "SANDBOX_HOST_TLS_CERT",
+                "path": "/run/sandbox-host/tls.crt"
+              },
+              {
+                "secret": "sandbox-host-identity-secret",
+                "key": "SANDBOX_HOST_TLS_KEY",
+                "path": "/run/sandbox-host/tls.key"
+              },
+              {
+                "secret": "sandbox-host-identity-secret",
+                "key": "SANDBOX_CONTROL_TRUST",
+                "path": "/run/sandbox-host/control-trust.json"
+              }
+            ],
+            "environment": []
           }
         },
         {
@@ -5180,8 +5680,13 @@
             "selector": "sandbox-control",
             "ports": [
               {
-                "name": "http",
+                "name": "public-tls",
                 "number": 8086,
+                "protocol": "TCP"
+              },
+              {
+                "name": "host-mtls",
+                "number": 9443,
                 "protocol": "TCP"
               }
             ],
@@ -5366,7 +5871,6 @@
             "api",
             "blob",
             "otel-collector",
-            "sandbox-control",
             "state",
             "tool"
           ],
@@ -5386,7 +5890,6 @@
               "subject": "tool",
               "allowed_egress": [
                 "api",
-                "sandbox-control",
                 "otel-collector"
               ],
               "allow_dns": true
@@ -5751,6 +6254,137 @@
           }
         },
         {
+          "id": "sandbox-control-database",
+          "kind": "database",
+          "owner": "database-operator",
+          "scope": "namespace",
+          "dependencies": [
+            "sandbox-state-secret",
+            "state"
+          ],
+          "retention": {
+            "policy": "ephemeral",
+            "days": 0
+          },
+          "backup_restore_owner": "none",
+          "delete_behavior": "delete",
+          "external_controller": false,
+          "database": {
+            "database": "agent_runtime",
+            "schema": "runtime",
+            "connection_reference": "sandbox-state-secret",
+            "migration_target": "state",
+            "migrations": [
+              {
+                "version": 1,
+                "upgrade_digest": "sha256:a35506b46fd8e354be84ed1eebbfd5c6660241e2d1e8bb631db1f4e020e98c06",
+                "rollback_digest": "sha256:f71eed76263a0dd1e86be6c3ea97bdf63e86a9e0440c8365b2529918a04a9d4a",
+                "upgrade_artifact": "migrations/sandboxcontrol-v1.up.sql",
+                "rollback_artifact": "migrations/sandboxcontrol-v1.down.sql"
+              },
+              {
+                "version": 2,
+                "upgrade_digest": "sha256:8366bfedac0e952adb567c752e9c82ee14924e9ae085d09388751e846f94e4dc",
+                "rollback_digest": "sha256:7069c872c70c47b4badcdeea8e585279a50972267e974c0478cb91fe3589b407",
+                "upgrade_artifact": "migrations/sandboxcontrol-v2.up.sql",
+                "rollback_artifact": "migrations/sandboxcontrol-v2.down.sql"
+              },
+              {
+                "version": 3,
+                "upgrade_digest": "sha256:6b4e74e759bd443ffe5a79909c2e6ff9b116c42a6ba969ef074ea5d3537de475",
+                "rollback_digest": "sha256:4013662fb5d0944f87ee444bc20ea7e517d1b4b6f2d15f997e2a55208d37db5d",
+                "upgrade_artifact": "migrations/sandboxcontrol-v3.up.sql",
+                "rollback_artifact": "migrations/sandboxcontrol-v3.down.sql"
+              },
+              {
+                "version": 4,
+                "upgrade_digest": "sha256:210036e6babb6500f8e36e07e4518634572b5e55de89236b5b147298625a1f7f",
+                "rollback_digest": "sha256:608011b0efc3c532e626279812afde11a5be8aa3c2a9c792c7e71b36a12ffbfb",
+                "upgrade_artifact": "migrations/sandboxcontrol-v4.up.sql",
+                "rollback_artifact": "migrations/sandboxcontrol-v4.down.sql"
+              },
+              {
+                "version": 5,
+                "upgrade_digest": "sha256:884f126f9a0dc0a1815c399ea648d7131fa60a3deb4cae8b13757ed71f9d9044",
+                "rollback_digest": "sha256:8d02d1ef4eb8b9281f9bda7fe9f80819f53ec85509175e7d2762028f1c028c4f",
+                "upgrade_artifact": "migrations/sandboxcontrol-v5.up.sql",
+                "rollback_artifact": "migrations/sandboxcontrol-v5.down.sql"
+              },
+              {
+                "version": 6,
+                "upgrade_digest": "sha256:61adc65985e35b779d83458cd1c2c3288859b842d43d6ccbca077a379ec09247",
+                "rollback_digest": "sha256:aa536c71a464414c8e6aee3ec9018d45839e4531f2a1361265ff1d63455d229d",
+                "upgrade_artifact": "migrations/sandboxcontrol-v6.up.sql",
+                "rollback_artifact": "migrations/sandboxcontrol-v6.down.sql"
+              },
+              {
+                "version": 7,
+                "upgrade_digest": "sha256:4ff6eb405a28a2c03819106784397c74bbbc981680e6cb628cfca25f996c6294",
+                "rollback_digest": "sha256:541729cac78db641cbad0ef74dd77a91a808b021097c5dd0dcafb93b8b316f60",
+                "upgrade_artifact": "migrations/sandboxcontrol-v7.up.sql",
+                "rollback_artifact": "migrations/sandboxcontrol-v7.down.sql"
+              },
+              {
+                "version": 8,
+                "upgrade_digest": "sha256:fdb5bb89e3dfc6955f2b3c3d1cd52acf6aaf99c27a0f13d045764126b6e5db35",
+                "rollback_digest": "sha256:4b123fa034ef9bfc3ec5903e0695ff40226bb74f4b86d1a8d95738265d5b340b",
+                "upgrade_artifact": "migrations/sandboxcontrol-v8.up.sql",
+                "rollback_artifact": "migrations/sandboxcontrol-v8.down.sql"
+              },
+              {
+                "version": 9,
+                "upgrade_digest": "sha256:78f85d98ff750477e1527a603c5f82b9487df21f87d94eb3c1af58c6c055b452",
+                "rollback_digest": "sha256:d45625b3bf49a566184325fa6d50ca14b49ebd3ab41f512655d9620f4369d6ea",
+                "upgrade_artifact": "migrations/sandboxcontrol-v9.up.sql",
+                "rollback_artifact": "migrations/sandboxcontrol-v9.down.sql"
+              },
+              {
+                "version": 10,
+                "upgrade_digest": "sha256:4dd10142d3e551f340288ccd701a6f1ed140685882019143ba467c4d9790aebe",
+                "rollback_digest": "sha256:f5497a47041bff655101a9b00c17489f96b1a6bce3ec571b53dbf40ea0e756bc",
+                "upgrade_artifact": "migrations/sandboxcontrol-v10.up.sql",
+                "rollback_artifact": "migrations/sandboxcontrol-v10.down.sql"
+              },
+              {
+                "version": 11,
+                "upgrade_digest": "sha256:2ef041d644e451e78b7b448cf8222a5596ae0fd34e24e47b90fd1f50f7e1d0a0",
+                "rollback_digest": "sha256:d24217b31ee5a0d965f8bb54db444c3e68b6d82147b6aedcd3ca5bb4c2f98738",
+                "upgrade_artifact": "migrations/sandboxcontrol-v11.up.sql",
+                "rollback_artifact": "migrations/sandboxcontrol-v11.down.sql"
+              },
+              {
+                "version": 12,
+                "upgrade_digest": "sha256:956d54dd8c492981f9575ac34cb51a3270f7d758ea143be9c725ee00bdf4138f",
+                "rollback_digest": "sha256:1ff1fbe8ee9c401ee31689b7ce80db847f539eaf34bfb170b4a5dbc7768127e7",
+                "upgrade_artifact": "migrations/sandboxcontrol-v12.up.sql",
+                "rollback_artifact": "migrations/sandboxcontrol-v12.down.sql"
+              },
+              {
+                "version": 13,
+                "upgrade_digest": "sha256:cea15e13ec668dc9ab456e4fe91784c061b20501502e0e6284cd413c56cf09d0",
+                "rollback_digest": "sha256:9a2c00b5a28c05058c9ba0c23a42081f00419a4c8c51b4a5d733fa465d5c329c",
+                "upgrade_artifact": "migrations/sandboxcontrol-v13.up.sql",
+                "rollback_artifact": "migrations/sandboxcontrol-v13.down.sql"
+              },
+              {
+                "version": 14,
+                "upgrade_digest": "sha256:8dd7ada64b84b799792ad1837563cc02ac5605326f5f96e64f495632ec2e7eca",
+                "rollback_digest": "sha256:8e48d5110bf544eac9c5a5c679409910a7aa31edbdec2dbfef9b8d3c4998f3a9",
+                "upgrade_artifact": "migrations/sandboxcontrol-v14.up.sql",
+                "rollback_artifact": "migrations/sandboxcontrol-v14.down.sql"
+              },
+              {
+                "version": 15,
+                "upgrade_digest": "sha256:f677f42b98532420a3543c97de65e11d1fffdf46ca1b8ae428c5a051a4a9d17f",
+                "rollback_digest": "sha256:474f67863c9000ebc3ae0256c8c36e28ff90ea41f417ef2a744f81bb91319f92",
+                "upgrade_artifact": "migrations/sandboxcontrol-v15.up.sql",
+                "rollback_artifact": "migrations/sandboxcontrol-v15.down.sql"
+              }
+            ],
+            "migration_authority": "sandbox-control"
+          }
+        },
+        {
           "id": "runtime-database",
           "kind": "database",
           "owner": "database-operator",
@@ -5807,7 +6441,8 @@
                 "upgrade_artifact": "migrations/runtime-v5.up.sql",
                 "rollback_artifact": "migrations/runtime-v5.down.sql"
               }
-            ]
+            ],
+            "migration_authority": "runtime"
           }
         },
         {
@@ -6525,6 +7160,129 @@
             "migration_target": "temporal-state",
             "migrations": []
           }
+        },
+        {
+          "id": "sandbox-host-bootstrap-config",
+          "kind": "kubernetes",
+          "owner": "runtime-operator",
+          "scope": "namespace",
+          "dependencies": [],
+          "retention": {
+            "policy": "ephemeral",
+            "days": 0
+          },
+          "backup_restore_owner": "none",
+          "delete_behavior": "delete",
+          "external_controller": false,
+          "kubernetes": {
+            "api_version": "v1",
+            "kind": "ConfigMap",
+            "name": "sandbox-host-bootstrap-config",
+            "data": {
+              "config.json": "{\"version\":1,\"database_dsn_environment\":\"SANDBOX_STATE_DSN\",\"host_id\":\"sandbox-host-01\",\"tenant\":\"public\",\"pool\":\"local-ci-reference\",\"generation\":1,\"certificate_file\":\"/run/sandbox-host/tls.crt\",\"signing_key_file\":\"/run/sandbox-host/signing.key\",\"capability_digest\":\"sha256:ae18609e688c7ebaaa4fb083f199cdc096067a21a71dadaa0346a74e0ed5b762\",\"expires_at\":\"2030-01-01T00:00:00Z\"}"
+            },
+            "environment": []
+          }
+        },
+        {
+          "id": "sandbox-host-bootstrap",
+          "kind": "kubernetes",
+          "owner": "runtime-operator",
+          "scope": "namespace",
+          "dependencies": [
+            "sandbox-control-database",
+            "sandbox-host-bootstrap-config",
+            "sandbox-host-identity-secret",
+            "sandbox-state-secret"
+          ],
+          "retention": {
+            "policy": "ephemeral",
+            "days": 0
+          },
+          "backup_restore_owner": "none",
+          "delete_behavior": "delete",
+          "external_controller": false,
+          "kubernetes": {
+            "api_version": "batch/v1",
+            "kind": "Job",
+            "name": "sandbox-host-bootstrap",
+            "post_migration": true,
+            "image": "ghcr.io/0x63616c/agent-runtime@sha256:bef38a1e7b268a50db626879ada7e4fc7d9486641dfb76ca8d5d54f21f102603",
+            "service_account": "sandbox-host-account",
+            "command": [
+              "/sandbox-host-bootstrap"
+            ],
+            "arguments": [
+              "--config",
+              "/etc/sandbox-host-bootstrap/config.json"
+            ],
+            "secret_environment": [
+              {
+                "name": "SANDBOX_STATE_DSN",
+                "secret": "sandbox-state-secret",
+                "key": "SANDBOX_STATE_DSN"
+              }
+            ],
+            "ports": [],
+            "compute": {
+              "request_milli_cpu": 100,
+              "limit_milli_cpu": 250,
+              "request_memory_bytes": 67108864,
+              "limit_memory_bytes": 134217728
+            },
+            "storage": [],
+            "config_map_mounts": [
+              {
+                "config_map": "sandbox-host-bootstrap-config",
+                "key": "config.json",
+                "path": "/etc/sandbox-host-bootstrap/config.json"
+              }
+            ],
+            "secret_mounts": [
+              {
+                "secret": "sandbox-host-identity-secret",
+                "key": "SANDBOX_HOST_TLS_CERT",
+                "path": "/run/sandbox-host/tls.crt"
+              },
+              {
+                "secret": "sandbox-host-identity-secret",
+                "key": "SANDBOX_HOST_SIGNING_KEY",
+                "path": "/run/sandbox-host/signing.key"
+              }
+            ],
+            "environment": []
+          }
+        },
+        {
+          "id": "sandbox-host-bootstrap-egress",
+          "kind": "kubernetes",
+          "owner": "security-operator",
+          "scope": "namespace",
+          "dependencies": [
+            "sandbox-host-bootstrap",
+            "state"
+          ],
+          "retention": {
+            "policy": "ephemeral",
+            "days": 0
+          },
+          "backup_restore_owner": "none",
+          "delete_behavior": "delete",
+          "external_controller": false,
+          "kubernetes": {
+            "api_version": "networking.k8s.io/v1",
+            "kind": "NetworkPolicy",
+            "name": "sandbox-host-bootstrap-egress",
+            "network": {
+              "default_deny": true,
+              "subject": "sandbox-host-bootstrap",
+              "allow_dns": true,
+              "allowed_egress": [
+                "state"
+              ]
+            },
+            "environment": []
+          }
         }
       ]
     },
@@ -6725,7 +7483,14 @@
             "reference": "agent-runtime-sandbox-control-secret",
             "version": "v1",
             "keys": [
-              "SANDBOX_CONTROL_TOKEN"
+              "SANDBOX_CONTROL_TOKEN",
+              "SANDBOX_AUTHORIZATION",
+              "SANDBOX_ASSERTION_KEY",
+              "SANDBOX_CONTROL_SIGNING_KEY",
+              "SANDBOX_PUBLIC_TLS_CERT",
+              "SANDBOX_PUBLIC_TLS_KEY",
+              "SANDBOX_HOST_TLS_CERT",
+              "SANDBOX_HOST_TLS_KEY"
             ]
           }
         },
@@ -6816,7 +7581,8 @@
             "reference": "agent-runtime-sandbox-host-ca-secret",
             "version": "v1",
             "keys": [
-              "SANDBOX_HOST_CA"
+              "SANDBOX_HOST_CA",
+              "SANDBOX_HOST_CLIENT_CA"
             ]
           }
         },
@@ -6860,8 +7626,86 @@
             "reference": "agent-runtime-sandbox-host-identity-secret",
             "version": "v1",
             "keys": [
-              "SANDBOX_HOST_IDENTITY"
+              "SANDBOX_HOST_IDENTITY",
+              "SANDBOX_HOST_TLS_CERT",
+              "SANDBOX_HOST_TLS_KEY",
+              "SANDBOX_HOST_SIGNING_KEY",
+              "SANDBOX_CONTROL_CA",
+              "SANDBOX_CONTROL_TRUST"
             ]
+          }
+        },
+        {
+          "id": "sandbox-control-config",
+          "kind": "kubernetes",
+          "owner": "runtime-operator",
+          "scope": "namespace",
+          "dependencies": [],
+          "retention": {
+            "policy": "persistent",
+            "days": 30
+          },
+          "backup_restore_owner": "platform-operator",
+          "delete_behavior": "retain",
+          "external_controller": false,
+          "kubernetes": {
+            "api_version": "v1",
+            "kind": "ConfigMap",
+            "name": "sandbox-control-config",
+            "data": {
+              "config.json": "{\"version\":2,\"listen_address\":\"0.0.0.0:8086\",\"tls_certificate_file\":\"/run/sandbox-control/public/tls.crt\",\"tls_private_key_file\":\"/run/sandbox-control/public/tls.key\",\"database_dsn_environment\":\"SANDBOX_STATE_DSN\",\"authorization_environment\":\"SANDBOX_AUTHORIZATION\",\"assertion_key_environment\":\"SANDBOX_ASSERTION_KEY\",\"identity\":{\"authority\":\"agent-runtime\",\"tenant\":\"public\",\"subject\":\"sandbox-control\",\"principal\":\"public:sandbox-control\"},\"binding_lifetime_seconds\":300,\"retention_seconds\":86400,\"wait_interval_millis\":25,\"admission\":{\"version\":\"sandbox-control/v1\",\"canonicalizer_version\":\"sandbox.control/v1\",\"capability_version\":\"capabilities/v1\",\"image_admission_version\":\"images/v1\",\"defaults\":{\"milli_cpu\":100,\"memory_bytes\":134217728,\"root_disk_bytes\":1073741824,\"tmpfs_bytes\":67108864,\"pids\":64,\"process_count\":32,\"open_files\":1024,\"inodes\":100000,\"files\":100000,\"lifetime_seconds\":900,\"produced_output_bytes\":67108864,\"retained_output_bytes\":16777216,\"transfer_bytes\":1073741824,\"network_connections\":64,\"volume_bytes\":10737418240,\"snapshot_bytes\":10737418240},\"maximum\":{\"milli_cpu\":4000,\"memory_bytes\":8589934592,\"root_disk_bytes\":107374182400,\"tmpfs_bytes\":2147483648,\"pids\":4096,\"process_count\":2048,\"open_files\":65536,\"inodes\":10000000,\"files\":10000000,\"lifetime_seconds\":86400,\"produced_output_bytes\":1073741824,\"retained_output_bytes\":268435456,\"transfer_bytes\":107374182400,\"network_connections\":4096,\"volume_bytes\":1099511627776,\"snapshot_bytes\":1099511627776},\"capabilities\":{},\"admitted_images\":{}},\"host_control\":{\"listen_address\":\"0.0.0.0:9443\",\"tls_certificate_file\":\"/run/sandbox-control/host/tls.crt\",\"tls_private_key_file\":\"/run/sandbox-control/host/tls.key\",\"client_ca_file\":\"/run/sandbox-control/host-client-ca/ca.crt\",\"control_trust_version\":1,\"control_revocation_epoch\":1,\"control_key_id\":\"sandbox_control_2026_01\",\"control_key_version\":1,\"control_key_not_before\":\"2026-01-01T00:00:00Z\",\"control_key_not_after\":\"2036-01-01T00:00:00Z\",\"control_signing_key_environment\":\"SANDBOX_CONTROL_SIGNING_KEY\",\"lease_seconds\":60}}"
+            },
+            "environment": []
+          }
+        },
+        {
+          "id": "sandbox-host-config",
+          "kind": "kubernetes",
+          "owner": "runtime-operator",
+          "scope": "namespace",
+          "dependencies": [],
+          "retention": {
+            "policy": "persistent",
+            "days": 30
+          },
+          "backup_restore_owner": "platform-operator",
+          "delete_behavior": "retain",
+          "external_controller": false,
+          "kubernetes": {
+            "api_version": "v1",
+            "kind": "ConfigMap",
+            "name": "sandbox-host-config",
+            "data": {
+              "config.json": "{\"version\":2,\"control_url\":\"https://sandbox-control:9443\",\"server_name\":\"sandbox-control\",\"trust_bundle_file\":\"/run/sandbox-host/control-ca.crt\",\"client_certificate_file\":\"/run/sandbox-host/tls.crt\",\"client_private_key_file\":\"/run/sandbox-host/tls.key\",\"control_trust_file\":\"/run/sandbox-host/control-trust.json\",\"host_id\":\"sandbox-host-01\",\"host_generation\":1,\"journal_file\":\"/var/lib/sandbox-host/receipts.json\",\"maximum_receipts\":10000,\"host_signing_key_environment\":\"SANDBOX_HOST_SIGNING_KEY\",\"request_timeout_seconds\":10,\"test_fault_after_journal\":false,\"test_fault_after_receipt\":false,\"test_fault_after_result_send\":false}"
+            },
+            "environment": []
+          }
+        },
+        {
+          "id": "sandbox-host-journal",
+          "kind": "kubernetes",
+          "owner": "runtime-operator",
+          "scope": "namespace",
+          "dependencies": [],
+          "retention": {
+            "policy": "persistent",
+            "days": 30
+          },
+          "backup_restore_owner": "platform-operator",
+          "delete_behavior": "retain",
+          "external_controller": false,
+          "kubernetes": {
+            "api_version": "v1",
+            "kind": "PersistentVolumeClaim",
+            "name": "sandbox-host-journal",
+            "storage": [
+              {
+                "name": "journal",
+                "size_bytes": 1073741824,
+                "class": "local-path"
+              }
+            ],
+            "environment": []
           }
         },
         {
@@ -7428,7 +8272,6 @@
           "scope": "namespace",
           "dependencies": [
             "tool-account",
-            "sandbox-control-secret",
             "tool-broker-secret"
           ],
           "retention": {
@@ -7457,15 +8300,10 @@
             "environment": [
               {
                 "name": "RUNTIME_ROLE_CONFIG",
-                "value": "{\"version\":1,\"role\":\"tool\",\"namespace\":\"agent-runtime\",\"listen_address\":\"0.0.0.0:8083\",\"dependencies\":[{\"name\":\"sandbox-control\",\"endpoint\":\"http://sandbox-control.agent-runtime.svc:8086\",\"secret_environment\":\"SANDBOX_CONTROL_TOKEN\"},{\"name\":\"telemetry\",\"endpoint\":\"http://otel-collector:4318\"},{\"name\":\"tool-broker\",\"endpoint\":\"http://api.agent-runtime.svc:8080\",\"secret_environment\":\"TOOL_BROKER_TOKEN\"}]}"
+                "value": "{\"version\":1,\"role\":\"tool\",\"namespace\":\"agent-runtime\",\"listen_address\":\"0.0.0.0:8083\",\"dependencies\":[{\"name\":\"telemetry\",\"endpoint\":\"http://otel-collector:4318\"},{\"name\":\"tool-broker\",\"endpoint\":\"http://api.agent-runtime.svc:8080\",\"secret_environment\":\"TOOL_BROKER_TOKEN\"}]}"
               }
             ],
             "secret_environment": [
-              {
-                "name": "SANDBOX_CONTROL_TOKEN",
-                "secret": "sandbox-control-secret",
-                "key": "SANDBOX_CONTROL_TOKEN"
-              },
               {
                 "name": "TOOL_BROKER_TOKEN",
                 "secret": "tool-broker-secret",
@@ -7660,6 +8498,8 @@
           "scope": "namespace",
           "dependencies": [
             "sandbox-control-account",
+            "sandbox-control-config",
+            "sandbox-control-secret",
             "sandbox-host-ca-secret",
             "sandbox-state-secret"
           ],
@@ -7678,25 +8518,27 @@
             "image": "ghcr.io/0x63616c/agent-runtime@sha256:bef38a1e7b268a50db626879ada7e4fc7d9486641dfb76ca8d5d54f21f102603",
             "service_account": "sandbox-control-account",
             "command": [
-              "/runtime"
+              "/sandbox-control"
             ],
             "arguments": [
-              "--config-env",
-              "RUNTIME_ROLE_CONFIG",
-              "--role",
-              "sandbox-control"
-            ],
-            "environment": [
-              {
-                "name": "RUNTIME_ROLE_CONFIG",
-                "value": "{\"version\":1,\"role\":\"sandbox-control\",\"namespace\":\"agent-runtime\",\"listen_address\":\"0.0.0.0:8086\",\"dependencies\":[{\"name\":\"host-ca\",\"endpoint\":\"https://host-ca.example.invalid\",\"secret_environment\":\"SANDBOX_HOST_CA\"},{\"name\":\"sandbox-state\",\"endpoint\":\"postgres://state.agent-runtime.svc:5432/sandbox\",\"secret_environment\":\"SANDBOX_STATE_DSN\"},{\"name\":\"telemetry\",\"endpoint\":\"http://otel-collector:4318\"}]}"
-              }
+              "--config",
+              "/etc/sandbox-control/config.json"
             ],
             "secret_environment": [
               {
-                "name": "SANDBOX_HOST_CA",
-                "secret": "sandbox-host-ca-secret",
-                "key": "SANDBOX_HOST_CA"
+                "name": "SANDBOX_AUTHORIZATION",
+                "secret": "sandbox-control-secret",
+                "key": "SANDBOX_AUTHORIZATION"
+              },
+              {
+                "name": "SANDBOX_ASSERTION_KEY",
+                "secret": "sandbox-control-secret",
+                "key": "SANDBOX_ASSERTION_KEY"
+              },
+              {
+                "name": "SANDBOX_CONTROL_SIGNING_KEY",
+                "secret": "sandbox-control-secret",
+                "key": "SANDBOX_CONTROL_SIGNING_KEY"
               },
               {
                 "name": "SANDBOX_STATE_DSN",
@@ -7704,23 +8546,15 @@
                 "key": "SANDBOX_STATE_DSN"
               }
             ],
-            "readiness": {
-              "command": [
-                "/runtime",
-                "--config-env",
-                "RUNTIME_ROLE_CONFIG",
-                "--role",
-                "sandbox-control",
-                "--check"
-              ],
-              "initial_delay_seconds": 1,
-              "period_seconds": 5,
-              "failure_threshold": 12
-            },
             "ports": [
               {
-                "name": "http",
+                "name": "public-tls",
                 "number": 8086,
+                "protocol": "TCP"
+              },
+              {
+                "name": "host-mtls",
+                "number": 9443,
                 "protocol": "TCP"
               }
             ],
@@ -7730,7 +8564,42 @@
               "request_memory_bytes": 134217728,
               "limit_memory_bytes": 536870912
             },
-            "storage": []
+            "storage": [],
+            "config_map_mounts": [
+              {
+                "config_map": "sandbox-control-config",
+                "key": "config.json",
+                "path": "/etc/sandbox-control/config.json"
+              }
+            ],
+            "secret_mounts": [
+              {
+                "secret": "sandbox-control-secret",
+                "key": "SANDBOX_PUBLIC_TLS_CERT",
+                "path": "/run/sandbox-control/public/tls.crt"
+              },
+              {
+                "secret": "sandbox-control-secret",
+                "key": "SANDBOX_PUBLIC_TLS_KEY",
+                "path": "/run/sandbox-control/public/tls.key"
+              },
+              {
+                "secret": "sandbox-control-secret",
+                "key": "SANDBOX_HOST_TLS_CERT",
+                "path": "/run/sandbox-control/host/tls.crt"
+              },
+              {
+                "secret": "sandbox-control-secret",
+                "key": "SANDBOX_HOST_TLS_KEY",
+                "path": "/run/sandbox-control/host/tls.key"
+              },
+              {
+                "secret": "sandbox-host-ca-secret",
+                "key": "SANDBOX_HOST_CLIENT_CA",
+                "path": "/run/sandbox-control/host-client-ca/ca.crt"
+              }
+            ],
+            "environment": []
           }
         },
         {
@@ -7740,8 +8609,9 @@
           "scope": "namespace",
           "dependencies": [
             "sandbox-host-account",
+            "sandbox-host-config",
             "sandbox-host-identity-secret",
-            "sandbox-control-secret"
+            "sandbox-host-journal"
           ],
           "retention": {
             "policy": "persistent",
@@ -7758,59 +8628,67 @@
             "image": "ghcr.io/0x63616c/agent-runtime@sha256:bef38a1e7b268a50db626879ada7e4fc7d9486641dfb76ca8d5d54f21f102603",
             "service_account": "sandbox-host-account",
             "command": [
-              "/runtime"
+              "/sandbox-host"
             ],
             "arguments": [
-              "--config-env",
-              "RUNTIME_ROLE_CONFIG",
-              "--role",
-              "sandbox-host"
-            ],
-            "environment": [
-              {
-                "name": "RUNTIME_ROLE_CONFIG",
-                "value": "{\"version\":1,\"role\":\"sandbox-host\",\"namespace\":\"agent-runtime\",\"listen_address\":\"0.0.0.0:8087\",\"dependencies\":[{\"name\":\"host-identity\",\"endpoint\":\"https://host-identity.example.invalid\",\"secret_environment\":\"SANDBOX_HOST_IDENTITY\"},{\"name\":\"sandbox-control\",\"endpoint\":\"http://sandbox-control.agent-runtime.svc:8086\",\"secret_environment\":\"SANDBOX_CONTROL_TOKEN\"},{\"name\":\"telemetry\",\"endpoint\":\"http://otel-collector:4318\"}]}"
-              }
+              "--config",
+              "/etc/sandbox-host/config.json",
+              "--poll-interval",
+              "1s",
+              "--firecracker-control"
             ],
             "secret_environment": [
               {
-                "name": "SANDBOX_HOST_IDENTITY",
+                "name": "SANDBOX_HOST_SIGNING_KEY",
                 "secret": "sandbox-host-identity-secret",
-                "key": "SANDBOX_HOST_IDENTITY"
-              },
-              {
-                "name": "SANDBOX_CONTROL_TOKEN",
-                "secret": "sandbox-control-secret",
-                "key": "SANDBOX_CONTROL_TOKEN"
+                "key": "SANDBOX_HOST_SIGNING_KEY"
               }
             ],
-            "readiness": {
-              "command": [
-                "/runtime",
-                "--config-env",
-                "RUNTIME_ROLE_CONFIG",
-                "--role",
-                "sandbox-host",
-                "--check"
-              ],
-              "initial_delay_seconds": 1,
-              "period_seconds": 5,
-              "failure_threshold": 12
-            },
-            "ports": [
-              {
-                "name": "http",
-                "number": 8087,
-                "protocol": "TCP"
-              }
-            ],
+            "ports": [],
             "compute": {
               "request_milli_cpu": 100,
               "limit_milli_cpu": 500,
               "request_memory_bytes": 134217728,
               "limit_memory_bytes": 536870912
             },
-            "storage": []
+            "storage": [],
+            "volume_mounts": [
+              {
+                "claim": "sandbox-host-journal",
+                "path": "/var/lib/sandbox-host",
+                "read_only": false
+              }
+            ],
+            "config_map_mounts": [
+              {
+                "config_map": "sandbox-host-config",
+                "key": "config.json",
+                "path": "/etc/sandbox-host/config.json"
+              }
+            ],
+            "secret_mounts": [
+              {
+                "secret": "sandbox-host-identity-secret",
+                "key": "SANDBOX_CONTROL_CA",
+                "path": "/run/sandbox-host/control-ca.crt"
+              },
+              {
+                "secret": "sandbox-host-identity-secret",
+                "key": "SANDBOX_HOST_TLS_CERT",
+                "path": "/run/sandbox-host/tls.crt"
+              },
+              {
+                "secret": "sandbox-host-identity-secret",
+                "key": "SANDBOX_HOST_TLS_KEY",
+                "path": "/run/sandbox-host/tls.key"
+              },
+              {
+                "secret": "sandbox-host-identity-secret",
+                "key": "SANDBOX_CONTROL_TRUST",
+                "path": "/run/sandbox-host/control-trust.json"
+              }
+            ],
+            "environment": []
           }
         },
         {
@@ -8425,8 +9303,13 @@
             "selector": "sandbox-control",
             "ports": [
               {
-                "name": "http",
+                "name": "public-tls",
                 "number": 8086,
+                "protocol": "TCP"
+              },
+              {
+                "name": "host-mtls",
+                "number": 9443,
                 "protocol": "TCP"
               }
             ],
@@ -8611,7 +9494,6 @@
             "api",
             "blob",
             "otel-collector",
-            "sandbox-control",
             "state",
             "tool"
           ],
@@ -8631,7 +9513,6 @@
               "subject": "tool",
               "allowed_egress": [
                 "api",
-                "sandbox-control",
                 "otel-collector"
               ],
               "allow_dns": true
@@ -8996,6 +9877,137 @@
           }
         },
         {
+          "id": "sandbox-control-database",
+          "kind": "database",
+          "owner": "database-operator",
+          "scope": "namespace",
+          "dependencies": [
+            "sandbox-state-secret",
+            "state"
+          ],
+          "retention": {
+            "policy": "persistent",
+            "days": 30
+          },
+          "backup_restore_owner": "platform-operator",
+          "delete_behavior": "retain",
+          "external_controller": false,
+          "database": {
+            "database": "agent_runtime",
+            "schema": "runtime",
+            "connection_reference": "sandbox-state-secret",
+            "migration_target": "state",
+            "migrations": [
+              {
+                "version": 1,
+                "upgrade_digest": "sha256:a35506b46fd8e354be84ed1eebbfd5c6660241e2d1e8bb631db1f4e020e98c06",
+                "rollback_digest": "sha256:f71eed76263a0dd1e86be6c3ea97bdf63e86a9e0440c8365b2529918a04a9d4a",
+                "upgrade_artifact": "migrations/sandboxcontrol-v1.up.sql",
+                "rollback_artifact": "migrations/sandboxcontrol-v1.down.sql"
+              },
+              {
+                "version": 2,
+                "upgrade_digest": "sha256:8366bfedac0e952adb567c752e9c82ee14924e9ae085d09388751e846f94e4dc",
+                "rollback_digest": "sha256:7069c872c70c47b4badcdeea8e585279a50972267e974c0478cb91fe3589b407",
+                "upgrade_artifact": "migrations/sandboxcontrol-v2.up.sql",
+                "rollback_artifact": "migrations/sandboxcontrol-v2.down.sql"
+              },
+              {
+                "version": 3,
+                "upgrade_digest": "sha256:6b4e74e759bd443ffe5a79909c2e6ff9b116c42a6ba969ef074ea5d3537de475",
+                "rollback_digest": "sha256:4013662fb5d0944f87ee444bc20ea7e517d1b4b6f2d15f997e2a55208d37db5d",
+                "upgrade_artifact": "migrations/sandboxcontrol-v3.up.sql",
+                "rollback_artifact": "migrations/sandboxcontrol-v3.down.sql"
+              },
+              {
+                "version": 4,
+                "upgrade_digest": "sha256:210036e6babb6500f8e36e07e4518634572b5e55de89236b5b147298625a1f7f",
+                "rollback_digest": "sha256:608011b0efc3c532e626279812afde11a5be8aa3c2a9c792c7e71b36a12ffbfb",
+                "upgrade_artifact": "migrations/sandboxcontrol-v4.up.sql",
+                "rollback_artifact": "migrations/sandboxcontrol-v4.down.sql"
+              },
+              {
+                "version": 5,
+                "upgrade_digest": "sha256:884f126f9a0dc0a1815c399ea648d7131fa60a3deb4cae8b13757ed71f9d9044",
+                "rollback_digest": "sha256:8d02d1ef4eb8b9281f9bda7fe9f80819f53ec85509175e7d2762028f1c028c4f",
+                "upgrade_artifact": "migrations/sandboxcontrol-v5.up.sql",
+                "rollback_artifact": "migrations/sandboxcontrol-v5.down.sql"
+              },
+              {
+                "version": 6,
+                "upgrade_digest": "sha256:61adc65985e35b779d83458cd1c2c3288859b842d43d6ccbca077a379ec09247",
+                "rollback_digest": "sha256:aa536c71a464414c8e6aee3ec9018d45839e4531f2a1361265ff1d63455d229d",
+                "upgrade_artifact": "migrations/sandboxcontrol-v6.up.sql",
+                "rollback_artifact": "migrations/sandboxcontrol-v6.down.sql"
+              },
+              {
+                "version": 7,
+                "upgrade_digest": "sha256:4ff6eb405a28a2c03819106784397c74bbbc981680e6cb628cfca25f996c6294",
+                "rollback_digest": "sha256:541729cac78db641cbad0ef74dd77a91a808b021097c5dd0dcafb93b8b316f60",
+                "upgrade_artifact": "migrations/sandboxcontrol-v7.up.sql",
+                "rollback_artifact": "migrations/sandboxcontrol-v7.down.sql"
+              },
+              {
+                "version": 8,
+                "upgrade_digest": "sha256:fdb5bb89e3dfc6955f2b3c3d1cd52acf6aaf99c27a0f13d045764126b6e5db35",
+                "rollback_digest": "sha256:4b123fa034ef9bfc3ec5903e0695ff40226bb74f4b86d1a8d95738265d5b340b",
+                "upgrade_artifact": "migrations/sandboxcontrol-v8.up.sql",
+                "rollback_artifact": "migrations/sandboxcontrol-v8.down.sql"
+              },
+              {
+                "version": 9,
+                "upgrade_digest": "sha256:78f85d98ff750477e1527a603c5f82b9487df21f87d94eb3c1af58c6c055b452",
+                "rollback_digest": "sha256:d45625b3bf49a566184325fa6d50ca14b49ebd3ab41f512655d9620f4369d6ea",
+                "upgrade_artifact": "migrations/sandboxcontrol-v9.up.sql",
+                "rollback_artifact": "migrations/sandboxcontrol-v9.down.sql"
+              },
+              {
+                "version": 10,
+                "upgrade_digest": "sha256:4dd10142d3e551f340288ccd701a6f1ed140685882019143ba467c4d9790aebe",
+                "rollback_digest": "sha256:f5497a47041bff655101a9b00c17489f96b1a6bce3ec571b53dbf40ea0e756bc",
+                "upgrade_artifact": "migrations/sandboxcontrol-v10.up.sql",
+                "rollback_artifact": "migrations/sandboxcontrol-v10.down.sql"
+              },
+              {
+                "version": 11,
+                "upgrade_digest": "sha256:2ef041d644e451e78b7b448cf8222a5596ae0fd34e24e47b90fd1f50f7e1d0a0",
+                "rollback_digest": "sha256:d24217b31ee5a0d965f8bb54db444c3e68b6d82147b6aedcd3ca5bb4c2f98738",
+                "upgrade_artifact": "migrations/sandboxcontrol-v11.up.sql",
+                "rollback_artifact": "migrations/sandboxcontrol-v11.down.sql"
+              },
+              {
+                "version": 12,
+                "upgrade_digest": "sha256:956d54dd8c492981f9575ac34cb51a3270f7d758ea143be9c725ee00bdf4138f",
+                "rollback_digest": "sha256:1ff1fbe8ee9c401ee31689b7ce80db847f539eaf34bfb170b4a5dbc7768127e7",
+                "upgrade_artifact": "migrations/sandboxcontrol-v12.up.sql",
+                "rollback_artifact": "migrations/sandboxcontrol-v12.down.sql"
+              },
+              {
+                "version": 13,
+                "upgrade_digest": "sha256:cea15e13ec668dc9ab456e4fe91784c061b20501502e0e6284cd413c56cf09d0",
+                "rollback_digest": "sha256:9a2c00b5a28c05058c9ba0c23a42081f00419a4c8c51b4a5d733fa465d5c329c",
+                "upgrade_artifact": "migrations/sandboxcontrol-v13.up.sql",
+                "rollback_artifact": "migrations/sandboxcontrol-v13.down.sql"
+              },
+              {
+                "version": 14,
+                "upgrade_digest": "sha256:8dd7ada64b84b799792ad1837563cc02ac5605326f5f96e64f495632ec2e7eca",
+                "rollback_digest": "sha256:8e48d5110bf544eac9c5a5c679409910a7aa31edbdec2dbfef9b8d3c4998f3a9",
+                "upgrade_artifact": "migrations/sandboxcontrol-v14.up.sql",
+                "rollback_artifact": "migrations/sandboxcontrol-v14.down.sql"
+              },
+              {
+                "version": 15,
+                "upgrade_digest": "sha256:f677f42b98532420a3543c97de65e11d1fffdf46ca1b8ae428c5a051a4a9d17f",
+                "rollback_digest": "sha256:474f67863c9000ebc3ae0256c8c36e28ff90ea41f417ef2a744f81bb91319f92",
+                "upgrade_artifact": "migrations/sandboxcontrol-v15.up.sql",
+                "rollback_artifact": "migrations/sandboxcontrol-v15.down.sql"
+              }
+            ],
+            "migration_authority": "sandbox-control"
+          }
+        },
+        {
           "id": "runtime-database",
           "kind": "database",
           "owner": "database-operator",
@@ -9052,7 +10064,8 @@
                 "upgrade_artifact": "migrations/runtime-v5.up.sql",
                 "rollback_artifact": "migrations/runtime-v5.down.sql"
               }
-            ]
+            ],
+            "migration_authority": "runtime"
           }
         },
         {

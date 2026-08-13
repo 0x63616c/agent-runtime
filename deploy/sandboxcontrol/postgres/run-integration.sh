@@ -27,8 +27,10 @@ binary_root=$(mktemp -d)
 trap 'rm -rf "$binary_root"; cleanup' EXIT
 go build -race -o "$binary_root/sandbox-control" ./cmd/sandbox-control
 go build -race -o "$binary_root/sandbox-host" ./cmd/sandbox-host
+go build -race -o "$binary_root/sandbox-host-bootstrap" ./cmd/sandbox-host-bootstrap
 export AR_SANDBOXCONTROL_BINARY="$binary_root/sandbox-control"
 export AR_SANDBOXHOST_BINARY="$binary_root/sandbox-host"
+export AR_SANDBOXHOST_BOOTSTRAP_BINARY="$binary_root/sandbox-host-bootstrap"
 go test -race -tags=integration ./internal/sandboxcontrol
 go test -race -tags=integration ./cmd/sandbox-control
 go test -race -tags=integration ./cmd/sandbox-host

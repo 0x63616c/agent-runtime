@@ -3,7 +3,9 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/x509"
 	"encoding/json"
+	"encoding/pem"
 	"io"
 	"os"
 	"path/filepath"
@@ -119,7 +121,7 @@ func TestCIRenderUsesStackScopedTiltImagesWhileProductionRetainsPublishedImages(
 	wantCIImages := map[stack.ResourceID]bool{
 		"api": true, "orchestration": true, "model": true, "tool": true,
 		"blob-role": true, "codec": true, "sandbox-control": true,
-		"sandbox-host": true, "egress-proxy": true,
+		"sandbox-host": true, "sandbox-host-bootstrap": true, "egress-proxy": true,
 	}
 	if len(ciImages) != len(wantCIImages) {
 		t.Fatalf("CI Stack has %d source-built images, want %d: %#v", len(ciImages), len(wantCIImages), ciImages)
@@ -230,6 +232,30 @@ func TestLocalStackExactlyMatchesReviewedLocalTopologyAfterInstanceNormalization
 	want := normalizedTopology(t, reviewed.Resources(), "ar-agent-runtime")
 	if !bytes.Equal(got, want) {
 		t.Fatalf("generated local resources differ from the reviewed local profile after only namespace and Tilt image normalization\ngot:  %s\nwant: %s", got, want)
+	}
+}
+
+func TestMaterializedSandboxHostCertificateCarriesItsFixedSPIFFEIdentity(t *testing.T) {
+	root := t.TempDir()
+	if _, err := materializeSecrets("spiffe-proof", root, strings.NewReader(strings.Repeat("s", 4096))); err != nil {
+		t.Fatalf("materialize local secrets: %v", err)
+	}
+	wire, err := os.ReadFile(secretStatePath(root, "spiffe-proof", "local"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var state localSecrets
+	if err := json.Unmarshal(wire, &state); err != nil {
+		t.Fatal(err)
+	}
+	certificatePEM := state.Values["ar-spiffe-proof-sandbox-host-identity-secret"]["SANDBOX_HOST_TLS_CERT"]
+	block, _ := pem.Decode([]byte(certificatePEM))
+	if block == nil {
+		t.Fatal("generated host certificate is not PEM")
+	}
+	certificate, err := x509.ParseCertificate(block.Bytes)
+	if err != nil || len(certificate.URIs) != 1 || certificate.URIs[0].String() != "spiffe://agent-runtime/sandbox-host/sandbox-host-01/generation/1" {
+		t.Fatalf("generated host certificate identity = %#v, %v", certificate.URIs, err)
 	}
 }
 
@@ -391,11 +417,11 @@ func TestLocalStackProjectsTheReviewedEightRoleTopology(t *testing.T) {
 		"api":             {"STATE_DATABASE_DSN", "RUNTIME_API_ADMIN_TOKEN", "RUNTIME_API_DEVELOPER_TOKEN", "RUNTIME_API_CONTENT_ACCESS_KEY", "RUNTIME_API_CONTENT_SECRET_KEY", "OBSERVABILITY_CORRELATION_KEY"},
 		"orchestration":   {"STATE_DATABASE_DSN", "TEMPORAL_AUTH_TOKEN", "ORCHESTRATION_PAYLOAD_BLOB_ACCESS_KEY", "ORCHESTRATION_PAYLOAD_BLOB_SECRET_KEY"},
 		"model":           {"CONVERSATION_ACCESS_TOKEN", "MODEL_API_KEY", "LOCAL_DEMO_STATE_DSN", "LOCAL_DEMO_CONTENT_ACCESS_KEY", "LOCAL_DEMO_CONTENT_SECRET_KEY"},
-		"tool":            {"SANDBOX_CONTROL_TOKEN", "TOOL_BROKER_TOKEN", "LOCAL_DEMO_STATE_DSN", "LOCAL_DEMO_CONTENT_ACCESS_KEY", "LOCAL_DEMO_CONTENT_SECRET_KEY"},
+		"tool":            {"TOOL_BROKER_TOKEN", "LOCAL_DEMO_STATE_DSN", "LOCAL_DEMO_CONTENT_ACCESS_KEY", "LOCAL_DEMO_CONTENT_SECRET_KEY"},
 		"blob-role":       {"BLOB_STORAGE_CREDENTIAL"},
 		"codec":           {"CODEC_BLOB_CREDENTIAL"},
-		"sandbox-control": {"SANDBOX_HOST_CA", "SANDBOX_STATE_DSN"},
-		"sandbox-host":    {"SANDBOX_HOST_IDENTITY", "SANDBOX_CONTROL_TOKEN"},
+		"sandbox-control": {"SANDBOX_AUTHORIZATION", "SANDBOX_ASSERTION_KEY", "SANDBOX_CONTROL_SIGNING_KEY", "SANDBOX_STATE_DSN"},
+		"sandbox-host":    {"SANDBOX_HOST_SIGNING_KEY"},
 	}
 	expectedRoles := map[stack.ResourceID]roles.Role{
 		"orchestration": roles.RoleOrchestrationCodec,
@@ -406,7 +432,7 @@ func TestLocalStackProjectsTheReviewedEightRoleTopology(t *testing.T) {
 		"api":             {"blob", "otel-collector", "state"},
 		"orchestration":   {"blob", "otel-collector", "state", "temporal"},
 		"model":           {"api", "blob", "egress-proxy", "otel-collector", "state"},
-		"tool":            {"api", "blob", "otel-collector", "sandbox-control", "state"},
+		"tool":            {"api", "blob", "otel-collector", "state"},
 		"blob-role":       {"blob", "otel-collector"},
 		"codec":           {"blob", "otel-collector"},
 		"sandbox-control": {"otel-collector", "state"},
@@ -448,21 +474,35 @@ func TestLocalStackProjectsTheReviewedEightRoleTopology(t *testing.T) {
 			role     roles.Role
 		}{resource: resourceID, role: expectedRole}
 		resource := renderedResource(t, rendered.Resources(), expected.resource)
-		if got := resource.Kubernetes.Command; len(got) != 1 || got[0] != "/runtime" {
-			t.Fatalf("%s command = %v, want /runtime", expected.resource, got)
-		}
-		if got := resource.Kubernetes.Arguments; len(got) != 4 || got[0] != "--config-env" || got[1] != "RUNTIME_ROLE_CONFIG" || got[2] != "--role" || got[3] != string(expected.role) {
-			t.Fatalf("%s arguments = %v, want real runtime role arguments", expected.resource, got)
-		}
-		var configuration string
-		for _, environment := range resource.Kubernetes.Environment {
-			if environment.Name == "RUNTIME_ROLE_CONFIG" {
-				configuration = environment.Value
+		if expected.resource == "sandbox-control" {
+			if got := resource.Kubernetes.Command; len(got) != 1 || got[0] != "/sandbox-control" {
+				t.Fatalf("sandbox-control command = %v, want /sandbox-control", got)
 			}
 		}
-		config, parseErr := roles.Parse(strings.NewReader(configuration))
-		if parseErr != nil || config.Role() != expected.role || config.Namespace() != "ar-role-proof" {
-			t.Fatalf("%s runtime configuration = %q, parsed role=%q namespace=%q err=%v", expected.resource, configuration, config.Role(), config.Namespace(), parseErr)
+		if expected.resource == "sandbox-host" {
+			if got := resource.Kubernetes.Command; len(got) != 1 || got[0] != "/sandbox-host" {
+				t.Fatalf("sandbox-host command = %v, want /sandbox-host", got)
+			}
+		}
+		if expected.resource != "sandbox-control" && expected.resource != "sandbox-host" && (len(resource.Kubernetes.Command) != 1 || resource.Kubernetes.Command[0] != "/runtime") {
+			got := resource.Kubernetes.Command
+			t.Fatalf("%s command = %v, want /runtime", expected.resource, got)
+		}
+		if expected.resource != "sandbox-control" && expected.resource != "sandbox-host" && (len(resource.Kubernetes.Arguments) != 4 || resource.Kubernetes.Arguments[0] != "--config-env" || resource.Kubernetes.Arguments[1] != "RUNTIME_ROLE_CONFIG" || resource.Kubernetes.Arguments[2] != "--role" || resource.Kubernetes.Arguments[3] != string(expected.role)) {
+			got := resource.Kubernetes.Arguments
+			t.Fatalf("%s arguments = %v, want real runtime role arguments", expected.resource, got)
+		}
+		if expected.resource != "sandbox-control" && expected.resource != "sandbox-host" {
+			var configuration string
+			for _, environment := range resource.Kubernetes.Environment {
+				if environment.Name == "RUNTIME_ROLE_CONFIG" {
+					configuration = environment.Value
+				}
+			}
+			config, parseErr := roles.Parse(strings.NewReader(configuration))
+			if parseErr != nil || config.Role() != expected.role || config.Namespace() != "ar-role-proof" {
+				t.Fatalf("%s runtime configuration = %q, parsed role=%q namespace=%q err=%v", expected.resource, configuration, config.Role(), config.Namespace(), parseErr)
+			}
 		}
 		if resource.Kubernetes.ServiceAccount == "" {
 			t.Fatalf("%s must declare its own ServiceAccount", expected.resource)
@@ -549,15 +589,15 @@ func TestMaterializeSecretsKeepsValuesPrivateAndStablePerStack(t *testing.T) {
 		"ar-safe-stack-conversation-secret":               {"CONVERSATION_ACCESS_TOKEN"},
 		"ar-safe-stack-model-secret":                      {"MODEL_API_KEY", "LOCAL_DEMO_STATE_DSN", "LOCAL_DEMO_CONTENT_ACCESS_KEY", "LOCAL_DEMO_CONTENT_SECRET_KEY"},
 		"ar-safe-stack-tool-broker-secret":                {"TOOL_BROKER_TOKEN", "LOCAL_DEMO_STATE_DSN", "LOCAL_DEMO_CONTENT_ACCESS_KEY", "LOCAL_DEMO_CONTENT_SECRET_KEY"},
-		"ar-safe-stack-sandbox-control-secret":            {"SANDBOX_CONTROL_TOKEN"},
+		"ar-safe-stack-sandbox-control-secret":            {"SANDBOX_ASSERTION_KEY", "SANDBOX_AUTHORIZATION", "SANDBOX_CONTROL_SIGNING_KEY", "SANDBOX_CONTROL_TOKEN", "SANDBOX_HOST_TLS_CERT", "SANDBOX_HOST_TLS_KEY", "SANDBOX_PUBLIC_TLS_CERT", "SANDBOX_PUBLIC_TLS_KEY"},
 		"ar-safe-stack-blob-storage-secret":               {"BLOB_STORAGE_CREDENTIAL", "MINIO_ROOT_PASSWORD", "MINIO_ROOT_USER"},
 		"ar-safe-stack-blob-tls-secret":                   {"BLOB_TLS_CA", "BLOB_TLS_CERT", "BLOB_TLS_KEY"},
 		"ar-safe-stack-orchestration-payload-blob-secret": {"ORCHESTRATION_PAYLOAD_BLOB_ACCESS_KEY", "ORCHESTRATION_PAYLOAD_BLOB_SECRET_KEY"},
 		"ar-safe-stack-runtime-api-secret":                {"OBSERVABILITY_CORRELATION_KEY", "RUNTIME_API_ADMIN_TOKEN", "RUNTIME_API_CONTENT_ACCESS_KEY", "RUNTIME_API_CONTENT_SECRET_KEY", "RUNTIME_API_DEVELOPER_TOKEN"},
 		"ar-safe-stack-codec-blob-secret":                 {"CODEC_BLOB_CREDENTIAL"},
-		"ar-safe-stack-sandbox-host-ca-secret":            {"SANDBOX_HOST_CA"},
+		"ar-safe-stack-sandbox-host-ca-secret":            {"SANDBOX_HOST_CA", "SANDBOX_HOST_CLIENT_CA"},
 		"ar-safe-stack-sandbox-state-secret":              {"SANDBOX_STATE_DSN"},
-		"ar-safe-stack-sandbox-host-identity-secret":      {"SANDBOX_HOST_IDENTITY"},
+		"ar-safe-stack-sandbox-host-identity-secret":      {"SANDBOX_CONTROL_CA", "SANDBOX_CONTROL_TRUST", "SANDBOX_HOST_IDENTITY", "SANDBOX_HOST_SIGNING_KEY", "SANDBOX_HOST_TLS_CERT", "SANDBOX_HOST_TLS_KEY"},
 		"ar-safe-stack-temporal-db-secret":                {"POSTGRES_PASSWORD"},
 	}
 	if len(secrets.Items) != len(expectedSecretKeys) {

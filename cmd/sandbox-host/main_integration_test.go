@@ -35,6 +35,7 @@ import (
 	"github.com/0x63616c/agent-runtime/internal/sandboxcontrol"
 	"github.com/0x63616c/agent-runtime/internal/sandboxhostprotocol"
 	"github.com/0x63616c/agent-runtime/sandbox"
+	"github.com/cockroachdb/errors"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -161,6 +162,88 @@ func TestFirecrackerControlBridgeMultiProcessLostAckQuarantineCleanupAndReassign
 	got, err = client.GetOperation(context.Background(), quarantineRequest.ID)
 	if err != nil || got.State != sandbox.OperationUncertain {
 		t.Fatalf("operation after cleanup/reassignment = %#v, %v", got, err)
+	}
+}
+
+// TestBootstrapEnrollsMountedIdentityThenActualMTLSHostPullAndRevocation proves
+// the local/CI bootstrap creates exactly the identity the real host presents.
+// It does not claim that the reference executor is a Linux/KVM implementation.
+func TestBootstrapEnrollsMountedIdentityThenActualMTLSHostPullAndRevocation(t *testing.T) {
+	controlBinary := requiredEnvironment(t, "AR_SANDBOXCONTROL_BINARY")
+	hostBinary := requiredEnvironment(t, "AR_SANDBOXHOST_BINARY")
+	bootstrapBinary := requiredEnvironment(t, "AR_SANDBOXHOST_BOOTSTRAP_BINARY")
+	dsn := requiredEnvironment(t, "AR_SANDBOXCONTROL_POSTGRES_DSN")
+	directory := t.TempDir()
+	identities := writeIdentities(t, directory)
+	controlPublic, controlPrivate, _ := ed25519.GenerateKey(rand.Reader)
+	hostPublic, hostPrivate, _ := ed25519.GenerateKey(rand.Reader)
+	const authorization = "bootstrap-mtls-authorization"
+	const assertionKey = "6363636363636363636363636363636363636363636363636363636363636363"
+	controlSigning := base64.RawStdEncoding.EncodeToString(controlPrivate)
+	control := startProcess(t, controlBinary, []string{"--config", writeControlConfig(t, directory, "127.0.0.1:0", "0.0.0.0:0", identities)}, map[string]string{"TEST_DATABASE_DSN": dsn, "TEST_AUTHORIZATION": authorization, "TEST_ASSERTION_KEY": assertionKey, "TEST_CONTROL_SIGNING_KEY": controlSigning})
+	defer control.stop(t, true, authorization, assertionKey, dsn, controlSigning)
+	addresses := control.awaitControlReady(t)
+	client := connectPublicClient(t, "https://"+addresses.Public, identities.caPEM, authorization)
+	defer client.Close(context.Background())
+	ledger, pool := openLedger(t, dsn)
+	defer pool.Close()
+	if _, err := pool.Exec(context.Background(), `TRUNCATE runtime.sandbox_host_output_chunks, runtime.sandbox_host_outputs, runtime.sandbox_host_dispatches, runtime.sandbox_host_enrollments, runtime.sandbox_operation_outbox, runtime.sandbox_operations RESTART IDENTITY`); err != nil {
+		t.Fatal(err)
+	}
+	request := sandbox.OperationRequest{ID: "op_bootstrap_mtls", Kind: sandbox.OperationCloseSandbox, CloseSandbox: &sandbox.CloseSandboxRequest{SandboxID: "sbx_bootstrap_mtls"}}
+	if _, err := client.Submit(context.Background(), request); err != nil {
+		t.Fatal(err)
+	}
+	operation, err := ledger.Get(context.Background(), "tenant_01:runtime_01", string(request.ID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	signingPath := filepath.Join(directory, "host-signing.key")
+	if err := os.WriteFile(signingPath, []byte(base64.RawStdEncoding.EncodeToString(hostPrivate)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	bootstrapConfig := filepath.Join(directory, "bootstrap.json")
+	bootstrapDocument := fmt.Sprintf(`{"version":1,"database_dsn_environment":"TEST_DATABASE_DSN","host_id":"host_01","tenant":"tenant_01","pool":"reference","generation":1,"certificate_file":%q,"signing_key_file":%q,"capability_digest":%q,"expires_at":"2030-01-01T00:00:00Z"}`, identities.host1CertificatePath, signingPath, operation.CapabilityDigest)
+	if err := os.WriteFile(bootstrapConfig, []byte(bootstrapDocument), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for attempt := 0; attempt != 2; attempt++ {
+		command := exec.Command(bootstrapBinary, "--config", bootstrapConfig)
+		command.Env = append(os.Environ(), "TEST_DATABASE_DSN="+dsn)
+		output, err := command.CombinedOutput()
+		if err != nil || len(output) != 0 {
+			t.Fatalf("bootstrap attempt %d = %v output=%q", attempt, err, output)
+		}
+	}
+	mismatchedDocument := strings.Replace(bootstrapDocument, operation.CapabilityDigest, "sha256:"+strings.Repeat("f", 64), 1)
+	if err := os.WriteFile(bootstrapConfig, []byte(mismatchedDocument), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	mismatch := exec.Command(bootstrapBinary, "--config", bootstrapConfig)
+	mismatch.Env = append(os.Environ(), "TEST_DATABASE_DSN="+dsn)
+	mismatchOutput, mismatchErr := mismatch.CombinedOutput()
+	if mismatchErr == nil || strings.Contains(string(mismatchOutput), dsn) {
+		t.Fatalf("mismatched bootstrap = %v output=%q; want safe refusal", mismatchErr, mismatchOutput)
+	}
+	if err := os.WriteFile(bootstrapConfig, []byte(bootstrapDocument), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	identity := sandboxcontrol.HostIdentity{HostID: "host_01", Generation: 1, CertificateDigest: certificateDigest(identities.host1Certificate)}
+	enrolled, err := ledger.AuthenticateHost(context.Background(), identity, time.Now().UTC())
+	if err != nil || string(enrolled.SigningPublicKey) != string(hostPublic) {
+		t.Fatalf("AuthenticateHost(after bootstrap) = %#v, %v", enrolled, err)
+	}
+	controlVerify := base64.RawStdEncoding.EncodeToString(controlPublic)
+	t.Setenv("TEST_CONTROL_PUBLIC_KEY", controlVerify)
+	hostConfig := writeHostConfig(t, directory, "bootstrap-host.json", loopbackAddress(t, addresses.HostControl), identities, 1, filepath.Join(directory, "bootstrap-receipts.json"), false, false, false)
+	host := startProcess(t, hostBinary, firecrackerHostArguments(hostConfig), map[string]string{"TEST_CONTROL_PUBLIC_KEY": controlVerify, "TEST_HOST_SIGNING_KEY": base64.RawStdEncoding.EncodeToString(hostPrivate)})
+	defer host.stop(t, true, controlVerify)
+	waitForOperationState(t, client, request.ID, sandbox.OperationUncertain)
+	if err := ledger.RevokeHost(context.Background(), "host_01", 1, time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ledger.AuthenticateHost(context.Background(), identity, time.Now().UTC()); !errors.Is(err, sandboxcontrol.ErrHostDenied) {
+		t.Fatalf("AuthenticateHost(after revoke) = %v, want denied", err)
 	}
 }
 

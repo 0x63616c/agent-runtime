@@ -12,6 +12,8 @@ import (
 	"strings"
 
 	"github.com/0x63616c/agent-runtime/internal/roles"
+	"github.com/0x63616c/agent-runtime/internal/sandboxcontrolprocess"
+	"github.com/0x63616c/agent-runtime/internal/sandboxhostprocess"
 	"github.com/0x63616c/agent-runtime/internal/stack"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -43,6 +45,36 @@ var _ = Describe("Self-hosted production Stack", func() {
 				}
 			}
 		}
+	})
+
+	It("retains the sandbox-control migration inventory under the reviewed operator root", func() {
+		for version := 1; version <= 15; version++ {
+			for _, direction := range []string{"up", "down"} {
+				source := filepath.Join("../../deploy/sandboxcontrol/migrations", fmt.Sprintf("v%d.%s.sql", version, direction))
+				copied := filepath.Join("../../deploy/production/migrations", fmt.Sprintf("sandboxcontrol-v%d.%s.sql", version, direction))
+				expected, err := os.ReadFile(source)
+				Expect(err).NotTo(HaveOccurred(), source)
+				actual, err := os.ReadFile(copied)
+				Expect(err).NotTo(HaveOccurred(), copied)
+				Expect(actual).To(Equal(expected), "sandbox-control migration v%d %s must remain source-identical", version, direction)
+			}
+		}
+	})
+
+	It("names independent migration authorities when runtime and sandbox share a schema", func() {
+		file, err := os.Open("../../deploy/production/stack.json")
+		Expect(err).NotTo(HaveOccurred())
+		DeferCleanup(func() { Expect(file.Close()).To(Succeed()) })
+		spec, err := stack.Parse(file)
+		Expect(err).NotTo(HaveOccurred())
+		rendered, err := stack.Render(spec, stack.ProfileProduction)
+		Expect(err).NotTo(HaveOccurred())
+		runtime := findResource(rendered.Resources(), "runtime-database")
+		sandbox := findResource(rendered.Resources(), "sandbox-control-database")
+		Expect(runtime.Database.Database).To(Equal(sandbox.Database.Database))
+		Expect(runtime.Database.Schema).To(Equal(sandbox.Database.Schema))
+		Expect(runtime.Database.MigrationAuthority).To(Equal("runtime"))
+		Expect(sandbox.Database.MigrationAuthority).To(Equal("sandbox-control"))
 	})
 
 	It("derives disposable profiles from production with only identity, lifecycle, test-secret, and declared local transport differences", func() {
@@ -82,6 +114,12 @@ var _ = Describe("Self-hosted production Stack", func() {
 		checkedIn, err := os.ReadFile("../../deploy/production/stack.json")
 		Expect(err).NotTo(HaveOccurred())
 		Expect(derived).To(Equal(checkedIn), "derive-profiles.jq must be an idempotent checked-in generator")
+		for _, disposable := range []stack.Rendered{local, ci} {
+			bootstrap := findResource(disposable.Resources(), "sandbox-host-bootstrap")
+			Expect(bootstrap.Kubernetes.Kind).To(Equal("Job"))
+			Expect(bootstrap.Kubernetes.PostMigration).To(BeTrue())
+			Expect(findResource(disposable.Resources(), "sandbox-host").Dependencies).To(ContainElement(stack.ResourceID("sandbox-host-bootstrap")))
+		}
 	})
 
 	It("renders explicit trust-scoped roles, secrets, defaults, ingress, and operator dependencies", func() {
@@ -121,6 +159,11 @@ var _ = Describe("Self-hosted production Stack", func() {
 		}
 
 		Expect(secretEnvironmentNames(findResource(resources, "orchestration"))).To(ContainElement("TEMPORAL_AUTH_TOKEN"))
+		tool := findResource(resources, "tool")
+		Expect(secretEnvironmentNames(tool)).NotTo(ContainElement("SANDBOX_CONTROL_TOKEN"))
+		Expect(tool.Dependencies).NotTo(ContainElement(stack.ResourceID("sandbox-control-secret")))
+		Expect(findResource(resources, "tool-egress").Kubernetes.Network.AllowedEgress).NotTo(ContainElement(stack.ResourceID("sandbox-control")))
+		Expect(findResource(resources, "tool-egress").Dependencies).NotTo(ContainElement(stack.ResourceID("sandbox-control")))
 		api := findResource(resources, "api")
 		Expect(api.Kubernetes.Image).To(Equal("ghcr.io/0x63616c/agent-runtime@sha256:aa96439dbda5207c31dea06d72a5f58c7e0f3a929c6a8bcfd2a24e67d3365207"))
 		Expect(api.Kubernetes.Command).To(ConsistOf("/agent-runtime-api"))
@@ -170,13 +213,11 @@ var _ = Describe("Self-hosted production Stack", func() {
 		}
 		Expect(findResource(resources, "migration-runner").Kubernetes.Image).To(Equal("postgres@sha256:e5507c984377515b8c9922b0eb19f55aba2063fdc7bccf268cefd53133f97054"))
 		expectedRoleConfigs := map[stack.ResourceID]string{
-			"orchestration":   `{"version":1,"role":"orchestration-codec","namespace":"agent-runtime","listen_address":"0.0.0.0:8081","dependencies":[{"name":"state","endpoint":"postgres://state.agent-runtime.svc:5432/agent_runtime","secret_environment":"STATE_DATABASE_DSN"},{"name":"telemetry","endpoint":"http://otel-collector:4318"},{"name":"temporal","endpoint":"temporal.agent-runtime.svc:7233","secret_environment":"TEMPORAL_AUTH_TOKEN"},{"name":"payload-blob","endpoint":"http://blob.agent-runtime.svc:9000","secret_environment":"ORCHESTRATION_PAYLOAD_BLOB_ACCESS_KEY"},{"name":"payload-blob-secret","endpoint":"http://blob.agent-runtime.svc:9000","secret_environment":"ORCHESTRATION_PAYLOAD_BLOB_SECRET_KEY"}],"worker":{"task_queue":"agent-runtime-session-v1","payload_blob_endpoint":"http://blob.agent-runtime.svc:9000","payload_blob_bucket":"agent-runtime-temporal-payload","payload_blob_prefix":"temporal-payload","payload_access_key_environment":"ORCHESTRATION_PAYLOAD_BLOB_ACCESS_KEY","payload_secret_key_environment":"ORCHESTRATION_PAYLOAD_BLOB_SECRET_KEY"}}`,
-			"model":           `{"version":1,"role":"model","namespace":"agent-runtime","listen_address":"0.0.0.0:8082","dependencies":[{"name":"conversation","endpoint":"http://api.agent-runtime.svc:8080","secret_environment":"CONVERSATION_ACCESS_TOKEN"},{"name":"egress-proxy","endpoint":"http://egress-proxy.agent-runtime.svc:8088"},{"name":"model","endpoint":"https://model-provider.example.invalid","secret_environment":"MODEL_API_KEY"},{"name":"telemetry","endpoint":"http://otel-collector:4318"}]}`,
-			"tool":            `{"version":1,"role":"tool","namespace":"agent-runtime","listen_address":"0.0.0.0:8083","dependencies":[{"name":"sandbox-control","endpoint":"http://sandbox-control.agent-runtime.svc:8086","secret_environment":"SANDBOX_CONTROL_TOKEN"},{"name":"telemetry","endpoint":"http://otel-collector:4318"},{"name":"tool-broker","endpoint":"http://api.agent-runtime.svc:8080","secret_environment":"TOOL_BROKER_TOKEN"}]}`,
-			"blob-role":       `{"version":1,"role":"blob","namespace":"agent-runtime","listen_address":"0.0.0.0:8084","dependencies":[{"name":"storage","endpoint":"http://blob.agent-runtime.svc:9000","secret_environment":"BLOB_STORAGE_CREDENTIAL"},{"name":"telemetry","endpoint":"http://otel-collector:4318"}]}`,
-			"codec":           `{"version":1,"role":"codec","namespace":"agent-runtime","listen_address":"0.0.0.0:8085","dependencies":[{"name":"blob","endpoint":"http://blob.agent-runtime.svc:9000","secret_environment":"CODEC_BLOB_CREDENTIAL"},{"name":"telemetry","endpoint":"http://otel-collector:4318"}]}`,
-			"sandbox-control": `{"version":1,"role":"sandbox-control","namespace":"agent-runtime","listen_address":"0.0.0.0:8086","dependencies":[{"name":"host-ca","endpoint":"https://host-ca.example.invalid","secret_environment":"SANDBOX_HOST_CA"},{"name":"sandbox-state","endpoint":"postgres://state.agent-runtime.svc:5432/sandbox","secret_environment":"SANDBOX_STATE_DSN"},{"name":"telemetry","endpoint":"http://otel-collector:4318"}]}`,
-			"sandbox-host":    `{"version":1,"role":"sandbox-host","namespace":"agent-runtime","listen_address":"0.0.0.0:8087","dependencies":[{"name":"host-identity","endpoint":"https://host-identity.example.invalid","secret_environment":"SANDBOX_HOST_IDENTITY"},{"name":"sandbox-control","endpoint":"http://sandbox-control.agent-runtime.svc:8086","secret_environment":"SANDBOX_CONTROL_TOKEN"},{"name":"telemetry","endpoint":"http://otel-collector:4318"}]}`,
+			"orchestration": `{"version":1,"role":"orchestration-codec","namespace":"agent-runtime","listen_address":"0.0.0.0:8081","dependencies":[{"name":"state","endpoint":"postgres://state.agent-runtime.svc:5432/agent_runtime","secret_environment":"STATE_DATABASE_DSN"},{"name":"telemetry","endpoint":"http://otel-collector:4318"},{"name":"temporal","endpoint":"temporal.agent-runtime.svc:7233","secret_environment":"TEMPORAL_AUTH_TOKEN"},{"name":"payload-blob","endpoint":"http://blob.agent-runtime.svc:9000","secret_environment":"ORCHESTRATION_PAYLOAD_BLOB_ACCESS_KEY"},{"name":"payload-blob-secret","endpoint":"http://blob.agent-runtime.svc:9000","secret_environment":"ORCHESTRATION_PAYLOAD_BLOB_SECRET_KEY"}],"worker":{"task_queue":"agent-runtime-session-v1","payload_blob_endpoint":"http://blob.agent-runtime.svc:9000","payload_blob_bucket":"agent-runtime-temporal-payload","payload_blob_prefix":"temporal-payload","payload_access_key_environment":"ORCHESTRATION_PAYLOAD_BLOB_ACCESS_KEY","payload_secret_key_environment":"ORCHESTRATION_PAYLOAD_BLOB_SECRET_KEY"}}`,
+			"model":         `{"version":1,"role":"model","namespace":"agent-runtime","listen_address":"0.0.0.0:8082","dependencies":[{"name":"conversation","endpoint":"http://api.agent-runtime.svc:8080","secret_environment":"CONVERSATION_ACCESS_TOKEN"},{"name":"egress-proxy","endpoint":"http://egress-proxy.agent-runtime.svc:8088"},{"name":"model","endpoint":"https://model-provider.example.invalid","secret_environment":"MODEL_API_KEY"},{"name":"telemetry","endpoint":"http://otel-collector:4318"}]}`,
+			"tool":          `{"version":1,"role":"tool","namespace":"agent-runtime","listen_address":"0.0.0.0:8083","dependencies":[{"name":"telemetry","endpoint":"http://otel-collector:4318"},{"name":"tool-broker","endpoint":"http://api.agent-runtime.svc:8080","secret_environment":"TOOL_BROKER_TOKEN"}]}`,
+			"blob-role":     `{"version":1,"role":"blob","namespace":"agent-runtime","listen_address":"0.0.0.0:8084","dependencies":[{"name":"storage","endpoint":"http://blob.agent-runtime.svc:9000","secret_environment":"BLOB_STORAGE_CREDENTIAL"},{"name":"telemetry","endpoint":"http://otel-collector:4318"}]}`,
+			"codec":         `{"version":1,"role":"codec","namespace":"agent-runtime","listen_address":"0.0.0.0:8085","dependencies":[{"name":"blob","endpoint":"http://blob.agent-runtime.svc:9000","secret_environment":"CODEC_BLOB_CREDENTIAL"},{"name":"telemetry","endpoint":"http://otel-collector:4318"}]}`,
 		}
 		for role, expectedConfig := range expectedRoleConfigs {
 			stackConfig, found := environmentValue(findResource(resources, role), "RUNTIME_ROLE_CONFIG")
@@ -188,26 +229,48 @@ var _ = Describe("Self-hosted production Stack", func() {
 			Expect(prepareErr).NotTo(HaveOccurred(), "resource %s", role)
 			Expect(secretEnvironmentNames(findResource(resources, role))).To(ConsistOf(plan.SecretEnvironmentNames()), "resource %s", role)
 		}
-		Expect(expectedRoleConfigs).To(HaveLen(7))
+		Expect(expectedRoleConfigs).To(HaveLen(5))
 		apiConfig, found := environmentValue(api, "RUNTIME_API_CONFIG")
 		Expect(found).To(BeTrue())
 		Expect(apiConfig).To(Equal(`{"version":1,"listen_address":"0.0.0.0:8080","public_listen":true,"storage":{"mode":"postgres","database_dsn_environment":"STATE_DATABASE_DSN","content":{"endpoint":"https://blob.agent-runtime.svc:9000","access_key_environment":"RUNTIME_API_CONTENT_ACCESS_KEY","secret_key_environment":"RUNTIME_API_CONTENT_SECRET_KEY","bucket":"agent-runtime","ca_file":"/etc/agent-runtime/blob-ca.crt"}},"model_profiles":["balanced"],"max_request_bytes":4194304,"observability":{"identity_correlation_key_environment":"OBSERVABILITY_CORRELATION_KEY","otlp_grpc_endpoint":"otel-collector:4317"},"principals":[{"tenant":"public","principal":"admin","admin":true,"bearer_token_environment":"RUNTIME_API_ADMIN_TOKEN"},{"tenant":"public","principal":"developer","admin":false,"bearer_token_environment":"RUNTIME_API_DEVELOPER_TOKEN"}],"profile":"production"}`))
 
 		controlService := findResource(resources, "sandbox-control-service")
-		Expect(controlService.Kubernetes.Ports).To(ConsistOf(stack.Port{Name: "http", Number: 8086, Protocol: "TCP"}))
-		for _, role := range []stack.ResourceID{"tool", "sandbox-host"} {
-			configuration, found := environmentValue(findResource(resources, role), "RUNTIME_ROLE_CONFIG")
-			Expect(found).To(BeTrue())
-			var document struct {
-				Dependencies []roles.Dependency `json:"dependencies"`
-			}
-			Expect(json.Unmarshal([]byte(configuration), &document)).To(Succeed())
-			Expect(document.Dependencies).To(ContainElement(roles.Dependency{
-				Name:              "sandbox-control",
-				Endpoint:          "http://sandbox-control.agent-runtime.svc:8086",
-				SecretEnvironment: "SANDBOX_CONTROL_TOKEN",
-			}), role)
-		}
+		Expect(controlService.Kubernetes.Ports).To(ConsistOf(
+			stack.Port{Name: "public-tls", Number: 8086, Protocol: "TCP"},
+			stack.Port{Name: "host-mtls", Number: 9443, Protocol: "TCP"},
+		))
+		control := findResource(resources, "sandbox-control")
+		Expect(control.Kubernetes.Command).To(ConsistOf("/sandbox-control"))
+		Expect(control.Kubernetes.Arguments).To(ConsistOf("--config", "/etc/sandbox-control/config.json"))
+		Expect(secretEnvironmentNames(control)).To(ConsistOf("SANDBOX_AUTHORIZATION", "SANDBOX_ASSERTION_KEY", "SANDBOX_CONTROL_SIGNING_KEY", "SANDBOX_STATE_DSN"))
+		Expect(control.Kubernetes.ConfigMapMounts).To(ConsistOf(stack.ConfigMapMount{ConfigMap: "sandbox-control-config", Key: "config.json", Path: "/etc/sandbox-control/config.json"}))
+		Expect(control.Kubernetes.SecretMounts).To(ConsistOf(
+			stack.SecretMount{Secret: "sandbox-control-secret", Key: "SANDBOX_PUBLIC_TLS_CERT", Path: "/run/sandbox-control/public/tls.crt"},
+			stack.SecretMount{Secret: "sandbox-control-secret", Key: "SANDBOX_PUBLIC_TLS_KEY", Path: "/run/sandbox-control/public/tls.key"},
+			stack.SecretMount{Secret: "sandbox-control-secret", Key: "SANDBOX_HOST_TLS_CERT", Path: "/run/sandbox-control/host/tls.crt"},
+			stack.SecretMount{Secret: "sandbox-control-secret", Key: "SANDBOX_HOST_TLS_KEY", Path: "/run/sandbox-control/host/tls.key"},
+			stack.SecretMount{Secret: "sandbox-host-ca-secret", Key: "SANDBOX_HOST_CLIENT_CA", Path: "/run/sandbox-control/host-client-ca/ca.crt"},
+		))
+		controlConfig := findResource(resources, "sandbox-control-config")
+		_, err = sandboxcontrolprocess.Parse(strings.NewReader(controlConfig.Kubernetes.Data["config.json"]))
+		Expect(err).NotTo(HaveOccurred())
+
+		host := findResource(resources, "sandbox-host")
+		Expect(host.Kubernetes.Command).To(ConsistOf("/sandbox-host"))
+		Expect(host.Kubernetes.Arguments).To(ConsistOf("--config", "/etc/sandbox-host/config.json", "--poll-interval", "1s", "--firecracker-control"))
+		Expect(host.Kubernetes.Ports).To(BeEmpty())
+		Expect(secretEnvironmentNames(host)).To(ConsistOf("SANDBOX_HOST_SIGNING_KEY"))
+		Expect(host.Kubernetes.VolumeMounts).To(ConsistOf(stack.PersistentVolumeMount{Claim: "sandbox-host-journal", Path: "/var/lib/sandbox-host", ReadOnly: false}))
+		Expect(host.Kubernetes.ConfigMapMounts).To(ConsistOf(stack.ConfigMapMount{ConfigMap: "sandbox-host-config", Key: "config.json", Path: "/etc/sandbox-host/config.json"}))
+		Expect(host.Kubernetes.SecretMounts).To(ConsistOf(
+			stack.SecretMount{Secret: "sandbox-host-identity-secret", Key: "SANDBOX_CONTROL_CA", Path: "/run/sandbox-host/control-ca.crt"},
+			stack.SecretMount{Secret: "sandbox-host-identity-secret", Key: "SANDBOX_HOST_TLS_CERT", Path: "/run/sandbox-host/tls.crt"},
+			stack.SecretMount{Secret: "sandbox-host-identity-secret", Key: "SANDBOX_HOST_TLS_KEY", Path: "/run/sandbox-host/tls.key"},
+			stack.SecretMount{Secret: "sandbox-host-identity-secret", Key: "SANDBOX_CONTROL_TRUST", Path: "/run/sandbox-host/control-trust.json"},
+		))
+		hostConfig := findResource(resources, "sandbox-host-config")
+		_, err = sandboxhostprocess.Parse(strings.NewReader(hostConfig.Kubernetes.Data["config.json"]))
+		Expect(err).NotTo(HaveOccurred())
 	})
 
 	It("keeps every first-party runtime dependency inside the declared image build boundary", func() {
@@ -237,8 +300,14 @@ func findResource(resources []stack.Resource, id stack.ResourceID) stack.Resourc
 }
 
 func normalizedProfile(resources []stack.Resource, namespace string, localFixture bool) []byte {
-	normalized := make([]stack.Resource, len(resources))
-	copy(normalized, resources)
+	normalized := make([]stack.Resource, 0, len(resources))
+	for _, resource := range resources {
+		if resource.ID == "sandbox-host-bootstrap" || resource.ID == "sandbox-host-bootstrap-config" || resource.ID == "sandbox-host-bootstrap-egress" {
+			continue
+		}
+		resource.Dependencies = removeBootstrapDependencies(resource.Dependencies)
+		normalized = append(normalized, resource)
+	}
 	for index := range normalized {
 		resource := &normalized[index]
 		resource.Retention = stack.Retention{}
@@ -312,6 +381,16 @@ func normalizedProfile(resources []stack.Resource, namespace string, localFixtur
 	encoded, err := json.Marshal(normalized)
 	Expect(err).NotTo(HaveOccurred())
 	return bytes.TrimSpace(encoded)
+}
+
+func removeBootstrapDependencies(values []stack.ResourceID) []stack.ResourceID {
+	filtered := make([]stack.ResourceID, 0, len(values))
+	for _, value := range values {
+		if value != "sandbox-host-bootstrap" && value != "sandbox-host-bootstrap-config" && value != "sandbox-host-bootstrap-egress" {
+			filtered = append(filtered, value)
+		}
+	}
+	return filtered
 }
 
 func removeEnvironment(values []stack.EnvironmentVariable, name string) []stack.EnvironmentVariable {

@@ -443,17 +443,49 @@ func validateProfileTopology(profiles Profiles) error {
 		resources []Resource
 	}{{ProfileCI, profiles.CI.Resources}, {ProfileProduction, profiles.Production.Resources}} {
 		resources := profileResources(candidate.resources)
+		if candidate.name == ProfileProduction {
+			for id := range reference {
+				if localCIOnlyBootstrapResource(id) {
+					delete(reference, id)
+				}
+			}
+		}
 		if len(resources) != len(reference) {
 			return errors.Newf("validate %s stack profile: resource topology differs from local", candidate.name)
 		}
 		for id, resource := range reference {
 			candidateResource, exists := resources[id]
-			if !exists || !sameResourceTopology(resource, candidateResource) {
+			if !exists || !sameResourceTopologyForProfile(resource, candidateResource, candidate.name) {
 				return errors.Newf("validate %s stack profile: resource %s topology differs from local", candidate.name, id)
 			}
 		}
 	}
 	return nil
+}
+
+// localCIOnlyBootstrapResource names the only disposable enrollment material
+// intentionally absent from production. Production identities remain external
+// operator authority; it must never render a generated bootstrap Job.
+func localCIOnlyBootstrapResource(id ResourceID) bool {
+	return id == "sandbox-host-bootstrap" || id == "sandbox-host-bootstrap-config" || id == "sandbox-host-bootstrap-egress"
+}
+
+func sameResourceTopologyForProfile(left, right Resource, profile Profile) bool {
+	if profile == ProfileProduction {
+		left.Dependencies = removeLocalCIOnlyBootstrapDependencies(left.Dependencies)
+		right.Dependencies = removeLocalCIOnlyBootstrapDependencies(right.Dependencies)
+	}
+	return sameResourceTopology(left, right)
+}
+
+func removeLocalCIOnlyBootstrapDependencies(values []ResourceID) []ResourceID {
+	filtered := make([]ResourceID, 0, len(values))
+	for _, value := range values {
+		if !localCIOnlyBootstrapResource(value) {
+			filtered = append(filtered, value)
+		}
+	}
+	return filtered
 }
 
 func profileResources(resources []Resource) map[ResourceID]Resource {

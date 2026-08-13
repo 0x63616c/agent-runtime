@@ -1,0 +1,1 @@
+DROP TABLE runtime.firecracker_boot_probe_sessions;

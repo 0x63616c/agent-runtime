@@ -17,15 +17,19 @@ func (audit *recordedAudit) Append(_ context.Context, record stack.OperatorAudit
 }
 
 type fakeKubernetesOperator struct {
-	changes   []stack.Change
-	applies   int
-	diffs     int
-	observes  int
-	teardowns int
-	upgrades  int
-	rollbacks int
-	verifies  int
-	verifyErr error
+	changes    []stack.Change
+	applies    int
+	diffs      int
+	observes   int
+	teardowns  int
+	upgrades   int
+	rollbacks  int
+	verifies   int
+	verifyErr  error
+	upgradeErr error
+	postErr    error
+	postPhase  bool
+	events     []string
 }
 
 func (*fakeKubernetesOperator) BootstrapNamespace(_ context.Context, _ stack.OperatorTarget, _ stack.KubernetesManifests, _ string) (stack.KubernetesNamespaceObservation, error) {
@@ -56,7 +60,16 @@ func (provider *fakeDeclaredProvider) TeardownDeclared(_ context.Context, _ stac
 
 func (operator *fakeKubernetesOperator) Apply(_ context.Context, _ stack.OperatorTarget, _ stack.KubernetesManifests, _ stack.BootstrapAuthority) (stack.KubernetesObservation, error) {
 	operator.applies++
+	operator.events = append(operator.events, "apply")
 	return stack.KubernetesObservation{ObjectIDs: []stack.ResourceID{"api"}}, nil
+}
+
+func (operator *fakeKubernetesOperator) ApplyPostMigration(_ context.Context, _ stack.OperatorTarget, _ stack.KubernetesManifests, _ stack.BootstrapAuthority) (stack.KubernetesObservation, error) {
+	if !operator.postPhase {
+		return stack.KubernetesObservation{}, nil
+	}
+	operator.events = append(operator.events, "post")
+	return stack.KubernetesObservation{ObjectIDs: []stack.ResourceID{"sandbox-host-bootstrap"}}, operator.postErr
 }
 
 func (operator *fakeKubernetesOperator) Observe(_ context.Context, _ stack.OperatorTarget, _ stack.KubernetesManifests) (stack.KubernetesObservation, error) {
@@ -76,7 +89,8 @@ func (operator *fakeKubernetesOperator) Teardown(_ context.Context, _ stack.Oper
 
 func (operator *fakeKubernetesOperator) Upgrade(_ context.Context, _ stack.OperatorTarget, _ stack.Rendered, _ stack.BootstrapAuthority) error {
 	operator.upgrades++
-	return nil
+	operator.events = append(operator.events, "upgrade")
+	return operator.upgradeErr
 }
 
 func (operator *fakeKubernetesOperator) Rollback(_ context.Context, _ stack.OperatorTarget, _ stack.Rendered, _ stack.Rendered, _ stack.BootstrapAuthority) error {
@@ -95,6 +109,28 @@ func operatorRequest(rendered stack.Rendered) stack.OperatorRequest {
 }
 
 var _ = Describe("Audited Kubernetes operator", func() {
+	It("applies post-migration Jobs only after a successful migration upgrade", func() {
+		spec, err := stack.Parse(strings.NewReader(databaseStack(`{"database":"agent_runtime","schema":"runtime","connection_reference":"database-secret","migration_target":"postgres","migrations":[{"version":1,"upgrade_digest":"sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","rollback_digest":"sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc","upgrade_artifact":"migrations/v1.up.sql","rollback_artifact":"migrations/v1.down.sql"}]}`)))
+		Expect(err).NotTo(HaveOccurred())
+		rendered, err := stack.Render(spec, stack.ProfileLocal)
+		Expect(err).NotTo(HaveOccurred())
+		adapter := &fakeKubernetesOperator{postPhase: true}
+		operator, err := stack.NewKubernetesOperator(adapter, &recordedAudit{})
+		Expect(err).NotTo(HaveOccurred())
+		request := operatorRequest(rendered)
+		request.Target.MigrationRoot = "/reviewed-migrations"
+		_, err = operator.Apply(context.Background(), request, rendered)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(adapter.events).To(Equal([]string{"apply", "upgrade", "post"}))
+
+		adapter = &fakeKubernetesOperator{postPhase: true, upgradeErr: context.DeadlineExceeded}
+		operator, err = stack.NewKubernetesOperator(adapter, &recordedAudit{})
+		Expect(err).NotTo(HaveOccurred())
+		_, err = operator.Apply(context.Background(), request, rendered)
+		Expect(err).To(MatchError(ContainSubstring("deadline exceeded")))
+		Expect(adapter.events).To(Equal([]string{"apply", "upgrade"}))
+	})
+
 	It("transitions verified authority only to a later render of the same Stack", func() {
 		currentSpec, err := stack.Parse(strings.NewReader(validIdentityStack))
 		Expect(err).NotTo(HaveOccurred())

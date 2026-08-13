@@ -118,6 +118,33 @@ var _ = Describe("Kubectl migrations", func() {
 		Expect(runner.commands[7].input).To(Equal(v2))
 	})
 
+	It("refuses an authority journal digest mismatch before executing reviewed SQL", func() {
+		root := GinkgoT().TempDir()
+		upgrade := []byte("CREATE TABLE mismatch_probe (id integer primary key);\n")
+		rollback := []byte("DROP TABLE mismatch_probe;\n")
+		Expect(os.WriteFile(filepath.Join(root, "v1.up.sql"), upgrade, 0o600)).To(Succeed())
+		Expect(os.WriteFile(filepath.Join(root, "v1.down.sql"), rollback, 0o600)).To(Succeed())
+		payload := fmt.Sprintf(`{"database":"agent_runtime","schema":"runtime","connection_reference":"database-secret","migration_target":"postgres","migration_authority":"sandbox-control","migrations":[{"version":1,"upgrade_digest":%q,"rollback_digest":%q,"upgrade_artifact":"v1.up.sql","rollback_artifact":"v1.down.sql"}]}`,
+			migrationDigest(upgrade), migrationDigest(rollback))
+		spec, err := stack.Parse(strings.NewReader(databaseStack(payload)))
+		Expect(err).NotTo(HaveOccurred())
+		rendered, err := stack.Render(spec, stack.ProfileLocal)
+		Expect(err).NotTo(HaveOccurred())
+		authority := stack.BootstrapAuthority{Stack: "feature-a", Profile: stack.ProfileLocal, Namespace: "ar-feature-a", NamespaceUID: "uid-namespace", RenderDigest: rendered.Digest(), Nonce: "private-bootstrap-nonce"}
+		namespace := fmt.Sprintf(`{"metadata":{"uid":"uid-namespace","labels":{"app.kubernetes.io/part-of":"agent-runtime","agent-runtime.dev/stack":"feature-a","agent-runtime.dev/profile":"local"},"annotations":{"agent-runtime.dev/bootstrap-nonce-sha256":%q}}}`, authority.NonceDigest())
+		runner := &bootstrapRunner{results: []stack.KubectlCommandResult{
+			{Output: []byte(namespace)}, {}, {}, {Output: []byte("t\n")}, {Output: []byte("sha256:deadbeef\n")},
+		}}
+		adapter, err := stack.NewKubectlAdapter(runner)
+		Expect(err).NotTo(HaveOccurred())
+
+		err = adapter.Upgrade(context.Background(), stack.OperatorTarget{Kubeconfig: "/explicit/kubeconfig", Context: "disposable", MigrationRoot: root}, rendered, authority)
+
+		Expect(err).To(MatchError(ContainSubstring("journal digest conflicts")))
+		Expect(runner.commands).To(HaveLen(5))
+		Expect(strings.Join(runner.commands[4].arguments, " ")).To(ContainSubstring("migration_authority = 'sandbox-control'"))
+	})
+
 	It("executes only the removed reviewed migration rollback through an explicit revision transition", func() {
 		root := GinkgoT().TempDir()
 		v1Upgrade := []byte("CREATE TABLE v1 (id integer primary key);\n")

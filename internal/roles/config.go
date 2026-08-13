@@ -35,7 +35,7 @@ const (
 	RoleOrchestrationCodec Role = "orchestration-codec"
 	// RoleModel invokes a configured model with only model and conversation authority.
 	RoleModel Role = "model"
-	// RoleTool executes policy-authorized tools with narrow tool and sandbox authority.
+	// RoleTool executes policy-authorized tools with narrow tool authority.
 	RoleTool Role = "tool"
 	// RoleBlob serves the immutable blob plane with storage authority.
 	RoleBlob Role = "blob"
@@ -226,7 +226,7 @@ var roleRequirements = map[Role][]requirement{
 		{name: "conversation", secretEnvironment: "CONVERSATION_ACCESS_TOKEN"}, {name: "egress-proxy"}, {name: "model", secretEnvironment: "MODEL_API_KEY"}, {name: "telemetry"},
 	},
 	RoleTool: {
-		{name: "sandbox-control", secretEnvironment: "SANDBOX_CONTROL_TOKEN"}, {name: "telemetry"}, {name: "tool-broker", secretEnvironment: "TOOL_BROKER_TOKEN"},
+		{name: "telemetry"}, {name: "tool-broker", secretEnvironment: "TOOL_BROKER_TOKEN"},
 	},
 	RoleBlob: {
 		{name: "storage", secretEnvironment: "BLOB_STORAGE_CREDENTIAL"}, {name: "telemetry"},

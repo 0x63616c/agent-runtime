@@ -287,9 +287,11 @@ var _ = Describe("M1 deployment safety boundaries", func() {
 		Expect(unsafeBootstrapErr).To(HaveOccurred())
 		Expect(string(unsafeBootstrapOutput)).To(ContainSubstring("requires a generated Stack and private k3d context"))
 		ciReconcile := read("deploy/dev/reconcile-ci-stack.sh")
-		for _, required := range []string{"--profile ci", "--providers-only", "--bootstrap-capability-file", "k3d-ar-ci-*", "CI Stack reconciliation accepts only --stack and --context", "requires existing rendered state and private authority"} {
+		for _, required := range []string{"--profile ci", "stackctl apply", "--bootstrap-capability-file", "k3d-ar-ci-*", "CI Stack reconciliation accepts only --stack and --context", "requires existing rendered state and private authority"} {
 			Expect(ciReconcile).To(ContainSubstring(required))
 		}
+		Expect(ciReconcile).NotTo(ContainSubstring("--providers-only"))
+		Expect(read("Tiltfile")).To(ContainSubstring("--phase initial"))
 		unsafeCIReconcile := exec.Command("bash", "deploy/dev/reconcile-ci-stack.sh", "--stack=ci-fixture", "--context=orbstack")
 		unsafeCIReconcile.Dir = "../.."
 		unsafeOutput, unsafeErr := unsafeCIReconcile.CombinedOutput()

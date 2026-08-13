@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Reconciles the declared non-Kubernetes providers for one disposable CI Stack.
-# The smoke harness established its private bootstrap authority before Tilt
-# applied the reviewed manifest, so this action cannot invent Kubernetes state.
+# Applies the deferred Stack phase for one disposable CI Stack. Tilt has applied
+# only the initial manifests; stackctl is the sole route that runs migrations
+# and creates post-migration Jobs.
 set -euo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -32,4 +32,4 @@ if [[ ! -f "$stack_file" || ! -f "$capability_file" || ! -f "$audit_file" ]]; th
 fi
 umask 077
 common=(--stack-file "$stack_file" --stack "$stack" --profile ci --kubeconfig "$KUBECONFIG" --context "$context" --actor ci-stack-reconcile --audit-file "$audit_file" --migration-root "$root/deploy/production" --bootstrap-capability-file "$capability_file")
-go run ./cmd/stackctl reconcile "${common[@]}" --providers-only >/dev/null
+go run ./cmd/stackctl apply "${common[@]}" >/dev/null
