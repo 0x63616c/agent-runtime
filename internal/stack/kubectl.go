@@ -224,6 +224,12 @@ func (adapter KubectlAdapter) verifyBootstrapAuthority(ctx context.Context, targ
 	return nil
 }
 
+// VerifyBootstrapAuthority exposes the read-only provider re-observation used
+// before a reviewed-render transition rewrites private capability state.
+func (adapter KubectlAdapter) VerifyBootstrapAuthority(ctx context.Context, target OperatorTarget, manifests KubernetesManifests, authority BootstrapAuthority) error {
+	return adapter.verifyBootstrapAuthority(ctx, target, manifests, authority)
+}
+
 func (adapter KubectlAdapter) verifyNamespaceEmpty(ctx context.Context, target OperatorTarget, namespace string) error {
 	resources := "deployments,statefulsets,jobs,services,ingresses,serviceaccounts,roles,rolebindings,networkpolicies,persistentvolumeclaims,configmaps,resourcequotas,secrets"
 	result, err := adapter.run(ctx, target, []string{"get", resources, "--namespace", namespace, "-o", "json"}, nil)

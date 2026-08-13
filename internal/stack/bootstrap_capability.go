@@ -104,6 +104,51 @@ func RemoveBootstrapAuthority(path string, expected BootstrapAuthority) error {
 	return nil
 }
 
+// TransitionBootstrapAuthority atomically replaces an unchanged private
+// capability with one bound to the next reviewed render digest.
+func TransitionBootstrapAuthority(path string, current, next BootstrapAuthority) error {
+	stored, err := ReadBootstrapAuthority(path)
+	if err != nil {
+		return err
+	}
+	if !reflect.DeepEqual(stored, current) {
+		return errors.New("transition bootstrap authority: capability changed")
+	}
+	if current.Stack != next.Stack || current.Profile != next.Profile || current.Namespace != next.Namespace || current.NamespaceUID != next.NamespaceUID || current.Nonce != next.Nonce || current.RenderDigest == next.RenderDigest {
+		return errors.New("transition bootstrap authority: next authority must retain identity and change render digest")
+	}
+	next.capabilityFile = ""
+	encoded, err := json.Marshal(next)
+	if err != nil {
+		return errors.Wrap(err, "encode transitioned bootstrap authority")
+	}
+	temporary, err := os.CreateTemp(filepath.Dir(path), ".bootstrap-capability-transition-*")
+	if err != nil {
+		return errors.Wrap(err, "create transitioned bootstrap authority")
+	}
+	temporaryPath := temporary.Name()
+	defer func() { _ = os.Remove(temporaryPath) }()
+	if err := temporary.Chmod(0o600); err != nil {
+		_ = temporary.Close()
+		return errors.Wrap(err, "chmod transitioned bootstrap authority")
+	}
+	if _, err := temporary.Write(append(encoded, '\n')); err != nil {
+		_ = temporary.Close()
+		return errors.Wrap(err, "write transitioned bootstrap authority")
+	}
+	if err := temporary.Sync(); err != nil {
+		_ = temporary.Close()
+		return errors.Wrap(err, "sync transitioned bootstrap authority")
+	}
+	if err := temporary.Close(); err != nil {
+		return errors.Wrap(err, "close transitioned bootstrap authority")
+	}
+	if err := os.Rename(temporaryPath, path); err != nil {
+		return errors.Wrap(err, "replace transitioned bootstrap authority")
+	}
+	return nil
+}
+
 // RecordDeletedSecret durably records one exact precondition-deleted Secret for a retry.
 func RecordDeletedSecret(authority *BootstrapAuthority, resource ResourceID, uid ObservedUID) error {
 	if authority == nil || authority.capabilityFile == "" || resource == "" || uid == "" {

@@ -24,10 +24,17 @@ type fakeKubernetesOperator struct {
 	teardowns int
 	upgrades  int
 	rollbacks int
+	verifies  int
+	verifyErr error
 }
 
 func (*fakeKubernetesOperator) BootstrapNamespace(_ context.Context, _ stack.OperatorTarget, _ stack.KubernetesManifests, _ string) (stack.KubernetesNamespaceObservation, error) {
 	return stack.KubernetesNamespaceObservation{}, nil
+}
+
+func (operator *fakeKubernetesOperator) VerifyBootstrapAuthority(_ context.Context, _ stack.OperatorTarget, _ stack.KubernetesManifests, _ stack.BootstrapAuthority) error {
+	operator.verifies++
+	return operator.verifyErr
 }
 
 type fakeDeclaredProvider struct {
@@ -88,6 +95,50 @@ func operatorRequest(rendered stack.Rendered) stack.OperatorRequest {
 }
 
 var _ = Describe("Audited Kubernetes operator", func() {
+	It("transitions verified authority only to a later render of the same Stack", func() {
+		currentSpec, err := stack.Parse(strings.NewReader(validIdentityStack))
+		Expect(err).NotTo(HaveOccurred())
+		nextSpec, err := stack.Parse(strings.NewReader(strings.Replace(validIdentityStack, "ntfy-token", "ntfy-token-v2", 1)))
+		Expect(err).NotTo(HaveOccurred())
+		current, err := stack.Render(currentSpec, stack.ProfileLocal)
+		Expect(err).NotTo(HaveOccurred())
+		next, err := stack.Render(nextSpec, stack.ProfileLocal)
+		Expect(err).NotTo(HaveOccurred())
+		adapter := &fakeKubernetesOperator{}
+		audit := &recordedAudit{}
+		operator, err := stack.NewKubernetesOperator(adapter, audit)
+		Expect(err).NotTo(HaveOccurred())
+		request := operatorRequest(current)
+		var bound stack.BootstrapAuthority
+		Expect(operator.Transition(context.Background(), request, current, next, func(authority stack.BootstrapAuthority) error {
+			bound = authority
+			return nil
+		})).To(Succeed())
+		Expect(adapter.verifies).To(Equal(1))
+		Expect(bound.RenderDigest).To(Equal(next.Digest()))
+		Expect(bound.Nonce).To(Equal(request.BootstrapAuthority.Nonce))
+		Expect(audit.records).To(ConsistOf(stack.OperatorAuditRecord{Action: stack.OperatorActionTransition, Actor: request.Actor, Context: request.Target.Context, Stack: "feature-a", Profile: stack.ProfileLocal, Digest: next.Digest(), TransitionFromDigest: current.Digest(), Result: "transitioned", Resources: []stack.ResourceID{"namespace"}}))
+	})
+
+	It("refuses stale authority and a cross-profile transition before binding", func() {
+		spec, err := stack.Parse(strings.NewReader(validIdentityStack))
+		Expect(err).NotTo(HaveOccurred())
+		current, err := stack.Render(spec, stack.ProfileLocal)
+		Expect(err).NotTo(HaveOccurred())
+		next, err := stack.Render(spec, stack.ProfileProduction)
+		Expect(err).NotTo(HaveOccurred())
+		adapter := &fakeKubernetesOperator{}
+		operator, err := stack.NewKubernetesOperator(adapter, &recordedAudit{})
+		Expect(err).NotTo(HaveOccurred())
+		request := operatorRequest(current)
+		called := false
+		Expect(operator.Transition(context.Background(), request, current, next, func(stack.BootstrapAuthority) error { called = true; return nil })).To(MatchError(ContainSubstring("same Stack identity")))
+		request.BootstrapAuthority.RenderDigest = "sha256:" + strings.Repeat("0", 64)
+		Expect(operator.Transition(context.Background(), request, current, current, func(stack.BootstrapAuthority) error { called = true; return nil })).To(MatchError(ContainSubstring("render digest")))
+		Expect(called).To(BeFalse())
+		Expect(adapter.verifies).To(BeZero())
+	})
+
 	It("refuses standalone apply before any adapter can mutate an unproven namespace", func() {
 		spec, err := stack.Parse(strings.NewReader(validIdentityStack))
 		Expect(err).NotTo(HaveOccurred())

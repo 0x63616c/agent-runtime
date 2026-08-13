@@ -192,6 +192,10 @@ func (*retryingTeardownOperator) Rollback(context.Context, stack.OperatorRequest
 	return stack.KubernetesObservation{}, nil
 }
 
+func (*retryingTeardownOperator) Transition(context.Context, stack.OperatorRequest, stack.Rendered, stack.Rendered, func(stack.BootstrapAuthority) error) error {
+	return nil
+}
+
 func (operator *retryingTeardownOperator) Teardown(context.Context, stack.OperatorRequest, stack.Rendered) error {
 	defer func() { operator.teardowns++ }()
 	if operator.teardowns < len(operator.errors) {

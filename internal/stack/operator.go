@@ -19,6 +19,8 @@ const (
 	OperatorActionBootstrap OperatorAction = "bootstrap"
 	// OperatorActionApply applies reviewed Kubernetes manifests.
 	OperatorActionApply OperatorAction = "apply"
+	// OperatorActionTransition binds Namespace authority to a later reviewed rendering.
+	OperatorActionTransition OperatorAction = "transition"
 	// OperatorActionObserve reads provider identity without mutation.
 	OperatorActionObserve OperatorAction = "observe"
 	// OperatorActionDiff compares provider state with reviewed manifests.
@@ -109,6 +111,12 @@ type KubernetesOperatorAdapter interface {
 	Diff(context.Context, OperatorTarget, KubernetesManifests) (KubernetesDifference, error)
 	// Teardown re-observes UID and labels before any containment-safe deletion.
 	Teardown(context.Context, OperatorTarget, Rendered, KubernetesManifests, BootstrapAuthority) error
+}
+
+// KubernetesBootstrapAuthorityVerifier re-observes the Namespace identity and
+// nonce binding without applying a new rendering.
+type KubernetesBootstrapAuthorityVerifier interface {
+	VerifyBootstrapAuthority(context.Context, OperatorTarget, KubernetesManifests, BootstrapAuthority) error
 }
 
 // KubernetesMigrationAdapter executes only digest-verified, declared migration artifacts.
@@ -286,6 +294,39 @@ func (operator KubernetesOperator) Apply(ctx context.Context, request OperatorRe
 		return KubernetesObservation{}, err
 	}
 	return observation, nil
+}
+
+// Transition verifies existing authority against the current reviewed render
+// and binds it to one later render with the same Stack identity. bind is called
+// only after the provider UID/nonce check succeeds.
+func (operator KubernetesOperator) Transition(ctx context.Context, request OperatorRequest, current, next Rendered, bind func(BootstrapAuthority) error) error {
+	currentManifests, currentDocument, err := operator.prepare(ctx, request, current)
+	if err != nil {
+		return err
+	}
+	_, nextDocument, err := operator.prepare(ctx, request, next)
+	if err != nil {
+		return err
+	}
+	if err := validateBootstrapAuthority(request.BootstrapAuthority, currentDocument); err != nil {
+		return operator.recordFailure(ctx, request, currentDocument, OperatorActionTransition, err)
+	}
+	if currentDocument.Stack != nextDocument.Stack || currentDocument.Profile != nextDocument.Profile || currentDocument.Namespace != nextDocument.Namespace || currentDocument.Digest == nextDocument.Digest {
+		return operator.recordFailure(ctx, request, nextDocument, OperatorActionTransition, errors.New("validate forward transition: target must be a distinct reviewed rendering of the same Stack identity"))
+	}
+	verifier, ok := operator.adapter.(KubernetesBootstrapAuthorityVerifier)
+	if !ok {
+		return operator.recordFailure(ctx, request, currentDocument, OperatorActionTransition, errors.New("validate forward transition: adapter does not re-observe bootstrap authority"))
+	}
+	if err := verifier.VerifyBootstrapAuthority(ctx, request.Target, currentManifests, request.BootstrapAuthority); err != nil {
+		return operator.recordFailure(ctx, request, currentDocument, OperatorActionTransition, errors.Wrap(err, "verify current bootstrap authority"))
+	}
+	nextAuthority := request.BootstrapAuthority
+	nextAuthority.RenderDigest = nextDocument.Digest
+	if err := bind(nextAuthority); err != nil {
+		return operator.recordFailure(ctx, request, nextDocument, OperatorActionTransition, errors.Wrap(err, "bind next reviewed rendering"))
+	}
+	return operator.recordForwardTransition(ctx, request, nextDocument, currentDocument.Digest, []ResourceID{"namespace"})
 }
 
 // Observe reads one reviewed Stack profile through the audited operator boundary without mutation.
@@ -610,6 +651,11 @@ func (operator KubernetesOperator) record(ctx context.Context, request OperatorR
 
 func (operator KubernetesOperator) recordTransition(ctx context.Context, request OperatorRequest, document renderedDocument, fromDigest string, resources []ResourceID) error {
 	record := OperatorAuditRecord{Action: OperatorActionRollback, Actor: request.Actor, Context: request.Target.Context, Stack: document.Stack, Profile: document.Profile, Digest: document.Digest, TransitionFromDigest: fromDigest, Result: "rolled_back", Resources: append([]ResourceID(nil), resources...)}
+	return operator.appendRecord(ctx, record)
+}
+
+func (operator KubernetesOperator) recordForwardTransition(ctx context.Context, request OperatorRequest, document renderedDocument, fromDigest string, resources []ResourceID) error {
+	record := OperatorAuditRecord{Action: OperatorActionTransition, Actor: request.Actor, Context: request.Target.Context, Stack: document.Stack, Profile: document.Profile, Digest: document.Digest, TransitionFromDigest: fromDigest, Result: "transitioned", Resources: append([]ResourceID(nil), resources...)}
 	return operator.appendRecord(ctx, record)
 }
 
