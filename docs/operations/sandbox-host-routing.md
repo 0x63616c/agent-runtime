@@ -103,10 +103,13 @@ Migrate during a controlled drain, not a mixed-version rollout:
    `control_key_not_before`/`control_key_not_after` alongside the existing key
    ID and signing-key environment reference.
 3. In each host declaration, replace the legacy `control_key_id` and
-   `control_public_key_environment` fields with `control_trust`: a non-zero
-   bundle version and revocation epoch, a `current` key with ID, version,
-   public-key environment reference and UTC validity, plus an optional distinct
-   `next` key for rotation overlap.
+   `control_public_key_environment` fields with an absolute
+   `control_trust_file` path. Mount a non-empty, bounded JSON trust document at
+   that path with non-zero bundle version and revocation epoch, a `current` key
+   containing its ID, version, base64 public key, and UTC validity, plus an
+   optional distinct `next` key for rotation overlap. The host checks this file
+   at each poll boundary and retains its last valid snapshot if a replacement
+   is malformed or regresses.
 4. Have the reviewed deployment validation parse the exact v2 declarations
    before rollout, then deploy the v2 control and v2 hosts as the same reviewed
    change. The roles do not currently expose a standalone `--check` mode; do

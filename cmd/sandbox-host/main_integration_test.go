@@ -81,10 +81,11 @@ func TestFirecrackerControlBridgeMultiProcessLostAckQuarantineCleanupAndReassign
 	if err := ledger.ProvisionHost(context.Background(), host1, sandboxcontrol.AttestationInput{Profile: sandboxcontrol.AttestationProfileLocalMetadata}, nil); err != nil {
 		t.Fatal(err)
 	}
+	controlVerify := base64.RawStdEncoding.EncodeToString(controlPublic)
+	t.Setenv("TEST_CONTROL_PUBLIC_KEY", controlVerify)
 	journalPath := filepath.Join(directory, "receipts.json")
 	faultConfig := writeHostConfig(t, directory, "host-fault.json", hostAddress, identities, 1, journalPath, true, false, false)
 	hostSigning1 := base64.RawStdEncoding.EncodeToString(hostPrivate1)
-	controlVerify := base64.RawStdEncoding.EncodeToString(controlPublic)
 	fault := startProcess(t, hostBinary, firecrackerHostArguments(faultConfig), map[string]string{"TEST_CONTROL_PUBLIC_KEY": controlVerify, "TEST_HOST_SIGNING_KEY": hostSigning1})
 	fault.stop(t, false, controlVerify, hostSigning1)
 
@@ -206,6 +207,7 @@ func TestFirecrackerBootProbeV2MultiProcessRoute(t *testing.T) {
 		t.Fatal(err)
 	}
 	controlVerify := base64.RawStdEncoding.EncodeToString(controlPublic)
+	t.Setenv("TEST_CONTROL_PUBLIC_KEY", controlVerify)
 	hostSigning1 := base64.RawStdEncoding.EncodeToString(hostPrivate1)
 	crossTenantConfig := writeBootProbeHostConfig(t, directory, "boot-probe-host-cross-tenant.json", hostAddress, identities, 1, filepath.Join(directory, "boot-probe-cross-tenant.json"), crossTenant.Principal, crossTenant.ID, "instance-v2-cross-tenant")
 	runBootProbeHost(t, hostBinary, crossTenantConfig, map[string]string{"TEST_CONTROL_PUBLIC_KEY": controlVerify, "TEST_HOST_SIGNING_KEY": hostSigning1}, false)
@@ -401,7 +403,16 @@ func writeHostConfig(t *testing.T, directory, name, address string, identity ide
 		certificate, key = identity.host2CertificatePath, identity.host2KeyPath
 	}
 	now := time.Now().UTC()
-	config := fmt.Sprintf(`{"version":2,"control_url":%q,"server_name":"localhost","trust_bundle_file":%q,"client_certificate_file":%q,"client_private_key_file":%q,"host_id":"host_01","host_generation":%d,"journal_file":%q,"maximum_receipts":100,"control_trust":{"version":1,"revocation_epoch":1,"current":{"id":"control_01","version":1,"public_key_environment":"TEST_CONTROL_PUBLIC_KEY","not_before":%q,"not_after":%q}},"host_signing_key_environment":"TEST_HOST_SIGNING_KEY","request_timeout_seconds":5,"test_fault_after_journal":%t,"test_fault_after_receipt":%t,"test_fault_after_result_send":%t}`, "https://"+address, filepath.Join(directory, "ca.crt"), certificate, key, generation, journal, now.Add(-time.Hour).Format(time.RFC3339), now.Add(time.Hour).Format(time.RFC3339), faultAfterJournal, faultAfterReceipt, faultAfterResultSend)
+	controlPublic, ok := os.LookupEnv("TEST_CONTROL_PUBLIC_KEY")
+	if !ok || controlPublic == "" {
+		t.Fatal("TEST_CONTROL_PUBLIC_KEY is required to write host trust")
+	}
+	trustPath := filepath.Join(directory, name+".control-trust.json")
+	trust := fmt.Sprintf(`{"version":1,"revocation_epoch":1,"current":{"id":"control_01","version":1,"public_key":%q,"not_before":%q,"not_after":%q}}`, controlPublic, now.Add(-time.Hour).Format(time.RFC3339), now.Add(time.Hour).Format(time.RFC3339))
+	if err := os.WriteFile(trustPath, []byte(trust), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	config := fmt.Sprintf(`{"version":2,"control_url":%q,"server_name":"localhost","trust_bundle_file":%q,"client_certificate_file":%q,"client_private_key_file":%q,"control_trust_file":%q,"host_id":"host_01","host_generation":%d,"journal_file":%q,"maximum_receipts":100,"host_signing_key_environment":"TEST_HOST_SIGNING_KEY","request_timeout_seconds":5,"test_fault_after_journal":%t,"test_fault_after_receipt":%t,"test_fault_after_result_send":%t}`, "https://"+address, filepath.Join(directory, "ca.crt"), certificate, key, trustPath, generation, journal, faultAfterJournal, faultAfterReceipt, faultAfterResultSend)
 	path := filepath.Join(directory, name)
 	if err := os.WriteFile(path, []byte(config), 0o600); err != nil {
 		t.Fatal(err)

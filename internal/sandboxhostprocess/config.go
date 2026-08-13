@@ -29,7 +29,7 @@ type Config struct {
 	hostGeneration            uint64
 	journalFile               string
 	maximumReceipts           int
-	controlTrust              controlTrustConfig
+	controlTrustFile          string
 	hostSigningKeyEnvironment string
 	requestTimeout            time.Duration
 	testFaultAfterJournal     bool
@@ -39,25 +39,25 @@ type Config struct {
 }
 
 type document struct {
-	Version                     int                  `json:"version"`
-	ControlURL                  string               `json:"control_url"`
-	ServerName                  string               `json:"server_name"`
-	TrustBundleFile             string               `json:"trust_bundle_file"`
-	ClientCertificateFile       string               `json:"client_certificate_file"`
-	ClientPrivateKeyFile        string               `json:"client_private_key_file"`
-	HostID                      string               `json:"host_id"`
-	HostGeneration              uint64               `json:"host_generation"`
-	JournalFile                 string               `json:"journal_file"`
-	MaximumReceipts             int                  `json:"maximum_receipts"`
-	ControlTrust                controlTrustDocument `json:"control_trust"`
-	ControlKeyID                string               `json:"control_key_id"`
-	ControlPublicKeyEnvironment string               `json:"control_public_key_environment"`
-	HostSigningKeyEnvironment   string               `json:"host_signing_key_environment"`
-	RequestTimeoutSeconds       uint32               `json:"request_timeout_seconds"`
-	TestFaultAfterJournal       bool                 `json:"test_fault_after_journal"`
-	TestFaultAfterReceipt       bool                 `json:"test_fault_after_receipt"`
-	TestFaultAfterResultSend    bool                 `json:"test_fault_after_result_send"`
-	BootProbe                   *bootProbeDocument   `json:"boot_probe"`
+	Version                     int                `json:"version"`
+	ControlURL                  string             `json:"control_url"`
+	ServerName                  string             `json:"server_name"`
+	TrustBundleFile             string             `json:"trust_bundle_file"`
+	ClientCertificateFile       string             `json:"client_certificate_file"`
+	ClientPrivateKeyFile        string             `json:"client_private_key_file"`
+	HostID                      string             `json:"host_id"`
+	HostGeneration              uint64             `json:"host_generation"`
+	JournalFile                 string             `json:"journal_file"`
+	MaximumReceipts             int                `json:"maximum_receipts"`
+	ControlTrustFile            string             `json:"control_trust_file"`
+	ControlKeyID                string             `json:"control_key_id"`
+	ControlPublicKeyEnvironment string             `json:"control_public_key_environment"`
+	HostSigningKeyEnvironment   string             `json:"host_signing_key_environment"`
+	RequestTimeoutSeconds       uint32             `json:"request_timeout_seconds"`
+	TestFaultAfterJournal       bool               `json:"test_fault_after_journal"`
+	TestFaultAfterReceipt       bool               `json:"test_fault_after_receipt"`
+	TestFaultAfterResultSend    bool               `json:"test_fault_after_result_send"`
+	BootProbe                   *bootProbeDocument `json:"boot_probe"`
 }
 type bootProbeDocument struct {
 	Principal             string `json:"principal"`
@@ -66,36 +66,6 @@ type bootProbeDocument struct {
 	JournalFile           string `json:"journal_file"`
 }
 type bootProbeConfig struct{ principal, operationID, hostInstanceSessionID, journalFile string }
-
-type controlTrustDocument struct {
-	Version         uint64                   `json:"version"`
-	RevocationEpoch uint64                   `json:"revocation_epoch"`
-	Current         controlTrustKeyDocument  `json:"current"`
-	Next            *controlTrustKeyDocument `json:"next"`
-}
-
-type controlTrustKeyDocument struct {
-	ID                   string    `json:"id"`
-	Version              uint64    `json:"version"`
-	PublicKeyEnvironment string    `json:"public_key_environment"`
-	NotBefore            time.Time `json:"not_before"`
-	NotAfter             time.Time `json:"not_after"`
-}
-
-type controlTrustConfig struct {
-	version         uint64
-	revocationEpoch uint64
-	current         controlTrustKeyConfig
-	next            *controlTrustKeyConfig
-}
-
-type controlTrustKeyConfig struct {
-	id                   string
-	version              uint64
-	publicKeyEnvironment string
-	notBefore            time.Time
-	notAfter             time.Time
-}
 
 // Parse decodes exactly one strict reference-host declaration.
 func Parse(input io.Reader) (Config, error) {
@@ -135,10 +105,9 @@ func Parse(input io.Reader) (Config, error) {
 		}
 	}
 	if decoded.ControlKeyID != "" || decoded.ControlPublicKeyEnvironment != "" {
-		return Config{}, errors.New("validate sandbox-host configuration: version 2 requires control_trust and refuses legacy single-key trust")
+		return Config{}, errors.New("validate sandbox-host configuration: version 2 refuses legacy single-key trust")
 	}
-	controlTrust, err := parseControlTrust(decoded.ControlTrust)
-	if decoded.ClientCertificateFile == decoded.ClientPrivateKeyFile || err != nil || !environmentName.MatchString(decoded.HostSigningKeyEnvironment) {
+	if !filepath.IsAbs(decoded.ControlTrustFile) || decoded.ClientCertificateFile == decoded.ClientPrivateKeyFile || !environmentName.MatchString(decoded.HostSigningKeyEnvironment) {
 		return Config{}, errors.New("validate sandbox-host configuration: distinct TLS paths and secret environment references are required")
 	}
 	timeout := time.Duration(decoded.RequestTimeoutSeconds) * time.Second
@@ -153,29 +122,6 @@ func Parse(input io.Reader) (Config, error) {
 		}
 		boot = &bootProbeConfig{value.Principal, value.OperationID, value.HostInstanceSessionID, value.JournalFile}
 	}
-	return Config{controlURL: decoded.ControlURL, serverName: decoded.ServerName, trustBundleFile: decoded.TrustBundleFile, clientCertificateFile: decoded.ClientCertificateFile, clientPrivateKeyFile: decoded.ClientPrivateKeyFile, hostID: decoded.HostID, hostGeneration: decoded.HostGeneration, journalFile: decoded.JournalFile, maximumReceipts: decoded.MaximumReceipts, controlTrust: controlTrust, hostSigningKeyEnvironment: decoded.HostSigningKeyEnvironment, requestTimeout: timeout, testFaultAfterJournal: decoded.TestFaultAfterJournal, testFaultAfterReceipt: decoded.TestFaultAfterReceipt, testFaultAfterResultSend: decoded.TestFaultAfterResultSend, bootProbe: boot}, nil
+	return Config{controlURL: decoded.ControlURL, serverName: decoded.ServerName, trustBundleFile: decoded.TrustBundleFile, clientCertificateFile: decoded.ClientCertificateFile, clientPrivateKeyFile: decoded.ClientPrivateKeyFile, hostID: decoded.HostID, hostGeneration: decoded.HostGeneration, journalFile: decoded.JournalFile, maximumReceipts: decoded.MaximumReceipts, controlTrustFile: decoded.ControlTrustFile, hostSigningKeyEnvironment: decoded.HostSigningKeyEnvironment, requestTimeout: timeout, testFaultAfterJournal: decoded.TestFaultAfterJournal, testFaultAfterReceipt: decoded.TestFaultAfterReceipt, testFaultAfterResultSend: decoded.TestFaultAfterResultSend, bootProbe: boot}, nil
 }
 func bounded(value string, maximum int) bool { return value != "" && len(value) <= maximum }
-
-func parseControlTrust(document controlTrustDocument) (controlTrustConfig, error) {
-	current, err := parseControlTrustKey(document.Current)
-	if document.Version == 0 || document.RevocationEpoch == 0 || err != nil {
-		return controlTrustConfig{}, errors.New("validate sandbox-host configuration: versioned control trust is invalid")
-	}
-	config := controlTrustConfig{version: document.Version, revocationEpoch: document.RevocationEpoch, current: current}
-	if document.Next != nil {
-		next, nextErr := parseControlTrustKey(*document.Next)
-		if nextErr != nil || next.id == current.id {
-			return controlTrustConfig{}, errors.New("validate sandbox-host configuration: next control trust key is invalid")
-		}
-		config.next = &next
-	}
-	return config, nil
-}
-
-func parseControlTrustKey(document controlTrustKeyDocument) (controlTrustKeyConfig, error) {
-	if document.ID == "" || len(document.ID) > 128 || document.Version == 0 || !environmentName.MatchString(document.PublicKeyEnvironment) || document.NotBefore.Location() != time.UTC || document.NotAfter.Location() != time.UTC || !document.NotAfter.After(document.NotBefore) {
-		return controlTrustKeyConfig{}, errors.New("validate sandbox-host configuration: control trust key is invalid")
-	}
-	return controlTrustKeyConfig{id: document.ID, version: document.Version, publicKeyEnvironment: document.PublicKeyEnvironment, notBefore: document.NotBefore, notAfter: document.NotAfter}, nil
-}

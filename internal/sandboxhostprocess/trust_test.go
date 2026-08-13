@@ -4,114 +4,140 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/base64"
+	"encoding/json"
+	"fmt"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/0x63616c/agent-runtime/internal/sandboxhostprotocol"
+	"github.com/cockroachdb/errors"
 )
 
-func TestControlTrustReloadRotatesThenRetiresPreviousKey(t *testing.T) {
+func TestReloadControlTrustFileAcceptsSuccessorAndRetainsPriorSnapshotOnBadOrRegressedInput(t *testing.T) {
 	t.Parallel()
-
-	firstPublic, firstPrivate, err := ed25519.GenerateKey(rand.Reader)
-	if err != nil {
-		t.Fatal(err)
-	}
-	secondPublic, secondPrivate, err := ed25519.GenerateKey(rand.Reader)
-	if err != nil {
-		t.Fatal(err)
-	}
-	thirdPublic, _, err := ed25519.GenerateKey(rand.Reader)
-	if err != nil {
-		t.Fatal(err)
-	}
 	now := time.Date(2026, 8, 8, 12, 0, 0, 0, time.UTC)
-	first := controlTrustKeyConfig{id: "control_01", version: 1, publicKeyEnvironment: "FIRST_PUBLIC", notBefore: now.Add(-time.Hour), notAfter: now.Add(time.Hour)}
-	second := controlTrustKeyConfig{id: "control_02", version: 2, publicKeyEnvironment: "SECOND_PUBLIC", notBefore: now.Add(-time.Hour), notAfter: now.Add(time.Hour)}
-	third := controlTrustKeyConfig{id: "control_03", version: 3, publicKeyEnvironment: "THIRD_PUBLIC", notBefore: now.Add(-time.Hour), notAfter: now.Add(time.Hour)}
-	lookup := func(name string) (string, bool) {
-		values := map[string]string{"FIRST_PUBLIC": base64.RawStdEncoding.EncodeToString(firstPublic), "SECOND_PUBLIC": base64.RawStdEncoding.EncodeToString(secondPublic), "THIRD_PUBLIC": base64.RawStdEncoding.EncodeToString(thirdPublic)}
-		value, ok := values[name]
-		return value, ok
+	firstPublic, firstPrivate, _ := ed25519.GenerateKey(rand.Reader)
+	secondPublic, secondPrivate, _ := ed25519.GenerateKey(rand.Reader)
+	path := filepath.Join(t.TempDir(), "control-trust.json")
+	write := func(version uint64, current string, currentKey ed25519.PublicKey, next string, nextKey ed25519.PublicKey) {
+		document := map[string]any{"version": version, "revocation_epoch": 1, "current": map[string]any{"id": current, "version": version, "public_key": base64.RawStdEncoding.EncodeToString(currentKey), "not_before": now.Add(-time.Hour), "not_after": now.Add(time.Hour)}}
+		if next != "" {
+			document["next"] = map[string]any{"id": next, "version": version + 1, "public_key": base64.RawStdEncoding.EncodeToString(nextKey), "not_before": now.Add(-time.Hour), "not_after": now.Add(time.Hour)}
+		}
+		wire, err := json.Marshal(document)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, wire, 0o600); err != nil {
+			t.Fatal(err)
+		}
 	}
-	trust, err := LoadControlTrust(controlTrustConfig{version: 1, revocationEpoch: 4, current: first, next: &second}, lookup)
+	write(1, "control_01", firstPublic, "control_02", secondPublic)
+	trust, err := LoadControlTrustFile(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	oldWire, err := sandboxhostprotocol.SignEnvelopeWithTrust(processTestEnvelope(now), trust.Snapshot(), firstPrivate)
+	if err := ReloadControlTrustFile(trust, path); err != nil {
+		t.Fatalf("ReloadControlTrustFile(unchanged) = %v", err)
+	}
+	write(2, "control_02", secondPublic, "", nil)
+	if err := ReloadControlTrustFile(trust, path); err != nil {
+		t.Fatal(err)
+	}
+	envelope := processTestEnvelope(now)
+	newWire, err := sandboxhostprotocol.SignEnvelopeWithTrust(envelope, trust.Snapshot(), secondPrivate)
 	if err != nil {
 		t.Fatal(err)
 	}
-
-	if err := ReloadControlTrust(trust, controlTrustConfig{version: 2, revocationEpoch: 4, current: second, next: &third}, lookup); err != nil {
+	if _, err := sandboxhostprotocol.VerifyEnvelopeWithTrust(newWire, envelope.HostID, envelope.HostGeneration, now, trust.Snapshot()); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := sandboxhostprotocol.VerifyEnvelopeWithTrust(oldWire, "host_01", 1, now, trust.Snapshot()); err == nil {
-		t.Fatal("retired control key remained trusted after promotion")
-	}
-	newWire, err := sandboxhostprotocol.SignEnvelopeWithTrust(processTestEnvelope(now), trust.Snapshot(), secondPrivate)
+	oldBundle := sandboxhostprotocol.TrustBundle{Version: 1, RevocationEpoch: 1, Current: sandboxhostprotocol.SigningKey{ID: "control_01", Version: 1, PublicKey: firstPublic, NotBefore: now.Add(-time.Hour), NotAfter: now.Add(time.Hour)}}
+	oldWire, err := sandboxhostprotocol.SignEnvelopeWithTrust(envelope, oldBundle, firstPrivate)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := sandboxhostprotocol.VerifyEnvelopeWithTrust(newWire, "host_01", 1, now, trust.Snapshot()); err != nil {
+	if _, err := sandboxhostprotocol.VerifyEnvelopeWithTrust(oldWire, envelope.HostID, envelope.HostGeneration, now, trust.Snapshot()); err == nil {
+		t.Fatal("retired key was accepted")
+	}
+	if err := os.WriteFile(path, []byte("{"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-
-	if err := ReloadControlTrust(trust, controlTrustConfig{version: 3, revocationEpoch: 4, current: second}, lookup); err != nil {
-		t.Fatal(err)
+	if err := ReloadControlTrustFile(trust, path); err == nil {
+		t.Fatal("malformed trust file was accepted")
 	}
-	if _, err := sandboxhostprotocol.VerifyEnvelopeWithTrust(oldWire, "host_01", 1, now, trust.Snapshot()); err == nil {
-		t.Fatal("retired control key remained trusted")
+	if _, err := sandboxhostprotocol.VerifyEnvelopeWithTrust(newWire, envelope.HostID, envelope.HostGeneration, now, trust.Snapshot()); err != nil {
+		t.Fatal("last valid trust was not retained")
 	}
-	legacy, err := sandboxhostprotocol.SignEnvelope(processTestEnvelope(now), "control_02", secondPrivate)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := sandboxhostprotocol.VerifyEnvelopeWithTrust(legacy, "host_01", 1, now, trust.Snapshot()); err == nil {
-		t.Fatal("production trust accepted legacy zero key bindings")
+	write(1, "control_02", secondPublic, "", nil)
+	if err := ReloadControlTrustFile(trust, path); err == nil {
+		t.Fatal("regressed trust file was accepted")
 	}
 }
 
-func TestControlTrustReloadRefusesRetiredAndRegressedKeyVersions(t *testing.T) {
+func TestLoadControlTrustFileRefusesDuplicateJSONKeys(t *testing.T) {
 	t.Parallel()
-
-	firstPublic, _, err := ed25519.GenerateKey(rand.Reader)
+	public, _, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
 		t.Fatal(err)
 	}
-	secondPublic, _, err := ed25519.GenerateKey(rand.Reader)
-	if err != nil {
-		t.Fatal(err)
-	}
-	regressedPublic, _, err := ed25519.GenerateKey(rand.Reader)
-	if err != nil {
-		t.Fatal(err)
-	}
+	path := filepath.Join(t.TempDir(), "control-trust.json")
 	now := time.Date(2026, 8, 8, 12, 0, 0, 0, time.UTC)
-	first := controlTrustKeyConfig{id: "control_01", version: 1, publicKeyEnvironment: "FIRST_PUBLIC", notBefore: now.Add(-time.Hour), notAfter: now.Add(time.Hour)}
-	second := controlTrustKeyConfig{id: "control_02", version: 2, publicKeyEnvironment: "SECOND_PUBLIC", notBefore: now.Add(-time.Hour), notAfter: now.Add(time.Hour)}
-	regressed := controlTrustKeyConfig{id: "control_03", version: 1, publicKeyEnvironment: "REGRESSED_PUBLIC", notBefore: now.Add(-time.Hour), notAfter: now.Add(time.Hour)}
-	lookup := func(name string) (string, bool) {
-		values := map[string]string{
-			"FIRST_PUBLIC":     base64.RawStdEncoding.EncodeToString(firstPublic),
-			"SECOND_PUBLIC":    base64.RawStdEncoding.EncodeToString(secondPublic),
-			"REGRESSED_PUBLIC": base64.RawStdEncoding.EncodeToString(regressedPublic),
-		}
-		value, ok := values[name]
-		return value, ok
+	wire := []byte(`{"version":1,"version":2,"revocation_epoch":1,"current":{"id":"control_01","version":1,"public_key":"` + base64.RawStdEncoding.EncodeToString(public) + `","not_before":"` + now.Add(-time.Hour).Format(time.RFC3339) + `","not_after":"` + now.Add(time.Hour).Format(time.RFC3339) + `"}}`)
+	if err := os.WriteFile(path, wire, 0o600); err != nil {
+		t.Fatal(err)
 	}
-	trust, err := LoadControlTrust(controlTrustConfig{version: 1, revocationEpoch: 4, current: first, next: &second}, lookup)
+	if _, err := LoadControlTrustFile(path); err == nil {
+		t.Fatal("duplicate trust-file key was accepted")
+	}
+}
+
+func TestPollWithTrustReloadUsesOneHostLifetimeSnapshot(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 8, 8, 12, 0, 0, 0, time.UTC)
+	firstPublic, firstPrivate, _ := ed25519.GenerateKey(rand.Reader)
+	secondPublic, secondPrivate, _ := ed25519.GenerateKey(rand.Reader)
+	path := filepath.Join(t.TempDir(), "control-trust.json")
+	write := func(version uint64, current string, public ed25519.PublicKey) {
+		wire := []byte(`{"version":` + fmt.Sprint(version) + `,"revocation_epoch":1,"current":{"id":"` + current + `","version":` + fmt.Sprint(version) + `,"public_key":"` + base64.RawStdEncoding.EncodeToString(public) + `","not_before":"` + now.Add(-time.Hour).Format(time.RFC3339) + `","not_after":"` + now.Add(time.Hour).Format(time.RFC3339) + `"}}`)
+		if err := os.WriteFile(path, wire, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write(1, "control_01", firstPublic)
+	trust, err := LoadControlTrustFile(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := ReloadControlTrust(trust, controlTrustConfig{version: 2, revocationEpoch: 4, current: second}, lookup); err != nil {
-		t.Fatalf("ReloadControlTrust(retire first) error = %v", err)
+	firstBundle := trust.Snapshot()
+	firstWire, err := sandboxhostprotocol.SignEnvelopeWithTrust(processTestEnvelope(now), firstBundle, firstPrivate)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if err := ReloadControlTrust(trust, controlTrustConfig{version: 3, revocationEpoch: 4, current: second, next: &first}, lookup); err == nil {
-		t.Fatal("ReloadControlTrust() reintroduced a retired key")
+	write(2, "control_02", secondPublic)
+	secondWire, err := sandboxhostprotocol.SignEnvelopeWithTrust(processTestEnvelope(now), sandboxhostprotocol.TrustBundle{Version: 2, RevocationEpoch: 1, Current: sandboxhostprotocol.SigningKey{ID: "control_02", Version: 2, PublicKey: secondPublic, NotBefore: now.Add(-time.Hour), NotAfter: now.Add(time.Hour)}}, secondPrivate)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if err := ReloadControlTrust(trust, controlTrustConfig{version: 3, revocationEpoch: 4, current: second, next: &regressed}, lookup); err == nil {
-		t.Fatal("ReloadControlTrust() accepted a new key with a regressed version")
+	verifySuccessor := func(trust *sandboxhostprotocol.AtomicTrust) error {
+		if _, err := sandboxhostprotocol.VerifyEnvelopeWithTrust(secondWire, "host_01", 1, now, trust.Snapshot()); err != nil {
+			t.Fatalf("successor rejected after poll-boundary reload: %v", err)
+		}
+		if _, err := sandboxhostprotocol.VerifyEnvelopeWithTrust(firstWire, "host_01", 1, now, trust.Snapshot()); err == nil {
+			t.Fatal("retired key accepted after poll-boundary reload")
+		}
+		return ErrNoWork
+	}
+	if err := pollWithTrustReload(trust, path, verifySuccessor); !errors.Is(err, ErrNoWork) {
+		t.Fatalf("pollWithTrustReload(successor) = %v", err)
+	}
+	if err := os.WriteFile(path, []byte("{"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := pollWithTrustReload(trust, path, verifySuccessor); !errors.Is(err, ErrRetryable) {
+		t.Fatalf("pollWithTrustReload(malformed) = %v, want degraded retryable status", err)
 	}
 }
 

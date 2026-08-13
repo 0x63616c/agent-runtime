@@ -5,28 +5,11 @@
   "trust_bundle_file": "/run/sandbox-host/control-ca.crt",
   "client_certificate_file": "/run/sandbox-host/tls.crt",
   "client_private_key_file": "/run/sandbox-host/tls.key",
+  "control_trust_file": "/run/sandbox-host/control-trust.json",
   "host_id": "host_local_01",
   "host_generation": 1,
   "journal_file": "/var/lib/sandbox-host/receipts.json",
   "maximum_receipts": 10000,
-  "control_trust": {
-    "version": 1,
-    "revocation_epoch": 1,
-    "current": {
-      "id": "control_signing_2026_01",
-      "version": 1,
-      "public_key_environment": "SANDBOX_CONTROL_PUBLIC_KEY",
-      "not_before": "2026-08-08T00:00:00Z",
-      "not_after": "2026-08-09T00:00:00Z"
-    },
-    "next": {
-      "id": "control_signing_2026_02",
-      "version": 2,
-      "public_key_environment": "SANDBOX_CONTROL_NEXT_PUBLIC_KEY",
-      "not_before": "2026-08-08T12:00:00Z",
-      "not_after": "2026-08-10T00:00:00Z"
-    }
-  },
   "host_signing_key_environment": "SANDBOX_HOST_SIGNING_KEY",
   "request_timeout_seconds": 10,
   "test_fault_after_journal": false,

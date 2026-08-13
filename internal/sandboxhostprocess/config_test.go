@@ -9,7 +9,7 @@ func TestParseStrictReferenceHostConfiguration(t *testing.T) {
 	t.Parallel()
 
 	config, err := Parse(strings.NewReader(validHostDocument))
-	if err != nil || config.hostID != "host_01" || config.hostGeneration != 2 || config.maximumReceipts != 100 || config.controlTrust.version != 3 || config.controlTrust.next == nil {
+	if err != nil || config.hostID != "host_01" || config.hostGeneration != 2 || config.maximumReceipts != 100 || config.controlTrustFile != "/run/sandbox-host/control-trust.json" {
 		t.Fatalf("Parse() = %#v, %v", config, err)
 	}
 }
@@ -21,7 +21,7 @@ func TestParseVersionOneHostConfigurationRequiresExplicitMigration(t *testing.T)
 	if _, err := Parse(strings.NewReader(compatibility)); err == nil || !strings.Contains(err.Error(), "migrate to version 2") {
 		t.Fatalf("Parse(version 1 versioned trust) error = %v, want explicit version 2 migration", err)
 	}
-	legacy := strings.Replace(compatibility, `"control_trust":{`, `"control_key_id":"control_01","control_public_key_environment":"CONTROL_PUBLIC_KEY","control_trust":{`, 1)
+	legacy := strings.Replace(compatibility, `"control_trust_file":`, `"control_key_id":"control_01","control_public_key_environment":"CONTROL_PUBLIC_KEY","control_trust_file":`, 1)
 	if _, err := Parse(strings.NewReader(legacy)); err == nil || !strings.Contains(err.Error(), "migrate to version 2") {
 		t.Fatalf("Parse(version 1 legacy trust) error = %v, want explicit version 2 migration", err)
 	}
@@ -30,8 +30,8 @@ func TestParseVersionOneHostConfigurationRequiresExplicitMigration(t *testing.T)
 func TestParseVersionTwoHostConfigurationRefusesLegacySingleKeyFields(t *testing.T) {
 	t.Parallel()
 
-	legacy := strings.Replace(validHostDocument, `"control_trust":{`, `"control_key_id":"control_01","control_public_key_environment":"CONTROL_PUBLIC_KEY","control_trust":{`, 1)
-	if _, err := Parse(strings.NewReader(legacy)); err == nil || !strings.Contains(err.Error(), "control_trust") {
+	legacy := strings.Replace(validHostDocument, `"control_trust_file":`, `"control_key_id":"control_01","control_public_key_environment":"CONTROL_PUBLIC_KEY","control_trust_file":`, 1)
+	if _, err := Parse(strings.NewReader(legacy)); err == nil || !strings.Contains(err.Error(), "legacy") {
 		t.Fatalf("Parse(version 2 legacy trust) error = %v, want versioned control_trust refusal", err)
 	}
 }
@@ -85,7 +85,7 @@ func TestParseReferenceHostConfigurationBoundsItsInputBeforeAcceptingTrailingWhi
 	}
 }
 
-const validHostDocument = `{"version":2,"control_url":"https://sandbox-control.internal:9443","server_name":"sandbox-control.internal","trust_bundle_file":"/run/sandbox-host/control-ca.crt","client_certificate_file":"/run/sandbox-host/tls.crt","client_private_key_file":"/run/sandbox-host/tls.key","host_id":"host_01","host_generation":2,"journal_file":"/var/lib/sandbox-host/receipts.json","maximum_receipts":100,"control_trust":{"version":3,"revocation_epoch":9,"current":{"id":"control_01","version":4,"public_key_environment":"CONTROL_PUBLIC_KEY","not_before":"2026-08-08T00:00:00Z","not_after":"2026-08-09T00:00:00Z"},"next":{"id":"control_02","version":5,"public_key_environment":"CONTROL_NEXT_PUBLIC_KEY","not_before":"2026-08-08T00:00:00Z","not_after":"2026-08-09T00:00:00Z"}},"host_signing_key_environment":"HOST_SIGNING_KEY","request_timeout_seconds":5,"test_fault_after_journal":false,"test_fault_after_receipt":false,"test_fault_after_result_send":false}`
+const validHostDocument = `{"version":2,"control_url":"https://sandbox-control.internal:9443","server_name":"sandbox-control.internal","trust_bundle_file":"/run/sandbox-host/control-ca.crt","client_certificate_file":"/run/sandbox-host/tls.crt","client_private_key_file":"/run/sandbox-host/tls.key","control_trust_file":"/run/sandbox-host/control-trust.json","host_id":"host_01","host_generation":2,"journal_file":"/var/lib/sandbox-host/receipts.json","maximum_receipts":100,"host_signing_key_environment":"HOST_SIGNING_KEY","request_timeout_seconds":5,"test_fault_after_journal":false,"test_fault_after_receipt":false,"test_fault_after_result_send":false}`
 
 type countingReader struct {
 	*strings.Reader

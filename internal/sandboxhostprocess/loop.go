@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/0x63616c/agent-runtime/internal/clock"
+	"github.com/0x63616c/agent-runtime/internal/sandboxhostprotocol"
 	"github.com/cockroachdb/errors"
 )
 
@@ -56,8 +57,14 @@ func Run(ctx context.Context, config Config, lookup SecretLookup, source clock.C
 		observe(Summary{ObservedAt: source.Now().UTC(), Outcome: outcomeFor(err), Ready: err == nil})
 		return err
 	}
+	trust, err := LoadControlTrustFile(config.controlTrustFile)
+	if err != nil {
+		return err
+	}
 	return loop(ctx, source, interval, wait, func(ctx context.Context) error {
-		return RunOnce(ctx, config, lookup, source)
+		return pollWithTrustReload(trust, config.controlTrustFile, func(trust *sandboxhostprotocol.AtomicTrust) error {
+			return runOnceWithExecutor(ctx, config, lookup, source, unavailableExecutor{}, trust)
+		})
 	}, observe)
 }
 
@@ -74,9 +81,30 @@ func RunWithExecutor(ctx context.Context, config Config, lookup SecretLookup, so
 		observe(Summary{ObservedAt: source.Now().UTC(), Outcome: outcomeFor(err), Ready: err == nil})
 		return err
 	}
+	trust, err := LoadControlTrustFile(config.controlTrustFile)
+	if err != nil {
+		return err
+	}
 	return loop(ctx, source, interval, wait, func(ctx context.Context) error {
-		return RunOnceWithExecutor(ctx, config, lookup, source, executor)
+		return pollWithTrustReload(trust, config.controlTrustFile, func(trust *sandboxhostprotocol.AtomicTrust) error {
+			return runOnceWithExecutor(ctx, config, lookup, source, executor, trust)
+		})
 	}, observe)
+}
+
+func pollWithTrustReload(trust *sandboxhostprotocol.AtomicTrust, path string, poll func(*sandboxhostprotocol.AtomicTrust) error) error {
+	// A projected update is applied only as a complete, strictly newer snapshot.
+	// Keep serving with the already-verified snapshot while an operator repairs a
+	// malformed or regressed replacement.
+	reloadErr := ReloadControlTrustFile(trust, path)
+	return runWithReloadStatus(reloadErr, poll(trust))
+}
+
+func runWithReloadStatus(reloadErr, runErr error) error {
+	if reloadErr != nil && (runErr == nil || errors.Is(runErr, ErrNoWork)) {
+		return errors.Mark(errors.Wrap(reloadErr, "reload sandbox host control trust"), ErrRetryable)
+	}
+	return runErr
 }
 
 func outcomeFor(err error) Outcome {

@@ -63,20 +63,21 @@ control-plane Ed25519 key and transported over mTLS. It binds:
 The host strictly decodes the canonical bytes, atomically selects the declared
 control key from the complete current/next trust snapshot, verifies its key
 version, revocation epoch, signature, payload digest and declared key validity,
-then checks host generation and envelope time before journaling. A strictly
-newer snapshot may rotate current to next during overlap and later retire it.
+then checks host generation and envelope time before journaling. Its public
+verification material comes from a bounded, versioned mounted trust file. At
+each poll boundary, the host accepts only a complete strictly newer snapshot;
+a malformed or regressed replacement leaves the last verified snapshot active.
+A newer snapshot may rotate current to next during overlap and later retire it.
 Unknown fields, trailing JSON, altered bytes, legacy zero bindings, retired or
 revoked keys, replay to another host/generation, and expired envelopes are
-refused. The atomic snapshot primitive has unit coverage for this lifecycle;
-the reference host does not yet implement a watched configuration reload, and
-M3 has no retained live control-trust-rotation proof. Retirement lineage is
-in-memory and lasts only for one running `AtomicTrust` instance; a restarted
-host needs authenticated persisted trust history before it can make an
-across-restart retirement claim, and M3 does not yet provide that persistence.
+refused. Retirement lineage is in-memory and lasts only for one running host
+process; a restarted host needs authenticated persisted trust history before it
+can make an across-restart retirement claim. This reference describes the
+local host behavior; it is not live-environment rotation evidence.
 
-TLS supplies transport confidentiality. M3 does not add application-layer
-envelope encryption beyond TLS and therefore makes no protection claim after a
-legitimate endpoint receives plaintext.
+TLS supplies transport confidentiality. This protocol does not add
+application-layer envelope encryption beyond TLS and therefore makes no
+protection claim after a legitimate endpoint receives plaintext.
 
 ## Pull, receipt, heartbeat, output, and result
 

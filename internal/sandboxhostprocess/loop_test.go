@@ -166,3 +166,15 @@ func TestLoopHonorsCancellationWithoutPollingOrWaiting(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestRunWithReloadStatusKeepsServingButDegradesReadinessOnInvalidReplacement(t *testing.T) {
+	t.Parallel()
+
+	if err := runWithReloadStatus(errors.New("regressed trust"), ErrNoWork); !errors.Is(err, ErrRetryable) {
+		t.Fatalf("runWithReloadStatus(invalid replacement, no work) = %v, want retryable degraded status", err)
+	}
+	terminal := errors.New("control signature refusal")
+	if err := runWithReloadStatus(errors.New("regressed trust"), terminal); !errors.Is(err, terminal) {
+		t.Fatalf("runWithReloadStatus(invalid replacement, terminal) = %v, want terminal control error", err)
+	}
+}

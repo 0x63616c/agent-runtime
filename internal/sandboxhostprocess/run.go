@@ -53,14 +53,18 @@ func RunOnce(ctx context.Context, config Config, lookup SecretLookup, source clo
 // RunOnceWithExecutor polls, verifies, receipts, durably records execution
 // intent, then delegates at most one lease-fenced host effect.
 func RunOnceWithExecutor(ctx context.Context, config Config, lookup SecretLookup, source clock.Clock, executor HostExecutor) (err error) {
+	trust, err := LoadControlTrustFile(config.controlTrustFile)
+	if err != nil {
+		return err
+	}
+	return runOnceWithExecutor(ctx, config, lookup, source, executor, trust)
+}
+
+func runOnceWithExecutor(ctx context.Context, config Config, lookup SecretLookup, source clock.Clock, executor HostExecutor, controlTrust *sandboxhostprotocol.AtomicTrust) (err error) {
 	if ctx == nil || lookup == nil || source == nil || executor == nil {
 		return errors.New("run sandbox reference host: context, secret lookup, clock and executor are required")
 	}
 	hostPrivateEncoded, err := requiredSecret(lookup, config.hostSigningKeyEnvironment)
-	if err != nil {
-		return err
-	}
-	controlTrust, err := LoadControlTrust(config.controlTrust, lookup)
 	if err != nil {
 		return err
 	}
