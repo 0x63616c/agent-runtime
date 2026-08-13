@@ -186,7 +186,10 @@ func TestSandboxAdapterDispatchesASealedWorkspaceActionThroughControlProcess(t *
 	planner, _ := runtimestate.NewRuntimeStatePlanner(source, &toolIDs{})
 	store, _ := runtimestate.NewMemoryRuntimeStateStore(planner)
 	controlDescriptor, err := sandbox.EncodeControlOperationRequest(sandbox.OperationRequest{
-		ID:   "op_tool_000000000001",
+		// A model has to stage its descriptor before approval creates a durable
+		// grant.  This intentionally differs from the later runtime-owned
+		// execution ID; SandboxAdapter must replace it before submission.
+		ID:   "op_model_000000000001",
 		Kind: sandbox.OperationCopyIn,
 		CopyIn: &sandbox.CopyInRequest{
 			SandboxID:   "sbx_tool_000000000001",
@@ -211,15 +214,23 @@ func TestSandboxAdapterDispatchesASealedWorkspaceActionThroughControlProcess(t *
 	go func() { result <- worker.ScanOnce(ctx) }()
 
 	var operation sandboxcontrol.Operation
+	var expectedOperationID string
 	for deadline := time.Now().Add(time.Second); time.Now().Before(deadline); {
-		operation, err = ledger.Get(ctx, "tenant-a:subject-a", "op_tool_000000000001")
-		if err == nil {
-			break
+		state, stateErr := store.LoadRuntimeState(ctx, runtimestate.MutationScope{Tenant: tenant, Principal: principal, Authority: runtimestate.AuthorityRuntimeWorker})
+		if stateErr == nil && len(state.ToolExecutions) == 1 {
+			expectedOperationID = string(state.ToolExecutions[0].OperationID)
+			operation, err = ledger.Get(ctx, "tenant-a:subject-a", expectedOperationID)
+			if err == nil {
+				break
+			}
 		}
 		runtime.Gosched()
 	}
 	if err != nil {
 		t.Fatalf("control process did not retain Worker-submitted workspace action: %v", err)
+	}
+	if operation.ID != expectedOperationID || operation.ID == "op_model_000000000001" {
+		t.Fatalf("sandbox operation ID = %q, want runtime-owned %q rather than model descriptor ID", operation.ID, expectedOperationID)
 	}
 	submitted, err := sandbox.DecodeControlOperationRequest([]byte(operation.DispatchBody))
 	if err != nil || submitted.Kind != sandbox.OperationCopyIn || submitted.CopyIn == nil || submitted.CopyIn.SandboxID != "sbx_tool_000000000001" || submitted.CopyIn.Destination != "/workspace/reports/result.txt" || submitted.CopyIn.Source.ID != "art_tool_000000000001" {

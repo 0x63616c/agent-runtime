@@ -63,9 +63,15 @@ func (adapter *SandboxAdapter) Reconcile(ctx context.Context, request Request) (
 
 func decodeSandboxAction(request Request) (sandbox.OperationRequest, Response) {
 	action, err := sandbox.DecodeControlOperationRequest(request.Descriptor)
-	if err != nil || action.ID == "" || string(action.ID) != string(request.OperationID) {
+	if err != nil || action.ID == "" || request.OperationID == "" {
 		return sandbox.OperationRequest{}, Response{Failure: &agentruntime.Failure{Code: agentruntime.FailureInvalidInput, Message: "verified tool action descriptor is invalid"}}
 	}
+	// The model stages this immutable descriptor before an owner has approved it.
+	// The durable grant -- and therefore the external-effect idempotency key --
+	// exists only afterwards.  Never honour the descriptor's correlation ID:
+	// replacing it here makes sandbox-control receive the runtime-owned execution
+	// ID while retaining the sealed action and argument commitments unchanged.
+	action.ID = sandbox.OperationID(request.OperationID)
 	return action, Response{}
 }
 
