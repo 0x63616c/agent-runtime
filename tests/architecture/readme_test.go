@@ -26,7 +26,7 @@ var _ = Describe("README landing page", func() {
 			"just check",
 			"just docs-check",
 			"just verify",
-			"docs/planning/requirements-dashboard.html",
+			"The project records the distinction between code, local checks, hosted CI, and",
 			"not Firecracker isolation",
 			"https://0x63616c.github.io/agent-runtime/",
 		} {

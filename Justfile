@@ -63,6 +63,7 @@ docs-check:
     npm --prefix website run typecheck
     npm --prefix website run build
     npm --prefix website run check:routes
+    npm --prefix website run check:public-claims
 
 requirements-dashboard:
     node ./scripts/generate-project-dashboard.mjs

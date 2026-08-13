@@ -3,6 +3,7 @@ package architecture_test
 import (
 	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 
@@ -88,6 +89,17 @@ var _ = Describe("public documentation foundation", func() {
 
 	It("links the public Pages site from the repository landing page", func() {
 		Expect(read("README.md")).To(ContainSubstring("https://0x63616c.github.io/agent-runtime/"))
+	})
+
+	It("keeps public documentation free of internal delivery tracking and source-only links", func() {
+		root, err := filepath.Abs(filepath.Join("..", ".."))
+		Expect(err).NotTo(HaveOccurred())
+		command := exec.Command("npm", "--prefix", "website", "run", "check:public-claims")
+		command.Dir = root
+		output, err := command.CombinedOutput()
+		Expect(err).NotTo(HaveOccurred(), string(output))
+		Expect(string(output)).To(ContainSubstring("validated public-claim boundary"))
+		Expect(read("Justfile")).To(ContainSubstring("npm --prefix website run check:public-claims"))
 	})
 
 	It("documents versioning, local search, accessibility, permissions, rollback, and the clean audit policy", func() {
