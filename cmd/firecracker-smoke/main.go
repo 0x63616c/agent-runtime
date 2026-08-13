@@ -213,6 +213,14 @@ func smokeObservationFailureReason(err error) string {
 		return prefix + ": Jailer executable was denied by the host"
 	case strings.Contains(message, "start Jailer:") && strings.Contains(strings.ToLower(message), "no such file or directory"):
 		return prefix + ": Jailer executable was unavailable to the host"
+	case strings.Contains(message, "Linux Jailer kernel capabilities:"):
+		return prefix + ": Jailer kernel capabilities were unavailable"
+	case strings.Contains(message, "declared Jailer cgroup authority:"):
+		return prefix + ": Jailer cgroup authority was unavailable"
+	case strings.Contains(message, "immutable Jailer launch artifact:"):
+		return prefix + ": Jailer launch artifact was not trusted by the host"
+	case strings.Contains(message, "trusted staged Jailer root:"):
+		return prefix + ": staged Jailer root was not trusted by the host"
 	case strings.Contains(message, "prepare jailed rootfs:"):
 		return prefix + ": Jailer fixture staging failed"
 	case strings.Contains(message, "await Firecracker API socket"):
