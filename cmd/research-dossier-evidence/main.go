@@ -56,7 +56,7 @@ func main() {
 		if err != nil {
 			fail(fmt.Errorf("open report: %w", err))
 		}
-		defer input.Close()
+		defer func() { _ = input.Close() }()
 		if _, err := parse(input); err != nil {
 			fail(err)
 		}
