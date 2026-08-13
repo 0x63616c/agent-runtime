@@ -6,12 +6,14 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/0x63616c/agent-runtime/internal/sandboxauthority"
@@ -23,7 +25,16 @@ const (
 	maximumGuestOutputBytes          = 32 << 10
 	maximumGuestOutputChunks         = 4
 	maximumGuestSecretBytes          = 16 << 10
+	// The guest writes its serial boot marker immediately after binding its
+	// AF_VSOCK listener. Firecracker can expose the paired host UDS shortly
+	// afterwards, so accept only this bounded, pre-connection readiness lag.
+	// Once a Unix connection exists, the guest is one-shot and no handshake
+	// frame may be retried.
+	guestControlReadinessTimeout = 5 * time.Second
+	guestControlReadinessRetry   = 25 * time.Millisecond
 )
+
+var errGuestControlNotReady = errors.New("guest control transport is not ready")
 
 // GuestOutput is one bounded, ordered private guest-output chunk. Its caller
 // must route it to a durable output owner before any future profile can claim
@@ -156,7 +167,7 @@ func (channel *UnixGuestControlChannel) Ping(ctx context.Context, vmID string) e
 	if vmID != expectedVMID {
 		return fmt.Errorf("ping guest control: %w", ErrSmokeUnavailable)
 	}
-	connection, reader, err := channel.open(ctx)
+	connection, reader, err := channel.openForPing(ctx)
 	if err != nil {
 		return err
 	}
@@ -169,6 +180,41 @@ func (channel *UnixGuestControlChannel) Ping(ctx context.Context, vmID string) e
 		return fmt.Errorf("ping guest control: %w", ErrSmokeUnavailable)
 	}
 	return nil
+}
+
+// openForPing waits only for the host side of Firecracker's private vsock
+// transport to begin listening. It retries only a failed Unix dial before any
+// connection, CONNECT frame, or guest state has been consumed. A guest accepts
+// exactly one connection, so every post-dial failure remains terminal.
+func (channel *UnixGuestControlChannel) openForPing(ctx context.Context) (net.Conn, *bufio.Reader, error) {
+	if err := contextError(ctx); err != nil {
+		return nil, nil, err
+	}
+	deadline := time.Now().Add(guestControlReadinessTimeout)
+	if contextDeadline, ok := ctx.Deadline(); ok && contextDeadline.Before(deadline) {
+		deadline = contextDeadline
+	}
+	for {
+		connection, reader, err := channel.open(ctx)
+		if err == nil || !errors.Is(err, errGuestControlNotReady) {
+			return connection, reader, err
+		}
+		if !time.Now().Before(deadline) {
+			return nil, nil, fmt.Errorf("open guest control: %w", ErrSmokeUnavailable)
+		}
+		wait := time.NewTimer(guestControlReadinessRetry)
+		select {
+		case <-ctx.Done():
+			if !wait.Stop() {
+				select {
+				case <-wait.C:
+				default:
+				}
+			}
+			return nil, nil, ctx.Err()
+		case <-wait.C:
+		}
+	}
 }
 
 // ExecuteDispatch carries one host-authenticated, lease-fenced envelope over
@@ -529,6 +575,9 @@ func (channel *UnixGuestControlChannel) open(ctx context.Context) (net.Conn, *bu
 	}
 	connection, err := channel.dial.DialContext(ctx, "unix", socket)
 	if err != nil {
+		if isGuestControlReadinessError(err) {
+			return nil, nil, fmt.Errorf("open guest control: %w", errors.Join(ErrSmokeUnavailable, fmt.Errorf("%w: %w", errGuestControlNotReady, err)))
+		}
 		return nil, nil, fmt.Errorf("open guest control: %w", ErrSmokeUnavailable)
 	}
 	if deadline, ok := ctx.Deadline(); ok {
@@ -559,6 +608,10 @@ func (channel *UnixGuestControlChannel) open(ctx context.Context) (net.Conn, *bu
 		return nil, nil, fmt.Errorf("open guest control: %w", ErrSmokeUnavailable)
 	}
 	return connection, reader, nil
+}
+
+func isGuestControlReadinessError(err error) bool {
+	return errors.Is(err, syscall.ENOENT) || errors.Is(err, syscall.ECONNREFUSED) || errors.Is(err, syscall.EAGAIN) || errors.Is(err, syscall.EWOULDBLOCK)
 }
 
 func (channel *UnixGuestControlChannel) release(connection net.Conn) {

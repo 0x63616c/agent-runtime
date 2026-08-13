@@ -11,6 +11,7 @@ import (
 	"net"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -94,6 +95,48 @@ func TestUnixGuestControlChannelExchangesOnlyTheBoundIdentityAndUnavailableDispa
 	dialer.wait()
 	if got, want := dialer.targets(), []string{"unix:/srv/jailer/sandbox-001/root/run/firecracker.vsock", "unix:/srv/jailer/sandbox-001/root/run/firecracker.vsock", "unix:/srv/jailer/sandbox-001/root/run/firecracker.vsock", "unix:/srv/jailer/sandbox-001/root/run/firecracker.vsock"}; strings.Join(got, "|") != strings.Join(want, "|") {
 		t.Fatalf("dial targets = %v, want %v", got, want)
+	}
+}
+
+func TestUnixGuestControlChannelPingRetriesOnlyPreConnectionVsockReadiness(t *testing.T) {
+	attempts := 0
+	dialer := guestChannelDialerFunc(func(_ context.Context, network, address string) (net.Conn, error) {
+		if network != "unix" || address != "/srv/jailer/sandbox-001/root/run/firecracker.vsock" {
+			t.Fatalf("DialContext(%q, %q), want exact private vsock UDS", network, address)
+		}
+		attempts++
+		if attempts == 1 {
+			return nil, syscall.ECONNREFUSED
+		}
+		client, server := net.Pipe()
+		go func() {
+			defer func() { _ = server.Close() }()
+			reader := bufio.NewReader(server)
+			if line := guestChannelTestReadLine(t, reader); line != "CONNECT sandbox-001 fixture-v1" {
+				return
+			}
+			_, _ = server.Write([]byte("OK sandbox-001 fixture-v1\n"))
+			if line := guestChannelTestReadLine(t, reader); line == "PING bootstrap" {
+				_, _ = server.Write([]byte("PONG sandbox-001 bootstrap\n"))
+			}
+		}()
+		return client, nil
+	})
+	channel, err := NewUnixGuestControlChannel(dialer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := channel.BindGuestIdentity(context.Background(), "sandbox-001", "fixture-v1"); err != nil {
+		t.Fatal(err)
+	}
+	if err := channel.Bind(context.Background(), "/srv/jailer/sandbox-001/root/run/firecracker.vsock"); err != nil {
+		t.Fatal(err)
+	}
+	if err := channel.Ping(context.Background(), "sandbox-001"); err != nil {
+		t.Fatalf("Ping() error = %v, want bounded readiness retry then success", err)
+	}
+	if attempts != 2 {
+		t.Fatalf("dial attempts = %d, want exactly one pre-connection retry", attempts)
 	}
 }
 
