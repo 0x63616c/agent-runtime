@@ -174,8 +174,14 @@ spec:
           resources:
             requests: { cpu: "1000m", memory: "1024Mi" }
             limits: { cpu: "2000m", memory: "2048Mi" }
+          env:
+            # The Firecracker fixture provisioner verifies and executes its
+            # staged Jailer binary.  `/tmp` is world-writable and therefore
+            # deliberately rejected as an untrusted Jailer ancestor.
+            - { name: TMPDIR, value: /var/lib/agent-runtime/firecracker-smoke }
           volumeMounts:
             - { name: tmp, mountPath: /tmp }
+            - { name: smoke-work, mountPath: /var/lib/agent-runtime/firecracker-smoke }
             - { name: kvm, mountPath: /dev/kvm }
             # Talos rejects nested file hostPath mounts beneath a mounted
             # parent.  Each dedicated parent is mounted at its authoritative
@@ -191,6 +197,8 @@ spec:
             - { name: cgroup, mountPath: /sys/fs/cgroup/agent-runtime, readOnly: false }
       volumes:
         - name: tmp
+          emptyDir: { sizeLimit: 2Gi }
+        - name: smoke-work
           emptyDir: { sizeLimit: 2Gi }
         - name: kvm
           hostPath: { path: /dev/kvm, type: CharDevice }
@@ -258,6 +266,8 @@ self_test() {
   grep -Fqx '        kubernetes.io/arch: amd64' "$manifest"
   grep -Fqx '          imagePullPolicy: Always' "$manifest"
   grep -Fqx '            - { name: tmp, mountPath: /tmp }' "$manifest"
+  grep -Fqx '            - { name: smoke-work, mountPath: /var/lib/agent-runtime/firecracker-smoke }' "$manifest"
+  grep -Fqx '            - { name: TMPDIR, value: /var/lib/agent-runtime/firecracker-smoke }' "$manifest"
   grep -Fqx '          emptyDir: { sizeLimit: 2Gi }' "$manifest"
   grep -Fqx '          hostPath: { path: /dev/kvm, type: CharDevice }' "$manifest"
   grep -Fqx '            - { name: direct-authority, mountPath: /var/lib/agent-runtime/firecracker-direct, readOnly: true }' "$manifest"
