@@ -7,14 +7,12 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"runtime"
 	"strings"
 	"sync"
-	"time"
 )
 
 const maximumFirecrackerAPIResponseBytes = 64 << 10
-
-const firecrackerSocketReadyRetryInterval = 10 * time.Millisecond
 
 type unixSocketDialer interface {
 	DialContext(context.Context, string, string) (net.Conn, error)
@@ -82,15 +80,10 @@ func (port *unixFirecrackerHTTP) WaitReady(ctx context.Context) error {
 		if contextErr := contextError(ctx); contextErr != nil {
 			return fmt.Errorf("%w: await private Firecracker API socket: %w", ErrSmokeUnavailable, contextErr)
 		}
-		timer := time.NewTimer(firecrackerSocketReadyRetryInterval)
-		select {
-		case <-ctx.Done():
-			if !timer.Stop() {
-				<-timer.C
-			}
-			return fmt.Errorf("%w: await private Firecracker API socket: %w", ErrSmokeUnavailable, ctx.Err())
-		case <-timer.C:
-		}
+		// Socket creation is an event driven by the just-started Jailer. Yield
+		// rather than introducing a wall-clock polling timer; the caller's
+		// bounded context remains the sole deadline authority.
+		runtime.Gosched()
 	}
 }
 

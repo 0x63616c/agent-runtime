@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -25,13 +26,8 @@ const (
 	maximumGuestOutputBytes          = 32 << 10
 	maximumGuestOutputChunks         = 4
 	maximumGuestSecretBytes          = 16 << 10
-	// The guest writes its serial boot marker immediately after binding its
-	// AF_VSOCK listener. Firecracker can expose the paired host UDS shortly
-	// afterwards, so accept only this bounded, pre-connection readiness lag.
 	// Once a Unix connection exists, the guest is one-shot and no handshake
-	// frame may be retried.
-	guestControlReadinessTimeout = 5 * time.Second
-	guestControlReadinessRetry   = 25 * time.Millisecond
+	// frame may be retried. A caller's bounded context is the sole deadline.
 )
 
 var errGuestControlNotReady = errors.New("guest control transport is not ready")
@@ -190,30 +186,15 @@ func (channel *UnixGuestControlChannel) openForPing(ctx context.Context) (net.Co
 	if err := contextError(ctx); err != nil {
 		return nil, nil, err
 	}
-	deadline := time.Now().Add(guestControlReadinessTimeout)
-	if contextDeadline, ok := ctx.Deadline(); ok && contextDeadline.Before(deadline) {
-		deadline = contextDeadline
-	}
 	for {
 		connection, reader, err := channel.open(ctx)
 		if err == nil || !errors.Is(err, errGuestControlNotReady) {
 			return connection, reader, err
 		}
-		if !time.Now().Before(deadline) {
-			return nil, nil, fmt.Errorf("open guest control: %w", ErrSmokeUnavailable)
+		if err := contextError(ctx); err != nil {
+			return nil, nil, err
 		}
-		wait := time.NewTimer(guestControlReadinessRetry)
-		select {
-		case <-ctx.Done():
-			if !wait.Stop() {
-				select {
-				case <-wait.C:
-				default:
-				}
-			}
-			return nil, nil, ctx.Err()
-		case <-wait.C:
-		}
+		runtime.Gosched()
 	}
 }
 
