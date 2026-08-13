@@ -35,12 +35,29 @@ type GuestOutput struct {
 	Data     []byte
 }
 
+// GuestTerminalObservation is the deliberately small set of terminal facts a
+// guest process can report about itself. It is not a SandboxObservation: the
+// guest cannot truthfully establish host lifecycle state, cgroup usage,
+// retention, cleanup, or the durable control-plane process state. A host may
+// use this private input when it constructs its own observation, but must not
+// promote it directly to a signed resource view.
+type GuestTerminalObservation struct {
+	ProcessID  string    `json:"process_id,omitempty"`
+	GuestPID   int       `json:"guest_pid"`
+	StartedAt  time.Time `json:"started_at"`
+	FinishedAt time.Time `json:"finished_at"`
+	ExitCode   *int32    `json:"exit_code,omitempty"`
+	Signal     string    `json:"signal,omitempty"`
+	Reason     string    `json:"reason"`
+}
+
 // GuestDispatchResult records the only terminal result accepted from a guest
 // dispatch exchange and the bounded output that preceded it.
 type GuestDispatchResult struct {
-	State       string
-	Outputs     []GuestOutput
-	Observation *sandboxhostprotocol.Observation
+	State            string
+	Outputs          []GuestOutput
+	GuestObservation *GuestTerminalObservation
+	Observation      *sandboxhostprotocol.Observation
 }
 
 // GuestIdentityBinder binds the boot identities that the guest must echo on
@@ -568,13 +585,14 @@ func readGuestControlResponse(reader *bufio.Reader) (string, error) {
 func readGuestDispatchResult(reader *bufio.Reader, envelope sandboxhostprotocol.Envelope) (GuestDispatchResult, error) {
 	result := GuestDispatchResult{}
 	observationSeen := false
+	guestObservationSeen := false
 	for {
 		line, err := readGuestControlResponse(reader)
 		if err != nil {
 			return GuestDispatchResult{}, fmt.Errorf("read guest result: %w", ErrCapabilityUnavailable)
 		}
 		fields := strings.Split(line, " ")
-		if len(fields) == 6 && fields[0] == "OUTPUT" && !observationSeen && fields[1] == envelope.EnvelopeID && validGuestOutputStream(fields[2]) && len(result.Outputs) < maximumGuestOutputChunks {
+		if len(fields) == 6 && fields[0] == "OUTPUT" && !observationSeen && !guestObservationSeen && fields[1] == envelope.EnvelopeID && validGuestOutputStream(fields[2]) && len(result.Outputs) < maximumGuestOutputChunks {
 			sequence, sequenceErr := strconv.ParseUint(fields[3], 10, 64)
 			chunk, decodeErr := base64.RawURLEncoding.DecodeString(fields[5])
 			if sequenceErr != nil || sequence != uint64(len(result.Outputs)) || decodeErr != nil || len(chunk) == 0 || len(chunk) > maximumGuestOutputBytes || fields[4] != sandboxhostprotocol.Digest(chunk) {
@@ -583,7 +601,7 @@ func readGuestDispatchResult(reader *bufio.Reader, envelope sandboxhostprotocol.
 			result.Outputs = append(result.Outputs, GuestOutput{Stream: fields[2], Sequence: sequence, Digest: fields[4], Data: append([]byte(nil), chunk...)})
 			continue
 		}
-		if len(fields) == 3 && fields[0] == "OBSERVATION" && !observationSeen && fields[1] == envelope.EnvelopeID {
+		if len(fields) == 3 && fields[0] == "OBSERVATION" && !observationSeen && !guestObservationSeen && fields[1] == envelope.EnvelopeID {
 			observation, decodeErr := decodeGuestTerminalObservation(fields[2], envelope)
 			if decodeErr != nil {
 				return GuestDispatchResult{}, fmt.Errorf("read guest terminal observation: %w", ErrCapabilityUnavailable)
@@ -592,11 +610,79 @@ func readGuestDispatchResult(reader *bufio.Reader, envelope sandboxhostprotocol.
 			observationSeen = true
 			continue
 		}
-		if len(fields) == 3 && fields[0] == "RESULT" && (fields[1] == "UNAVAILABLE" || fields[1] == "SUCCEEDED" || fields[1] == "FAILED") && fields[2] == envelope.EnvelopeID && (!observationSeen || fields[1] != "UNAVAILABLE") {
+		if len(fields) == 3 && fields[0] == "GUEST_OBSERVATION" && !guestObservationSeen && !observationSeen && fields[1] == envelope.EnvelopeID {
+			observation, decodeErr := decodeGuestTerminalSelfObservation(fields[2], envelope)
+			if decodeErr != nil {
+				return GuestDispatchResult{}, fmt.Errorf("read guest terminal self observation: %w", ErrCapabilityUnavailable)
+			}
+			result.GuestObservation = observation
+			guestObservationSeen = true
+			continue
+		}
+		if len(fields) == 3 && fields[0] == "RESULT" && (fields[1] == "UNAVAILABLE" || fields[1] == "SUCCEEDED" || fields[1] == "FAILED") && fields[2] == envelope.EnvelopeID && (!observationSeen || fields[1] != "UNAVAILABLE") && (!guestObservationSeen || fields[1] != "UNAVAILABLE") {
 			result.State = fields[1]
 			return result, nil
 		}
 		return GuestDispatchResult{}, fmt.Errorf("read guest terminal result: %w", ErrCapabilityUnavailable)
+	}
+}
+
+// EncodeGuestTerminalObservation produces a canonical bounded private frame.
+// It intentionally has no sandbox-state, resource, output-retention, or
+// cleanup fields because those are host-controlled facts.
+func EncodeGuestTerminalObservation(observation GuestTerminalObservation) ([]byte, error) {
+	if !validGuestTerminalSelfObservation(observation) {
+		return nil, fmt.Errorf("invalid guest terminal self observation")
+	}
+	wire, err := json.Marshal(observation)
+	if err != nil || len(wire) == 0 || len(wire) > maximumGuestControlResponseBytes {
+		return nil, fmt.Errorf("encode bounded guest terminal self observation")
+	}
+	return wire, nil
+}
+
+func decodeGuestTerminalSelfObservation(encoded string, envelope sandboxhostprotocol.Envelope) (*GuestTerminalObservation, error) {
+	wire, err := base64.RawURLEncoding.DecodeString(encoded)
+	if err != nil || len(wire) == 0 || len(wire) > maximumGuestControlResponseBytes {
+		return nil, fmt.Errorf("invalid bounded guest terminal self observation encoding")
+	}
+	decoder := json.NewDecoder(bytes.NewReader(wire))
+	decoder.DisallowUnknownFields()
+	var observation GuestTerminalObservation
+	if err := decoder.Decode(&observation); err != nil {
+		return nil, fmt.Errorf("invalid guest terminal self observation")
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); err != io.EOF {
+		return nil, fmt.Errorf("invalid trailing guest terminal self observation")
+	}
+	canonical, err := EncodeGuestTerminalObservation(observation)
+	if err != nil || !bytes.Equal(canonical, wire) || (observation.ProcessID != "" && observation.ProcessID != envelope.ProcessID) {
+		return nil, fmt.Errorf("invalid canonical guest terminal self observation")
+	}
+	return &observation, nil
+}
+
+func validGuestTerminalSelfObservation(observation GuestTerminalObservation) bool {
+	if observation.GuestPID <= 0 || observation.StartedAt.IsZero() || observation.FinishedAt.IsZero() || observation.StartedAt.Location() != time.UTC || observation.FinishedAt.Location() != time.UTC || observation.FinishedAt.Before(observation.StartedAt) {
+		return false
+	}
+	switch observation.Reason {
+	case "exited":
+		return observation.ExitCode != nil && observation.Signal == ""
+	case "signaled":
+		return observation.ExitCode == nil && validGuestTerminalSignal(observation.Signal)
+	default:
+		return false
+	}
+}
+
+func validGuestTerminalSignal(signal string) bool {
+	switch signal {
+	case "SIGHUP", "SIGINT", "SIGQUIT", "SIGILL", "SIGABRT", "SIGFPE", "SIGKILL", "SIGSEGV", "SIGPIPE", "SIGALRM", "SIGTERM", "SIGTRAP", "SIGBUS", "SIGUSR1", "SIGUSR2", "SIGCHLD", "SIGCONT", "SIGSTOP", "SIGTSTP", "SIGTTIN", "SIGTTOU":
+		return true
+	default:
+		return false
 	}
 }
 

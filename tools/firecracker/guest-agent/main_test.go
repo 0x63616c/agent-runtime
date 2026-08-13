@@ -308,7 +308,7 @@ func TestGuestCommandRunnerUsesTypedArgvAndBoundsTheGuestProcessTreeOutput(t *te
 		t.Fatal(err)
 	}
 	result, err := runGuestCommand(context.Background(), payload)
-	if err != nil || string(result.stdout) != "typed-output\n" || len(result.stderr) != 0 {
+	if err != nil || string(result.stdout) != "typed-output\n" || len(result.stderr) != 0 || result.terminal == nil || result.terminal.guestPID <= 0 || result.terminal.exitCode == nil || *result.terminal.exitCode != 0 || result.terminal.reason != "exited" {
 		t.Fatalf("runGuestCommand() = (%q, %q, %v)", result.stdout, result.stderr, err)
 	}
 	for _, workingDirectory := range []string{"/proc", "/proc/self", "/sys", "/sys/kernel", "/dev", "/dev/shm", "/run", "/run/lock"} {
@@ -319,6 +319,48 @@ func TestGuestCommandRunnerUsesTypedArgvAndBoundsTheGuestProcessTreeOutput(t *te
 		if _, err := runGuestCommand(context.Background(), unsafe); err == nil {
 			t.Fatalf("runGuestCommand() accepted reserved workdir %q", workingDirectory)
 		}
+	}
+}
+
+func TestServeGuestControlEmitsOnlyGuestKnownTerminalFactsForTypedCommand(t *testing.T) {
+	var serial bytes.Buffer
+	payload, err := json.Marshal(guestCommand{Version: guestCommandVersion, Argv: []string{"/bin/sh", "-c", "exit 7"}, WorkingDirectory: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	envelope := sandboxhostprotocol.Envelope{EnvelopeID: "envelope-001", DeliveryID: "delivery-001", FencingToken: 1, SandboxID: "sandbox-001", ProcessID: "process-001", OperationKind: guestCommandVersion, Payload: payload}
+	envelope.PayloadDigest = sandboxhostprotocol.Digest(envelope.Payload)
+	authenticated, err := json.Marshal(envelope)
+	if err != nil {
+		t.Fatal(err)
+	}
+	frame, err := firecracker.EncodeAuthenticatedGuestDispatch(envelope, authenticated)
+	if err != nil {
+		t.Fatal(err)
+	}
+	connection := &recordingGuestConnection{requests: strings.NewReader("CONNECT sandbox-001 fixture-v1\nDISPATCH " + base64.RawURLEncoding.EncodeToString(frame) + "\n")}
+	listener := &recordingGuestListener{connection: connection}
+	if err := serveGuestControl("sandbox-001", "fixture-v1", &serial, func() (guestControlListener, error) { return listener, nil }, func(context.Context) error { return nil }); err != nil {
+		t.Fatalf("serveGuestControl() error = %v", err)
+	}
+	lines := strings.Split(strings.TrimSpace(connection.String()), "\n")
+	if len(lines) != 3 || !strings.HasPrefix(lines[1], "GUEST_OBSERVATION envelope-001 ") || lines[2] != "RESULT FAILED envelope-001" {
+		t.Fatalf("guest control response = %q, want guest-only terminal frame then failed result", connection.String())
+	}
+	fields := strings.Split(lines[1], " ")
+	observationWire, err := base64.RawURLEncoding.DecodeString(fields[2])
+	if err != nil {
+		t.Fatal(err)
+	}
+	var observation firecracker.GuestTerminalObservation
+	if err := json.Unmarshal(observationWire, &observation); err != nil {
+		t.Fatal(err)
+	}
+	if observation.ProcessID != envelope.ProcessID || observation.GuestPID <= 0 || observation.ExitCode == nil || *observation.ExitCode != 7 || observation.Reason != "exited" || observation.Signal != "" {
+		t.Fatalf("guest observation = %#v, want only exact reaped process facts", observation)
+	}
+	if strings.Contains(string(observationWire), "sandbox") || strings.Contains(string(observationWire), "usage") || strings.Contains(string(observationWire), "cleanup") {
+		t.Fatalf("guest observation contained a host-controlled fact: %s", observationWire)
 	}
 }
 

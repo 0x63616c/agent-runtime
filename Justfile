@@ -27,8 +27,8 @@ completion-check: verify
 
 # Writes the exact immutable release hand-off for a clean main checkout. This
 # command is read-only: it neither tags nor publishes a release.
-release-readiness tag="":
-    go run ./cmd/release-readiness -tag "{{tag}}"
+release-readiness tag="" hosted_runs="":
+    go run ./cmd/release-readiness -tag "{{tag}}" -hosted-runs "{{hosted_runs}}"
 
 # Runs the Research Dossier public end-to-end proof against a freshly composed
 # disposable PostgreSQL and MinIO dependency set. The test starts its own

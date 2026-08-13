@@ -223,6 +223,40 @@ func TestGuestDispatchResultAcceptsOnlyCanonicalEnvelopeBoundTerminalObservation
 	}
 }
 
+func TestGuestDispatchResultAcceptsOnlyBoundedGuestSelfTerminalFacts(t *testing.T) {
+	now := time.Date(2026, time.August, 12, 0, 0, 0, 0, time.UTC)
+	envelope := sandboxhostprotocol.Envelope{EnvelopeID: "envelope-001", SandboxID: "sandbox-001", ProcessID: "process-001"}
+	exitCode := int32(7)
+	observation := GuestTerminalObservation{ProcessID: envelope.ProcessID, GuestPID: 42, StartedAt: now, FinishedAt: now.Add(time.Second), ExitCode: &exitCode, Reason: "exited"}
+	wire, err := EncodeGuestTerminalObservation(observation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	valid := "GUEST_OBSERVATION envelope-001 " + base64.RawURLEncoding.EncodeToString(wire) + "\nRESULT FAILED envelope-001\n"
+	wrongBinding := "GUEST_OBSERVATION envelope-001 " + base64.RawURLEncoding.EncodeToString([]byte(strings.Replace(string(wire), "process-001", "process-other", 1))) + "\nRESULT FAILED envelope-001\n"
+	unsafeHostClaim := "GUEST_OBSERVATION envelope-001 " + base64.RawURLEncoding.EncodeToString([]byte(`{"process_id":"process-001","guest_pid":42,"started_at":"2026-08-12T00:00:00Z","finished_at":"2026-08-12T00:00:01Z","exit_code":7,"reason":"exited","sandbox":{"actual_state":"ready"}}`)) + "\nRESULT FAILED envelope-001\n"
+	for name, candidate := range map[string]string{
+		"valid":                 valid,
+		"wrong process":         wrongBinding,
+		"host claim":            unsafeHostClaim,
+		"unavailable":           strings.Replace(valid, "RESULT FAILED", "RESULT UNAVAILABLE", 1),
+		"output after terminal": strings.Replace(valid, "RESULT FAILED", "OUTPUT envelope-001 stdout 0 sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa YQ\nRESULT FAILED", 1),
+	} {
+		t.Run(name, func(t *testing.T) {
+			result, readErr := readGuestDispatchResult(bufio.NewReader(strings.NewReader(candidate)), envelope)
+			if name == "valid" {
+				if readErr != nil || result.GuestObservation == nil || result.GuestObservation.GuestPID != 42 || result.GuestObservation.ExitCode == nil || *result.GuestObservation.ExitCode != exitCode || result.Observation != nil {
+					t.Fatalf("readGuestDispatchResult() = (%#v, %v), want guest-only terminal facts", result, readErr)
+				}
+				return
+			}
+			if !errors.Is(readErr, ErrCapabilityUnavailable) {
+				t.Fatalf("readGuestDispatchResult() error = %v, want unavailable", readErr)
+			}
+		})
+	}
+}
+
 func TestUnixGuestControlChannelRelaysOnlyTheSignedLeaseBoundProxyRequest(t *testing.T) {
 	now := time.Date(2026, 8, 10, 0, 0, 0, 0, time.UTC)
 	request := sandboxauthority.ProxySessionRequest{

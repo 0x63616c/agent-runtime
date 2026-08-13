@@ -208,6 +208,15 @@ func serveGuestOperation(vmID string, connection guestControlConnection, frames 
 					return err
 				}
 			}
+			if result.terminal != nil {
+				observation, observationErr := firecracker.EncodeGuestTerminalObservation(firecracker.GuestTerminalObservation{ProcessID: envelope.ProcessID, GuestPID: result.terminal.guestPID, StartedAt: result.terminal.startedAt, FinishedAt: result.terminal.finishedAt, ExitCode: result.terminal.exitCode, Signal: result.terminal.signal, Reason: result.terminal.reason})
+				if observationErr != nil {
+					return fmt.Errorf("encode guest terminal self observation: %w", observationErr)
+				}
+				if _, err := fmt.Fprintf(connection, "GUEST_OBSERVATION %s %s\n", envelope.EnvelopeID, base64.RawURLEncoding.EncodeToString(observation)); err != nil {
+					return fmt.Errorf("write guest terminal self observation: %w", err)
+				}
+			}
 			state := "SUCCEEDED"
 			if runErr != nil {
 				state = "FAILED"

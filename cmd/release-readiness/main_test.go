@@ -1,7 +1,11 @@
 package main
 
 import (
+	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -63,6 +67,84 @@ func TestRunRefusesNonStableTag(t *testing.T) {
 	if _, err := run("v1.2.3-rc.1", successfulGit(readinessRevision)); err == nil {
 		t.Fatal("run() accepted pre-release tag")
 	}
+}
+
+func TestReadHostedWorkflowEvidenceAcceptsOnlyExactSuccessfulRequiredRuns(t *testing.T) {
+	release := buildReport("v1.2.3", readinessRevision)
+	evidence := hostedWorkflowEvidence{
+		SchemaVersion:  "agent-runtime.hosted-workflow-evidence/v1",
+		Repository:     repository,
+		SourceRevision: readinessRevision,
+		SourceRef:      "refs/heads/main",
+	}
+	for index, workflow := range release.RequiredHostedWorkflows {
+		evidence.Workflows = append(evidence.Workflows, hostedWorkflowRun{
+			Name:       workflow.Name,
+			HeadSHA:    readinessRevision,
+			Conclusion: "success",
+			RunURL:     "https://github.com/0x63616c/agent-runtime/actions/runs/" + strconv.Itoa(index+1),
+		})
+	}
+
+	path := writeHostedWorkflowEvidence(t, evidence)
+	got, err := readHostedWorkflowEvidence(path, release)
+	if err != nil {
+		t.Fatalf("readHostedWorkflowEvidence() error = %v", err)
+	}
+	if !strings.Contains(got.Validation, "structural-only") {
+		t.Fatalf("validation = %q, want structural-only disclaimer", got.Validation)
+	}
+}
+
+func TestReadHostedWorkflowEvidenceRefusesWeakOrMismatchedDeclarations(t *testing.T) {
+	release := buildReport("v1.2.3", readinessRevision)
+	base := hostedWorkflowEvidence{
+		SchemaVersion:  "agent-runtime.hosted-workflow-evidence/v1",
+		Repository:     repository,
+		SourceRevision: readinessRevision,
+		SourceRef:      "refs/heads/main",
+	}
+	for index, workflow := range release.RequiredHostedWorkflows {
+		base.Workflows = append(base.Workflows, hostedWorkflowRun{
+			Name:       workflow.Name,
+			HeadSHA:    readinessRevision,
+			Conclusion: "success",
+			RunURL:     "https://github.com/0x63616c/agent-runtime/actions/runs/" + strconv.Itoa(index+1),
+		})
+	}
+	for name, mutate := range map[string]func(*hostedWorkflowEvidence){
+		"different revision": func(evidence *hostedWorkflowEvidence) {
+			evidence.SourceRevision = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+		},
+		"run from a different revision": func(evidence *hostedWorkflowEvidence) {
+			evidence.Workflows[0].HeadSHA = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+		},
+		"queued run":         func(evidence *hostedWorkflowEvidence) { evidence.Workflows[0].Conclusion = "queued" },
+		"wrong run origin":   func(evidence *hostedWorkflowEvidence) { evidence.Workflows[0].RunURL = "https://example.test/run/1" },
+		"duplicate workflow": func(evidence *hostedWorkflowEvidence) { evidence.Workflows[1].Name = evidence.Workflows[0].Name },
+	} {
+		t.Run(name, func(t *testing.T) {
+			evidence := base
+			evidence.Workflows = append([]hostedWorkflowRun(nil), base.Workflows...)
+			mutate(&evidence)
+			if _, err := readHostedWorkflowEvidence(writeHostedWorkflowEvidence(t, evidence), release); err == nil {
+				t.Fatal("readHostedWorkflowEvidence() succeeded for weak hosted evidence")
+			}
+		})
+	}
+}
+
+func writeHostedWorkflowEvidence(t *testing.T, evidence hostedWorkflowEvidence) string {
+	t.Helper()
+	bytes, err := json.Marshal(evidence)
+	if err != nil {
+		t.Fatalf("marshal hosted evidence: %v", err)
+	}
+	path := filepath.Join(t.TempDir(), "hosted-runs.json")
+	if err := os.WriteFile(path, bytes, 0o600); err != nil {
+		t.Fatalf("write hosted evidence: %v", err)
+	}
+	return path
 }
 
 func successfulGit(revision string) commandRunner {
