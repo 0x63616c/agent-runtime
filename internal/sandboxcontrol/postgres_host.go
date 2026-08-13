@@ -282,7 +282,14 @@ func (ledger *PostgresLedger) RecordAuthenticatedHostOutput(ctx context.Context,
 			prior.Sequence = uint64(priorSequence)
 			prior.SizeBytes = uint32(priorSize)
 			prior.ObservedAt = prior.ObservedAt.UTC()
-			if prior != outputFields(output) {
+			var chunk []byte
+			err = tx.QueryRow(ctx, `SELECT chunk, redacted FROM runtime.sandbox_host_output_chunks WHERE assignment_id=$1 AND stream=$2 AND sequence=$3`, output.AssignmentID, output.Stream, int64(output.Sequence)).Scan(&chunk, &prior.Redacted)
+			if err == nil {
+				prior.Chunk = append([]byte(nil), chunk...)
+			} else if !errors.Is(err, pgx.ErrNoRows) {
+				return errors.Wrap(err, "read retained sandbox host output")
+			}
+			if !sameHostOutputHeaderFields(prior, outputFields(output)) || len(prior.Chunk) > 0 && !sameHostOutputFields(prior, outputFields(output)) {
 				return ErrHostProtocolViolation
 			}
 			duplicate = true
@@ -301,10 +308,36 @@ func (ledger *PostgresLedger) RecordAuthenticatedHostOutput(ctx context.Context,
 		if output.Sequence != uint64(last)+1 {
 			return ErrHostProtocolViolation
 		}
+		if uint64(output.SizeBytes) > retainedOutputLimit(operation) {
+			return ErrHostProtocolViolation
+		}
+		if len(output.Chunk) > 0 {
+			if _, err := tx.Exec(ctx, `
+				WITH ranked AS (
+					SELECT c.assignment_id, c.stream, c.sequence,
+						SUM(octet_length(c.chunk)) OVER (ORDER BY h.sequence) AS cumulative_bytes,
+						SUM(octet_length(c.chunk)) OVER () AS total_bytes
+					FROM runtime.sandbox_host_output_chunks c
+					JOIN runtime.sandbox_host_outputs h USING (assignment_id, stream, sequence)
+					WHERE c.assignment_id=$1 AND c.stream=$2
+				)
+				DELETE FROM runtime.sandbox_host_output_chunks c USING ranked r
+				WHERE c.assignment_id=r.assignment_id AND c.stream=r.stream AND c.sequence=r.sequence
+				  AND r.total_bytes + $3 > $4 AND r.cumulative_bytes <= r.total_bytes + $3 - $4`, output.AssignmentID, output.Stream, int64(output.SizeBytes), int64(retainedOutputLimit(operation))); err != nil {
+				return errors.Wrap(err, "trim retained sandbox host output")
+			}
+		}
 		_, err = tx.Exec(ctx, `INSERT INTO runtime.sandbox_host_outputs
 			(output_id, principal, operation_id, assignment_id, stream, sequence, chunk_digest, size_bytes, observed_at)
 			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`, output.OutputID, output.Principal, output.OperationID, output.AssignmentID, output.Stream, int64(output.Sequence), output.ChunkDigest, int64(output.SizeBytes), output.ObservedAt.UTC())
-		return errors.Wrap(err, "persist sandbox host output sequence")
+		if err != nil {
+			return errors.Wrap(err, "persist sandbox host output sequence")
+		}
+		if len(output.Chunk) == 0 {
+			return nil
+		}
+		_, err = tx.Exec(ctx, `INSERT INTO runtime.sandbox_host_output_chunks (assignment_id, stream, sequence, chunk, redacted) VALUES ($1,$2,$3,$4,$5)`, output.AssignmentID, output.Stream, int64(output.Sequence), output.Chunk, output.Redacted)
+		return errors.Wrap(err, "persist retained sandbox host output")
 	})
 	return duplicate, err
 }

@@ -5,6 +5,7 @@ import (
 	"crypto/ed25519"
 	"encoding/json"
 	"math"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -148,6 +149,8 @@ type hostOutputFields struct {
 	Sequence     uint64
 	ChunkDigest  string
 	SizeBytes    uint32
+	Chunk        []byte
+	Redacted     bool
 	ObservedAt   time.Time
 }
 
@@ -361,7 +364,7 @@ func (ledger *MemoryLedger) RecordAuthenticatedHostOutput(ctx context.Context, i
 	fields := outputFields(output)
 	key := hostOutputKey(output.AssignmentID, output.Stream, output.Sequence)
 	if prior, exists := ledger.hostOutput[key]; exists {
-		if prior != fields {
+		if !sameHostOutputHeaderFields(prior, fields) || len(prior.Chunk) > 0 && !sameHostOutputFields(prior, fields) {
 			return false, ErrHostProtocolViolation
 		}
 		return true, nil
@@ -378,8 +381,34 @@ func (ledger *MemoryLedger) RecordAuthenticatedHostOutput(ctx context.Context, i
 	if output.Sequence != last+1 {
 		return false, ErrHostProtocolViolation
 	}
+	if uint64(output.SizeBytes) > retainedOutputLimit(operation) {
+		return false, ErrHostProtocolViolation
+	}
+	ledger.trimOutputLocked(output.AssignmentID, output.Stream, uint64(output.SizeBytes), retainedOutputLimit(operation))
 	ledger.hostOutput[key] = fields
 	return false, nil
+}
+
+func (ledger *MemoryLedger) trimOutputLocked(assignmentID, stream string, incoming, limit uint64) {
+	var total uint64
+	keys := make([]string, 0)
+	for key, output := range ledger.hostOutput {
+		if output.AssignmentID == assignmentID && output.Stream == stream && len(output.Chunk) > 0 {
+			total += uint64(len(output.Chunk))
+			keys = append(keys, key)
+		}
+	}
+	sort.Slice(keys, func(left, right int) bool {
+		return ledger.hostOutput[keys[left]].Sequence < ledger.hostOutput[keys[right]].Sequence
+	})
+	for total+incoming > limit && len(keys) > 0 {
+		key := keys[0]
+		keys = keys[1:]
+		output := ledger.hostOutput[key]
+		total -= uint64(len(output.Chunk))
+		output.Chunk = nil
+		ledger.hostOutput[key] = output
+	}
 }
 
 // RecordAuthenticatedDataPlaneReceipt persists one reference-only terminal
@@ -614,7 +643,8 @@ func validDeliverySeed(seed DeliverySeed, requireAssignment bool) bool {
 }
 
 func validHostOutputImmutableBinding(identity HostIdentity, operation Operation, output sandboxhostprotocol.Output) bool {
-	return output.ProtocolVersion == sandboxhostprotocol.Version && output.HostID == identity.HostID && output.HostGeneration == identity.Generation && output.AssignmentID == operation.Assignment.AssignmentID && output.LeaseEpoch == operation.Assignment.LeaseEpoch && output.FencingToken == operation.Assignment.FencingToken && output.Principal == operation.Principal && output.OperationID == operation.ID && (output.Stream == "stdout" || output.Stream == "stderr") && output.Sequence > 0 && validBounded(output.OutputID, 128) && validBounded(output.ChunkDigest, maxDigestBytes) && output.SizeBytes > 0 && output.SizeBytes <= 256<<10 && !output.ObservedAt.IsZero()
+	chunkMatches := len(output.Chunk) == 0 || (uint32(len(output.Chunk)) == output.SizeBytes && sandboxhostprotocol.Digest(output.Chunk) == output.ChunkDigest)
+	return output.ProtocolVersion == sandboxhostprotocol.Version && output.HostID == identity.HostID && output.HostGeneration == identity.Generation && output.AssignmentID == operation.Assignment.AssignmentID && output.LeaseEpoch == operation.Assignment.LeaseEpoch && output.FencingToken == operation.Assignment.FencingToken && output.Principal == operation.Principal && output.OperationID == operation.ID && (output.Stream == "stdout" || output.Stream == "stderr") && output.Sequence > 0 && validBounded(output.OutputID, 128) && validBounded(output.ChunkDigest, maxDigestBytes) && output.SizeBytes > 0 && output.SizeBytes <= 256<<10 && chunkMatches && !output.ObservedAt.IsZero()
 }
 
 func validHostOutputLiveBinding(operation Operation, output sandboxhostprotocol.Output, receivedAt time.Time) bool {
@@ -658,7 +688,15 @@ func validHostResultLiveBinding(operation Operation, result sandboxhostprotocol.
 }
 
 func outputFields(output sandboxhostprotocol.Output) hostOutputFields {
-	return hostOutputFields{OutputID: output.OutputID, AssignmentID: output.AssignmentID, Stream: output.Stream, Sequence: output.Sequence, ChunkDigest: output.ChunkDigest, SizeBytes: output.SizeBytes, ObservedAt: output.ObservedAt.UTC()}
+	return hostOutputFields{OutputID: output.OutputID, AssignmentID: output.AssignmentID, Stream: output.Stream, Sequence: output.Sequence, ChunkDigest: output.ChunkDigest, SizeBytes: output.SizeBytes, Chunk: append([]byte(nil), output.Chunk...), Redacted: output.Redacted, ObservedAt: output.ObservedAt.UTC()}
+}
+
+func sameHostOutputFields(left, right hostOutputFields) bool {
+	return sameHostOutputHeaderFields(left, right) && left.Redacted == right.Redacted && string(left.Chunk) == string(right.Chunk)
+}
+
+func sameHostOutputHeaderFields(left, right hostOutputFields) bool {
+	return left.OutputID == right.OutputID && left.AssignmentID == right.AssignmentID && left.Stream == right.Stream && left.Sequence == right.Sequence && left.ChunkDigest == right.ChunkDigest && left.SizeBytes == right.SizeBytes && left.ObservedAt.Equal(right.ObservedAt)
 }
 
 func authenticatedResultDigest(result sandboxhostprotocol.Result) (string, error) {

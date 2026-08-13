@@ -160,7 +160,7 @@ func resolveControlOperationRequest(input []byte, acceptedAt, retentionExpiresAt
 		RetentionExpiresAt:  retentionExpiresAt,
 		LatestCursor:        "operation:1",
 	}
-	return ResolvedOperation{Operation: operation, InputDigest: canonicalDigestBytes(input), CleanupRequired: frozen.Kind != OperationApproveSensitive}, nil
+	return ResolvedOperation{Operation: operation, ResourceLimits: effective.limits, InputDigest: canonicalDigestBytes(input), CleanupRequired: frozen.Kind != OperationApproveSensitive}, nil
 }
 
 func freezeLimitPolicy(policy limitPolicy) limitPolicy {

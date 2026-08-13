@@ -26,6 +26,7 @@ const (
 	bindPath              = "/sandbox.control/v1/bind"
 	operationsPath        = "/sandbox.control/v1/operations"
 	capabilitiesPath      = "/sandbox.control/v1/capabilities"
+	processOutputPath     = "/sandbox.control/v1/processes/{id}/output"
 	bindingHeader         = "Sandbox-Binding"
 	maxRequestBytes       = 1 << 20
 	maxAssertionBytes     = 2048
@@ -72,7 +73,11 @@ func NewHandler(config Config) (http.Handler, error) {
 	if config.Store == nil || config.Authenticator == nil || config.Entropy == nil || config.Clock == nil || config.Wait == nil || len(config.AssertionKey) < 32 || len(config.AssertionKey) > 128 || config.BindingLifetime <= 0 || config.BindingLifetime > time.Hour || config.Retention <= 0 || config.WaitInterval <= 0 || config.WaitInterval > time.Second {
 		return nil, errors.New("construct sandbox control handler: explicit bounded dependencies are required")
 	}
-	server := &server{config: config, assertionKey: append([]byte(nil), config.AssertionKey...)}
+	replay, ok := config.Store.(sandboxcontrol.OutputReplayStore)
+	if !ok {
+		return nil, errors.New("construct sandbox control handler: durable output replay store is required")
+	}
+	server := &server{config: config, assertionKey: append([]byte(nil), config.AssertionKey...), replay: replay}
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST "+bindPath, server.bind)
 	mux.HandleFunc("POST "+operationsPath, server.submit)
@@ -80,6 +85,7 @@ func NewHandler(config Config) (http.Handler, error) {
 	mux.HandleFunc("GET "+operationsPath+"/{id}/wait", server.wait)
 	mux.HandleFunc("GET "+operationsPath+"/{id}/events", server.watch)
 	mux.HandleFunc("GET "+capabilitiesPath, server.capabilities)
+	mux.HandleFunc("GET "+processOutputPath, server.replayOutput)
 	return http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		writer.Header().Set("Cache-Control", "no-store")
 		writer.Header().Set("X-Content-Type-Options", "nosniff")
@@ -90,6 +96,7 @@ func NewHandler(config Config) (http.Handler, error) {
 type server struct {
 	config       Config
 	assertionKey []byte
+	replay       sandboxcontrol.OutputReplayStore
 }
 
 type assertionPayload struct {
@@ -125,6 +132,12 @@ type capabilitiesResponse struct {
 	Version      string                     `json:"version"`
 	Kind         string                     `json:"kind"`
 	Capabilities sandbox.CapabilitySnapshot `json:"capabilities"`
+}
+
+type outputEventsResponse struct {
+	Version string                `json:"version"`
+	Kind    string                `json:"kind"`
+	Events  []sandbox.OutputEvent `json:"events"`
 }
 
 type failureResponse struct {
@@ -173,6 +186,33 @@ func (server *server) capabilities(writer http.ResponseWriter, request *http.Req
 		return
 	}
 	writeJSON(writer, http.StatusOK, capabilitiesResponse{Version: controlVersion, Kind: "capabilities-response", Capabilities: capabilities})
+}
+
+func (server *server) replayOutput(writer http.ResponseWriter, request *http.Request) {
+	identity, ok := server.authenticateBound(writer, request)
+	if !ok {
+		return
+	}
+	processID := sandbox.ProcessID(request.PathValue("id"))
+	after := sandbox.OutputCursor(request.URL.Query().Get("after"))
+	if processID == "" || len(processID) > 128 || len(after) > 128 {
+		writeFailure(writer, http.StatusBadRequest, sandbox.Failure{Code: sandbox.FailureInvalidArgument, Message: "output replay request is invalid", Retry: sandbox.RetryNever})
+		return
+	}
+	events, err := server.replay.ReplayOutput(request.Context(), identity.Principal, processID, after)
+	if err != nil {
+		if strings.Contains(err.Error(), "cursor") {
+			writeFailure(writer, http.StatusConflict, sandbox.Failure{Code: sandbox.FailureOutputGap, Message: "output cursor is outside retained history", Retry: sandbox.RetryCallerControlled})
+			return
+		}
+		writeStoreError(writer, err)
+		return
+	}
+	if len(events) == 0 {
+		writeFailure(writer, http.StatusConflict, sandbox.Failure{Code: sandbox.FailureCursorExpired, Message: "no retained output is available", Retry: sandbox.RetryNever})
+		return
+	}
+	writeJSON(writer, http.StatusOK, outputEventsResponse{Version: controlVersion, Kind: "output-events", Events: events})
 }
 
 func (server *server) submit(writer http.ResponseWriter, request *http.Request) {
@@ -355,7 +395,7 @@ func bounded(value string, limit int) bool {
 func toRecord(tenant, principal string, dispatchBody []byte, resolved sandbox.ResolvedOperation) sandboxcontrol.Operation {
 	operation := resolved.Operation
 	targetKind, targetID := flattenTarget(operation.Target)
-	return sandboxcontrol.Operation{Principal: principal, Tenant: tenant, ID: string(operation.Ref.ID), Kind: string(operation.Kind), TargetKind: targetKind, TargetID: targetID, InputDigest: string(resolved.InputDigest), CanonicalDigest: string(operation.CanonicalDigest), EffectiveSpecDigest: string(operation.EffectiveSpecDigest), CapabilityDigest: string(operation.CapabilityDigest), DispatchBody: string(dispatchBody), AcceptedAt: operation.Ref.AcceptedAt, RetentionExpiresAt: operation.RetentionExpiresAt, CleanupRequired: resolved.CleanupRequired}
+	return sandboxcontrol.Operation{Principal: principal, Tenant: tenant, ID: string(operation.Ref.ID), Kind: string(operation.Kind), TargetKind: targetKind, TargetID: targetID, InputDigest: string(resolved.InputDigest), CanonicalDigest: string(operation.CanonicalDigest), EffectiveSpecDigest: string(operation.EffectiveSpecDigest), CapabilityDigest: string(operation.CapabilityDigest), DispatchBody: string(dispatchBody), AcceptedAt: operation.Ref.AcceptedAt, RetentionExpiresAt: operation.RetentionExpiresAt, CleanupRequired: resolved.CleanupRequired, RetainedOutputBytes: resolved.ResourceLimits.RetainedOutputBytes}
 }
 
 func fromRecord(record sandboxcontrol.Operation) sandbox.Operation {

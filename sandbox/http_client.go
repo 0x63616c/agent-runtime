@@ -17,6 +17,7 @@ const bindRouteV1 = "/sandbox.control/v1/bind"
 const (
 	operationsRouteV1   = "/sandbox.control/v1/operations"
 	capabilitiesRouteV1 = "/sandbox.control/v1/capabilities"
+	processesRouteV1    = "/sandbox.control/v1/processes/"
 	bindingHeaderV1     = "Sandbox-Binding"
 )
 
@@ -235,8 +236,26 @@ func (client *httpControlClient) GetSandbox(context.Context, SandboxID) (Sandbox
 func (client *httpControlClient) GetProcess(context.Context, ProcessID) (ProcessInfo, error) {
 	return ProcessInfo{}, newFailure(FailureUnavailable, "sandbox resource transport is not implemented", RetryAfterReconcile)
 }
-func (client *httpControlClient) ReplayOutput(context.Context, ProcessID, OutputCursor) (OutputStream, error) {
-	return nil, newFailure(FailureUnavailable, "sandbox resource transport is not implemented", RetryAfterReconcile)
+func (client *httpControlClient) ReplayOutput(ctx context.Context, id ProcessID, from OutputCursor) (OutputStream, error) {
+	if id == "" || len(id) > 128 {
+		return nil, newFailure(FailureInvalidArgument, "sandbox process ID is invalid", RetryNever)
+	}
+	target := processesRouteV1 + url.PathEscape(string(id)) + "/output"
+	if from != "" {
+		target += "?after=" + url.QueryEscape(string(from))
+	}
+	response, err := client.do(ctx, http.MethodGet, target, nil)
+	if err != nil {
+		return nil, err
+	}
+	events, err := decodeOutputEventsV1(response)
+	if err != nil {
+		return nil, newFailure(FailureUnavailable, "sandbox output response is invalid", RetryAfterReconcile)
+	}
+	// The server applies `after` against its durable window; applying it again
+	// would reject a valid resumed page because that cursor is intentionally not
+	// included in the response.
+	return newSliceOutputStream(events, "")
 }
 func (client *httpControlClient) GetVolume(context.Context, VolumeID) (VolumeInfo, error) {
 	return VolumeInfo{}, newFailure(FailureUnavailable, "sandbox resource transport is not implemented", RetryAfterReconcile)

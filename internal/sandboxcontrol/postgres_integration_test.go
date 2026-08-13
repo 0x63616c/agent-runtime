@@ -32,7 +32,7 @@ func TestPostgresBootProbeV2RefusesRevokedAndStaleLeaseSessions(t *testing.T) {
 	ctx := context.Background()
 	pool := openIntegrationPool(t, ctx, dsn)
 	t.Cleanup(pool.Close)
-	if _, err := pool.Exec(ctx, `TRUNCATE runtime.firecracker_boot_probe_sessions, runtime.sandbox_host_outputs, runtime.sandbox_host_dispatches, runtime.sandbox_host_enrollments, runtime.sandbox_operation_outbox, runtime.sandbox_operations RESTART IDENTITY`); err != nil {
+	if _, err := pool.Exec(ctx, `TRUNCATE runtime.firecracker_boot_probe_sessions, runtime.sandbox_host_output_chunks, runtime.sandbox_host_outputs, runtime.sandbox_host_dispatches, runtime.sandbox_host_enrollments, runtime.sandbox_operation_outbox, runtime.sandbox_operations RESTART IDENTITY`); err != nil {
 		t.Fatal(err)
 	}
 	ledger, err := NewPostgresLedger(pool)
@@ -186,7 +186,7 @@ func TestPostgresLedgerSurvivesRestartAndReconcilesExpiredAuthority(t *testing.T
 	}
 	ctx := context.Background()
 	pool := openIntegrationPool(t, ctx, dsn)
-	if _, err := pool.Exec(ctx, `TRUNCATE runtime.sandbox_host_outputs, runtime.sandbox_host_dispatches, runtime.sandbox_host_enrollments, runtime.sandbox_operation_outbox, runtime.sandbox_operations RESTART IDENTITY`); err != nil {
+	if _, err := pool.Exec(ctx, `TRUNCATE runtime.sandbox_host_output_chunks, runtime.sandbox_host_outputs, runtime.sandbox_host_dispatches, runtime.sandbox_host_enrollments, runtime.sandbox_operation_outbox, runtime.sandbox_operations RESTART IDENTITY`); err != nil {
 		t.Fatalf("truncate integration ledger: %v", err)
 	}
 	ledger, err := NewPostgresLedger(pool)
@@ -267,7 +267,7 @@ func TestPostgresLedgerConcurrentlyAcceptsOneImmutableOperation(t *testing.T) {
 	ctx := context.Background()
 	pool := openIntegrationPool(t, ctx, dsn)
 	t.Cleanup(pool.Close)
-	if _, err := pool.Exec(ctx, `TRUNCATE runtime.sandbox_host_outputs, runtime.sandbox_host_dispatches, runtime.sandbox_host_enrollments, runtime.sandbox_operation_outbox, runtime.sandbox_operations RESTART IDENTITY`); err != nil {
+	if _, err := pool.Exec(ctx, `TRUNCATE runtime.sandbox_host_output_chunks, runtime.sandbox_host_outputs, runtime.sandbox_host_dispatches, runtime.sandbox_host_enrollments, runtime.sandbox_operation_outbox, runtime.sandbox_operations RESTART IDENTITY`); err != nil {
 		t.Fatalf("truncate integration ledger: %v", err)
 	}
 	ledger, err := NewPostgresLedger(pool)
@@ -323,7 +323,7 @@ func TestPostgresHostControlPersistsLostAckAndQuarantineAcrossRestart(t *testing
 	}
 	ctx := context.Background()
 	pool := openIntegrationPool(t, ctx, dsn)
-	if _, err := pool.Exec(ctx, `TRUNCATE runtime.sandbox_host_outputs, runtime.sandbox_host_dispatches, runtime.sandbox_host_enrollments, runtime.sandbox_operation_outbox, runtime.sandbox_operations RESTART IDENTITY`); err != nil {
+	if _, err := pool.Exec(ctx, `TRUNCATE runtime.sandbox_host_output_chunks, runtime.sandbox_host_outputs, runtime.sandbox_host_dispatches, runtime.sandbox_host_enrollments, runtime.sandbox_operation_outbox, runtime.sandbox_operations RESTART IDENTITY`); err != nil {
 		t.Fatalf("truncate host integration ledger: %v", err)
 	}
 	ledger, err := NewPostgresLedger(pool)
@@ -384,6 +384,52 @@ func TestPostgresHostControlPersistsLostAckAndQuarantineAcrossRestart(t *testing
 	}
 }
 
+func TestPostgresLedgerPersistsRedactedOutputForPrincipalScopedReplay(t *testing.T) {
+	dsn := os.Getenv("AR_SANDBOXCONTROL_POSTGRES_DSN")
+	if dsn == "" {
+		t.Fatal("AR_SANDBOXCONTROL_POSTGRES_DSN is required for the integration suite")
+	}
+	ctx := context.Background()
+	pool := openIntegrationPool(t, ctx, dsn)
+	t.Cleanup(pool.Close)
+	if _, err := pool.Exec(ctx, `TRUNCATE runtime.sandbox_host_output_chunks, runtime.sandbox_host_outputs, runtime.sandbox_host_dispatches, runtime.sandbox_host_enrollments, runtime.sandbox_operation_outbox, runtime.sandbox_operations RESTART IDENTITY`); err != nil {
+		t.Fatal(err)
+	}
+	ledger, err := NewPostgresLedger(pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2030, 8, 7, 1, 2, 3, 0, time.UTC)
+	host := HostEnrollment{HostID: "host_pg_output_replay", Tenant: "tenant-pg", Pool: "pool-pg", Generation: 1, ProtocolVersion: sandboxhostprotocol.Version, CertificateDigest: digest("1"), SigningPublicKey: make(ed25519.PublicKey, ed25519.PublicKeySize), CapabilityDigest: digest("2"), Status: HostActive, ExpiresAt: now.Add(time.Hour)}
+	if err := ledger.ProvisionHost(ctx, host, AttestationInput{Profile: AttestationProfileLocalMetadata}, nil); err != nil {
+		t.Fatal(err)
+	}
+	operation := Operation{Principal: "tenant-pg:subject", Tenant: host.Tenant, ID: "op_pg_output_replay", Kind: "exec-process", TargetKind: "process", TargetID: "prc_pg_output_replay", InputDigest: digest("3"), CanonicalDigest: digest("4"), EffectiveSpecDigest: digest("5"), CapabilityDigest: host.CapabilityDigest, DispatchBody: `{"version":"sandbox.control/v1"}`, AcceptedAt: now, RetentionExpiresAt: now.Add(time.Hour), CleanupRequired: true}
+	if _, _, err := ledger.Accept(ctx, operation); err != nil {
+		t.Fatal(err)
+	}
+	identity := HostIdentity{HostID: host.HostID, Generation: host.Generation, CertificateDigest: host.CertificateDigest}
+	dispatch, err := ledger.PullHostAssignment(ctx, identity, now, now.Add(time.Minute), DeliverySeed{AssignmentID: "assignment_pg_replay", EnvelopeID: "envelope_pg_replay", DeliveryID: "delivery_pg_replay", Nonce: "nonce_pg_replay"}, testEnvelopeSigner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	output := replayOutput(dispatch.Operation, host, "output_pg_replay", "stdout", 1, []byte("safe [REDACTED]"), true, now.Add(time.Second))
+	if duplicate, err := ledger.RecordAuthenticatedHostOutput(ctx, identity, output, now.Add(2*time.Second)); err != nil || duplicate {
+		t.Fatalf("RecordAuthenticatedHostOutput() = %t, %v", duplicate, err)
+	}
+	pool.Close()
+	pool = openIntegrationPool(t, ctx, dsn)
+	t.Cleanup(pool.Close)
+	ledger, _ = NewPostgresLedger(pool)
+	events, err := ledger.ReplayOutput(ctx, operation.Principal, sandbox.ProcessID(operation.TargetID), "")
+	if err != nil || len(events) != 1 || string(events[0].Chunk.Bytes) != "safe [REDACTED]" || !events[0].Chunk.Redacted {
+		t.Fatalf("ReplayOutput(after restart) = %#v, %v", events, err)
+	}
+	if _, err := ledger.ReplayOutput(ctx, "tenant-pg:other", sandbox.ProcessID(operation.TargetID), ""); err != nil {
+		t.Fatalf("cross-principal ReplayOutput() = %v", err)
+	}
+}
+
 func TestPostgresProvisionHostPersistsVerifierFailureWithoutRawEvidence(t *testing.T) {
 	dsn := os.Getenv("AR_SANDBOXCONTROL_POSTGRES_DSN")
 	if dsn == "" {
@@ -392,7 +438,7 @@ func TestPostgresProvisionHostPersistsVerifierFailureWithoutRawEvidence(t *testi
 	ctx := context.Background()
 	pool := openIntegrationPool(t, ctx, dsn)
 	t.Cleanup(pool.Close)
-	if _, err := pool.Exec(ctx, `TRUNCATE runtime.sandbox_host_outputs, runtime.sandbox_host_dispatches, runtime.sandbox_host_enrollments, runtime.sandbox_operation_outbox, runtime.sandbox_operations RESTART IDENTITY`); err != nil {
+	if _, err := pool.Exec(ctx, `TRUNCATE runtime.sandbox_host_output_chunks, runtime.sandbox_host_outputs, runtime.sandbox_host_dispatches, runtime.sandbox_host_enrollments, runtime.sandbox_operation_outbox, runtime.sandbox_operations RESTART IDENTITY`); err != nil {
 		t.Fatal(err)
 	}
 	ledger, err := NewPostgresLedger(pool)
@@ -426,7 +472,7 @@ func TestPostgresProvisionHostComparesConcurrentWinnerAndFailedOutcome(t *testin
 	ctx := context.Background()
 	pool := openIntegrationPool(t, ctx, dsn)
 	t.Cleanup(pool.Close)
-	if _, err := pool.Exec(ctx, `TRUNCATE runtime.sandbox_host_outputs, runtime.sandbox_host_dispatches, runtime.sandbox_host_enrollments, runtime.sandbox_operation_outbox, runtime.sandbox_operations RESTART IDENTITY`); err != nil {
+	if _, err := pool.Exec(ctx, `TRUNCATE runtime.sandbox_host_output_chunks, runtime.sandbox_host_outputs, runtime.sandbox_host_dispatches, runtime.sandbox_host_enrollments, runtime.sandbox_operation_outbox, runtime.sandbox_operations RESTART IDENTITY`); err != nil {
 		t.Fatal(err)
 	}
 	ledger, _ := NewPostgresLedger(pool)
@@ -508,7 +554,7 @@ func TestPostgresAttestationTupleConstraintAndCorruptRowRefusal(t *testing.T) {
 	ctx := context.Background()
 	pool := openIntegrationPool(t, ctx, dsn)
 	t.Cleanup(pool.Close)
-	if _, err := pool.Exec(ctx, `TRUNCATE runtime.sandbox_host_outputs, runtime.sandbox_host_dispatches, runtime.sandbox_host_enrollments, runtime.sandbox_operation_outbox, runtime.sandbox_operations RESTART IDENTITY`); err != nil {
+	if _, err := pool.Exec(ctx, `TRUNCATE runtime.sandbox_host_output_chunks, runtime.sandbox_host_outputs, runtime.sandbox_host_dispatches, runtime.sandbox_host_enrollments, runtime.sandbox_operation_outbox, runtime.sandbox_operations RESTART IDENTITY`); err != nil {
 		t.Fatal(err)
 	}
 	ledger, _ := NewPostgresLedger(pool)
@@ -544,7 +590,7 @@ func TestPostgresHostControlRecoversNormalUncertainResultAckAndRequeuesAfterClea
 	ctx := context.Background()
 	pool := openIntegrationPool(t, ctx, dsn)
 	t.Cleanup(pool.Close)
-	if _, err := pool.Exec(ctx, `TRUNCATE runtime.sandbox_host_outputs, runtime.sandbox_host_dispatches, runtime.sandbox_host_enrollments, runtime.sandbox_operation_outbox, runtime.sandbox_operations RESTART IDENTITY`); err != nil {
+	if _, err := pool.Exec(ctx, `TRUNCATE runtime.sandbox_host_output_chunks, runtime.sandbox_host_outputs, runtime.sandbox_host_dispatches, runtime.sandbox_host_enrollments, runtime.sandbox_operation_outbox, runtime.sandbox_operations RESTART IDENTITY`); err != nil {
 		t.Fatalf("truncate host ACK recovery ledger: %v", err)
 	}
 	ledger, err := NewPostgresLedger(pool)
@@ -606,7 +652,7 @@ func TestPostgresResourceReadModelProjectsSandboxAndProcessAtomically(t *testing
 	ctx := context.Background()
 	pool := openIntegrationPool(t, ctx, dsn)
 	t.Cleanup(pool.Close)
-	if _, err := pool.Exec(ctx, `TRUNCATE runtime.sandbox_resource_projections, runtime.firecracker_boot_probe_sessions, runtime.sandbox_host_outputs, runtime.sandbox_host_dispatches, runtime.sandbox_host_enrollments, runtime.sandbox_operation_outbox, runtime.sandbox_operations RESTART IDENTITY`); err != nil {
+	if _, err := pool.Exec(ctx, `TRUNCATE runtime.sandbox_resource_projections, runtime.firecracker_boot_probe_sessions, runtime.sandbox_host_output_chunks, runtime.sandbox_host_outputs, runtime.sandbox_host_dispatches, runtime.sandbox_host_enrollments, runtime.sandbox_operation_outbox, runtime.sandbox_operations RESTART IDENTITY`); err != nil {
 		t.Fatalf("truncate resource projection tables: %v", err)
 	}
 	model, err := NewPostgresResourceReadModel(pool)

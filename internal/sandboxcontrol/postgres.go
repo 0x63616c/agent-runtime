@@ -44,9 +44,9 @@ func (ledger *PostgresLedger) Accept(ctx context.Context, operation Operation) (
 				input_digest, canonical_digest, effective_spec_digest, capability_digest,
 				dispatch_body, resource_projection_kind, resource_projection_id,
 				resource_projection_admitted_snapshot_digest, resource_projection_transition,
-				state, version, accepted_at, retention_expires_at, cleanup_required,
+				state, version, accepted_at, retention_expires_at, cleanup_required, retained_output_bytes,
 				assignment_fencing_token
-			) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, 1, $17, $18, $19, 0)
+			) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, 1, $17, $18, $19, $20, 0)
 			ON CONFLICT DO NOTHING
 			RETURNING `+selectOperationColumns,
 			operation.Principal, operation.Tenant, operation.ID, operation.Kind, operation.TargetKind,
@@ -54,7 +54,7 @@ func (ledger *PostgresLedger) Accept(ctx context.Context, operation Operation) (
 			operation.CapabilityDigest, operation.DispatchBody, resourceProjectionKindValue(operation),
 			resourceProjectionIDValue(operation), resourceProjectionDigestValue(operation),
 			resourceProjectionTransitionValue(operation), StateAccepted, operation.AcceptedAt.UTC(),
-			operation.RetentionExpiresAt.UTC(), operation.CleanupRequired)
+			operation.RetentionExpiresAt.UTC(), operation.CleanupRequired, retainedOutputLimit(operation))
 		inserted, err := scanOperation(row)
 		switch {
 		case err == nil:
@@ -382,7 +382,7 @@ const selectOperationColumns = `principal, tenant, operation_id, kind, target_ki
 	input_digest, canonical_digest, effective_spec_digest, capability_digest,
 	dispatch_body, resource_projection_kind, resource_projection_id,
 	resource_projection_admitted_snapshot_digest, resource_projection_transition,
-	state, version, accepted_at, retention_expires_at, cleanup_required,
+	state, version, accepted_at, retention_expires_at, cleanup_required, retained_output_bytes,
 	assignment_host_id, assignment_host_generation, assignment_id,
 	assignment_lease_epoch, assignment_fencing_token, assignment_lease_expires_at`
 
@@ -436,7 +436,7 @@ func scanOperation(row rowScanner) (Operation, error) {
 		&operation.CapabilityDigest, &operation.DispatchBody, &projectionKind, &projectionID,
 		&projectionDigest, &projectionTransition, &operation.State, &version,
 		&operation.AcceptedAt, &operation.RetentionExpiresAt,
-		&operation.CleanupRequired, &hostID, &hostGeneration, &assignmentID,
+		&operation.CleanupRequired, &operation.RetainedOutputBytes, &hostID, &hostGeneration, &assignmentID,
 		&leaseEpoch, &fence, &leaseExpiresAt,
 	)
 	if err != nil {
@@ -448,6 +448,9 @@ func scanOperation(row rowScanner) (Operation, error) {
 	operation.Version = uint64(version)
 	operation.AcceptedAt = operation.AcceptedAt.UTC()
 	operation.RetentionExpiresAt = operation.RetentionExpiresAt.UTC()
+	if operation.RetainedOutputBytes == 0 {
+		return Operation{}, errors.New("scan sandbox operation: invalid output retention")
+	}
 	operation.Assignment.FencingToken = uint64(fence)
 	if hostID != nil {
 		operation.Assignment.HostID = *hostID
@@ -471,6 +474,15 @@ func scanOperation(row rowScanner) (Operation, error) {
 		operation.ResourceProjectionBinding = &binding
 	}
 	return operation, nil
+}
+
+const defaultRetainedOutputBytes uint64 = 16 << 20
+
+func retainedOutputLimit(operation Operation) uint64 {
+	if operation.RetainedOutputBytes == 0 {
+		return defaultRetainedOutputBytes
+	}
+	return operation.RetainedOutputBytes
 }
 
 func resourceProjectionKindValue(operation Operation) any {

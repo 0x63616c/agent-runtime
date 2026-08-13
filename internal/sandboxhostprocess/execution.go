@@ -311,7 +311,9 @@ func signExecutionOutput(envelope sandboxhostprotocol.Envelope, output Execution
 		return nil, errors.New("sign sandbox host output: invalid bounded guest output")
 	}
 	sequence := output.Sequence + 1
-	return sandboxhostprotocol.SignOutput(sandboxhostprotocol.Output{ProtocolVersion: sandboxhostprotocol.Version, OutputID: "output_" + sandboxhostprotocol.Digest([]byte(envelope.DeliveryID + "\x00" + output.Stream + "\x00" + string(output.Data)))[7:39], HostID: envelope.HostID, HostGeneration: envelope.HostGeneration, AssignmentID: envelope.AssignmentID, LeaseEpoch: envelope.LeaseEpoch, FencingToken: envelope.FencingToken, Principal: envelope.Principal, OperationID: envelope.OperationID, Stream: output.Stream, Sequence: sequence, ChunkDigest: sandboxhostprotocol.Digest(output.Data), SizeBytes: uint32(len(output.Data)), ObservedAt: observedAt.UTC()}, privateKey)
+	// The authenticated executor is the output owner. It must supply redacted
+	// bytes here; control signs, persists, and replays only this bounded value.
+	return sandboxhostprotocol.SignOutput(sandboxhostprotocol.Output{ProtocolVersion: sandboxhostprotocol.Version, OutputID: "output_" + sandboxhostprotocol.Digest([]byte(envelope.DeliveryID + "\x00" + output.Stream + "\x00" + string(output.Data)))[7:39], HostID: envelope.HostID, HostGeneration: envelope.HostGeneration, AssignmentID: envelope.AssignmentID, LeaseEpoch: envelope.LeaseEpoch, FencingToken: envelope.FencingToken, Principal: envelope.Principal, OperationID: envelope.OperationID, Stream: output.Stream, Sequence: sequence, ChunkDigest: sandboxhostprotocol.Digest(output.Data), SizeBytes: uint32(len(output.Data)), Chunk: append([]byte(nil), output.Data...), ObservedAt: observedAt.UTC()}, privateKey)
 }
 
 func stageAndSendTerminal(ctx context.Context, envelope sandboxhostprotocol.Envelope, now time.Time, journal *sandboxhostjournal.Journal, privateKey ed25519.PrivateKey, state string, observation *sandboxhostprotocol.Observation, send resultSender, afterTerminalSend func() error) error {

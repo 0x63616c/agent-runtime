@@ -67,7 +67,7 @@ func TestFirecrackerControlBridgeMultiProcessLostAckQuarantineCleanupAndReassign
 	request := sandbox.OperationRequest{ID: "op_host_lost_ack", Kind: sandbox.OperationCloseSandbox, CloseSandbox: &sandbox.CloseSandboxRequest{SandboxID: "sbx_host_lost_ack"}}
 	ledger, pool := openLedger(t, dsn)
 	defer pool.Close()
-	if _, err := pool.Exec(context.Background(), `TRUNCATE runtime.sandbox_host_outputs, runtime.sandbox_host_dispatches, runtime.sandbox_host_enrollments, runtime.sandbox_operation_outbox, runtime.sandbox_operations RESTART IDENTITY`); err != nil {
+	if _, err := pool.Exec(context.Background(), `TRUNCATE runtime.sandbox_host_output_chunks, runtime.sandbox_host_outputs, runtime.sandbox_host_dispatches, runtime.sandbox_host_enrollments, runtime.sandbox_operation_outbox, runtime.sandbox_operations RESTART IDENTITY`); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := client.Submit(context.Background(), request); err != nil {
@@ -188,7 +188,7 @@ func TestFirecrackerBootProbeV2MultiProcessRoute(t *testing.T) {
 	ledger, pool := openLedger(t, dsn)
 	defer pool.Close()
 	ctx := context.Background()
-	if _, err := pool.Exec(ctx, `TRUNCATE runtime.firecracker_boot_probe_sessions, runtime.sandbox_host_outputs, runtime.sandbox_host_dispatches, runtime.sandbox_host_enrollments, runtime.sandbox_operation_outbox, runtime.sandbox_operations RESTART IDENTITY`); err != nil {
+	if _, err := pool.Exec(ctx, `TRUNCATE runtime.firecracker_boot_probe_sessions, runtime.sandbox_host_output_chunks, runtime.sandbox_host_outputs, runtime.sandbox_host_dispatches, runtime.sandbox_host_enrollments, runtime.sandbox_operation_outbox, runtime.sandbox_operations RESTART IDENTITY`); err != nil {
 		t.Fatal(err)
 	}
 	now := time.Now().UTC()

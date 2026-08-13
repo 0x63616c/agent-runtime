@@ -120,6 +120,33 @@ func TestHTTPClientSubmitsAndReconnectsOperationWithFreshBoundCredential(t *test
 	}
 }
 
+func TestHTTPClientReplaysAuthenticatedBoundedOutputAfterCursor(t *testing.T) {
+	events := []OutputEvent{{Kind: OutputEventChunk, Cursor: "output:assignment:stdout:2", Stream: OutputStdout, Chunk: &OutputChunk{Bytes: []byte("[REDACTED]"), Redacted: true}}}
+	server := httptest.NewTLSServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.URL.Path == bindRouteV1 {
+			writeTestJSON(t, writer, bindResponse{Version: controlV1, Kind: bindResponseKind, Assertion: "opaque-binding", ExpiresAt: time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC)})
+			return
+		}
+		if request.Method != http.MethodGet || request.URL.Path != processesRouteV1+"prc_output/output" || request.URL.Query().Get("after") != "output:assignment:stdout:1" || request.Header.Get(bindingHeaderV1) != "opaque-binding" {
+			t.Errorf("output replay request = %s %s binding=%q", request.Method, request.URL.String(), request.Header.Get(bindingHeaderV1))
+		}
+		writeTestJSON(t, writer, outputEventsResponseEnvelope{Version: controlV1, Kind: outputEventsResponseKind, Events: events})
+	}))
+	t.Cleanup(server.Close)
+	client := newTestHTTPClient(t, server, func(_ context.Context, sink CredentialSink) error {
+		return sink.SetAuthorization("Bearer", "credential")
+	})
+	stream, err := client.ReplayOutput(context.Background(), "prc_output", "output:assignment:stdout:1")
+	if err != nil {
+		t.Fatalf("ReplayOutput() error = %v", err)
+	}
+	defer stream.Close()
+	event, err := stream.Next(context.Background())
+	if err != nil || event.Cursor != events[0].Cursor || string(event.Chunk.Bytes) != "[REDACTED]" || !event.Chunk.Redacted {
+		t.Fatalf("ReplayOutput() event = %#v, %v", event, err)
+	}
+}
+
 func TestHTTPClientMapsSafeFailureAndCancellationWithoutTransportCause(t *testing.T) {
 	server := httptest.NewTLSServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		if request.URL.Path == bindRouteV1 {

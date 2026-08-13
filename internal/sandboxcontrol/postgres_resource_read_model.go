@@ -95,15 +95,15 @@ func (model *PostgresResourceReadModel) acceptProjection(ctx context.Context, op
 				dispatch_body, resource_projection_kind, resource_projection_id,
 				resource_projection_admitted_snapshot_digest, resource_projection_transition,
 				state, version, accepted_at, retention_expires_at,
-				cleanup_required, assignment_fencing_token
-			) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, 1, $17, $18, $19, 0)
+				cleanup_required, retained_output_bytes, assignment_fencing_token
+			) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, 1, $17, $18, $19, $20, 0)
 			ON CONFLICT DO NOTHING
 			RETURNING `+selectOperationColumns,
 			operation.Principal, operation.Tenant, operation.ID, operation.Kind, operation.TargetKind, operation.TargetID,
 			operationInputDigest(operation), operation.CanonicalDigest, operation.EffectiveSpecDigest, operation.CapabilityDigest,
 			operation.DispatchBody, resourceProjectionKindValue(operation), resourceProjectionIDValue(operation),
 			resourceProjectionDigestValue(operation), resourceProjectionTransitionValue(operation),
-			StateAccepted, operation.AcceptedAt.UTC(), operation.RetentionExpiresAt.UTC(), operation.CleanupRequired)
+			StateAccepted, operation.AcceptedAt.UTC(), operation.RetentionExpiresAt.UTC(), operation.CleanupRequired, retainedOutputLimit(operation))
 		inserted, err := scanOperation(row)
 		switch {
 		case err == nil:

@@ -127,6 +127,7 @@ type Operation struct {
 	AcceptedAt          time.Time
 	RetentionExpiresAt  time.Time
 	CleanupRequired     bool
+	RetainedOutputBytes uint64
 	// ResourceProjectionBinding, when present, is immutable admission metadata
 	// for a complete resource snapshot. Resource-aware stores enforce it before
 	// accepting or replacing any projection.

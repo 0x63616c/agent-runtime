@@ -159,8 +159,10 @@ type OutputRetention struct {
 	Truncated      bool   `json:"truncated"`
 }
 
-// Output is one host-signed bounded output sequence header. Chunk content is
-// stored by the output owner; this protocol binds only its integrity metadata.
+// Output is one host-signed bounded output sequence. Chunk is already redacted
+// by the host output owner before it crosses the private control transport;
+// control stores and replays exactly these signed bytes. It is deliberately
+// bounded so a guest cannot make durable control storage unbounded.
 type Output struct {
 	ProtocolVersion string    `json:"protocol_version"`
 	OutputID        string    `json:"output_id"`
@@ -175,6 +177,8 @@ type Output struct {
 	Sequence        uint64    `json:"sequence"`
 	ChunkDigest     string    `json:"chunk_digest"`
 	SizeBytes       uint32    `json:"size_bytes"`
+	Chunk           []byte    `json:"chunk"`
+	Redacted        bool      `json:"redacted"`
 	ObservedAt      time.Time `json:"observed_at"`
 	Signature       string    `json:"signature"`
 }
@@ -589,7 +593,9 @@ func validOutputRetention(retention OutputRetention) bool {
 }
 
 func validOutput(output Output) bool {
-	return output.ProtocolVersion == Version && boundedID(output.OutputID, 128) && boundedID(output.HostID, 128) && output.HostGeneration > 0 && boundedID(output.AssignmentID, 128) && output.LeaseEpoch > 0 && output.FencingToken > 0 && boundedID(output.Principal, 512) && boundedID(output.OperationID, 128) && (output.Stream == "stdout" || output.Stream == "stderr") && output.Sequence > 0 && validDigest(output.ChunkDigest) && output.SizeBytes > 0 && output.SizeBytes <= 256<<10 && !output.ObservedAt.IsZero() && output.ObservedAt.Location() == time.UTC && (output.Signature == "" || len(output.Signature) <= 128)
+	legacyHeaderOnly := len(output.Chunk) == 0
+	chunkMatches := uint32(len(output.Chunk)) == output.SizeBytes && Digest(output.Chunk) == output.ChunkDigest
+	return output.ProtocolVersion == Version && boundedID(output.OutputID, 128) && boundedID(output.HostID, 128) && output.HostGeneration > 0 && boundedID(output.AssignmentID, 128) && output.LeaseEpoch > 0 && output.FencingToken > 0 && boundedID(output.Principal, 512) && boundedID(output.OperationID, 128) && (output.Stream == "stdout" || output.Stream == "stderr") && output.Sequence > 0 && validDigest(output.ChunkDigest) && output.SizeBytes > 0 && output.SizeBytes <= 256<<10 && (legacyHeaderOnly || chunkMatches) && !output.ObservedAt.IsZero() && output.ObservedAt.Location() == time.UTC && (output.Signature == "" || len(output.Signature) <= 128)
 }
 
 func validDataPlaneReceipt(receipt DataPlaneReceipt) bool {

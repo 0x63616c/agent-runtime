@@ -17,6 +17,7 @@ const (
 	operationResponseKind    = "operation-response"
 	operationEventsKind      = "operation-events"
 	capabilitiesResponseKind = "capabilities-response"
+	outputEventsResponseKind = "output-events"
 	failureResponseKind      = "failure-response"
 )
 
@@ -48,6 +49,12 @@ type capabilitiesResponseEnvelope struct {
 	Version      string             `json:"version"`
 	Kind         string             `json:"kind"`
 	Capabilities CapabilitySnapshot `json:"capabilities"`
+}
+
+type outputEventsResponseEnvelope struct {
+	Version string        `json:"version"`
+	Kind    string        `json:"kind"`
+	Events  []OutputEvent `json:"events"`
 }
 
 type failureResponseEnvelope struct {
@@ -150,6 +157,35 @@ func decodeCapabilitiesResponseV1(data []byte) (CapabilitySnapshot, error) {
 		return CapabilitySnapshot{}, newFailure(FailureInvalidArgument, "capabilities response violates sandbox.control/v1", RetryNever)
 	}
 	return copyCapabilitySnapshot(envelope.Capabilities), nil
+}
+
+func decodeOutputEventsV1(data []byte) ([]OutputEvent, error) {
+	var envelope outputEventsResponseEnvelope
+	if err := decodeControlV1(data, outputEventsResponseKind, &envelope); err != nil {
+		return nil, err
+	}
+	if len(envelope.Events) == 0 || len(envelope.Events) > maxControlV1Collection {
+		return nil, newFailure(FailureInvalidArgument, "output events violate sandbox.control/v1", RetryNever)
+	}
+	seen := make(map[OutputCursor]struct{}, len(envelope.Events))
+	for _, event := range envelope.Events {
+		if event.Kind != OutputEventChunk || event.Cursor == "" || len(event.Cursor) > 128 || event.Stream != OutputStdout && event.Stream != OutputStderr || event.Chunk == nil || event.Gap != nil || event.Final != nil || len(event.Chunk.Bytes) == 0 || len(event.Chunk.Bytes) > maximumOutputChunkBytes {
+			return nil, newFailure(FailureInvalidArgument, "output events violate sandbox.control/v1", RetryNever)
+		}
+		if _, duplicate := seen[event.Cursor]; duplicate {
+			return nil, newFailure(FailureInvalidArgument, "output events violate sandbox.control/v1", RetryNever)
+		}
+		seen[event.Cursor] = struct{}{}
+	}
+	return copyOutputEvents(envelope.Events), nil
+}
+
+func copyOutputEvents(events []OutputEvent) []OutputEvent {
+	copied := make([]OutputEvent, len(events))
+	for index, event := range events {
+		copied[index] = copyOutputEvent(event)
+	}
+	return copied
 }
 
 func decodeFailureResponseV1(data []byte) (Failure, error) {

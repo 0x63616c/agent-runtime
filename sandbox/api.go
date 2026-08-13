@@ -166,6 +166,10 @@ type OperationAdmissionPolicy struct {
 // are never part of this value.
 type ResolvedOperation struct {
 	Operation Operation
+	// ResourceLimits are the immutable finite values resolved at admission.
+	// Private control storage persists the output retention ceiling separately
+	// so an authenticated host cannot widen durable output retention.
+	ResourceLimits ResourceLimits
 	// InputDigest identifies the exact canonical wire request before operator
 	// defaults are resolved. Control stores use it to reconnect retries to the
 	// already accepted effective policy instead of silently adopting new defaults.

@@ -35,6 +35,13 @@ type ResourceReadModel interface {
 	ListSnapshots(context.Context, string, sandbox.Page) (sandbox.SnapshotPage, error)
 }
 
+// OutputReplayStore is the separately authenticated, durable output window
+// behind the public replay transport. It returns only retained redacted bytes;
+// callers cannot derive output from host metadata headers.
+type OutputReplayStore interface {
+	ReplayOutput(context.Context, string, sandbox.ProcessID, sandbox.OutputCursor) ([]sandbox.OutputEvent, error)
+}
+
 // MemoryResourceReadModel is a hermetic, principal-scoped resource projection
 // for control-plane tests. It is deliberately independent from MemoryLedger:
 // callers must project complete resource facts as their state transitions are
