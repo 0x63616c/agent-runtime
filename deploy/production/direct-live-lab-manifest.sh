@@ -67,6 +67,24 @@ render() {
       {id:"direct-live-lab-quota",kind:"kubernetes",owner:"platform-operator",scope:"namespace",dependencies:[],retention:{policy:"ephemeral",days:0},backup_restore_owner:"none",delete_behavior:"delete",external_controller:false,kubernetes:{api_version:"v1",kind:"ResourceQuota",name:"direct-live-lab-quota",compute:{request_milli_cpu:4000,limit_milli_cpu:8000,request_memory_bytes:8589934592,limit_memory_bytes:17179869184}}},
       {id:"direct-live-lab-egress-proxy-deny",kind:"kubernetes",owner:"security-operator",scope:"namespace",dependencies:["egress-proxy"],retention:{policy:"ephemeral",days:0},backup_restore_owner:"none",delete_behavior:"delete",external_controller:false,kubernetes:{api_version:"networking.k8s.io/v1",kind:"NetworkPolicy",name:"direct-live-lab-egress-proxy-deny",network:{default_deny:true,subject:"egress-proxy",allowed_egress:[]}}}
     ])
+  ' | jq '
+    # Keep the namespace limit quota large enough for the complete rendered
+    # workload set.  This lab is intentionally ephemeral, but ResourceQuota
+    # admission still accounts for every desired deployment before any of
+    # them can become ready.  Deriving this lower bound prevents a newly added
+    # workload from silently making the lab impossible to apply.
+    ([.profiles.ci.resources[]
+      | select(.kind == "kubernetes" and
+          (.kubernetes.kind == "Deployment" or
+           .kubernetes.kind == "StatefulSet" or
+           .kubernetes.kind == "Job"))
+      | .kubernetes.compute.limit_milli_cpu] | add) as $workload_limit_milli_cpu |
+    .profiles.ci.resources |= map(
+      if .kind == "kubernetes" and .kubernetes.kind == "ResourceQuota" then
+        .kubernetes.compute.limit_milli_cpu |=
+          if . < $workload_limit_milli_cpu then $workload_limit_milli_cpu else . end
+      else . end
+    )
   ' >"$output"
   validate --stack-file "$output"
 }
@@ -84,6 +102,19 @@ validate() {
     ([.profiles.ci.resources[] | select(.kind == "kubernetes" and (.kubernetes.kind == "Deployment" or .kubernetes.kind == "StatefulSet" or .kubernetes.kind == "Job"))] | all(.kubernetes.image | test("@sha256:[0-9a-f]{64}$")))
     and ([.profiles.ci.resources[] | select(.kind == "kubernetes" and .kubernetes.kind == "PersistentVolumeClaim") | .kubernetes.storage[] | .class] | all(. == "local-lvm"))
   ' "$stack_file" >/dev/null || fail "direct lab requires namespace-local secret references and immutable images"
+  jq -e '
+    ([.profiles.ci.resources[]
+      | select(.kind == "kubernetes" and
+          (.kubernetes.kind == "Deployment" or
+           .kubernetes.kind == "StatefulSet" or
+           .kubernetes.kind == "Job"))
+      | .kubernetes.compute.limit_milli_cpu] | add) as $workload_limit_milli_cpu |
+    ([.profiles.ci.resources[]
+      | select(.kind == "kubernetes" and .kubernetes.kind == "ResourceQuota")
+      | .kubernetes.compute.limit_milli_cpu]) as $quota_limit_milli_cpu |
+    ($quota_limit_milli_cpu | length) == 1 and
+    $quota_limit_milli_cpu[0] >= $workload_limit_milli_cpu
+  ' "$stack_file" >/dev/null || fail "direct lab CPU limit quota is smaller than its rendered workload limits"
   rendered="$(go run "$root/cmd/stackctl" render --stack-file "$stack_file" --profile ci)"
   manifests="$(go run "$root/cmd/stackctl" manifests --stack-file "$stack_file" --profile ci)"
   printf '%s' "$rendered" | jq -e --arg name "$name" --arg namespace "$namespace" '.stack==$name and .profile=="ci" and .namespace==$namespace and ([.resources[]|select(.kind=="kubernetes" and .kubernetes.kind=="ResourceQuota")]|length)==1 and (([.resources[]|select(.kind=="kubernetes" and (.kubernetes.kind=="Deployment" or .kubernetes.kind=="StatefulSet" or .kubernetes.kind=="Job"))|.id])-([.resources[]|select(.kind=="kubernetes" and .kubernetes.kind=="NetworkPolicy" and .kubernetes.network.default_deny==true)|.kubernetes.network.subject]))==[]' >/dev/null || fail "direct lab requires quota and default-deny policy for every workload"
