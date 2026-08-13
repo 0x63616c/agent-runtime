@@ -264,6 +264,38 @@ func TestLinuxJailerHostStopsRESTConfigurationBeforeInstanceStartOnFailure(t *te
 	}
 }
 
+func TestLinuxJailerHostWaitsForThePrivateAPISocketBeforeRESTConfiguration(t *testing.T) {
+	plan := mustCompile(t, validProfile())
+	fixtures := verifiedPlanFixtures(plan)
+	processes := &recordingJailerStarter{}
+	http := &recordingFirecrackerHTTP{readyErr: errors.New("socket not ready")}
+	host := LinuxJailerHost{
+		PreflightState: validKVMPreflight(),
+		RootFSCopyPath: "/run/agent-runtime/sandbox-001/rootfs.ext4",
+		Resources:      &recordingResourceStager{stage: validBoundJailedResourceStage(plan, fixtures, "/run/agent-runtime/sandbox-001/rootfs.ext4")},
+		Authority:      mustCompileJailerExecutionAuthority(t, plan),
+		Jailer:         processes,
+		HTTP:           http,
+		Guest:          &recordingGuestChannel{},
+	}
+	if err := host.Preflight(context.Background(), plan, fixtures); err != nil {
+		t.Fatalf("Preflight() error = %v", err)
+	}
+	request, err := host.Prepare(context.Background(), plan, fixtures)
+	if err != nil {
+		t.Fatalf("Prepare() error = %v", err)
+	}
+	if err := host.Launch(context.Background(), request); err == nil {
+		t.Fatal("Launch() error = nil, want API readiness failure")
+	}
+	if http.ready != 1 || len(http.calls) != 0 {
+		t.Fatalf("readiness/calls = %d/%d, want one readiness probe and no REST requests", http.ready, len(http.calls))
+	}
+	if got, want := processes.process.steps, []string{"terminate", "wait", "cleanup"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("process steps = %v, want %v after readiness failure", got, want)
+	}
+}
+
 func TestLinuxJailerHostRetainsAProcessForCleanupWhenStartReturnsBothProcessAndError(t *testing.T) {
 	plan := mustCompile(t, validProfile())
 	fixtures := verifiedPlanFixtures(plan)
@@ -633,6 +665,8 @@ type firecrackerRESTCall struct {
 type recordingFirecrackerHTTP struct {
 	calls    []firecrackerRESTCall
 	binds    []string
+	ready    int
+	readyErr error
 	failPath string
 	onPut    func(string)
 }
@@ -640,6 +674,11 @@ type recordingFirecrackerHTTP struct {
 func (port *recordingFirecrackerHTTP) Bind(_ context.Context, path string) error {
 	port.binds = append(port.binds, path)
 	return nil
+}
+
+func (port *recordingFirecrackerHTTP) WaitReady(context.Context) error {
+	port.ready++
+	return port.readyErr
 }
 
 func (port *recordingFirecrackerHTTP) Put(_ context.Context, path string, body any) error {

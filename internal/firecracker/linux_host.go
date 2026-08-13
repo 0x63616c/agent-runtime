@@ -76,6 +76,11 @@ type JailerSerialObserver interface {
 // FirecrackerHTTPPort sends one bounded JSON request over the exact private Firecracker API socket.
 type FirecrackerHTTPPort interface {
 	Bind(context.Context, string) error
+	// WaitReady confirms that the exact bound Unix socket accepts a local
+	// connection before the immutable REST sequence starts. A real Jailer
+	// returns after spawning Firecracker, before Firecracker creates its API
+	// socket, so treating Start as socket readiness races real KVM hosts.
+	WaitReady(context.Context) error
 	Put(context.Context, string, any) error
 }
 
@@ -570,6 +575,9 @@ func (host *LinuxJailerHost) Launch(ctx context.Context, request LaunchRequest) 
 		}); err != nil {
 			return host.failLaunch(err)
 		}
+	}
+	if err := callWithContextFence(ctx, "await Firecracker API socket", http.WaitReady); err != nil {
+		return host.failLaunch(err)
 	}
 	for _, call := range []struct {
 		path string

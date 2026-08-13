@@ -1,12 +1,35 @@
 package main
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
 
 	"github.com/0x63616c/agent-runtime/internal/firecracker"
 )
+
+func TestSmokeObservationFailureReasonRetainsOnlyTheFailedProofBoundary(t *testing.T) {
+	prefix := "protected smoke harness did not retain a complete boot/control/cleanup observation"
+	for _, test := range []struct {
+		name string
+		err  error
+		want string
+	}{
+		{name: "stage", err: errors.New("prepare jailed rootfs: arbitrary host path /private/secret"), want: prefix + ": Jailer fixture staging failed"},
+		{name: "launch", err: errors.New("launch jailer: arbitrary Jailer diagnostic"), want: prefix + ": Jailer or Firecracker launch failed"},
+		{name: "serial", err: errors.New("await guest serial marker: context deadline exceeded"), want: prefix + ": guest serial boot marker was not observed"},
+		{name: "control", err: errors.New("guest control channel: arbitrary guest wire"), want: prefix + ": private guest control handshake failed"},
+		{name: "cleanup", err: errors.New("cleanup protected Firecracker resources: arbitrary cleanup output"), want: prefix + ": Jailer cleanup proof failed"},
+		{name: "unknown", err: errors.New("arbitrary internal failure"), want: prefix + ": an unclassified bounded smoke lifecycle edge failed"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if got := smokeObservationFailureReason(test.err); got != test.want {
+				t.Fatalf("smokeObservationFailureReason() = %q, want %q", got, test.want)
+			}
+		})
+	}
+}
 
 func TestRunRefusesBeforeFixtureReadWithoutTheProtectedRunnerContract(t *testing.T) {
 	t.Setenv("FIRECRACKER_RUNNER_CONTRACT", "")

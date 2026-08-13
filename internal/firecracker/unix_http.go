@@ -9,9 +9,12 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"time"
 )
 
 const maximumFirecrackerAPIResponseBytes = 64 << 10
+
+const firecrackerSocketReadyRetryInterval = 10 * time.Millisecond
 
 type unixSocketDialer interface {
 	DialContext(context.Context, string, string) (net.Conn, error)
@@ -48,6 +51,47 @@ func (port *unixFirecrackerHTTP) Bind(ctx context.Context, socketPath string) er
 	}
 	port.bound = true
 	return nil
+}
+
+// WaitReady waits only for the exact bound private Unix socket to accept a
+// connection. Jailer.Start returning does not imply Firecracker has created
+// that socket yet. It uses the caller's bounded context and never sends an API
+// request, so the immutable launch sequence still begins at machine-config.
+func (port *unixFirecrackerHTTP) WaitReady(ctx context.Context) error {
+	if err := contextError(ctx); err != nil {
+		return err
+	}
+	if port == nil {
+		return fmt.Errorf("%w: private Firecracker API socket is required", ErrSmokeUnavailable)
+	}
+	port.mu.Lock()
+	bound, socketPath, dialer := port.bound, port.socketPath, port.dialer
+	port.mu.Unlock()
+	if !bound || !safeAbsolutePath(socketPath) || dialer == nil {
+		return fmt.Errorf("%w: bound private Firecracker API socket is required", ErrSmokeUnavailable)
+	}
+	for {
+		connection, err := dialer.DialContext(ctx, "unix", socketPath)
+		if err == nil {
+			closeErr := connection.Close()
+			if closeErr != nil {
+				return fmt.Errorf("close Firecracker API readiness connection: %w", closeErr)
+			}
+			return nil
+		}
+		if contextErr := contextError(ctx); contextErr != nil {
+			return fmt.Errorf("%w: await private Firecracker API socket: %w", ErrSmokeUnavailable, contextErr)
+		}
+		timer := time.NewTimer(firecrackerSocketReadyRetryInterval)
+		select {
+		case <-ctx.Done():
+			if !timer.Stop() {
+				<-timer.C
+			}
+			return fmt.Errorf("%w: await private Firecracker API socket: %w", ErrSmokeUnavailable, ctx.Err())
+		case <-timer.C:
+		}
+	}
 }
 
 func (port *unixFirecrackerHTTP) Put(ctx context.Context, endpoint string, body any) (err error) {

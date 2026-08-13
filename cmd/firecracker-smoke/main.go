@@ -191,9 +191,36 @@ func run(config recordRunnerConfig, record *report) (err error) {
 	evidence, err := (firecracker.SmokeHarness{Host: host, Timeout: config.timeout}).Run(ctx, plan, fixtures)
 	record.Cleanup, record.SerialMarker, record.Result = evidence.Cleanup, evidence.SerialMarker, evidence.Result
 	if err != nil {
-		return block(record, "protected smoke harness did not retain a complete boot/control/cleanup observation")
+		return block(record, smokeObservationFailureReason(err))
 	}
 	return nil
+}
+
+// smokeObservationFailureReason exposes the failed proof boundary without
+// retaining arbitrary process, guest, API, or environment output in an
+// operator evidence record. SmokeHarness wraps each lifecycle edge with one
+// of these fixed prefixes; errors below that edge can include host-specific
+// details and are deliberately not copied into the redacted report.
+func smokeObservationFailureReason(err error) string {
+	const prefix = "protected smoke harness did not retain a complete boot/control/cleanup observation"
+	if err == nil {
+		return prefix
+	}
+	message := err.Error()
+	switch {
+	case strings.Contains(message, "prepare jailed rootfs:"):
+		return prefix + ": Jailer fixture staging failed"
+	case strings.Contains(message, "launch jailer:"):
+		return prefix + ": Jailer or Firecracker launch failed"
+	case strings.Contains(message, "await guest serial marker:"):
+		return prefix + ": guest serial boot marker was not observed"
+	case strings.Contains(message, "guest control channel:"):
+		return prefix + ": private guest control handshake failed"
+	case strings.Contains(message, "cleanup protected Firecracker resources:"):
+		return prefix + ": Jailer cleanup proof failed"
+	default:
+		return prefix + ": an unclassified bounded smoke lifecycle edge failed"
+	}
 }
 
 type directExecutionBinding struct {

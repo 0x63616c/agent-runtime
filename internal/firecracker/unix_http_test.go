@@ -12,7 +12,55 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
+
+func TestUnixFirecrackerHTTPWaitReadyUsesTheBoundSocket(t *testing.T) {
+	directory, err := os.MkdirTemp(os.TempDir(), "fc-http-")
+	if err != nil {
+		t.Fatalf("make short socket directory: %v", err)
+	}
+	defer func() { _ = os.RemoveAll(directory) }()
+	socketPath := filepath.Join(directory, "firecracker.sock")
+	listener, err := net.Listen("unix", socketPath)
+	if err != nil {
+		t.Fatalf("listen on Firecracker socket: %v", err)
+	}
+	defer func() { _ = listener.Close() }()
+	port, err := newUnixFirecrackerHTTP(socketPath, &net.Dialer{})
+	if err != nil {
+		t.Fatalf("newUnixFirecrackerHTTP() error = %v", err)
+	}
+	if err := port.Bind(context.Background(), socketPath); err != nil {
+		t.Fatalf("Bind() error = %v", err)
+	}
+	go func() {
+		connection, acceptErr := listener.Accept()
+		if acceptErr == nil {
+			_ = connection.Close()
+		}
+	}()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := port.WaitReady(ctx); err != nil {
+		t.Fatalf("WaitReady() error = %v", err)
+	}
+}
+
+func TestUnixFirecrackerHTTPWaitReadyHonorsItsContext(t *testing.T) {
+	port, err := newUnixFirecrackerHTTP(filepath.Join(t.TempDir(), "missing.sock"), &net.Dialer{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := port.Bind(context.Background(), port.socketPath); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	if err := port.WaitReady(ctx); err == nil || !strings.Contains(err.Error(), "await private Firecracker API socket") {
+		t.Fatalf("WaitReady() error = %v, want bounded socket readiness failure", err)
+	}
+}
 
 func TestUnixFirecrackerHTTPWritesTheFixedLaunchSequenceToItsBoundSocket(t *testing.T) {
 	directory, err := os.MkdirTemp(os.TempDir(), "fc-http-")
