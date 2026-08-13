@@ -56,6 +56,8 @@ var _ = Describe("M1 deployment safety boundaries", func() {
 	It("bootstraps the disposable NetworkPolicy harness before applying reviewed state", func() {
 		script := read("deploy/harness/run-k3s-networkpolicy-evidence.sh")
 		for _, required := range []string{
+			`--flannel-backend=none --disable-network-policy`,
+			`install-pinned-cilium-cni.sh" "$kubeconfig_path" "$K3S_CONTEXT"`,
 			`bootstrap_capability_file="$harness_tmp/bootstrap-capability.json"`,
 			`stackctl bootstrap --stack-file "$v1" --stack issue10-work --profile ci --bootstrap-capability-file "$bootstrap_capability_file"`,
 			`stackctl apply --stack-file "$v1" --stack issue10-work --profile ci --bootstrap-capability-file "$bootstrap_capability_file"`,
@@ -63,6 +65,32 @@ var _ = Describe("M1 deployment safety boundaries", func() {
 		} {
 			Expect(script).To(ContainSubstring(required))
 		}
+	})
+
+	It("uses a checksum-pinned Cilium CNI before either disposable NetworkPolicy proof", func() {
+		installer := read("deploy/harness/install-pinned-cilium-cni.sh")
+		for _, required := range []string{
+			`CILIUM_VERSION=v1.18.11`,
+			`CILIUM_CHART_SHA256=85ea267d7fb4a7f95fe0775ebad3919658905fb78627541a55e96478c33a8473`,
+			`CILIUM_CLI_VERSION=v0.19.4`,
+			`--chart-directory "$installer_tmp/cilium"`,
+			`--wait-duration 5m`,
+			`rollout status daemonset/cilium --timeout=5m`,
+			`rollout status deployment/cilium-operator --timeout=5m`,
+		} {
+			Expect(installer).To(ContainSubstring(required))
+		}
+
+		workflow := read(".github/workflows/ci.yml")
+		for _, required := range []string{
+			`--flannel-backend=none@server:0`,
+			`--disable-network-policy@server:0`,
+			`Install pinned policy-enforcing Cilium CNI`,
+			`deploy/harness/install-pinned-cilium-cni.sh "$KUBECONFIG" "${AGENT_RUNTIME_CI_CONTEXT:?}"`,
+		} {
+			Expect(workflow).To(ContainSubstring(required))
+		}
+		Expect(strings.Index(workflow, "Install pinned policy-enforcing Cilium CNI")).To(BeNumerically("<", strings.Index(workflow, "Prove two isolated full Stack instances")))
 	})
 
 	It("validates every AFK record and keeps integration-specific evidence outside that schema", func() {

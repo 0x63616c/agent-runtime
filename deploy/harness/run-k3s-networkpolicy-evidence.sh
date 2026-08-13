@@ -43,7 +43,7 @@ trap cleanup EXIT INT TERM
 "$docker_bin" run --detach --privileged --name "$K3S_CONTAINER" --hostname "$K3S_CONTAINER" \
   --tmpfs /var/lib/rancher/k3s:rw,exec,nosuid,size=2g \
   --publish "127.0.0.1:${K3S_HOST_PORT}:6443" \
-  "$K3S_IMAGE" server --disable traefik --disable servicelb --write-kubeconfig-mode 600 >/dev/null
+  "$K3S_IMAGE" server --flannel-backend=none --disable-network-policy --disable traefik --disable servicelb --write-kubeconfig-mode 600 >/dev/null
 
 kubeconfig_path="$harness_tmp/kubeconfig"
 for attempt in $(seq 1 90); do
@@ -62,6 +62,10 @@ for attempt in $(seq 1 90); do
   fi
   sleep 1
 done
+
+# K3s' bundled flannel and policy controller are disabled above. Cilium is the
+# sole CNI and must be healthy before the NetworkPolicy proof can begin.
+"$repo_root/deploy/harness/install-pinned-cilium-cni.sh" "$kubeconfig_path" "$K3S_CONTEXT"
 
 v1="$repo_root/deploy/stacks/issue10-disposable-v1.json"
 v2="$repo_root/deploy/stacks/issue10-disposable-v2.json"

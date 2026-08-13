@@ -272,6 +272,8 @@ jobs:
             --registry-use "$registry_host_from_cluster" \
             --kubeconfig-update-default=false \
             --kubeconfig-switch-context=false \
+            --k3s-arg '--flannel-backend=none@server:0' \
+            --k3s-arg '--disable-network-policy@server:0' \
             --k3s-arg '--disable=traefik@server:0' \
             --k3s-arg '--disable=servicelb@server:0' \
             --wait --timeout 5m; then
@@ -300,6 +302,11 @@ jobs:
             echo "AGENT_RUNTIME_CI_REGISTRY_HOST_FROM_CLUSTER=$registry_host_from_cluster"
           } >> "$GITHUB_ENV"
           trap - EXIT
+      - name: Install pinned policy-enforcing Cilium CNI
+        shell: bash
+        run: |
+          set -euo pipefail
+          deploy/harness/install-pinned-cilium-cni.sh "$KUBECONFIG" "${AGENT_RUNTIME_CI_CONTEXT:?}"
       - name: Preload and prove the local-path helper image
         shell: bash
         run: |
