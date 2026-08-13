@@ -52,6 +52,49 @@ func TestHTTPAdapterNormalizesBoundedStreamAndReconcilesWithoutPOST(t *testing.T
 	}
 }
 
+func TestHTTPAdapterRejectsNonHTTPSNonLoopbackEndpoints(t *testing.T) {
+	for _, endpoint := range []string{
+		"http://model.example.com",
+		"http://192.0.2.1",
+		"ftp://model.example.com",
+	} {
+		adapter, err := runtimemodel.NewHTTPAdapter(runtimemodel.HTTPAdapterConfig{Endpoint: endpoint, Token: "model-token"})
+		if err == nil || adapter != nil {
+			t.Fatalf("NewHTTPAdapter(%q) accepted a non-HTTPS non-loopback endpoint", endpoint)
+		}
+	}
+	for _, endpoint := range []string{"http://127.0.0.1:8080", "http://[::1]:8080", "http://localhost:8080", "https://model.example.com"} {
+		adapter, err := runtimemodel.NewHTTPAdapter(runtimemodel.HTTPAdapterConfig{Endpoint: endpoint, Token: "model-token"})
+		if err != nil || adapter == nil {
+			t.Fatalf("NewHTTPAdapter(%q) = %#v, %v", endpoint, adapter, err)
+		}
+	}
+}
+
+func TestHTTPAdapterRejectsRedirectBeforeSendingCredentialToTarget(t *testing.T) {
+	targetRequests := 0
+	target := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		targetRequests++
+		if request.Header.Get("Authorization") != "" {
+			t.Fatal("redirect target received a model credential")
+		}
+		writer.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer target.Close()
+	redirector := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		http.Redirect(writer, request, target.URL, http.StatusFound)
+	}))
+	defer redirector.Close()
+	adapter, err := runtimemodel.NewHTTPAdapter(runtimemodel.HTTPAdapterConfig{Endpoint: redirector.URL, Token: "model-token"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = adapter.Invoke(context.Background(), runtimemodel.Request{Tenant: "tenant-a", SessionID: "sess_0000000000000001", TurnID: "turn_0000000000000001", OperationID: "op_model_0001"})
+	if err == nil || !strings.Contains(err.Error(), "redirects are forbidden") || targetRequests != 0 {
+		t.Fatalf("redirect invocation error = %v, target requests = %d", err, targetRequests)
+	}
+}
+
 func TestHTTPAdapterParsesOnlyCanonicalSafeToolOutcomes(t *testing.T) {
 	valid := `{"type":"tool","tool":{"tool_call_id":"tcall_1234567890ABCDEF","approval_id":"appr_1234567890ABCDEF","policy_name":"workspace-write","policy_revision":1,"tool_name":"workspace.write","action":{"verb":"write","target":"workspace-service"},"maximum_uses":1,"expires_at":"2026-08-11T13:00:00Z","descriptor":{"path":"notes.txt","kind":"workspace.write"}}}` + "\n"
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {

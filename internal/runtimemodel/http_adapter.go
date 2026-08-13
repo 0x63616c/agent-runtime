@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -19,9 +20,10 @@ import (
 )
 
 const (
-	maxStreamLineBytes = 64 << 10
-	maxStreamOutput    = 2 << 20
-	maxToolDescriptor  = 48 << 10
+	maxStreamLineBytes  = 64 << 10
+	maxStreamOutput     = 2 << 20
+	maxToolDescriptor   = 48 << 10
+	modelRequestTimeout = 30 * time.Second
 )
 
 // HTTPAdapterConfig configures the concrete, provider-neutral normalized-stream
@@ -52,14 +54,33 @@ func NewHTTPAdapter(config HTTPAdapterConfig) (*HTTPAdapter, error) {
 	if err != nil || endpoint == nil || endpoint.Scheme == "" || endpoint.Host == "" || endpoint.User != nil || endpoint.RawQuery != "" || endpoint.Fragment != "" {
 		return nil, errors.New("create normalized model HTTP adapter: endpoint must be an absolute origin")
 	}
+	if endpoint.Scheme != "https" && (endpoint.Scheme != "http" || !loopbackHost(endpoint.Hostname())) {
+		return nil, errors.New("create normalized model HTTP adapter: endpoint must use HTTPS unless it is a literal loopback development address")
+	}
 	if config.Token == "" {
 		return nil, errors.New("create normalized model HTTP adapter: model credential is required")
 	}
-	client := config.HTTPClient
-	if client == nil {
-		client = http.DefaultClient
+	return &HTTPAdapter{endpoint: endpoint, token: config.Token, client: boundedNoRedirectClient(config.HTTPClient)}, nil
+}
+
+func loopbackHost(host string) bool {
+	if strings.EqualFold(host, "localhost") {
+		return true
 	}
-	return &HTTPAdapter{endpoint: endpoint, token: config.Token, client: client}, nil
+	address := net.ParseIP(host)
+	return address != nil && address.IsLoopback()
+}
+
+func boundedNoRedirectClient(provided *http.Client) *http.Client {
+	if provided == nil {
+		provided = &http.Client{}
+	}
+	client := *provided
+	client.Timeout = modelRequestTimeout
+	client.CheckRedirect = func(*http.Request, []*http.Request) error {
+		return errors.New("normalized model redirects are forbidden")
+	}
+	return &client
 }
 
 // Invoke executes one new normalized provider operation exactly once.
