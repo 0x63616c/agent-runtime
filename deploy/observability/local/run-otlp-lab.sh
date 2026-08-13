@@ -28,6 +28,10 @@ collector_config="$root/deploy/observability/otelcol/collector.yaml"
 stack_file="$root/deploy/production/stack.json"
 for program in docker jq curl; do command -v "$program" >/dev/null || { echo "OTLP lab requires $program" >&2; exit 1; }; done
 [[ -f "$collector_config" && -f "$stack_file" ]] || { echo "OTLP lab inputs are missing" >&2; exit 1; }
+# Every network observation has a transport deadline. The surrounding bounded
+# poll controls total convergence time; an individual unavailable endpoint
+# cannot make one iteration hang indefinitely.
+curl_timeout=(--connect-timeout 2 --max-time 5)
 
 # The lab asserts the exact collector redaction contract before it starts.
 for key in http.request.header.authorization http.request.body http.response.body gen_ai.prompt gen_ai.completion runtime.model.reasoning runtime.tool.output process.command_args; do
@@ -65,15 +69,25 @@ docker run -d --name "$api" --network "$network" -p 127.0.0.1::8080 --entrypoint
 api_port="$(docker port "$api" 8080/tcp | sed 's/.*://')"
 collector_port="$(docker port "$collector" 8889/tcp | sed 's/.*://')"
 trace_port="$(docker port "$trace_store" 16686/tcp | sed 's/.*://')"
-for _ in $(seq 1 60); do curl -fsS "http://127.0.0.1:$api_port/v1/unknown" -H 'Authorization: Bearer direct-lab-developer-token' >/dev/null 2>&1 && break; sleep 0.25; done
-response="$(curl -sS -o /dev/null -w '%{http_code}' "http://127.0.0.1:$api_port/v1/unknown" -H 'Authorization: Bearer direct-lab-developer-token' -H 'X-Request-ID: req_0000000000000001')"
-[[ "$response" == 404 ]] || { echo "API request did not reach exact public route" >&2; exit 1; }
+# The deliberately unknown public route must return its exact safe 400
+# response, not a 2xx. Treating curl's --fail result as readiness made this
+# lab wait for a response that its own next assertion correctly expects to be
+# a 400.
+for _ in $(seq 1 60); do
+  response="$(curl "${curl_timeout[@]}" -sS -o /dev/null -w '%{http_code}' "http://127.0.0.1:$api_port/v1/unknown" -H 'Authorization: Bearer direct-lab-developer-token' || true)"
+  if [[ "$response" == 400 ]]; then
+    break
+  fi
+  sleep 0.25
+done
+response="$(curl "${curl_timeout[@]}" -sS -o /dev/null -w '%{http_code}' "http://127.0.0.1:$api_port/v1/unknown" -H 'Authorization: Bearer direct-lab-developer-token')"
+[[ "$response" == 400 ]] || { echo "API request did not reach exact public route" >&2; exit 1; }
 docker stop "$api" >/dev/null
-for _ in $(seq 1 80); do curl -fsS "http://127.0.0.1:$collector_port/metrics" | grep -F 'runtime_api_request_completed' >/dev/null && break; sleep 0.25; done
-metrics="$(curl -fsS "http://127.0.0.1:$collector_port/metrics")"
+for _ in $(seq 1 80); do curl "${curl_timeout[@]}" -fsS "http://127.0.0.1:$collector_port/metrics" | grep -F 'runtime_api_request_completed' >/dev/null && break; sleep 0.25; done
+metrics="$(curl "${curl_timeout[@]}" -fsS "http://127.0.0.1:$collector_port/metrics")"
 grep -F 'runtime_api_request_completed' <<<"$metrics" >/dev/null || { echo "collector Prometheus exporter did not expose API metric" >&2; exit 1; }
-for _ in $(seq 1 80); do curl -fsS "http://127.0.0.1:$trace_port/api/services" | grep -F 'unknown_service:agent-runtime-api' >/dev/null && break; sleep 0.25; done
-services="$(curl -fsS "http://127.0.0.1:$trace_port/api/services")"
+for _ in $(seq 1 80); do curl "${curl_timeout[@]}" -fsS "http://127.0.0.1:$trace_port/api/services" | grep -F 'unknown_service:agent-runtime-api' >/dev/null && break; sleep 0.25; done
+services="$(curl "${curl_timeout[@]}" -fsS "http://127.0.0.1:$trace_port/api/services")"
 grep -F 'unknown_service:agent-runtime-api' <<<"$services" >/dev/null || { echo "Jaeger trace store did not receive API trace" >&2; exit 1; }
 
 if [[ -n "$report" ]]; then

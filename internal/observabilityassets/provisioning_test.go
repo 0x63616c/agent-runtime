@@ -70,6 +70,26 @@ func TestProvisionedAlertRulesAreBoundedAndCoverSyntheticFailureSignals(t *testi
 	}
 }
 
+func TestDisposableOTLPLabWaitsForItsExpectedPublicResponse(t *testing.T) {
+	t.Parallel()
+	bytes, err := os.ReadFile(filepath.Clean("../../deploy/observability/local/run-otlp-lab.sh"))
+	if err != nil {
+		t.Fatalf("read disposable OTLP lab: %v", err)
+	}
+	text := string(bytes)
+	if !strings.Contains(text, `if [[ "$response" == 400 ]]; then`) {
+		t.Fatal("disposable OTLP lab does not wait for its expected bounded public response")
+	}
+	if strings.Contains(text, `curl -fsS "http://127.0.0.1:$api_port/v1/unknown"`) {
+		t.Fatal("disposable OTLP lab treats its intentional non-2xx public route as curl --fail readiness")
+	}
+	for _, argument := range []string{"curl_timeout=(--connect-timeout 2 --max-time 5)", `curl "${curl_timeout[@]}" -sS`, `curl "${curl_timeout[@]}" -fsS`} {
+		if !strings.Contains(text, argument) {
+			t.Fatalf("disposable OTLP lab lacks bounded curl argument %q", argument)
+		}
+	}
+}
+
 func readJSON(t *testing.T, path string) map[string]any {
 	t.Helper()
 	bytes, err := os.ReadFile(filepath.Clean(path))
