@@ -177,7 +177,7 @@ func TestGuestDispatchResultRefusesTamperedOrOutOfOrderOutputBeforeTerminalState
 		"valid transport": valid,
 	} {
 		t.Run(name, func(t *testing.T) {
-			result, err := readGuestDispatchResult(bufio.NewReader(strings.NewReader(wire)), "envelope-001")
+			result, err := readGuestDispatchResult(bufio.NewReader(strings.NewReader(wire)), sandboxhostprotocol.Envelope{EnvelopeID: "envelope-001"})
 			if name == "valid transport" {
 				if err != nil || len(result.Outputs) != 1 || string(result.Outputs[0].Data) != string(chunk) {
 					t.Fatalf("readGuestDispatchResult() = (%#v, %v), want bounded output", result, err)
@@ -186,6 +186,38 @@ func TestGuestDispatchResultRefusesTamperedOrOutOfOrderOutputBeforeTerminalState
 			}
 			if !errors.Is(err, ErrCapabilityUnavailable) {
 				t.Fatalf("readGuestDispatchResult() error = %v, want output refusal", err)
+			}
+		})
+	}
+}
+
+func TestGuestDispatchResultAcceptsOnlyCanonicalEnvelopeBoundTerminalObservation(t *testing.T) {
+	now := time.Date(2026, time.August, 12, 0, 0, 0, 0, time.UTC)
+	envelope := sandboxhostprotocol.Envelope{EnvelopeID: "envelope-001", SandboxID: "sandbox-001", ProcessID: "process-001"}
+	exitCode := int32(0)
+	observation := sandboxhostprotocol.Observation{
+		Sandbox: sandboxhostprotocol.SandboxObservation{ID: envelope.SandboxID, ActualState: "ready"},
+		Process: &sandboxhostprotocol.ProcessObservation{ID: envelope.ProcessID, SandboxID: envelope.SandboxID, State: "terminal", Result: &sandboxhostprotocol.ProcessResult{StartedAt: now, FinishedAt: now.Add(time.Second), ExitCode: &exitCode, Reason: "exited", Cleanup: "confirmed"}},
+	}
+	wire, err := json.Marshal(observation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded := base64.RawURLEncoding.EncodeToString(wire)
+	valid := "OBSERVATION envelope-001 " + encoded + "\nRESULT SUCCEEDED envelope-001\n"
+	nonCanonical := "OBSERVATION envelope-001 " + base64.RawURLEncoding.EncodeToString([]byte(`{ "sandbox":{"id":"sandbox-001","actual_state":"ready"},"process":{"id":"process-001","sandbox_id":"sandbox-001","state":"terminal","result":{"started_at":"2026-08-12T00:00:00Z","finished_at":"2026-08-12T00:00:01Z","exit_code":0,"reason":"exited","usage":{"cpu_time_millis":0,"peak_memory_bytes":0,"read_bytes":0,"written_bytes":0},"cleanup":"confirmed"},"stdout":{"earliest_cursor":"","retained_bytes":0,"truncated":false},"stderr":{"earliest_cursor":"","retained_bytes":0,"truncated":false}}}`)) + "\nRESULT SUCCEEDED envelope-001\n"
+	wrongBinding := "OBSERVATION envelope-001 " + base64.RawURLEncoding.EncodeToString([]byte(strings.Replace(string(wire), "process-001", "process-other", 1))) + "\nRESULT SUCCEEDED envelope-001\n"
+	for name, candidate := range map[string]string{"valid": valid, "non canonical": nonCanonical, "wrong process": wrongBinding, "unavailable with observation": "OBSERVATION envelope-001 " + encoded + "\nRESULT UNAVAILABLE envelope-001\n", "output after observation": "OBSERVATION envelope-001 " + encoded + "\nOUTPUT envelope-001 stdout 0 sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa YQ\nRESULT SUCCEEDED envelope-001\n"} {
+		t.Run(name, func(t *testing.T) {
+			result, readErr := readGuestDispatchResult(bufio.NewReader(strings.NewReader(candidate)), envelope)
+			if name == "valid" {
+				if readErr != nil || result.Observation == nil || result.Observation.Process == nil || result.Observation.Process.Result == nil || result.Observation.Process.Result.ExitCode == nil || *result.Observation.Process.Result.ExitCode != 0 {
+					t.Fatalf("readGuestDispatchResult() = (%#v, %v), want exact observation", result, readErr)
+				}
+				return
+			}
+			if !errors.Is(readErr, ErrCapabilityUnavailable) {
+				t.Fatalf("readGuestDispatchResult() error = %v, want unavailable", readErr)
 			}
 		})
 	}

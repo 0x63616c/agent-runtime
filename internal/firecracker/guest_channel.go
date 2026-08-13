@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net"
@@ -37,8 +38,9 @@ type GuestOutput struct {
 // GuestDispatchResult records the only terminal result accepted from a guest
 // dispatch exchange and the bounded output that preceded it.
 type GuestDispatchResult struct {
-	State   string
-	Outputs []GuestOutput
+	State       string
+	Outputs     []GuestOutput
+	Observation *sandboxhostprotocol.Observation
 }
 
 // GuestIdentityBinder binds the boot identities that the guest must echo on
@@ -219,7 +221,7 @@ func (channel *UnixGuestControlChannel) DispatchAuthenticated(ctx context.Contex
 	if _, err := fmt.Fprintf(connection, "DISPATCH %s\n", base64.RawURLEncoding.EncodeToString(frame)); err != nil {
 		return GuestDispatchResult{}, fmt.Errorf("write authenticated guest dispatch: %w", err)
 	}
-	return readGuestDispatchResult(reader, envelope.EnvelopeID)
+	return readGuestDispatchResult(reader, envelope)
 }
 
 // DispatchAuthenticatedSecret binds one resolver/Manager lifecycle to the
@@ -458,7 +460,7 @@ func (channel *UnixGuestControlChannel) ProxyAuthenticated(ctx context.Context, 
 	if _, err := fmt.Fprintf(connection, "PROXY_RESULT SUCCEEDED %s\n", envelope.EnvelopeID); err != nil {
 		return GuestDispatchResult{}, fmt.Errorf("write proxied guest result: %w", err)
 	}
-	return readGuestDispatchResult(reader, envelope.EnvelopeID)
+	return readGuestDispatchResult(reader, envelope)
 }
 
 // Close tears down every in-flight private guest exchange before the Jailer
@@ -557,15 +559,22 @@ func readGuestControlResponse(reader *bufio.Reader) (string, error) {
 	return strings.TrimSuffix(line, "\n"), nil
 }
 
-func readGuestDispatchResult(reader *bufio.Reader, envelopeID string) (GuestDispatchResult, error) {
+// readGuestDispatchResult accepts the legacy bounded output/result exchange
+// and its additive terminal-observation frame.  An observation is optional so
+// existing unavailable/profile-gated guests remain compatible, but when one
+// is present it must be canonical, complete, and bound to this exact fenced
+// envelope. The guest does not gain authority merely by sending this frame:
+// the host must still decide whether it can truthfully sign it.
+func readGuestDispatchResult(reader *bufio.Reader, envelope sandboxhostprotocol.Envelope) (GuestDispatchResult, error) {
 	result := GuestDispatchResult{}
+	observationSeen := false
 	for {
 		line, err := readGuestControlResponse(reader)
 		if err != nil {
 			return GuestDispatchResult{}, fmt.Errorf("read guest result: %w", ErrCapabilityUnavailable)
 		}
 		fields := strings.Split(line, " ")
-		if len(fields) == 6 && fields[0] == "OUTPUT" && fields[1] == envelopeID && validGuestOutputStream(fields[2]) && len(result.Outputs) < maximumGuestOutputChunks {
+		if len(fields) == 6 && fields[0] == "OUTPUT" && !observationSeen && fields[1] == envelope.EnvelopeID && validGuestOutputStream(fields[2]) && len(result.Outputs) < maximumGuestOutputChunks {
 			sequence, sequenceErr := strconv.ParseUint(fields[3], 10, 64)
 			chunk, decodeErr := base64.RawURLEncoding.DecodeString(fields[5])
 			if sequenceErr != nil || sequence != uint64(len(result.Outputs)) || decodeErr != nil || len(chunk) == 0 || len(chunk) > maximumGuestOutputBytes || fields[4] != sandboxhostprotocol.Digest(chunk) {
@@ -574,12 +583,50 @@ func readGuestDispatchResult(reader *bufio.Reader, envelopeID string) (GuestDisp
 			result.Outputs = append(result.Outputs, GuestOutput{Stream: fields[2], Sequence: sequence, Digest: fields[4], Data: append([]byte(nil), chunk...)})
 			continue
 		}
-		if len(fields) == 3 && fields[0] == "RESULT" && (fields[1] == "UNAVAILABLE" || fields[1] == "SUCCEEDED" || fields[1] == "FAILED") && fields[2] == envelopeID {
+		if len(fields) == 3 && fields[0] == "OBSERVATION" && !observationSeen && fields[1] == envelope.EnvelopeID {
+			observation, decodeErr := decodeGuestTerminalObservation(fields[2], envelope)
+			if decodeErr != nil {
+				return GuestDispatchResult{}, fmt.Errorf("read guest terminal observation: %w", ErrCapabilityUnavailable)
+			}
+			result.Observation = observation
+			observationSeen = true
+			continue
+		}
+		if len(fields) == 3 && fields[0] == "RESULT" && (fields[1] == "UNAVAILABLE" || fields[1] == "SUCCEEDED" || fields[1] == "FAILED") && fields[2] == envelope.EnvelopeID && (!observationSeen || fields[1] != "UNAVAILABLE") {
 			result.State = fields[1]
 			return result, nil
 		}
 		return GuestDispatchResult{}, fmt.Errorf("read guest terminal result: %w", ErrCapabilityUnavailable)
 	}
+}
+
+func decodeGuestTerminalObservation(encoded string, envelope sandboxhostprotocol.Envelope) (*sandboxhostprotocol.Observation, error) {
+	wire, err := base64.RawURLEncoding.DecodeString(encoded)
+	if err != nil || len(wire) == 0 || len(wire) > maximumGuestControlResponseBytes {
+		return nil, fmt.Errorf("invalid bounded observation encoding")
+	}
+	decoder := json.NewDecoder(bytes.NewReader(wire))
+	decoder.DisallowUnknownFields()
+	var observation sandboxhostprotocol.Observation
+	if err := decoder.Decode(&observation); err != nil {
+		return nil, fmt.Errorf("invalid observation")
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); err != io.EOF {
+		return nil, fmt.Errorf("invalid trailing observation")
+	}
+	canonical, err := json.Marshal(observation)
+	if err != nil || !bytes.Equal(canonical, wire) || !sandboxhostprotocol.ValidObservation(&observation) || observation.Sandbox.ID != envelope.SandboxID {
+		return nil, fmt.Errorf("invalid canonical observation")
+	}
+	if envelope.ProcessID == "" {
+		if observation.Process != nil {
+			return nil, fmt.Errorf("unexpected process observation")
+		}
+	} else if observation.Process == nil || observation.Process.ID != envelope.ProcessID || observation.Process.SandboxID != envelope.SandboxID {
+		return nil, fmt.Errorf("unbound process observation")
+	}
+	return &observation, nil
 }
 
 func readGuestSecretRequest(reader *bufio.Reader, envelopeID string) (sandboxauthority.SecretRequest, error) {

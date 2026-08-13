@@ -493,6 +493,15 @@ func validObservation(observation *Observation) bool {
 	return observation.Process == nil || validProcessObservation(observation.Sandbox.ID, *observation.Process)
 }
 
+// ValidObservation reports whether observation is a complete bounded dynamic
+// resource view. It is exposed for private host/guest transports that must
+// reject malformed observations before a host signs them. It does not attest
+// that an observation was produced by a real guest or host; that remains the
+// responsibility of the authenticated execution path.
+func ValidObservation(observation *Observation) bool {
+	return validObservation(observation)
+}
+
 func validSandboxActualState(state string) bool {
 	switch state {
 	case "pending", "provisioning", "ready", "quiescing", "cleaning", "failed", "unreachable", "lost", "deleted":
