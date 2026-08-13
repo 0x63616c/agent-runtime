@@ -42,6 +42,29 @@ func TestLoadConfigFailsClosedWithoutProtectedAuthorityAndAcceptsCompleteBounded
 	}
 }
 
+func TestLoadRehearsalConfigAcceptsOnlyTheSameBoundedInputsWithoutProtectedRunnerContract(t *testing.T) {
+	values := map[string]string{
+		"AR_RUNTIME_OPERATIONS_DATABASE_DSN":               "postgres://operator@db.example.invalid/runtime_source?sslmode=require",
+		"AR_RUNTIME_OPERATIONS_PITR_RESTORE_DSN":           "postgres://operator@db.example.invalid/runtime_restore?sslmode=require",
+		"AR_RUNTIME_OPERATIONS_AUDIT_SINK_URL":             "https://audit.example.invalid/v1/facts",
+		"AR_RUNTIME_OPERATIONS_AUDIT_RETENTION_URL":        "https://audit.example.invalid/v1/retention",
+		"AR_RUNTIME_OPERATIONS_RETENTION_TENANT":           "local-retention-tenant",
+		"AR_RUNTIME_OPERATIONS_RETENTION_AUTHORIZATION_ID": "local-retention-authorization-0001",
+		"AR_RUNTIME_OPERATIONS_PITR_TENANT":                "local-pitr-tenant",
+		"AR_RUNTIME_OPERATIONS_PITR_AUTHORIZATION_ID":      "local-pitr-authorization-00000001",
+		"AR_RUNTIME_OPERATIONS_PITR_RECOVERY_POINT":        "2026-08-12T12:00:00Z",
+		"AR_RUNTIME_OPERATIONS_PITR_EXPECTED_GENERATION":   "7",
+		"AR_RUNTIME_OPERATIONS_SOURCE_REVISION":            "abcdef0123456789",
+	}
+	get := func(key string) string { return values[key] }
+	if _, err := LoadRehearsalConfig(get); err != nil {
+		t.Fatalf("load complete local rehearsal config: %v", err)
+	}
+	if _, err := LoadConfig(get); err == nil {
+		t.Fatal("protected command accepted rehearsal config without runner contract")
+	}
+}
+
 func TestEvidenceRoundTripIsStrictAndNeverOverwritesAnExistingArtifact(t *testing.T) {
 	evidence := Evidence{
 		SchemaVersion: SchemaVersion, ProofLevel: "protected_authorized_operational_drill", Result: "passed", OccurredAt: time.Date(2026, 8, 11, 12, 0, 0, 0, time.UTC).Format(time.RFC3339), SourceRevision: "abcdef0123456789",

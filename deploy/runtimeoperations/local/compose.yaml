@@ -1,0 +1,41 @@
+name: agent-runtime-m5-rehearsal
+
+services:
+  source:
+    image: postgres@sha256:e5507c984377515b8c9922b0eb19f55aba2063fdc7bccf268cefd53133f97054
+    command: ["postgres", "-c", "archive_mode=on", "-c", "archive_command=cp %p /var/lib/postgresql/wal-archive/%f"]
+    environment:
+      POSTGRES_DB: agent_runtime_source
+      POSTGRES_USER: runtime_lab
+      POSTGRES_PASSWORD: ${AR_M5_LAB_POSTGRES_PASSWORD:?AR_M5_LAB_POSTGRES_PASSWORD is required}
+    ports: ["127.0.0.1::5432"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U runtime_lab -d agent_runtime_source"]
+      interval: 1s
+      timeout: 2s
+      retries: 30
+    tmpfs:
+      - /var/lib/postgresql/data:rw,noexec,nosuid,size=256m
+      - /var/lib/postgresql/wal-archive:rw,noexec,nosuid,size=64m
+      - /var/run/postgresql:rw,noexec,nosuid,size=16m
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: ["ALL"]
+    cap_add: ["CHOWN", "DAC_OVERRIDE", "FOWNER", "SETGID", "SETUID"]
+  restore:
+    image: postgres@sha256:e5507c984377515b8c9922b0eb19f55aba2063fdc7bccf268cefd53133f97054
+    environment:
+      POSTGRES_DB: agent_runtime_restore
+      POSTGRES_USER: runtime_lab
+      POSTGRES_PASSWORD: ${AR_M5_LAB_POSTGRES_PASSWORD:?AR_M5_LAB_POSTGRES_PASSWORD is required}
+    ports: ["127.0.0.1::5432"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U runtime_lab -d agent_runtime_restore"]
+      interval: 1s
+      timeout: 2s
+      retries: 30
+    tmpfs:
+      - /var/lib/postgresql/data:rw,noexec,nosuid,size=256m
+      - /var/run/postgresql:rw,noexec,nosuid,size=16m
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: ["ALL"]
+    cap_add: ["CHOWN", "DAC_OVERRIDE", "FOWNER", "SETGID", "SETUID"]

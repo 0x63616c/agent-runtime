@@ -7,6 +7,8 @@ package runtimeoperations
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -78,7 +80,19 @@ type PITREvidence struct {
 // LoadConfig requires every protected-run capability. Missing authority is a
 // refusal, not a blocked evidence artifact.
 func LoadConfig(getenv func(string) string) (Config, error) {
-	if getenv("RUNTIME_OPERATIONS_RUNNER_CONTRACT") != RunnerContract {
+	return loadConfig(getenv, true)
+}
+
+// LoadRehearsalConfig loads the same database, audit-sink, and restore inputs
+// as the protected drill without accepting a runner contract. It exists only
+// for disposable local rehearsals: callers must not write or retain Evidence
+// from this configuration as protected operational proof.
+func LoadRehearsalConfig(getenv func(string) string) (Config, error) {
+	return loadConfig(getenv, false)
+}
+
+func loadConfig(getenv func(string) string, requireProtectedContract bool) (Config, error) {
+	if requireProtectedContract && getenv("RUNTIME_OPERATIONS_RUNNER_CONTRACT") != RunnerContract {
 		return Config{}, errors.New("runtime operations drill: protected runner contract is absent")
 	}
 	config := Config{
@@ -146,6 +160,21 @@ func validHTTPS(value string) bool {
 // is written if any authorization, database observation, sink phase, or PITR
 // recovery check cannot be observed through the supplied capabilities.
 func Run(ctx context.Context, config Config) (Evidence, error) {
+	return run(ctx, config, &http.Client{Timeout: 15 * time.Second})
+}
+
+// RunRehearsal executes the same observations using a caller-supplied local
+// CA bundle. It is for disposable local services only and returns no retained
+// evidence artifact itself.
+func RunRehearsal(ctx context.Context, config Config, localCAPEM []byte) (Evidence, error) {
+	pool := x509.NewCertPool()
+	if !pool.AppendCertsFromPEM(localCAPEM) {
+		return Evidence{}, errors.New("runtime operations rehearsal: local audit CA is invalid")
+	}
+	return run(ctx, config, &http.Client{Timeout: 15 * time.Second, Transport: &http.Transport{TLSClientConfig: &tls.Config{RootCAs: pool, MinVersion: tls.VersionTLS12}}})
+}
+
+func run(ctx context.Context, config Config, client *http.Client) (Evidence, error) {
 	source, err := pgxpool.New(ctx, config.SourceDSN)
 	if err != nil {
 		return Evidence{}, fmt.Errorf("open protected source database: %w", err)
@@ -161,7 +190,7 @@ func Run(ctx context.Context, config Config) (Evidence, error) {
 	if !appMember || !operatorMember || !retentionScheduled || !retentionExecuted || partitions != 4 || !archiveModeOn || !sourcePrimary {
 		return Evidence{}, errors.New("runtime operations drill: database authority or retention/PITR precondition was not observed")
 	}
-	outage, recovery, retention, err := inspectAuditSink(ctx, config)
+	outage, recovery, retention, err := inspectAuditSink(ctx, config, client)
 	if err != nil {
 		return Evidence{}, err
 	}
@@ -239,8 +268,7 @@ func retentionEvidence(last, next time.Time, authorization, expectedAuthorizatio
 	return executed, scheduled
 }
 
-func inspectAuditSink(ctx context.Context, config Config) (int, int, int64, error) {
-	client := &http.Client{Timeout: 15 * time.Second}
+func inspectAuditSink(ctx context.Context, config Config, client *http.Client) (int, int, int64, error) {
 	body := []byte(`{"schema_version":"agent-runtime.audit-drill/v1","kind":"protected.drill","redacted":true}`)
 	post := func(mode string) (int, error) {
 		request, err := http.NewRequestWithContext(ctx, http.MethodPost, config.AuditSinkURL, bytes.NewReader(body))
