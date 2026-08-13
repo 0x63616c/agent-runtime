@@ -388,7 +388,7 @@ func TestLocalStackProjectsTheReviewedEightRoleTopology(t *testing.T) {
 		t.Fatalf("render local stack: %v", err)
 	}
 	expectedRoleCredentials := map[stack.ResourceID][]string{
-		"api":             {"STATE_DATABASE_DSN", "RUNTIME_API_ADMIN_TOKEN", "RUNTIME_API_DEVELOPER_TOKEN", "RUNTIME_API_CONTENT_ACCESS_KEY", "RUNTIME_API_CONTENT_SECRET_KEY"},
+		"api":             {"STATE_DATABASE_DSN", "RUNTIME_API_ADMIN_TOKEN", "RUNTIME_API_DEVELOPER_TOKEN", "RUNTIME_API_CONTENT_ACCESS_KEY", "RUNTIME_API_CONTENT_SECRET_KEY", "OBSERVABILITY_CORRELATION_KEY"},
 		"orchestration":   {"STATE_DATABASE_DSN", "TEMPORAL_AUTH_TOKEN", "ORCHESTRATION_PAYLOAD_BLOB_ACCESS_KEY", "ORCHESTRATION_PAYLOAD_BLOB_SECRET_KEY"},
 		"model":           {"CONVERSATION_ACCESS_TOKEN", "MODEL_API_KEY", "LOCAL_DEMO_STATE_DSN", "LOCAL_DEMO_CONTENT_ACCESS_KEY", "LOCAL_DEMO_CONTENT_SECRET_KEY"},
 		"tool":            {"SANDBOX_CONTROL_TOKEN", "TOOL_BROKER_TOKEN", "LOCAL_DEMO_STATE_DSN", "LOCAL_DEMO_CONTENT_ACCESS_KEY", "LOCAL_DEMO_CONTENT_SECRET_KEY"},
@@ -552,7 +552,7 @@ func TestMaterializeSecretsKeepsValuesPrivateAndStablePerStack(t *testing.T) {
 		"ar-safe-stack-sandbox-control-secret":            {"SANDBOX_CONTROL_TOKEN"},
 		"ar-safe-stack-blob-storage-secret":               {"BLOB_STORAGE_CREDENTIAL", "MINIO_ROOT_PASSWORD", "MINIO_ROOT_USER"},
 		"ar-safe-stack-orchestration-payload-blob-secret": {"ORCHESTRATION_PAYLOAD_BLOB_ACCESS_KEY", "ORCHESTRATION_PAYLOAD_BLOB_SECRET_KEY"},
-		"ar-safe-stack-runtime-api-secret":                {"RUNTIME_API_ADMIN_TOKEN", "RUNTIME_API_CONTENT_ACCESS_KEY", "RUNTIME_API_CONTENT_SECRET_KEY", "RUNTIME_API_DEVELOPER_TOKEN"},
+		"ar-safe-stack-runtime-api-secret":                {"OBSERVABILITY_CORRELATION_KEY", "RUNTIME_API_ADMIN_TOKEN", "RUNTIME_API_CONTENT_ACCESS_KEY", "RUNTIME_API_CONTENT_SECRET_KEY", "RUNTIME_API_DEVELOPER_TOKEN"},
 		"ar-safe-stack-codec-blob-secret":                 {"CODEC_BLOB_CREDENTIAL"},
 		"ar-safe-stack-sandbox-host-ca-secret":            {"SANDBOX_HOST_CA"},
 		"ar-safe-stack-sandbox-state-secret":              {"SANDBOX_STATE_DSN"},
