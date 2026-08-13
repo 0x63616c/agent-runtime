@@ -49,17 +49,20 @@ type principalLedger struct {
 
 // limitPolicy is the explicitly injected finite resource authority for one core composition.
 type limitPolicy struct {
-	defaults              ResourceLimits
-	maximum               ResourceLimits
-	version               string
-	canonicalizerVersion  string
-	capabilityVersion     string
-	imageAdmissionVersion string
-	maximumOperations     uint32
-	maximumProcesses      uint32
-	maximumWatches        uint32
-	admittedImages        map[Digest]ImageInfo
-	capabilities          CapabilitySnapshot
+	defaults                ResourceLimits
+	maximum                 ResourceLimits
+	version                 string
+	canonicalizerVersion    string
+	capabilityVersion       string
+	imageAdmissionVersion   string
+	maximumOperations       uint32
+	maximumProcesses        uint32
+	maximumWatches          uint32
+	maximumGlobalOperations uint32
+	maximumGlobalProcesses  uint32
+	maximumGlobalWatches    uint32
+	admittedImages          map[Digest]ImageInfo
+	capabilities            CapabilitySnapshot
 }
 
 type accepted struct {
@@ -122,14 +125,17 @@ func resolveControlOperationRequest(input []byte, acceptedAt, retentionExpiresAt
 		return ResolvedOperation{}, err
 	}
 	limits := limitPolicy{
-		defaults:              policy.Defaults,
-		maximum:               policy.Maximum,
-		version:               policy.Version,
-		canonicalizerVersion:  policy.CanonicalizerVersion,
-		capabilityVersion:     policy.CapabilityVersion,
-		imageAdmissionVersion: policy.ImageAdmissionVersion,
-		admittedImages:        policy.AdmittedImages,
-		capabilities:          policy.Capabilities,
+		defaults:                policy.Defaults,
+		maximum:                 policy.Maximum,
+		version:                 policy.Version,
+		canonicalizerVersion:    policy.CanonicalizerVersion,
+		capabilityVersion:       policy.CapabilityVersion,
+		imageAdmissionVersion:   policy.ImageAdmissionVersion,
+		maximumGlobalOperations: policy.MaximumGlobalOperations,
+		maximumGlobalProcesses:  policy.MaximumGlobalProcesses,
+		maximumGlobalWatches:    policy.MaximumGlobalWatches,
+		admittedImages:          policy.AdmittedImages,
+		capabilities:            policy.Capabilities,
 	}
 	limits = freezeLimitPolicy(normalizedLimitPolicy(limits))
 	if !validLimitPolicy(limits) {
@@ -195,6 +201,15 @@ func normalizedLimitPolicy(limits limitPolicy) limitPolicy {
 	}
 	if limits.maximumWatches == 0 {
 		limits.maximumWatches = 32
+	}
+	if limits.maximumGlobalOperations == 0 {
+		limits.maximumGlobalOperations = 4096
+	}
+	if limits.maximumGlobalProcesses == 0 {
+		limits.maximumGlobalProcesses = 4096
+	}
+	if limits.maximumGlobalWatches == 0 {
+		limits.maximumGlobalWatches = 128
 	}
 	limits.capabilities = normalizedCapabilitySnapshot(limits.capabilities, limits.capabilityVersion)
 	// The capability digest is derived from the entire structured profile. A
@@ -268,6 +283,32 @@ func (client *coreClient) otherPrincipalHasOperationLocked(id OperationID) bool 
 	return false
 }
 
+// Global counts are derived while the shared ledger lock is held, rather than
+// maintained as a second mutable counter that could diverge after an error.
+func (client *coreClient) globalOperationCountLocked() uint32 {
+	var count uint32
+	for _, ledger := range client.ledger.principals {
+		count += uint32(len(ledger.operations))
+	}
+	return count
+}
+
+func (client *coreClient) globalProcessCountLocked() uint32 {
+	var count uint32
+	for _, ledger := range client.ledger.principals {
+		count += uint32(len(ledger.processes))
+	}
+	return count
+}
+
+func (client *coreClient) globalWatchCountLocked() uint32 {
+	var count uint32
+	for _, ledger := range client.ledger.principals {
+		count += ledger.watches
+	}
+	return count
+}
+
 func (client *coreClient) Submit(ctx context.Context, request OperationRequest) (OperationRef, error) {
 	if err := contextFailure(ctx); err != nil {
 		return OperationRef{}, err
@@ -300,8 +341,14 @@ func (client *coreClient) Submit(ctx context.Context, request OperationRequest) 
 	if uint32(len(ledger.operations)) >= client.limits.maximumOperations {
 		return OperationRef{}, newFailure(FailureControlQuotaExceeded, "principal operation admission quota is exhausted", RetryCallerControlled)
 	}
+	if client.globalOperationCountLocked() >= client.limits.maximumGlobalOperations {
+		return OperationRef{}, newFailure(FailureControlQuotaExceeded, "global operation admission quota is exhausted", RetryCallerControlled)
+	}
 	if request.Kind == OperationExecProcess && uint32(len(ledger.processes)) >= client.limits.maximumProcesses {
 		return OperationRef{}, newFailure(FailureControlQuotaExceeded, "principal process admission quota is exhausted", RetryCallerControlled)
+	}
+	if request.Kind == OperationExecProcess && client.globalProcessCountLocked() >= client.limits.maximumGlobalProcesses {
+		return OperationRef{}, newFailure(FailureControlQuotaExceeded, "global process admission quota is exhausted", RetryCallerControlled)
 	}
 	frozen, digest, err := normalizeRequest(request, client.limits)
 	if err != nil {
@@ -590,6 +637,10 @@ func (client *coreClient) WatchOperation(ctx context.Context, id OperationID, fr
 		client.ledger.mu.Unlock()
 		return nil, newFailure(FailureControlQuotaExceeded, "operation watch admission quota is exhausted", RetryCallerControlled)
 	}
+	if client.globalWatchCountLocked() >= client.limits.maximumGlobalWatches {
+		client.ledger.mu.Unlock()
+		return nil, newFailure(FailureControlQuotaExceeded, "global operation watch admission quota is exhausted", RetryCallerControlled)
+	}
 	ledger.watches++
 	stream := &sliceOperationStream{events: []OperationEvent{event}}
 	stream.onClose = func() { client.releaseWatch(stream) }
@@ -858,6 +909,12 @@ func (client *coreClient) operationCount() int {
 		return 0
 	}
 	return len(ledger.operations)
+}
+
+func (client *coreClient) globalOperationCountLockedForTest() uint32 {
+	client.ledger.mu.RLock()
+	defer client.ledger.mu.RUnlock()
+	return client.globalOperationCountLocked()
 }
 
 func normalizeRequest(request OperationRequest, limits limitPolicy) (OperationRequest, Digest, error) {

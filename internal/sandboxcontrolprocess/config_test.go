@@ -21,6 +21,20 @@ func TestParseStrictDeclarativeConfiguration(t *testing.T) {
 	}
 }
 
+func TestParseCarriesFiniteGlobalAdmissionCaps(t *testing.T) {
+	input := strings.Replace(validDocument, `"capabilities": {}`, `"maximum_global_operations": 200,
+    "maximum_global_processes": 100,
+    "maximum_global_watches": 50,
+    "capabilities": {}`, 1)
+	config, err := Parse(strings.NewReader(input))
+	if err != nil {
+		t.Fatalf("Parse() error = %v", err)
+	}
+	if config.admission.MaximumGlobalOperations != 200 || config.admission.MaximumGlobalProcesses != 100 || config.admission.MaximumGlobalWatches != 50 {
+		t.Fatalf("Parse() global admission caps = %#v", config.admission)
+	}
+}
+
 func TestParseRejectsImplicitOrAmbiguousConfiguration(t *testing.T) {
 	t.Parallel()
 

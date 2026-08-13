@@ -151,8 +151,14 @@ type OperationAdmissionPolicy struct {
 	ImageAdmissionVersion string
 	Defaults              ResourceLimits
 	Maximum               ResourceLimits
-	Capabilities          CapabilitySnapshot
-	AdmittedImages        map[Digest]ImageInfo
+	// MaximumGlobal* bound one whole control authority, across every
+	// principal. Zero selects a deliberately finite compatibility default;
+	// it never means unbounded admission.
+	MaximumGlobalOperations uint32
+	MaximumGlobalProcesses  uint32
+	MaximumGlobalWatches    uint32
+	Capabilities            CapabilitySnapshot
+	AdmittedImages          map[Digest]ImageInfo
 }
 
 // ResolvedOperation is the bounded output of strict control-wire decoding and

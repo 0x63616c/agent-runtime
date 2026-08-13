@@ -94,14 +94,17 @@ func (identity identityDocument) apiIdentity() sandboxcontrolapi.Identity {
 }
 
 type admissionDocument struct {
-	Version               string                               `json:"version"`
-	CanonicalizerVersion  string                               `json:"canonicalizer_version"`
-	CapabilityVersion     string                               `json:"capability_version"`
-	ImageAdmissionVersion string                               `json:"image_admission_version"`
-	Defaults              resourceLimitsDocument               `json:"defaults"`
-	Maximum               resourceLimitsDocument               `json:"maximum"`
-	Capabilities          sandbox.CapabilitySnapshot           `json:"capabilities"`
-	AdmittedImages        map[sandbox.Digest]sandbox.ImageInfo `json:"admitted_images"`
+	Version                 string                               `json:"version"`
+	CanonicalizerVersion    string                               `json:"canonicalizer_version"`
+	CapabilityVersion       string                               `json:"capability_version"`
+	ImageAdmissionVersion   string                               `json:"image_admission_version"`
+	Defaults                resourceLimitsDocument               `json:"defaults"`
+	Maximum                 resourceLimitsDocument               `json:"maximum"`
+	MaximumGlobalOperations uint32                               `json:"maximum_global_operations"`
+	MaximumGlobalProcesses  uint32                               `json:"maximum_global_processes"`
+	MaximumGlobalWatches    uint32                               `json:"maximum_global_watches"`
+	Capabilities            sandbox.CapabilitySnapshot           `json:"capabilities"`
+	AdmittedImages          map[sandbox.Digest]sandbox.ImageInfo `json:"admitted_images"`
 }
 
 type resourceLimitsDocument struct {
@@ -183,7 +186,7 @@ func Parse(input io.Reader) (Config, error) {
 		tlsPrivateKeyFile: decoded.TLSPrivateKeyFile, databaseDSNEnvironment: decoded.DatabaseDSNEnvironment,
 		authorizationEnv: decoded.AuthorizationEnv, assertionKeyEnv: decoded.AssertionKeyEnv,
 		identity: decoded.Identity.apiIdentity(), bindingLifetime: bindingLifetime, retention: retention, waitInterval: waitInterval,
-		admission:   sandbox.OperationAdmissionPolicy{Version: decoded.Admission.Version, CanonicalizerVersion: decoded.Admission.CanonicalizerVersion, CapabilityVersion: decoded.Admission.CapabilityVersion, ImageAdmissionVersion: decoded.Admission.ImageAdmissionVersion, Defaults: decoded.Admission.Defaults.resourceLimits(), Maximum: decoded.Admission.Maximum.resourceLimits(), Capabilities: decoded.Admission.Capabilities, AdmittedImages: decoded.Admission.AdmittedImages},
+		admission:   sandbox.OperationAdmissionPolicy{Version: decoded.Admission.Version, CanonicalizerVersion: decoded.Admission.CanonicalizerVersion, CapabilityVersion: decoded.Admission.CapabilityVersion, ImageAdmissionVersion: decoded.Admission.ImageAdmissionVersion, Defaults: decoded.Admission.Defaults.resourceLimits(), Maximum: decoded.Admission.Maximum.resourceLimits(), MaximumGlobalOperations: decoded.Admission.MaximumGlobalOperations, MaximumGlobalProcesses: decoded.Admission.MaximumGlobalProcesses, MaximumGlobalWatches: decoded.Admission.MaximumGlobalWatches, Capabilities: decoded.Admission.Capabilities, AdmittedImages: decoded.Admission.AdmittedImages},
 		hostControl: hostControl,
 	}, nil
 }

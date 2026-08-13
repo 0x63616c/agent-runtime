@@ -58,14 +58,17 @@ func (client *LocalUnsafeClient) SanitizedDeveloperEnvironment() map[string]stri
 
 func limitPolicyFromAdmission(policy OperationAdmissionPolicy) limitPolicy {
 	return limitPolicy{
-		defaults:              policy.Defaults,
-		maximum:               policy.Maximum,
-		version:               policy.Version,
-		canonicalizerVersion:  policy.CanonicalizerVersion,
-		capabilityVersion:     policy.CapabilityVersion,
-		imageAdmissionVersion: policy.ImageAdmissionVersion,
-		admittedImages:        policy.AdmittedImages,
-		capabilities:          policy.Capabilities,
+		defaults:                policy.Defaults,
+		maximum:                 policy.Maximum,
+		version:                 policy.Version,
+		canonicalizerVersion:    policy.CanonicalizerVersion,
+		capabilityVersion:       policy.CapabilityVersion,
+		imageAdmissionVersion:   policy.ImageAdmissionVersion,
+		maximumGlobalOperations: policy.MaximumGlobalOperations,
+		maximumGlobalProcesses:  policy.MaximumGlobalProcesses,
+		maximumGlobalWatches:    policy.MaximumGlobalWatches,
+		admittedImages:          policy.AdmittedImages,
+		capabilities:            policy.Capabilities,
 	}
 }
 

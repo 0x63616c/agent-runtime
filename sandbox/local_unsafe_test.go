@@ -8,6 +8,9 @@ import (
 
 func TestNewLocalUnsafeClientRequiresAcknowledgementAndSanitizesDeveloperEnvironment(t *testing.T) {
 	policy := testLimitPolicy()
+	policy.maximumGlobalOperations = 17
+	policy.maximumGlobalProcesses = 13
+	policy.maximumGlobalWatches = 11
 	config := LocalUnsafeConfig{
 		Principal:            "developer",
 		Now:                  time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC),
@@ -32,6 +35,9 @@ func TestNewLocalUnsafeClientRequiresAcknowledgementAndSanitizesDeveloperEnviron
 	copy["LANG"] = "mutated"
 	if got, want := client.SanitizedDeveloperEnvironment()["LANG"], "C.UTF-8"; got != want {
 		t.Fatalf("SanitizedDeveloperEnvironment returned caller-owned state: %q, want %q", got, want)
+	}
+	if client.limits.maximumGlobalOperations != 17 || client.limits.maximumGlobalProcesses != 13 || client.limits.maximumGlobalWatches != 11 {
+		t.Fatalf("global admission policy was not preserved: %#v", client.limits)
 	}
 }
 
@@ -95,8 +101,11 @@ func TestLocalUnsafeClientRefusesSecurityAuthorityItCannotEnforce(t *testing.T) 
 
 func operationAdmissionPolicyForTest(policy limitPolicy) OperationAdmissionPolicy {
 	return OperationAdmissionPolicy{
-		Defaults: policy.defaults,
-		Maximum:  policy.maximum,
+		Defaults:                policy.defaults,
+		Maximum:                 policy.maximum,
+		MaximumGlobalOperations: policy.maximumGlobalOperations,
+		MaximumGlobalProcesses:  policy.maximumGlobalProcesses,
+		MaximumGlobalWatches:    policy.maximumGlobalWatches,
 	}
 }
 

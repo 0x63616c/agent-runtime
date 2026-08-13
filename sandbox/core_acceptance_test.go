@@ -609,6 +609,29 @@ func TestControlAdmissionQuotaRejectsBeforeAddingAnotherOperation(t *testing.T) 
 	}
 }
 
+func TestGlobalOperationAdmissionQuotaCannotBeEvadedAcrossPrincipals(t *testing.T) {
+	ledger := newCoreLedger()
+	policy := testLimitPolicy()
+	policy.maximumOperations = 10
+	policy.maximumGlobalOperations = 1
+	first, err := newCoreClientWithLedger("principal-a", time.Date(2026, 8, 6, 12, 0, 0, 0, time.UTC), policy, ledger)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := newCoreClientWithLedger("principal-b", time.Date(2026, 8, 6, 12, 0, 0, 0, time.UTC), policy, ledger)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := first.Submit(context.Background(), validCreateRequest("op_global_capacity_a")); err != nil {
+		t.Fatal(err)
+	}
+	_, err = second.Submit(context.Background(), validCreateRequest("op_global_capacity_b"))
+	failureCode(t, err, FailureControlQuotaExceeded)
+	if got := first.globalOperationCountLockedForTest(); got != 1 {
+		t.Fatalf("global operation count = %d, want one accepted operation", got)
+	}
+}
+
 func TestProcessAdmissionQuotaRejectsBeforeOperationAcceptance(t *testing.T) {
 	policy := testLimitPolicy()
 	policy.maximumProcesses = 1
@@ -627,6 +650,29 @@ func TestProcessAdmissionQuotaRejectsBeforeOperationAcceptance(t *testing.T) {
 	if got := client.operationCount(); got != 1 {
 		t.Fatalf("operation count = %d, want one", got)
 	}
+}
+
+func TestGlobalProcessAdmissionQuotaCannotBeEvadedAcrossPrincipals(t *testing.T) {
+	ledger := newCoreLedger()
+	policy := testLimitPolicy()
+	policy.maximumProcesses = 10
+	policy.maximumGlobalProcesses = 1
+	first, err := newCoreClientWithLedger("principal-a", time.Date(2026, 8, 6, 12, 0, 0, 0, time.UTC), policy, ledger)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := newCoreClientWithLedger("principal-b", time.Date(2026, 8, 6, 12, 0, 0, 0, time.UTC), policy, ledger)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := func(id OperationID) OperationRequest {
+		return OperationRequest{ID: id, Kind: OperationExecProcess, ExecProcess: &ExecProcessRequest{SandboxID: "sbx_01", Command: Command{Executable: "/bin/echo", Argv: []string{"echo"}, WorkDir: "/work"}}}
+	}
+	if _, err := first.Submit(context.Background(), request("op_global_process_a")); err != nil {
+		t.Fatal(err)
+	}
+	_, err = second.Submit(context.Background(), request("op_global_process_b"))
+	failureCode(t, err, FailureControlQuotaExceeded)
 }
 
 func TestOperationWatchAdmissionIsFiniteAndReleasedOnLocalClose(t *testing.T) {
@@ -684,6 +730,35 @@ func TestOperationWatchAdmissionIsPrincipalScopedAcrossClients(t *testing.T) {
 		}
 	})
 	_, err = second.WatchOperation(context.Background(), request.ID, "")
+	failureCode(t, err, FailureControlQuotaExceeded)
+}
+
+func TestGlobalWatchAdmissionQuotaCannotBeEvadedAcrossPrincipals(t *testing.T) {
+	ledger := newCoreLedger()
+	policy := testLimitPolicy()
+	policy.maximumWatches = 10
+	policy.maximumGlobalWatches = 1
+	first, err := newCoreClientWithLedger("principal-a", time.Date(2026, 8, 6, 12, 0, 0, 0, time.UTC), policy, ledger)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := newCoreClientWithLedger("principal-b", time.Date(2026, 8, 6, 12, 0, 0, 0, time.UTC), policy, ledger)
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstRequest, secondRequest := validCreateRequest("op_global_watch_a"), validCreateRequest("op_global_watch_b")
+	if _, err := first.Submit(context.Background(), firstRequest); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := second.Submit(context.Background(), secondRequest); err != nil {
+		t.Fatal(err)
+	}
+	stream, err := first.WatchOperation(context.Background(), firstRequest.ID, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = stream.Close() }()
+	_, err = second.WatchOperation(context.Background(), secondRequest.ID, "")
 	failureCode(t, err, FailureControlQuotaExceeded)
 }
 
