@@ -402,14 +402,14 @@ func TestLocalStackProjectsTheReviewedEightRoleTopology(t *testing.T) {
 		"codec": roles.RoleCodec, "sandbox-control": roles.RoleSandboxControl, "sandbox-host": roles.RoleSandboxHost,
 	}
 	expectedEgress := map[stack.ResourceID][]stack.ResourceID{
-		"api":             {"blob", "state", "telemetry"},
-		"orchestration":   {"blob", "state", "telemetry", "temporal"},
-		"model":           {"api", "blob", "egress-proxy", "state", "telemetry"},
-		"tool":            {"api", "blob", "sandbox-control", "state", "telemetry"},
-		"blob-role":       {"blob", "telemetry"},
-		"codec":           {"blob", "telemetry"},
-		"sandbox-control": {"state", "telemetry"},
-		"sandbox-host":    {"sandbox-control", "telemetry"},
+		"api":             {"blob", "otel-collector", "state"},
+		"orchestration":   {"blob", "otel-collector", "state", "temporal"},
+		"model":           {"api", "blob", "egress-proxy", "otel-collector", "state"},
+		"tool":            {"api", "blob", "otel-collector", "sandbox-control", "state"},
+		"blob-role":       {"blob", "otel-collector"},
+		"codec":           {"blob", "otel-collector"},
+		"sandbox-control": {"otel-collector", "state"},
+		"sandbox-host":    {"otel-collector", "sandbox-control"},
 	}
 	seenAccounts := map[string]struct{}{}
 	api := renderedResource(t, rendered.Resources(), "api")
