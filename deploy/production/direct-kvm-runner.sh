@@ -176,7 +176,8 @@ spec:
             limits: { cpu: "2000m", memory: "2048Mi" }
           env:
             # The Firecracker fixture provisioner verifies and executes its
-            # staged Jailer binary.  `/tmp` is world-writable and therefore
+            # staged Jailer binary.  The ordinary tmp directory is
+            # world-writable and therefore
             # deliberately rejected as an untrusted Jailer ancestor.
             - { name: TMPDIR, value: /var/lib/agent-runtime/firecracker-smoke }
           volumeMounts:
