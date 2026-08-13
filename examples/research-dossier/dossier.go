@@ -3,6 +3,8 @@ package researchdossier
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -163,13 +165,49 @@ func (app *App) Download(ctx context.Context, artifactID agentruntime.ArtifactID
 		if int64(len(body)) != stream.Artifact.SizeBytes {
 			return Dossier{}, errors.New("download Research Dossier: stream bytes do not match the declared Artifact size")
 		}
+		if err := verifyArtifact(artifactID, stream.Artifact, body); err != nil {
+			return Dossier{}, err
+		}
 		return Dossier{Artifact: stream.Artifact, Body: append([]byte(nil), body...), Citations: ExtractCitations(body)}, nil
 	}
 	download, err := app.client.ReadArtifact(ctx, artifactID)
 	if err != nil {
 		return Dossier{}, err
 	}
+	if err := verifyArtifact(artifactID, download.Artifact, download.Body); err != nil {
+		return Dossier{}, err
+	}
 	return Dossier{Artifact: download.Artifact, Body: append([]byte(nil), download.Body...), Citations: ExtractCitations(download.Body)}, nil
+}
+
+// verifyArtifact keeps the example's public download boundary fail-closed even
+// when a Client implementation is not the bundled streaming SDK. The artifact
+// identity, exact byte count, and SHA-256 value are all part of the public
+// contract, so citations are never published from substituted retained bytes.
+func verifyArtifact(requested agentruntime.ArtifactID, artifact agentruntime.ArtifactReference, body []byte) error {
+	if artifact.ID != requested || artifact.SizeBytes < 1 || int64(len(body)) != artifact.SizeBytes || len(artifact.SHA256) != sha256.Size*2 {
+		return errors.New("download Research Dossier: Artifact metadata does not match the requested bytes")
+	}
+	declared, err := hex.DecodeString(artifact.SHA256)
+	if err != nil || len(declared) != sha256.Size {
+		return errors.New("download Research Dossier: Artifact digest is invalid")
+	}
+	actual := sha256.Sum256(body)
+	if !bytesEqual(actual[:], declared) {
+		return errors.New("download Research Dossier: Artifact digest does not match the requested bytes")
+	}
+	return nil
+}
+
+func bytesEqual(left, right []byte) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	var different byte
+	for index := range left {
+		different |= left[index] ^ right[index]
+	}
+	return different == 0
 }
 
 // ExtractCitations returns ordered, de-duplicated absolute HTTP(S) citations.

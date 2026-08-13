@@ -2,6 +2,8 @@ package researchdossier
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"io"
 	"strings"
@@ -11,10 +13,11 @@ import (
 )
 
 func TestDossierRunsResearchAndRecoversProgressUsingOnlyPublicContract(t *testing.T) {
+	downloadBody := "# Research Dossier\n\nEvidence: [Primary source](https://example.com/report)."
 	client := &recordingClient{
 		session:   agentruntime.Session{ID: "sess_0000000000000001", AgentRevision: "arev_0000000000000001", State: agentruntime.SessionOpen},
-		artifacts: agentruntime.ArtifactPage{Artifacts: []agentruntime.ArtifactReference{{ID: "art_0000000000000001", MediaType: "text/markdown", SizeBytes: 68, SHA256: strings.Repeat("a", 64)}}},
-		download:  agentruntime.ArtifactDownload{Artifact: agentruntime.ArtifactReference{ID: "art_0000000000000001", MediaType: "text/markdown", SizeBytes: 68, SHA256: strings.Repeat("a", 64)}, Body: []byte("# Research Dossier\n\nEvidence: [Primary source](https://example.com/report).")},
+		artifacts: agentruntime.ArtifactPage{Artifacts: []agentruntime.ArtifactReference{{ID: "art_0000000000000001", MediaType: "text/markdown", SizeBytes: int64(len(downloadBody)), SHA256: testSHA256(downloadBody)}}},
+		download:  agentruntime.ArtifactDownload{Artifact: agentruntime.ArtifactReference{ID: "art_0000000000000001", MediaType: "text/markdown", SizeBytes: int64(len(downloadBody)), SHA256: testSHA256(downloadBody)}, Body: []byte(downloadBody)},
 		events:    agentruntime.EventPage{NextCursor: "cur_0000000000000001", Events: []agentruntime.Event{{ID: "evt_0000000000000001", SessionID: "sess_0000000000000001", Kind: agentruntime.EventTurnStarted}}},
 	}
 	app, err := NewApp(client, fixedKeys{})
@@ -50,7 +53,7 @@ func TestDossierRunsResearchAndRecoversProgressUsingOnlyPublicContract(t *testin
 
 func TestDossierDownloadsStreamingPublicArtifacts(t *testing.T) {
 	streamBody := "# Research Dossier\n\nEvidence: https://example.com/stream"
-	artifact := agentruntime.ArtifactReference{ID: "art_0000000000000001", MediaType: "text/markdown", SizeBytes: int64(len(streamBody)), SHA256: strings.Repeat("a", 64)}
+	artifact := agentruntime.ArtifactReference{ID: "art_0000000000000001", MediaType: "text/markdown", SizeBytes: int64(len(streamBody)), SHA256: testSHA256(streamBody)}
 	body := &recordingReadCloser{Reader: strings.NewReader(streamBody)}
 	client := &streamingRecordingClient{recordingClient: recordingClient{download: agentruntime.ArtifactDownload{Artifact: artifact, Body: []byte("legacy body")}}, stream: agentruntime.ArtifactStream{Artifact: artifact, Body: body}}
 	app, err := NewApp(client, fixedKeys{})
@@ -64,7 +67,7 @@ func TestDossierDownloadsStreamingPublicArtifacts(t *testing.T) {
 }
 
 func TestDossierReportsStreamingCloseFailure(t *testing.T) {
-	artifact := agentruntime.ArtifactReference{ID: "art_0000000000000001", MediaType: "text/markdown", SizeBytes: 68, SHA256: strings.Repeat("a", 64)}
+	artifact := agentruntime.ArtifactReference{ID: "art_0000000000000001", MediaType: "text/markdown", SizeBytes: int64(len("complete body")), SHA256: testSHA256("complete body")}
 	body := &recordingReadCloser{Reader: strings.NewReader("complete body"), closeErr: errors.New("close failed")}
 	client := &streamingRecordingClient{stream: agentruntime.ArtifactStream{Artifact: artifact, Body: body}}
 	app, err := NewApp(client, fixedKeys{})
@@ -77,7 +80,7 @@ func TestDossierReportsStreamingCloseFailure(t *testing.T) {
 }
 
 func TestDossierRejectsStreamingArtifactMetadataAndByteMismatches(t *testing.T) {
-	artifact := agentruntime.ArtifactReference{ID: "art_0000000000000001", MediaType: "text/markdown", SizeBytes: 5, SHA256: strings.Repeat("a", 64)}
+	artifact := agentruntime.ArtifactReference{ID: "art_0000000000000001", MediaType: "text/markdown", SizeBytes: 5, SHA256: testSHA256("bytes")}
 	for _, test := range []struct {
 		name   string
 		stream agentruntime.ArtifactStream
@@ -98,6 +101,30 @@ func TestDossierRejectsStreamingArtifactMetadataAndByteMismatches(t *testing.T) 
 				t.Fatalf("download mismatch error = %v, closed=%t", err, body != nil && body.closed)
 			}
 		})
+	}
+}
+
+func TestDossierRejectsTamperedLegacyArtifactBeforePublishingCitations(t *testing.T) {
+	body := []byte("# Research Dossier\n\nEvidence: https://example.com/tampered")
+	artifact := agentruntime.ArtifactReference{ID: "art_0000000000000001", MediaType: "text/markdown", SizeBytes: int64(len(body)), SHA256: testSHA256("different retained bytes")}
+	app, err := NewApp(&recordingClient{download: agentruntime.ArtifactDownload{Artifact: artifact, Body: body}}, fixedKeys{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := app.Download(context.Background(), artifact.ID); err == nil {
+		t.Fatal("tampered legacy Artifact download error = nil")
+	}
+}
+
+func TestDossierRejectsArtifactMetadataSubstitution(t *testing.T) {
+	body := []byte("# Research Dossier\n\nEvidence: https://example.com/substituted")
+	artifact := agentruntime.ArtifactReference{ID: "art_0000000000000002", MediaType: "text/markdown", SizeBytes: int64(len(body)), SHA256: testSHA256(string(body))}
+	app, err := NewApp(&recordingClient{download: agentruntime.ArtifactDownload{Artifact: artifact, Body: body}}, fixedKeys{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := app.Download(context.Background(), "art_0000000000000001"); err == nil {
+		t.Fatal("substituted Artifact download error = nil")
 	}
 }
 
@@ -187,3 +214,8 @@ func (client *recordingClient) ReadArtifact(context.Context, agentruntime.Artifa
 type fixedKeys struct{}
 
 func (fixedKeys) Next(action string) (string, error) { return "research-dossier-" + action, nil }
+
+func testSHA256(value string) string {
+	sum := sha256.Sum256([]byte(value))
+	return hex.EncodeToString(sum[:])
+}

@@ -14,10 +14,11 @@ import (
 )
 
 func TestDossierWebAndTerminalUseTheSamePublicController(t *testing.T) {
+	body := "https://example.com/"
 	client := &recordingClient{
 		session:   agentruntime.Session{ID: "sess_0000000000000001", AgentRevision: "arev_0000000000000001", State: agentruntime.SessionOpen},
-		artifacts: agentruntime.ArtifactPage{Artifacts: []agentruntime.ArtifactReference{{ID: "art_0000000000000001", MediaType: "text/markdown", SizeBytes: 20, SHA256: strings.Repeat("a", 64)}}},
-		download:  agentruntime.ArtifactDownload{Artifact: agentruntime.ArtifactReference{ID: "art_0000000000000001", MediaType: "text/markdown", SizeBytes: 20, SHA256: strings.Repeat("a", 64)}, Body: []byte("https://example.com/")},
+		artifacts: agentruntime.ArtifactPage{Artifacts: []agentruntime.ArtifactReference{{ID: "art_0000000000000001", MediaType: "text/markdown", SizeBytes: int64(len(body)), SHA256: testSHA256(body)}}},
+		download:  agentruntime.ArtifactDownload{Artifact: agentruntime.ArtifactReference{ID: "art_0000000000000001", MediaType: "text/markdown", SizeBytes: int64(len(body)), SHA256: testSHA256(body)}, Body: []byte(body)},
 	}
 	app, err := NewApp(client, fixedKeys{})
 	if err != nil {
