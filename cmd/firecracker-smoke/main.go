@@ -209,8 +209,10 @@ func smokeObservationFailureReason(err error) string {
 	}
 	message := err.Error()
 	switch {
-	case strings.Contains(message, "start Jailer:") && errors.Is(err, fs.ErrPermission):
+	case strings.Contains(message, "start Jailer:") && (errors.Is(err, fs.ErrPermission) || strings.Contains(strings.ToLower(message), "permission denied")):
 		return prefix + ": Jailer executable was denied by the host"
+	case strings.Contains(message, "start Jailer:") && strings.Contains(strings.ToLower(message), "no such file or directory"):
+		return prefix + ": Jailer executable was unavailable to the host"
 	case strings.Contains(message, "prepare jailed rootfs:"):
 		return prefix + ": Jailer fixture staging failed"
 	case strings.Contains(message, "await Firecracker API socket"):

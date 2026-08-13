@@ -22,6 +22,8 @@ func TestSmokeObservationFailureReasonRetainsOnlyTheFailedProofBoundary(t *testi
 		{name: "api readiness", err: errors.New("launch jailer: await Firecracker API socket: arbitrary Jailer diagnostic"), want: prefix + ": Firecracker API socket was not observed"},
 		{name: "launch", err: errors.New("launch jailer: arbitrary Jailer diagnostic"), want: prefix + ": Jailer or Firecracker launch failed"},
 		{name: "jailer permission", err: fmt.Errorf("launch jailer: start Jailer: %w", fs.ErrPermission), want: prefix + ": Jailer executable was denied by the host"},
+		{name: "jailer permission text", err: errors.New("launch jailer: start Jailer: fork/exec: permission denied"), want: prefix + ": Jailer executable was denied by the host"},
+		{name: "jailer missing", err: errors.New("launch jailer: start Jailer: fork/exec: no such file or directory"), want: prefix + ": Jailer executable was unavailable to the host"},
 		{name: "serial", err: errors.New("await guest serial marker: context deadline exceeded"), want: prefix + ": guest serial boot marker was not observed"},
 		{name: "control", err: errors.New("guest control channel: arbitrary guest wire"), want: prefix + ": private guest control handshake failed"},
 		{name: "cleanup", err: errors.New("cleanup protected Firecracker resources: arbitrary cleanup output"), want: prefix + ": Jailer cleanup proof failed"},
