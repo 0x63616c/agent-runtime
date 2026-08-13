@@ -8,14 +8,17 @@ mode="full"
 case "$#" in
   0) ;;
   1)
-    if [[ "$1" != "--research-dossier-only" ]]; then
-      echo "usage: run-durable-integration.sh [--research-dossier-only]" >&2
-      exit 1
-    fi
-    mode="research-dossier-only"
+    case "$1" in
+      --research-dossier-only) mode="research-dossier-only" ;;
+      --runtime-api-binary-only) mode="runtime-api-binary-only" ;;
+      *)
+        echo "usage: run-durable-integration.sh [--research-dossier-only|--runtime-api-binary-only]" >&2
+        exit 1
+        ;;
+    esac
     ;;
   *)
-    echo "usage: run-durable-integration.sh [--research-dossier-only]" >&2
+    echo "usage: run-durable-integration.sh [--research-dossier-only|--runtime-api-binary-only]" >&2
     exit 1
     ;;
 esac
@@ -74,6 +77,16 @@ if [[ "$mode" == "research-dossier-only" ]]; then
   AR_RUNTIME_API_WORKER_POSTGRES_DSN="$runtime_worker_dsn" \
     go test -race -tags=integration ./internal/runtimeapiprocess \
     -run '^TestResearchDossierRecoversLongRunningToolResearchThroughThePublicContract$' -count=1
+  exit 0
+fi
+
+# This runs the exact separately deployed API binary with the config-env and
+# secret names used by the production Stack, against only the disposable
+# dependencies above. It is intentionally a composition check, not a cluster
+# deployment or a live-environment attestation.
+if [[ "$mode" == "runtime-api-binary-only" ]]; then
+  go test -race -tags=integration ./internal/runtimeapiprocess \
+    -run '^TestDurableRuntimeAPIBinaryUsesProductionStyleConfig$' -count=1
   exit 0
 fi
 

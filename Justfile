@@ -31,6 +31,12 @@ completion-check: verify
 research-dossier-e2e:
     deploy/runtimeapi/run-durable-integration.sh --research-dossier-only
 
+# Builds and starts the separately deployed durable API binary with the
+# production Stack's config-env/secret naming against disposable PostgreSQL
+# and MinIO. It performs no Kubernetes or home-server mutation.
+runtime-api-durable-e2e:
+    deploy/runtimeapi/run-durable-integration.sh --runtime-api-binary-only
+
 # Requires the protected self-hosted Linux/x86_64/KVM runner contract and always
 # retains a redacted blocked report rather than treating a local machine as proof.
 firecracker-smoke report="evidence/firecracker-smoke.json" vm_id="" uid="0" gid="0" cgroup_parent="" stack_resource="" external_owner="" fixture_lock="tools/firecracker/fixtures.lock":

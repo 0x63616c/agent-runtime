@@ -160,5 +160,16 @@ lock={'version':'firecracker.fixtures/v2','fixture_version':'smoke-'+revision[:1
 with open(os.path.join(out,'fixtures.lock.candidate.json'),'w') as f: json.dump(lock,f,sort_keys=True,separators=(',',':')); f.write('\n')
 PY
 
+# Exercise the candidate through the exact strict lock, digest, bundle-member,
+# provenance, and rootfs-to-agent binding checks that the protected runner will
+# use. This local preflight maps only the just-assembled files; it never fetches,
+# publishes, changes a reviewed lock, or starts a VM.
+go run ./cmd/firecracker-fixture-preflight \
+  -lock "$output_dir/fixtures.lock.candidate.json" \
+  -firecracker-archive "$output_dir/input/firecracker-${firecracker_version}-x86_64.tgz" \
+  -kernel "$output_dir/input/vmlinux" \
+  -rootfs-bundle "$output_dir/bundles/rootfs-bundle.tar.gz" \
+  -guest-agent-bundle "$output_dir/bundles/guest-agent-bundle.tar.gz"
+
 echo "candidate lock: $output_dir/fixtures.lock.candidate.json"
 echo "review the original versioned kernel identity recorded in *-inputs.json, then publish kernel-vmlinux and the two bundles to the exact commit-$revision GitHub release; after independent byte verification, copy the reviewed candidate to tools/firecracker/fixtures.lock."

@@ -9,9 +9,12 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"os/exec"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -82,6 +85,95 @@ func TestDurablePostgresMinIOAPIProcessSurvivesRestart(t *testing.T) {
 	}
 	if turn, err := alice.CancelTurn(context.Background(), agentruntime.CancelTurnRequest{SessionID: session.ID, TurnID: accepted.Turn.ID, IdempotencyKey: "durable-cancel"}); err != nil || turn.State != agentruntime.TurnCancelled {
 		t.Fatalf("cancel restarted Turn = %#v, %v", turn, err)
+	}
+}
+
+// TestDurableRuntimeAPIBinaryUsesProductionStyleConfig proves the separately
+// deployed API entrypoint, rather than only its in-process composition. It
+// supplies the same config-env and injected durable credentials shape used by
+// the Stack deployment, but binds a disposable loopback address and services.
+func TestDurableRuntimeAPIBinaryUsesProductionStyleConfig(t *testing.T) {
+	postgresDSN := requiredRuntimeAPIEnvironment(t, "AR_RUNTIME_API_POSTGRES_DSN")
+	endpoint := requiredRuntimeAPIEnvironment(t, "AR_RUNTIME_API_MINIO_ENDPOINT")
+	accessKey := requiredRuntimeAPIEnvironment(t, "AR_RUNTIME_API_MINIO_ACCESS_KEY")
+	secretKey := requiredRuntimeAPIEnvironment(t, "AR_RUNTIME_API_MINIO_SECRET_KEY")
+	bucket := requiredRuntimeAPIEnvironment(t, "AR_RUNTIME_API_MINIO_BUCKET")
+	minioClient, err := minio.New(endpoint, &minio.Options{Creds: credentials.NewStaticV4(accessKey, secretKey, ""), Secure: false})
+	if err != nil {
+		t.Fatalf("create MinIO setup client: %v", err)
+	}
+	if err := minioClient.MakeBucket(context.Background(), bucket, minio.MakeBucketOptions{}); err != nil && minio.ToErrorResponse(err).Code != "BucketAlreadyOwnedByYou" {
+		t.Fatalf("create declared integration bucket: %v", err)
+	}
+
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("reserve loopback address: %v", err)
+	}
+	address := listener.Addr().String()
+	if err := listener.Close(); err != nil {
+		t.Fatalf("release loopback address: %v", err)
+	}
+	config := fmt.Sprintf(`{"version":1,"listen_address":%q,"public_listen":true,"storage":{"mode":"postgres","database_dsn_environment":"STATE_DATABASE_DSN","content":{"endpoint":%q,"access_key_environment":"RUNTIME_API_CONTENT_ACCESS_KEY","secret_key_environment":"RUNTIME_API_CONTENT_SECRET_KEY","bucket":%q}},"model_profiles":["balanced"],"max_request_bytes":4194304,"principals":[{"tenant":"api-binary-e2e","principal":"admin","admin":true,"bearer_token_environment":"RUNTIME_API_ADMIN_TOKEN"},{"tenant":"api-binary-e2e","principal":"developer","admin":false,"bearer_token_environment":"RUNTIME_API_DEVELOPER_TOKEN"}]}`, address, endpoint, bucket)
+	secrets := []string{
+		"RUNTIME_API_CONFIG=" + config,
+		"STATE_DATABASE_DSN=" + postgresDSN,
+		"RUNTIME_API_CONTENT_ACCESS_KEY=" + accessKey,
+		"RUNTIME_API_CONTENT_SECRET_KEY=" + secretKey,
+		"RUNTIME_API_ADMIN_TOKEN=api-binary-admin-token",
+		"RUNTIME_API_DEVELOPER_TOKEN=api-binary-developer-token",
+	}
+	binary := filepath.Join(t.TempDir(), "agent-runtime-api")
+	build := exec.Command("go", "build", "-o", binary, "./cmd/agent-runtime-api")
+	build.Dir = repositoryRoot(t)
+	if output, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("build durable API binary: %v: %s", err, output)
+	}
+	check := exec.Command(binary, "--config-env", "RUNTIME_API_CONFIG", "--check")
+	check.Env = append(os.Environ(), secrets...)
+	if output, err := check.CombinedOutput(); err != nil {
+		t.Fatalf("check production-style durable API configuration: %v: %s", err, output)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	process := exec.CommandContext(ctx, binary, "--config-env", "RUNTIME_API_CONFIG")
+	process.Env = append(os.Environ(), secrets...)
+	var output strings.Builder
+	process.Stdout, process.Stderr = &output, &output
+	if err := process.Start(); err != nil {
+		t.Fatalf("start durable API binary: %v", err)
+	}
+	defer func() {
+		if process.ProcessState != nil && process.ProcessState.Exited() {
+			return
+		}
+		_ = process.Process.Signal(syscall.SIGTERM)
+		if err := process.Wait(); err != nil {
+			t.Fatalf("stop durable API binary: %v: %s", err, output.String())
+		}
+	}()
+	baseURL := "http://" + address
+	for {
+		request, requestErr := http.NewRequestWithContext(ctx, http.MethodGet, baseURL+"/readyz", nil)
+		if requestErr != nil {
+			t.Fatalf("construct durable API readiness request: %v", requestErr)
+		}
+		response, requestErr := http.DefaultClient.Do(request)
+		if requestErr == nil {
+			_ = response.Body.Close()
+			if response.StatusCode == http.StatusOK {
+				break
+			}
+		}
+		if ctx.Err() != nil {
+			t.Fatalf("durable API binary never became ready: %v: %s", ctx.Err(), output.String())
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	admin := durableProcessClient(t, baseURL, "api-binary-admin-token", &durableRequestIDs{})
+	if _, err := admin.CreateAgent(ctx, agentruntime.CreateAgentRequest{IdempotencyKey: "api-binary-agent", Name: "binary-api", ModelProfile: "balanced", Instructions: "prove deployed composition"}); err != nil {
+		t.Fatalf("create Agent through durable API binary: %v", err)
 	}
 }
 

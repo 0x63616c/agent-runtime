@@ -132,3 +132,10 @@ project bundles to the exact `commit-<revision>` GitHub release URLs named in
 the candidate. A separate review must verify those uploaded bytes before the
 candidate is copied to `tools/firecracker/fixtures.lock`; without that review
 and publication the smoke command remains correctly blocked.
+
+Before printing the candidate path, the assembler runs a local
+`firecracker-fixture-preflight`: it parses the candidate with the strict lock
+parser and provisions solely the just-assembled local files through the same
+digest, tar-member, provenance, and rootfs-to-agent binding checks used by the
+protected smoke runner. It is a reproducibility check, not publication or
+Linux/KVM boot evidence.
