@@ -304,7 +304,9 @@ execute() {
   command -v kubectl >/dev/null || fail 'kubectl is required'; command -v jq >/dev/null || fail 'jq is required'
   kubectl --kubeconfig "$kubeconfig" config get-contexts -o name | grep -Fx -- "$context_value" >/dev/null || fail 'explicit context is unavailable'
   [[ -z "$(kubectl --kubeconfig "$kubeconfig" --context "$context_value" get "namespace/$namespace" --ignore-not-found -o name)" ]] || fail 'namespace already exists; stager will not take it over'
-  manifest="$(mktemp)"; trap 'rm -f -- "${manifest:-}"' EXIT
+  manifest="$(mktemp)"
+  rm -f -- "$manifest"
+  trap 'rm -f -- "${manifest:-}"' EXIT
   render --run-id "$run_id" --revision "$revision" --rootfs-builder-manifest "$builder_manifest" --output "$manifest"
   local cleanup=true result=0 status logs
   trap 'if [[ "${cleanup:-false}" == true ]]; then kubectl --kubeconfig "$kubeconfig" --context "$context_value" delete "namespace/$namespace" --ignore-not-found --wait=false >/dev/null || true; kubectl --kubeconfig "$kubeconfig" --context "$context_value" wait --for=delete "namespace/$namespace" --timeout=180s >/dev/null 2>&1 || echo "fixture input-stager cleanup failed; delete namespace $namespace" >&2; fi; rm -f -- "${manifest:-}"' EXIT
