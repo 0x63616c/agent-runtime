@@ -7,12 +7,21 @@ import (
 	"crypto/x509"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
 	"strings"
+	"syscall"
 	"time"
 )
+
+// ErrTransientUnavailable marks the narrow set of transport failures that can
+// occur while the broker Service is being brought up. It deliberately does
+// not cover a non-success HTTP response: authentication, authorization, and
+// protocol failures must remain fatal to the trigger role.
+var ErrTransientUnavailable = errors.New("tool dispatch temporarily unavailable")
 
 // Client is the trigger-only RoleTool authority. It has no execution request
 // fields and cannot select a tenant, operation, or recovery mode.
@@ -64,6 +73,9 @@ func (client *Client) DispatchOnce(ctx context.Context) (Receipt, error) {
 	request.Header.Set("X-Tool-Dispatch-Role", Role)
 	response, err := client.http.Do(request)
 	if err != nil {
+		if transientTransportFailure(err) {
+			return Receipt{}, fmt.Errorf("dispatch tool work: %w", ErrTransientUnavailable)
+		}
 		return Receipt{}, errors.New("dispatch tool work: unavailable")
 	}
 	defer func() { _ = response.Body.Close() }()
@@ -77,4 +89,19 @@ func (client *Client) DispatchOnce(ctx context.Context) (Receipt, error) {
 		return Receipt{}, errors.New("dispatch tool work: invalid receipt")
 	}
 	return receipt, nil
+}
+
+func transientTransportFailure(err error) bool {
+	var networkError net.Error
+	if errors.As(err, &networkError) && networkError.Timeout() {
+		return true
+	}
+	var operationError *net.OpError
+	if !errors.As(err, &operationError) {
+		return false
+	}
+	return errors.Is(operationError.Err, syscall.ECONNREFUSED) ||
+		errors.Is(operationError.Err, syscall.ECONNRESET) ||
+		errors.Is(operationError.Err, syscall.EHOSTUNREACH) ||
+		errors.Is(operationError.Err, syscall.ENETUNREACH)
 }

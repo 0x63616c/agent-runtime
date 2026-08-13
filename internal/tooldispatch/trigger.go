@@ -22,6 +22,8 @@ type TriggerScheduler interface {
 
 type realtimeTriggerScheduler struct{ clock facebookclock.Clock }
 
+const maximumConsecutiveStartupUnavailability = 12
+
 // NewRealtimeTriggerScheduler returns the production scheduler for injection
 // at the application composition root.
 func NewRealtimeTriggerScheduler() TriggerScheduler {
@@ -38,10 +40,21 @@ func RunTriggerLoop(ctx context.Context, client TriggerClient, scheduler Trigger
 	if ctx == nil || client == nil || scheduler == nil || interval < time.Second || interval > 5*time.Minute {
 		return errors.New("run tool dispatch trigger: declared client, scheduler, and interval are required")
 	}
+	consecutiveUnavailability := 0
 	for {
 		if _, err := client.DispatchOnce(ctx); err != nil {
+			if errors.Is(err, ErrTransientUnavailable) && consecutiveUnavailability < maximumConsecutiveStartupUnavailability {
+				consecutiveUnavailability++
+				select {
+				case <-ctx.Done():
+					return nil
+				case <-scheduler.After(interval):
+					continue
+				}
+			}
 			return err
 		}
+		consecutiveUnavailability = 0
 		select {
 		case <-ctx.Done():
 			return nil

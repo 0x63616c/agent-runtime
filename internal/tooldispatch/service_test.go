@@ -8,6 +8,7 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
+	"errors"
 	"math/big"
 	"net/http"
 	"net/http/httptest"
@@ -177,6 +178,61 @@ func TestTriggerLoopMakesOneBoundedEmptyScanAndStopsWithContext(t *testing.T) {
 	}
 	if calls != 1 {
 		t.Fatalf("scan calls = %d, want 1", calls)
+	}
+}
+
+func TestTriggerLoopRetriesOnlyAStartupTransportUnavailability(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ticks := make(chan time.Time, 1)
+	calls := 0
+	client := triggerClientFunc(func(context.Context) (tooldispatch.Receipt, error) {
+		calls++
+		if calls == 1 {
+			return tooldispatch.Receipt{}, tooldispatch.ErrTransientUnavailable
+		}
+		cancel()
+		return tooldispatch.Receipt{Attempted: true}, nil
+	})
+	finished := make(chan error, 1)
+	go func() {
+		finished <- tooldispatch.RunTriggerLoop(ctx, client, triggerScheduler{ticks: ticks}, time.Second)
+	}()
+	ticks <- time.Now()
+	if err := <-finished; err != nil {
+		t.Fatalf("RunTriggerLoop() after broker startup = %v", err)
+	}
+	if calls != 2 {
+		t.Fatalf("dispatch calls = %d, want 2", calls)
+	}
+}
+
+func TestTriggerLoopDoesNotRetryNonTransportFailure(t *testing.T) {
+	client := triggerClientFunc(func(context.Context) (tooldispatch.Receipt, error) {
+		return tooldispatch.Receipt{}, errors.New("dispatch denied")
+	})
+	err := tooldispatch.RunTriggerLoop(context.Background(), client, triggerScheduler{ticks: make(chan time.Time)}, time.Second)
+	if err == nil || err.Error() != "dispatch denied" {
+		t.Fatalf("RunTriggerLoop() = %v, want non-transport failure", err)
+	}
+}
+
+func TestTriggerLoopFailsAfterBoundedStartupUnavailability(t *testing.T) {
+	ticks := make(chan time.Time, 12)
+	for range 12 {
+		ticks <- time.Now()
+	}
+	calls := 0
+	client := triggerClientFunc(func(context.Context) (tooldispatch.Receipt, error) {
+		calls++
+		return tooldispatch.Receipt{}, tooldispatch.ErrTransientUnavailable
+	})
+	err := tooldispatch.RunTriggerLoop(context.Background(), client, triggerScheduler{ticks: ticks}, time.Second)
+	if !errors.Is(err, tooldispatch.ErrTransientUnavailable) {
+		t.Fatalf("RunTriggerLoop() = %v, want bounded unavailable failure", err)
+	}
+	if calls != 13 {
+		t.Fatalf("dispatch calls = %d, want 13", calls)
 	}
 }
 

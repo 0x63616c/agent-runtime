@@ -84,7 +84,11 @@ k8s_resource('migration-runner', resource_deps=['state'], pod_readiness='wait')
 k8s_resource('api', resource_deps=['state', 'telemetry', 'otel-collector'], pod_readiness='wait', links=[link('http://api:8080/readyz', 'API runtime readiness')])
 k8s_resource('orchestration', resource_deps=['state', 'temporal', 'telemetry', 'stack-reconcile'], pod_readiness='wait', links=[link('http://orchestration:8081/readyz', 'Orchestration runtime readiness')])
 k8s_resource('model', resource_deps=['api', 'egress-proxy', 'telemetry'], pod_readiness='wait')
-k8s_resource('tool', resource_deps=['api', 'telemetry'], pod_readiness='wait')
+if profile == 'local':
+    k8s_resource('tool', resource_deps=['api', 'telemetry'], pod_readiness='wait')
+else:
+    k8s_resource('tool-dispatch', resource_deps=['state', 'blob', 'sandbox-control', 'telemetry', 'stack-reconcile'], pod_readiness='wait')
+    k8s_resource('tool', resource_deps=['api', 'telemetry', 'tool-dispatch'], pod_readiness='wait')
 k8s_resource('blob-role', resource_deps=['blob', 'telemetry'], pod_readiness='wait')
 k8s_resource('codec', resource_deps=['blob', 'telemetry'], pod_readiness='wait', links=[link('http://codec:8085/readyz', 'Codec runtime readiness'), link('https://0x63616c.github.io/agent-runtime/', 'Agent Runtime docs')])
 k8s_resource('sandbox-control', resource_deps=['state', 'telemetry'], pod_readiness='wait')
