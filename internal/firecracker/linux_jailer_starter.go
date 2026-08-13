@@ -204,15 +204,15 @@ func trustedJailerArtifact(artifact PinnedArtifact) error {
 		return errors.New("absolute SHA-256-pinned artifact is required")
 	}
 	if err := trustedJailerDirectory(filepath.Dir(artifact.Path)); err != nil {
-		return fmt.Errorf("trusted artifact directory: %w", err)
+		return errors.New("artifact ancestor is not trusted")
 	}
 	info, err := os.Lstat(artifact.Path)
 	if err != nil || !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 || info.Mode().Perm()&0o022 != 0 {
-		return errors.New("root-owned immutable regular artifact is required")
+		return errors.New("artifact is not a non-writable regular file")
 	}
 	stat, ok := info.Sys().(*syscall.Stat_t)
 	if !ok || stat.Uid != 0 {
-		return errors.New("root-owned immutable regular artifact is required")
+		return errors.New("artifact is not owned by root")
 	}
 	return nil
 }

@@ -218,7 +218,14 @@ func smokeObservationFailureReason(err error) string {
 	case strings.Contains(message, "declared Jailer cgroup authority:"):
 		return prefix + ": Jailer cgroup authority was unavailable"
 	case strings.Contains(message, "immutable Jailer launch artifact:"):
-		return prefix + ": Jailer launch artifact was not trusted by the host"
+		switch {
+		case strings.Contains(message, "artifact ancestor is not trusted"):
+			return prefix + ": Jailer launcher ancestry was not trusted by the host"
+		case strings.Contains(message, "artifact is not owned by root"):
+			return prefix + ": Jailer launcher was not owned by root"
+		default:
+			return prefix + ": Jailer launch artifact was not trusted by the host"
+		}
 	case strings.Contains(message, "trusted staged Jailer root:"):
 		return prefix + ": staged Jailer root was not trusted by the host"
 	case strings.Contains(message, "prepare jailed rootfs:"):
