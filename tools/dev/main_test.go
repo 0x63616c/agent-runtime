@@ -259,6 +259,49 @@ func TestMaterializedSandboxHostCertificateCarriesItsFixedSPIFFEIdentity(t *test
 	}
 }
 
+func TestMaterializedBlobTLSIsAChainValidMinIOServerCertificate(t *testing.T) {
+	for _, profile := range []string{"local", "ci"} {
+		t.Run(profile, func(t *testing.T) {
+			root := t.TempDir()
+			stackName := "blob-tls-proof"
+			if _, err := materializeSecretsForProfile(stackName, profile, root, strings.NewReader(strings.Repeat(profile, 4096))); err != nil {
+				t.Fatalf("materialize %s secrets: %v", profile, err)
+			}
+			wire, err := os.ReadFile(secretStatePath(root, stackName, profile))
+			if err != nil {
+				t.Fatalf("read private %s secret state: %v", profile, err)
+			}
+			var state localSecrets
+			if err := json.Unmarshal(wire, &state); err != nil {
+				t.Fatalf("parse private %s secret state: %v", profile, err)
+			}
+			secretName := "ar-" + stackName + "-blob-tls-secret"
+			if profile == "ci" {
+				secretName = "ar-ci-" + stackName + "-blob-tls-secret"
+			}
+			values := state.Values[secretName]
+			names := []string{"blob", "blob." + profileNamespace(stackName, profile) + ".svc"}
+			if !localServerTLSIsValid(values["BLOB_TLS_CA"], values["BLOB_TLS_CERT"], values["BLOB_TLS_KEY"], names) {
+				t.Fatal("materialized blob TLS does not contain a chain-valid MinIO server identity")
+			}
+			block, _ := pem.Decode([]byte(values["BLOB_TLS_CERT"]))
+			if block == nil {
+				t.Fatal("materialized blob certificate is not PEM")
+			}
+			certificate, err := x509.ParseCertificate(block.Bytes)
+			if err != nil {
+				t.Fatalf("parse materialized blob certificate: %v", err)
+			}
+			actualNames := append([]string(nil), certificate.DNSNames...)
+			sort.Strings(actualNames)
+			sort.Strings(names)
+			if strings.Join(actualNames, ",") != strings.Join(names, ",") {
+				t.Fatalf("materialized blob certificate DNS SANs do not match the reviewed service identities")
+			}
+		})
+	}
+}
+
 func normalizedTopology(t *testing.T, resources []stack.Resource, namespace string) []byte {
 	t.Helper()
 	for index := range resources {
@@ -670,6 +713,12 @@ func TestMaterializeCISecretsUsesTheCIProfileIdentity(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(root, ".runtime", "dev", "ci-stack.ci.secrets.json")); err != nil {
 		t.Fatalf("stat profile-scoped CI secret state: %v", err)
+	}
+}
+
+func TestMaterializeSecretsRefusesProductionProfile(t *testing.T) {
+	if _, err := materializeSecretsForProfile("production-proof", "production", t.TempDir(), strings.NewReader(strings.Repeat("p", 4096))); err == nil {
+		t.Fatal("local development secret materializer accepted production external Secret references")
 	}
 }
 

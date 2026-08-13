@@ -9,6 +9,7 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/sha256"
+	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/base64"
@@ -591,6 +592,9 @@ func materializeSecrets(stack, root string, reader io.Reader) ([]byte, error) {
 }
 
 func materializeSecretsForProfile(stackName, profile, root string, reader io.Reader) ([]byte, error) {
+	if profile != "local" && profile != "ci" {
+		return nil, fmt.Errorf("materialize local development secrets: profile must be local or ci")
+	}
 	references, err := localSecretReferences(stackName, profile)
 	if err != nil {
 		return nil, err
@@ -673,6 +677,9 @@ func materializeSecretsForProfile(stackName, profile, root string, reader io.Rea
 	if err := materializeSandboxPKI(state.Values, references, reader); err != nil {
 		return nil, err
 	}
+	if err := materializeBlobPKI(state.Values, references, profileNamespace(stackName, profile), reader); err != nil {
+		return nil, err
+	}
 	if profile != "local" {
 		if err := materializeToolDispatchCredentials(state.Values, references, stackName, profile, reader); err != nil {
 			return nil, err
@@ -698,6 +705,61 @@ func materializeSecretsForProfile(stackName, profile, root string, reader io.Rea
 		return nil, fmt.Errorf("encode local development Secret manifests: %w", err)
 	}
 	return encoded, nil
+}
+
+// materializeBlobPKI replaces the initial disposable placeholders with a
+// stack-scoped MinIO server certificate. This controller owns local and CI
+// Secret values only; production retains its reviewed external Secret source.
+func materializeBlobPKI(values map[string]map[string]string, references []localSecretReference, namespace string, reader io.Reader) error {
+	tlsSecret, found := secretReferenceByID(references, "blob-tls-secret")
+	if !found {
+		return fmt.Errorf("materialize local blob PKI: reviewed Stack is missing blob TLS Secret reference")
+	}
+	for _, key := range []string{"BLOB_TLS_CA", "BLOB_TLS_CERT", "BLOB_TLS_KEY"} {
+		if _, found := values[tlsSecret.name][key]; !found {
+			return fmt.Errorf("materialize local blob PKI: reviewed Stack is missing %s/%s", tlsSecret.name, key)
+		}
+	}
+	names := []string{"blob", "blob." + namespace + ".svc"}
+	if localServerTLSIsValid(values[tlsSecret.name]["BLOB_TLS_CA"], values[tlsSecret.name]["BLOB_TLS_CERT"], values[tlsSecret.name]["BLOB_TLS_KEY"], names) {
+		return nil
+	}
+	authority, authorityKey, err := localCertificateAuthority(reader)
+	if err != nil {
+		return err
+	}
+	certificate, private, err := localCertificate(reader, authority, authorityKey, names, false, nil)
+	if err != nil {
+		return err
+	}
+	values[tlsSecret.name]["BLOB_TLS_CA"] = string(authority)
+	values[tlsSecret.name]["BLOB_TLS_CERT"] = string(certificate)
+	values[tlsSecret.name]["BLOB_TLS_KEY"] = string(private)
+	return nil
+}
+
+func localServerTLSIsValid(authorityPEM, certificatePEM, privateKeyPEM string, names []string) bool {
+	roots := x509.NewCertPool()
+	if !roots.AppendCertsFromPEM([]byte(authorityPEM)) {
+		return false
+	}
+	pair, err := tls.X509KeyPair([]byte(certificatePEM), []byte(privateKeyPEM))
+	if err != nil || len(pair.Certificate) == 0 {
+		return false
+	}
+	certificate, err := x509.ParseCertificate(pair.Certificate[0])
+	if err != nil {
+		return false
+	}
+	if _, err := certificate.Verify(x509.VerifyOptions{Roots: roots, KeyUsages: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}}); err != nil {
+		return false
+	}
+	for _, name := range names {
+		if err := certificate.VerifyHostname(name); err != nil {
+			return false
+		}
+	}
+	return true
 }
 
 // materializeToolDispatchCredentials creates the dedicated local trigger TLS
