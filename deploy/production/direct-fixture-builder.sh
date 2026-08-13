@@ -210,7 +210,7 @@ spec:
               test "\$(git -C /workspace rev-parse HEAD)" = "$revision"
               test -z "\$(git -C /workspace status --porcelain)"
               test ! -e /var/lib/agent-runtime/firecracker-fixtures/home-server
-              test ! -e /etc/agent-runtime/firecracker-direct-fixtures.json
+              test ! -e /var/lib/agent-runtime/firecracker-direct/fixture-source-map.json
               for input in firecracker.tgz vmlinux rootfs-builder.json; do
                 test -f "/input-parent/home-server/\$input"
                 test "\$(stat -c '%u %a' "/input-parent/home-server/\$input")" = '0 600'
@@ -241,8 +241,8 @@ spec:
               find "\$stage" -type d -exec chown 0:0 {} + -exec chmod 0700 {} +
               find "\$stage" -type f -exec chown 0:0 {} + -exec chmod 0600 {} +
               mv "\$stage" /var/lib/agent-runtime/firecracker-fixtures/home-server
-              install -d -o 0 -g 0 -m 0700 /etc/agent-runtime
-              /workspace/tools/firecracker/write-direct-fixture-source-map.sh /var/lib/agent-runtime/firecracker-fixtures/home-server /etc/agent-runtime/firecracker-direct-fixtures.json
+              install -d -o 0 -g 0 -m 0700 /var/lib/agent-runtime/firecracker-direct
+              /workspace/tools/firecracker/write-direct-fixture-source-map.sh /var/lib/agent-runtime/firecracker-fixtures/home-server /var/lib/agent-runtime/firecracker-direct/fixture-source-map.json
           securityContext:
             readOnlyRootFilesystem: true
             allowPrivilegeEscalation: false
@@ -254,7 +254,7 @@ spec:
             - { name: work, mountPath: /work }
             - { name: inputs, mountPath: /input-parent, readOnly: true }
             - { name: fixtures, mountPath: /var/lib/agent-runtime/firecracker-fixtures }
-            - { name: direct-config, mountPath: /etc/agent-runtime }
+            - { name: direct-authority, mountPath: /var/lib/agent-runtime/firecracker-direct }
       volumes:
         - name: work
           emptyDir: { sizeLimit: 2Gi }
@@ -262,8 +262,8 @@ spec:
           hostPath: { path: /var/lib/agent-runtime/firecracker-fixture-inputs, type: Directory }
         - name: fixtures
           hostPath: { path: /var/lib/agent-runtime/firecracker-fixtures, type: DirectoryOrCreate }
-        - name: direct-config
-          hostPath: { path: /etc/agent-runtime, type: DirectoryOrCreate }
+        - name: direct-authority
+          hostPath: { path: /var/lib/agent-runtime/firecracker-direct, type: DirectoryOrCreate }
 EOF
 }
 
@@ -354,7 +354,7 @@ self_test() {
   grep -Fqx '        kubernetes.io/arch: amd64' "$manifest"
   grep -Fqx '          hostPath: { path: /var/lib/agent-runtime/firecracker-fixtures, type: DirectoryOrCreate }' "$manifest"
   grep -Fq '/workspace/tools/firecracker/assemble-fixtures.sh "$work/assembled"' "$manifest"
-  grep -Fq '/workspace/tools/firecracker/write-direct-fixture-source-map.sh /var/lib/agent-runtime/firecracker-fixtures/home-server /etc/agent-runtime/firecracker-direct-fixtures.json' "$manifest"
+  grep -Fq '/workspace/tools/firecracker/write-direct-fixture-source-map.sh /var/lib/agent-runtime/firecracker-fixtures/home-server /var/lib/agent-runtime/firecracker-direct/fixture-source-map.json' "$manifest"
   if "$0" render --run-id bad_ID --image "ghcr.io/0x63616c/agent-runtime-firecracker-fixture-builder@sha256:$digest" --revision "$(git rev-parse HEAD)" --firecracker-version v1.16.1 --kernel-url https://example.invalid/vmlinux?versionId=abc --kernel-version-id abc --source-date-epoch 1704067200 --rootfs-bytes 16777216 --rootfs-uuid 00000000-0000-0000-0000-000000000001 --output "$tmp/bad.yaml" >/dev/null 2>&1; then fail 'accepted invalid run ID'; fi
   if "$0" render --run-id fixture-test --image ghcr.io/0x63616c/agent-runtime-firecracker-fixture-builder:latest --revision "$(git rev-parse HEAD)" --firecracker-version v1.16.1 --kernel-url https://example.invalid/vmlinux?versionId=abc --kernel-version-id abc --source-date-epoch 1704067200 --rootfs-bytes 16777216 --rootfs-uuid 00000000-0000-0000-0000-000001 --output "$tmp/bad.yaml" >/dev/null 2>&1; then fail 'accepted unpinned image'; fi
   if "$0" execute --run-id fixture-test --image "ghcr.io/0x63616c/agent-runtime-firecracker-fixture-builder@sha256:$digest" --revision "$(git rev-parse HEAD)" --firecracker-version v1.16.1 --kernel-url https://example.invalid/vmlinux?versionId=abc --kernel-version-id abc --source-date-epoch 1704067200 --rootfs-bytes 16777216 --rootfs-uuid 00000000-0000-0000-0000-000000000001 --kubeconfig /dev/null --context home-server --registry-docker-config /dev/null --evidence-file "$tmp/evidence.json" >/dev/null 2>&1; then fail 'execute accepted no explicit authorization flag'; fi

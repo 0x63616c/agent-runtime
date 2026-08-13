@@ -21,7 +21,9 @@ import (
 
 const (
 	directConfigVersion = "agent-runtime.firecracker-direct-kvm/v1"
-	directConfigPath    = "/etc/agent-runtime/firecracker-direct-kvm.json"
+	// Talos keeps /etc immutable. Direct-run authority therefore lives under
+	// the root-owned state volume rather than the protected runner's /etc path.
+	directConfigPath    = "/var/lib/agent-runtime/firecracker-direct/kvm-config.json"
 	directEvidenceRoot  = "/var/lib/agent-runtime/firecracker-evidence"
 	directFixtureLock   = "/var/lib/agent-runtime/firecracker-fixtures/home-server/fixtures.lock"
 	fixtureLockVersion  = "firecracker.fixtures/v2"

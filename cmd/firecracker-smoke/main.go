@@ -28,9 +28,9 @@ const runnerContract = "protected-linux-kvm-v1"
 
 const directExecutionMode = "direct"
 
-const directKVMConfigPath = "/etc/agent-runtime/firecracker-direct-kvm.json"
+const directKVMConfigPath = "/var/lib/agent-runtime/firecracker-direct/kvm-config.json"
 const directFixtureLockPath = "/var/lib/agent-runtime/firecracker-fixtures/home-server/fixtures.lock"
-const directFixtureSourceMapPath = "/etc/agent-runtime/firecracker-direct-fixtures.json"
+const directFixtureSourceMapPath = "/var/lib/agent-runtime/firecracker-direct/fixture-source-map.json"
 
 type report struct {
 	SchemaVersion           string                     `json:"schema_version"`

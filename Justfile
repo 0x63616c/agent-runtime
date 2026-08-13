@@ -60,12 +60,12 @@ firecracker-smoke report="evidence/firecracker-smoke.json" vm_id="" uid="0" gid=
 # Direct home-server preflight. Unlike the protected GitHub path, this checks
 # only the operator-owned Linux/KVM boundary and never relies on runner labels,
 # GitHub environments, or protected refs. It changes no host state.
-firecracker-direct-preflight config="/etc/agent-runtime/firecracker-direct-kvm.json" fixture_lock="/var/lib/agent-runtime/firecracker-fixtures/home-server/fixtures.lock":
+firecracker-direct-preflight config="/var/lib/agent-runtime/firecracker-direct/kvm-config.json" fixture_lock="/var/lib/agent-runtime/firecracker-fixtures/home-server/fixtures.lock":
     go run ./cmd/firecracker-direct-preflight -config "{{ config }}" -fixture-lock "{{ fixture_lock }}"
 
 # Runs the same no-NIC smoke harness directly after the operator-owned direct
 # preflight. All input identities must match the root-owned direct config.
-firecracker-direct-smoke report="" vm_id="" uid="0" gid="0" cgroup_parent="" stack_resource="" external_owner="" fixture_lock="/var/lib/agent-runtime/firecracker-fixtures/home-server/fixtures.lock" config="/etc/agent-runtime/firecracker-direct-kvm.json" fixture_source_map="/etc/agent-runtime/firecracker-direct-fixtures.json":
+firecracker-direct-smoke report="" vm_id="" uid="0" gid="0" cgroup_parent="" stack_resource="" external_owner="" fixture_lock="/var/lib/agent-runtime/firecracker-fixtures/home-server/fixtures.lock" config="/var/lib/agent-runtime/firecracker-direct/kvm-config.json" fixture_source_map="/var/lib/agent-runtime/firecracker-direct/fixture-source-map.json":
     just firecracker-direct-preflight "{{ config }}" "{{ fixture_lock }}"
     go run ./cmd/firecracker-smoke -execution-mode direct -direct-config "{{ config }}" -direct-fixture-source-map "{{ fixture_source_map }}" -report "{{ report }}" -fixture-lock "{{ fixture_lock }}" -vm-id "{{ vm_id }}" -uid "{{ uid }}" -gid "{{ gid }}" -cgroup-parent "{{ cgroup_parent }}" -stack-resource "{{ stack_resource }}" -external-owner "{{ external_owner }}"
 

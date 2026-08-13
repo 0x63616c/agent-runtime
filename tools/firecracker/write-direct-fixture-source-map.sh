@@ -12,7 +12,7 @@ fi
 fixture_dir=$1
 output_map=$2
 expected_root=/var/lib/agent-runtime/firecracker-fixtures/home-server
-expected_map=/etc/agent-runtime/firecracker-direct-fixtures.json
+expected_map=/var/lib/agent-runtime/firecracker-direct/fixture-source-map.json
 
 if [ "$fixture_dir" != "$expected_root" ] || [ "$output_map" != "$expected_map" ]; then
   echo "direct fixture paths do not match the reviewed home-server authority" >&2

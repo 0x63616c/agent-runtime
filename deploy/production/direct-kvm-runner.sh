@@ -88,12 +88,12 @@ spec:
       args:
         - >-
           /usr/local/bin/firecracker-direct-preflight
-          -config /etc/agent-runtime/firecracker-direct-kvm.json
+          -config /var/lib/agent-runtime/firecracker-direct/kvm-config.json
           -fixture-lock /var/lib/agent-runtime/firecracker-fixtures/home-server/fixtures.lock
           && exec /usr/local/bin/firecracker-smoke
           -execution-mode direct
-          -direct-config /etc/agent-runtime/firecracker-direct-kvm.json
-          -direct-fixture-source-map /etc/agent-runtime/firecracker-direct-fixtures.json
+          -direct-config /var/lib/agent-runtime/firecracker-direct/kvm-config.json
+          -direct-fixture-source-map /var/lib/agent-runtime/firecracker-direct/fixture-source-map.json
           -fixture-lock /var/lib/agent-runtime/firecracker-fixtures/home-server/fixtures.lock
           -report $report_path
           -vm-id $vm_id
@@ -113,8 +113,8 @@ spec:
       volumeMounts:
         - { name: tmp, mountPath: /tmp }
         - { name: kvm, mountPath: /dev/kvm }
-        - { name: direct-config, mountPath: /etc/agent-runtime/firecracker-direct-kvm.json, readOnly: true }
-        - { name: fixture-map, mountPath: /etc/agent-runtime/firecracker-direct-fixtures.json, readOnly: true }
+        - { name: direct-config, mountPath: /var/lib/agent-runtime/firecracker-direct/kvm-config.json, readOnly: true }
+        - { name: fixture-map, mountPath: /var/lib/agent-runtime/firecracker-direct/fixture-source-map.json, readOnly: true }
         - { name: fixtures, mountPath: /var/lib/agent-runtime/firecracker-fixtures/home-server, readOnly: true }
         - { name: evidence, mountPath: /var/lib/agent-runtime/firecracker-evidence/home-server }
         - { name: jailer, mountPath: /srv/agent-runtime/jailer }
@@ -125,9 +125,9 @@ spec:
     - name: kvm
       hostPath: { path: /dev/kvm, type: CharDevice }
     - name: direct-config
-      hostPath: { path: /etc/agent-runtime/firecracker-direct-kvm.json, type: File }
+      hostPath: { path: /var/lib/agent-runtime/firecracker-direct/kvm-config.json, type: File }
     - name: fixture-map
-      hostPath: { path: /etc/agent-runtime/firecracker-direct-fixtures.json, type: File }
+      hostPath: { path: /var/lib/agent-runtime/firecracker-direct/fixture-source-map.json, type: File }
     - name: fixtures
       hostPath: { path: /var/lib/agent-runtime/firecracker-fixtures/home-server, type: Directory }
     - name: evidence
@@ -178,7 +178,7 @@ self_test() {
   grep -Fqx '        - { name: tmp, mountPath: /tmp }' "$manifest"
   grep -Fqx '      emptyDir: { sizeLimit: 2Gi }' "$manifest"
   grep -Fqx '      hostPath: { path: /dev/kvm, type: CharDevice }' "$manifest"
-  grep -Fqx '      hostPath: { path: /etc/agent-runtime/firecracker-direct-kvm.json, type: File }' "$manifest"
+  grep -Fqx '      hostPath: { path: /var/lib/agent-runtime/firecracker-direct/kvm-config.json, type: File }' "$manifest"
   grep -Fqx '          -report /var/lib/agent-runtime/firecracker-evidence/home-server/smoke-test.json' "$manifest"
   if "$0" render --run-id upperCase --image "ghcr.io/0x63616c/agent-runtime-direct-runner@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" --output "$tmp/bad" >/dev/null 2>&1; then fail "accepted invalid run ID"; fi
   if "$0" render --run-id smoke-test --image "example.invalid/unpinned:latest" --output "$tmp/bad" >/dev/null 2>&1; then fail "accepted unreviewed image"; fi
