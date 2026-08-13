@@ -25,9 +25,9 @@ func TestIntegrationProcessWithholdsReadinessUntilListenerAccepts(t *testing.T) 
 	announced := make(chan struct{}, 1)
 	done := make(chan error, 1)
 	go func() {
-		done <- serve(ctx, config, func(name string) (string, bool) {
+		done <- serveWithTelemetry(ctx, config, func(name string) (string, bool) {
 			return map[string]string{"ADMIN_TOKEN": "admin-token-0000"}[name], name == "ADMIN_TOKEN"
-		}, blocked, func(string) { announced <- struct{}{} })
+		}, TelemetryProviders{}, blocked, func(string) { announced <- struct{}{} })
 	}()
 	awaitReadiness(t, blocked.accepting, "listener accept attempt")
 	select {

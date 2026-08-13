@@ -4,6 +4,21 @@ set -euo pipefail
 repository_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 compose_file="$repository_root/deploy/runtimeapi/compose.integration.yaml"
 migration_root="$repository_root/deploy/production/migrations"
+mode="full"
+case "$#" in
+  0) ;;
+  1)
+    if [[ "$1" != "--research-dossier-only" ]]; then
+      echo "usage: run-durable-integration.sh [--research-dossier-only]" >&2
+      exit 1
+    fi
+    mode="research-dossier-only"
+    ;;
+  *)
+    echo "usage: run-durable-integration.sh [--research-dossier-only]" >&2
+    exit 1
+    ;;
+esac
 environment_file=$(mktemp)
 backup_directory=$(mktemp -d)
 project_name="agent-runtime-api-$RANDOM-$RANDOM"
@@ -50,6 +65,17 @@ export AR_RUNTIME_API_MINIO_ENDPOINT="127.0.0.1:${minio_port}"
 export AR_RUNTIME_API_MINIO_ACCESS_KEY=agent-runtime-api
 export AR_RUNTIME_API_MINIO_SECRET_KEY="$minio_password"
 export AR_RUNTIME_API_MINIO_BUCKET=agent-runtime-api-integration
+
+# Keep the M8 public-application proof independently runnable. It uses the
+# same isolated PostgreSQL/MinIO composition and least-privilege role setup as
+# the broader durable suite, but skips unrelated package proofs so a developer
+# can iterate on Research Dossier end-to-end behavior without a full suite.
+if [[ "$mode" == "research-dossier-only" ]]; then
+  AR_RUNTIME_API_WORKER_POSTGRES_DSN="$runtime_worker_dsn" \
+    go test -race -tags=integration ./internal/runtimeapiprocess \
+    -run '^TestResearchDossierRecoversLongRunningToolResearchThroughThePublicContract$' -count=1
+  exit 0
+fi
 
 # The restore drill is deliberately operator-side: it uses the disposable
 # harness credential only, invokes PostgreSQL clients with argv, and never

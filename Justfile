@@ -25,6 +25,12 @@ verify: check
 # Compatibility alias for the final completion gate.
 completion-check: verify
 
+# Runs the Research Dossier public end-to-end proof against a freshly composed
+# disposable PostgreSQL and MinIO dependency set. The test starts its own
+# disposable Temporal dev server and retains no evidence artifact.
+research-dossier-e2e:
+    deploy/runtimeapi/run-durable-integration.sh --research-dossier-only
+
 # Requires the protected self-hosted Linux/x86_64/KVM runner contract and always
 # retains a redacted blocked report rather than treating a local machine as proof.
 firecracker-smoke report="evidence/firecracker-smoke.json" vm_id="" uid="0" gid="0" cgroup_parent="" stack_resource="" external_owner="" fixture_lock="tools/firecracker/fixtures.lock":
@@ -64,6 +70,7 @@ docs-check:
     npm --prefix website run build
     npm --prefix website run check:routes
     npm --prefix website run check:public-claims
+    npm --prefix website run check:quality
 
 requirements-dashboard:
     node ./scripts/generate-project-dashboard.mjs
