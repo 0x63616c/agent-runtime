@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/cockroachdb/errors"
 )
@@ -82,6 +83,7 @@ type Proxy struct {
 	transport http.RoundTripper
 	dial      func(context.Context, string, string) (net.Conn, error)
 	resolve   func(context.Context, string) ([]net.IPAddr, error)
+	tunnels   *tunnelRegistry
 }
 
 // New validates the complete finite target allowlist.
@@ -115,7 +117,7 @@ func New(config Config) (Proxy, error) {
 	if resolve == nil {
 		resolve = net.DefaultResolver.LookupIPAddr
 	}
-	proxy := Proxy{allowed: allowed, dial: dial, resolve: resolve}
+	proxy := Proxy{allowed: allowed, dial: dial, resolve: resolve, tunnels: newTunnelRegistry()}
 	// Every ordinary HTTP request must use dialResolved. Config intentionally
 	// exposes no RoundTripper seam: one could select an arbitrary destination
 	// after ServeHTTP has checked the URL.
@@ -213,6 +215,8 @@ func (proxy Proxy) connect(writer http.ResponseWriter, request *http.Request) {
 		closeConnection(upstream)
 		return
 	}
+	untrack := proxy.trackTunnel(client, upstream)
+	defer untrack()
 	toUpstream := make(chan struct{})
 	go func() {
 		_, _ = io.Copy(upstream, client)
@@ -222,6 +226,114 @@ func (proxy Proxy) connect(writer http.ResponseWriter, request *http.Request) {
 	_, _ = io.Copy(client, upstream)
 	closeConnection(client)
 	<-toUpstream
+}
+
+// ActiveTunnelCount reports the number of hijacked CONNECT tunnels that have
+// not yet drained. It is intended for process shutdown accounting.
+func (proxy Proxy) ActiveTunnelCount() int {
+	if proxy.tunnels == nil {
+		return 0
+	}
+	return proxy.tunnels.count()
+}
+
+// CloseActiveTunnels force-closes each active CONNECT tunnel and returns the
+// number of tunnel pairs that received the shutdown signal.
+func (proxy Proxy) CloseActiveTunnels() int {
+	if proxy.tunnels == nil {
+		return 0
+	}
+	return proxy.tunnels.closeAll()
+}
+
+// WaitForTunnels waits until every active CONNECT tunnel has drained or the
+// supplied shutdown context expires.
+func (proxy Proxy) WaitForTunnels(ctx context.Context) error {
+	if ctx == nil {
+		return errors.New("wait for egress proxy tunnels: context is required")
+	}
+	if proxy.tunnels == nil {
+		return nil
+	}
+	return proxy.tunnels.wait(ctx)
+}
+
+func (proxy Proxy) trackTunnel(client, upstream net.Conn) func() {
+	if proxy.tunnels == nil {
+		return func() {}
+	}
+	return proxy.tunnels.register(client, upstream)
+}
+
+type tunnel struct {
+	client, upstream net.Conn
+}
+
+type tunnelRegistry struct {
+	mu      sync.Mutex
+	nextID  uint64
+	active  map[uint64]tunnel
+	drained chan struct{}
+}
+
+func newTunnelRegistry() *tunnelRegistry {
+	drained := make(chan struct{})
+	close(drained)
+	return &tunnelRegistry{active: make(map[uint64]tunnel), drained: drained}
+}
+
+func (registry *tunnelRegistry) register(client, upstream net.Conn) func() {
+	registry.mu.Lock()
+	if len(registry.active) == 0 {
+		registry.drained = make(chan struct{})
+	}
+	registry.nextID++
+	id := registry.nextID
+	registry.active[id] = tunnel{client: client, upstream: upstream}
+	registry.mu.Unlock()
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			registry.mu.Lock()
+			delete(registry.active, id)
+			if len(registry.active) == 0 {
+				close(registry.drained)
+			}
+			registry.mu.Unlock()
+		})
+	}
+}
+
+func (registry *tunnelRegistry) count() int {
+	registry.mu.Lock()
+	defer registry.mu.Unlock()
+	return len(registry.active)
+}
+
+func (registry *tunnelRegistry) closeAll() int {
+	registry.mu.Lock()
+	tunnels := make([]tunnel, 0, len(registry.active))
+	for _, tunnel := range registry.active {
+		tunnels = append(tunnels, tunnel)
+	}
+	registry.mu.Unlock()
+	for _, tunnel := range tunnels {
+		closeConnection(tunnel.client)
+		closeConnection(tunnel.upstream)
+	}
+	return len(tunnels)
+}
+
+func (registry *tunnelRegistry) wait(ctx context.Context) error {
+	registry.mu.Lock()
+	drained := registry.drained
+	registry.mu.Unlock()
+	select {
+	case <-drained:
+		return nil
+	case <-ctx.Done():
+		return errors.Wrap(ctx.Err(), "wait for egress proxy tunnels")
+	}
 }
 
 func (proxy Proxy) dialResolved(ctx context.Context, network, address string) (net.Conn, error) {

@@ -17,6 +17,8 @@ import (
 	"github.com/0x63616c/agent-runtime/internal/egressproxy"
 )
 
+const shutdownGrace = 10 * time.Second
+
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -65,11 +67,24 @@ func run(ctx context.Context, arguments []string) error {
 		}
 		return fmt.Errorf("serve egress proxy: %w", err)
 	case <-ctx.Done():
-		if err := server.Shutdown(context.WithoutCancel(ctx)); err != nil {
-			return fmt.Errorf("stop egress proxy: %w", err)
+		shutdownContext, cancel := context.WithTimeout(context.Background(), shutdownGrace)
+		defer cancel()
+		shutdownErr := server.Shutdown(shutdownContext)
+		closedTunnels := proxy.CloseActiveTunnels()
+		if closedTunnels > 0 {
+			fmt.Fprintf(os.Stderr, "egress proxy shutdown: force-closed %d active CONNECT tunnel(s)\n", closedTunnels)
+		}
+		if shutdownErr != nil {
+			_ = server.Close()
+		}
+		if err := proxy.WaitForTunnels(shutdownContext); err != nil {
+			return err
 		}
 		if err := <-result; err != nil && err != http.ErrServerClosed {
 			return fmt.Errorf("serve egress proxy: %w", err)
+		}
+		if shutdownErr != nil {
+			return fmt.Errorf("stop egress proxy: %w", shutdownErr)
 		}
 		return nil
 	}

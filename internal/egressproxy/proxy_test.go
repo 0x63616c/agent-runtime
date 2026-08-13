@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"sync/atomic"
+	"time"
 
 	"github.com/0x63616c/agent-runtime/internal/egressproxy"
 	. "github.com/onsi/ginkgo/v2"
@@ -195,6 +196,40 @@ var _ = Describe("Allowlisted egress proxy", func() {
 		Expect(client.Close()).To(Succeed())
 		Expect(upstreamClient.Close()).To(Succeed())
 		<-finished
+	})
+
+	It("force-closes and accounts for held CONNECT tunnels during shutdown", func() {
+		upstreamClient, upstreamServer := net.Pipe()
+		proxy, err := egressproxy.New(egressproxy.Config{
+			AllowedTargets: []egressproxy.Target{{Host: "models.example.invalid", Port: 443}},
+			Resolve: func(context.Context, string) ([]net.IPAddr, error) {
+				return []net.IPAddr{{IP: net.ParseIP("8.8.8.8")}}, nil
+			},
+			DialContext: func(context.Context, string, string) (net.Conn, error) { return upstreamServer, nil },
+		})
+		Expect(err).NotTo(HaveOccurred())
+		client, server := net.Pipe()
+		response := &hijackResponseWriter{header: make(http.Header), connection: server}
+		request := httptest.NewRequestWithContext(context.Background(), http.MethodConnect, "http://models.example.invalid:443", nil)
+		request.Host = "models.example.invalid:443"
+		finished := make(chan struct{})
+		go func() { proxy.ServeHTTP(response, request); close(finished) }()
+
+		_, readErr := bufio.NewReader(client).ReadString('\n')
+		Expect(readErr).NotTo(HaveOccurred())
+		Eventually(proxy.ActiveTunnelCount).WithTimeout(time.Second).Should(Equal(1))
+		Expect(proxy.CloseActiveTunnels()).To(Equal(1))
+		shutdownContext, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		Expect(proxy.WaitForTunnels(shutdownContext)).To(Succeed())
+		Expect(proxy.ActiveTunnelCount()).To(Equal(0))
+		select {
+		case <-finished:
+		case <-shutdownContext.Done():
+			Fail("held CONNECT tunnel did not return after force close")
+		}
+		Expect(client.Close()).To(Succeed())
+		Expect(upstreamClient.Close()).To(Succeed())
 	})
 
 	It("refuses a target resolution with no public address before dialing", func() {
