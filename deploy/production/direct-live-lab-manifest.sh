@@ -58,6 +58,11 @@ render() {
       else . end
     )
   ' "$source_stack" | jq -f "$derive_profiles" | jq '
+    .profiles.ci.resources |= map(
+      if .kind == "kubernetes" and .kubernetes.kind == "PersistentVolumeClaim" then
+        .kubernetes.storage |= map(.class = "local-lvm")
+      else . end
+    ) |
     .profiles |= with_entries(.value.resources += [
       {id:"direct-live-lab-quota",kind:"kubernetes",owner:"platform-operator",scope:"namespace",dependencies:[],retention:{policy:"ephemeral",days:0},backup_restore_owner:"none",delete_behavior:"delete",external_controller:false,kubernetes:{api_version:"v1",kind:"ResourceQuota",name:"direct-live-lab-quota",compute:{request_milli_cpu:4000,limit_milli_cpu:8000,request_memory_bytes:8589934592,limit_memory_bytes:17179869184}}},
       {id:"direct-live-lab-egress-proxy-deny",kind:"kubernetes",owner:"security-operator",scope:"namespace",dependencies:["egress-proxy"],retention:{policy:"ephemeral",days:0},backup_restore_owner:"none",delete_behavior:"delete",external_controller:false,kubernetes:{api_version:"networking.k8s.io/v1",kind:"NetworkPolicy",name:"direct-live-lab-egress-proxy-deny",network:{default_deny:true,subject:"egress-proxy",allowed_egress:[]}}}
@@ -77,6 +82,7 @@ validate() {
     ([.profiles.ci.resources[] | select(.kind == "secret_reference")]) as $secrets |
     ($secrets|length)>0 and ($secrets|all(.external_controller and .secret_reference.provider == "local-generated" and (.secret_reference.reference|startswith("ar-ci-"+$name+"-")) and .retention.policy == "ephemeral" and .delete_behavior == "delete")) and
     ([.profiles.ci.resources[] | select(.kind == "kubernetes" and (.kubernetes.kind == "Deployment" or .kubernetes.kind == "StatefulSet" or .kubernetes.kind == "Job"))] | all(.kubernetes.image | test("@sha256:[0-9a-f]{64}$")))
+    and ([.profiles.ci.resources[] | select(.kind == "kubernetes" and .kubernetes.kind == "PersistentVolumeClaim") | .kubernetes.storage[] | .class] | all(. == "local-lvm"))
   ' "$stack_file" >/dev/null || fail "direct lab requires namespace-local secret references and immutable images"
   rendered="$(go run "$root/cmd/stackctl" render --stack-file "$stack_file" --profile ci)"
   manifests="$(go run "$root/cmd/stackctl" manifests --stack-file "$stack_file" --profile ci)"
