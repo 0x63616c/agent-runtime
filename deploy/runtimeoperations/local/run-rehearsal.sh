@@ -5,6 +5,7 @@ set -euo pipefail
 
 repository_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)
 compose_file="$repository_root/deploy/runtimeoperations/local/compose.yaml"
+runner_contract_file="$repository_root/deploy/runtimeoperations/runner-contract.json"
 migration_root="$repository_root/deploy/production/migrations"
 environment_file=$(mktemp)
 working_directory=$(mktemp -d)
@@ -20,6 +21,15 @@ cleanup() {
 trap cleanup EXIT
 
 umask 077
+runner_contract=$(jq -er '.required_environment_assertions.RUNTIME_OPERATIONS_RUNNER_CONTRACT' "$runner_contract_file")
+github_environment=$(jq -er '.github_environment' "$runner_contract_file")
+runner_labels=$(jq -er '.runner.required_labels | join(",")' "$runner_contract_file")
+workflow_name=$(jq -er '.runner.required_workflow' "$runner_contract_file")
+protected_ref_required=$(jq -er '.runner.protected_ref_required' "$runner_contract_file")
+if [ "$runner_contract" != "protected-runtime-operations-v1" ] || [ "$github_environment" != "runtime-operations" ] || [ "$workflow_name" != "runtime-operations-drill" ] || [ "$protected_ref_required" != "true" ]; then
+  echo "local rehearsal refuses an unexpected protected runner contract" >&2
+  exit 1
+fi
 printf 'AR_M5_LAB_POSTGRES_PASSWORD=%s\n' "$(openssl rand -hex 24)" > "$environment_file"
 postgres_password=$(awk -F= '/^AR_M5_LAB_POSTGRES_PASSWORD=/{print $2}' "$environment_file")
 docker compose --project-name "$project_name" --env-file "$environment_file" --file "$compose_file" up --detach --wait
@@ -56,7 +66,20 @@ for _ in $(seq 1 50); do [ -s "$working_directory/audit.address" ] && break; sle
 if [ ! -s "$working_directory/audit.address" ]; then cat "$working_directory/audit.log" >&2; exit 1; fi
 audit_address=$(cat "$working_directory/audit.address")
 
+# This deliberately uses the *same names and values* as the GitHub Environment
+# contract, but invokes only the non-writing preflight mode. The values below
+# are synthetic local assertions, not a claim that this shell is GitHub or an
+# authorized runner. This detects contract drift before the protected run.
 RUNTIME_OPERATIONS_REHEARSAL=local-only \
+RUNTIME_OPERATIONS_RUNNER_CONTRACT="$runner_contract" \
+GITHUB_ACTIONS=true \
+GITHUB_REF_PROTECTED=true \
+GITHUB_WORKFLOW="$workflow_name" \
+RUNNER_ENVIRONMENT=self-hosted \
+RUNNER_OS=Linux \
+RUNNER_ARCH=X64 \
+RUNTIME_OPERATIONS_GITHUB_ENVIRONMENT="$github_environment" \
+RUNTIME_OPERATIONS_RUNNER_LABELS="$runner_labels" \
 AR_RUNTIME_OPERATIONS_DATABASE_DSN="$source_dsn" \
 AR_RUNTIME_OPERATIONS_PITR_RESTORE_DSN="$restore_dsn" \
 AR_RUNTIME_OPERATIONS_AUDIT_SINK_URL="https://localhost:${audit_address##*:}/audit" \
@@ -67,6 +90,6 @@ AR_RUNTIME_OPERATIONS_PITR_TENANT="$pitr_tenant" \
 AR_RUNTIME_OPERATIONS_PITR_AUTHORIZATION_ID="$pitr_authorization" \
 AR_RUNTIME_OPERATIONS_PITR_RECOVERY_POINT="$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
 AR_RUNTIME_OPERATIONS_PITR_EXPECTED_GENERATION=7 \
-AR_RUNTIME_OPERATIONS_SOURCE_REVISION="$(git -C "$repository_root" rev-parse HEAD)" \
+GITHUB_SHA="$(git -C "$repository_root" rev-parse HEAD)" \
 AR_RUNTIME_OPERATIONS_REHEARSAL_CA_FILE="$working_directory/audit.crt" \
-go run "$repository_root/cmd/runtime-operations-rehearsal"
+go run "$repository_root/cmd/runtime-operations-drill" -preflight

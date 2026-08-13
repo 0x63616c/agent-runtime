@@ -35,7 +35,26 @@ func main() {
 		fmt.Fprintln(os.Stderr, "runtime-operations-drill:", err)
 		os.Exit(1)
 	}
-	evidence, err := runtimeoperations.Run(context.Background(), config)
+	// A local composition may emulate the protected runner's environment names
+	// to detect contract drift, but it must be preflight-only and explicitly
+	// supply its ephemeral TLS CA. That path never writes Evidence.
+	localRehearsal := os.Getenv("RUNTIME_OPERATIONS_REHEARSAL") == "local-only"
+	if localRehearsal && !*preflight {
+		fmt.Fprintln(os.Stderr, "runtime-operations-drill: local rehearsal permits only -preflight and cannot write evidence")
+		os.Exit(2)
+	}
+	var evidence runtimeoperations.Evidence
+	if localRehearsal {
+		certificatePath := os.Getenv("AR_RUNTIME_OPERATIONS_REHEARSAL_CA_FILE")
+		certificate, readErr := os.ReadFile(certificatePath)
+		if readErr != nil {
+			fmt.Fprintln(os.Stderr, "runtime-operations-drill: local rehearsal audit CA file is required:", readErr)
+			os.Exit(1)
+		}
+		evidence, err = runtimeoperations.RunRehearsal(context.Background(), config, certificate)
+	} else {
+		evidence, err = runtimeoperations.Run(context.Background(), config)
+	}
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "runtime-operations-drill:", err)
 		os.Exit(1)

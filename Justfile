@@ -63,6 +63,17 @@ runtime-operations-drill report="evidence/runtime-operations-report.json":
 runtime-operations-preflight:
     go run ./cmd/runtime-operations-drill -preflight
 
+# Validates the explicit, redacted contract for a protected subscription model
+# canary. This local command never reads values beyond presence, calls a
+# provider, persists an artifact, or creates evidence.
+subscription-model-canary-preflight:
+    go run ./cmd/subscription-model-canary -preflight
+
+# Starts a disposable two-PostgreSQL + TLS audit-sink composition and exercises
+# the exact runner-contract preflight without creating operational evidence.
+runtime-operations-rehearsal:
+    ./deploy/runtimeoperations/local/run-rehearsal.sh
+
 # Installs the locked Astro Starlight toolchain and starts the local site.
 docs:
     npm --prefix website ci
