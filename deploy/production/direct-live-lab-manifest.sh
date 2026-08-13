@@ -63,6 +63,17 @@ render() {
         .kubernetes.storage |= map(.class = "local-lvm")
       else . end
     ) |
+    # This is a capacity override for the explicitly named disposable direct
+    # lab only. It retains every workload and role, but collapses the two
+    # production fan-out Deployments to one replica so the complete lab can
+    # fit on the single-node home server. Local and production profiles are
+    # deliberately not touched.
+    .profiles.ci.resources |= map(
+      if .kind == "kubernetes" and .kubernetes.kind == "Deployment" and
+         (.id == "orchestration" or .id == "egress-proxy") then
+        .kubernetes.replicas = 1
+      else . end
+    ) |
     .profiles |= with_entries(.value.resources += [
       {id:"direct-live-lab-quota",kind:"kubernetes",owner:"platform-operator",scope:"namespace",dependencies:[],retention:{policy:"ephemeral",days:0},backup_restore_owner:"none",delete_behavior:"delete",external_controller:false,kubernetes:{api_version:"v1",kind:"ResourceQuota",name:"direct-live-lab-quota",compute:{request_milli_cpu:4000,limit_milli_cpu:8000,request_memory_bytes:8589934592,limit_memory_bytes:17179869184}}},
       {id:"direct-live-lab-egress-proxy-deny",kind:"kubernetes",owner:"security-operator",scope:"namespace",dependencies:["egress-proxy"],retention:{policy:"ephemeral",days:0},backup_restore_owner:"none",delete_behavior:"delete",external_controller:false,kubernetes:{api_version:"networking.k8s.io/v1",kind:"NetworkPolicy",name:"direct-live-lab-egress-proxy-deny",network:{default_deny:true,subject:"egress-proxy",allowed_egress:[]}}}
@@ -110,6 +121,25 @@ validate() {
     and ([.profiles.ci.resources[] | select(.kind == "kubernetes" and .kubernetes.kind == "PersistentVolumeClaim") | .kubernetes.storage[] | .class] | all(. == "local-lvm"))
   ' "$stack_file" >/dev/null || fail "direct lab requires namespace-local secret references and immutable images"
   jq -e '
+    def workload:
+      .kind == "kubernetes" and
+      (.kubernetes.kind == "Deployment" or
+       .kubernetes.kind == "StatefulSet" or
+       .kubernetes.kind == "Job");
+    def replicas_for($profile; $id):
+      [.profiles[$profile].resources[] | select(workload and .id == $id) | (.kubernetes.replicas // 1)];
+    ([.profiles.ci.resources[] | select(workload) | .id] | unique) as $ci_workloads |
+    ([.profiles.local.resources[] | select(workload) | .id] | unique) as $local_workloads |
+    ([.profiles.production.resources[] | select(workload) | .id] | unique) as $production_workloads |
+    $ci_workloads == $local_workloads and $ci_workloads == $production_workloads and
+    ($ci_workloads | index("orchestration") != null and index("egress-proxy") != null) and
+    ([.profiles.ci.resources[] | select(workload) | (.kubernetes.replicas // 1)] | all(. == 1)) and
+    replicas_for("local"; "orchestration") == [3] and
+    replicas_for("local"; "egress-proxy") == [2] and
+    replicas_for("production"; "orchestration") == [3] and
+    replicas_for("production"; "egress-proxy") == [2]
+  ' "$stack_file" >/dev/null || fail "direct-only replica override must retain every workload and leave local and production fan-out unchanged"
+  jq -e '
     def workloads:
       .profiles.ci.resources[]
       | select(.kind == "kubernetes" and
@@ -138,15 +168,20 @@ self_test() {
   local tmp="$(mktemp)"
   render --name agent-runtime-direct-live-lab-test --context home-server --output "$tmp" >/dev/null
   jq -e '
-    def workloads:
-      .profiles.ci.resources[]
-      | select(.kind == "kubernetes" and
-          (.kubernetes.kind == "Deployment" or
-           .kubernetes.kind == "StatefulSet" or
-           .kubernetes.kind == "Job"));
-    ([workloads | (.kubernetes.replicas // 1) * .kubernetes.compute.limit_milli_cpu] | add) as $limit_milli_cpu |
+    def workload:
+      .kind == "kubernetes" and
+      (.kubernetes.kind == "Deployment" or
+       .kubernetes.kind == "StatefulSet" or
+       .kubernetes.kind == "Job");
+    ([.profiles.ci.resources[] | select(workload) | (.kubernetes.replicas // 1) * .kubernetes.compute.limit_milli_cpu] | add) as $limit_milli_cpu |
     ([.profiles.ci.resources[] | select(.kind == "kubernetes" and .kubernetes.kind == "ResourceQuota") | .kubernetes.compute.limit_milli_cpu]) as $quota_limit_milli_cpu |
-    $limit_milli_cpu == 9600 and $quota_limit_milli_cpu == [10600]
+    $limit_milli_cpu == 8100 and $quota_limit_milli_cpu == [9100] and
+    ([.profiles.ci.resources[] | select(workload) | .id] | length) == 17 and
+    ([.profiles.ci.resources[] | select(workload) | (.kubernetes.replicas // 1)] | all(. == 1)) and
+    ([.profiles.local.resources[] | select(workload and .id == "orchestration") | (.kubernetes.replicas // 1)]) == [3] and
+    ([.profiles.local.resources[] | select(workload and .id == "egress-proxy") | (.kubernetes.replicas // 1)]) == [2] and
+    ([.profiles.production.resources[] | select(workload and .id == "orchestration") | (.kubernetes.replicas // 1)]) == [3] and
+    ([.profiles.production.resources[] | select(workload and .id == "egress-proxy") | (.kubernetes.replicas // 1)]) == [2]
   ' "$tmp" >/dev/null || fail "replica-aware quota derivation regressed"
   jq '.profiles.ci.resources[0].secret_reference.provider="external-secrets"' "$tmp" >"$tmp.bad"
   if (validate --stack-file "$tmp.bad") >/dev/null 2>&1; then fail "accepted a cluster-wide secret controller"; fi
