@@ -1,12 +1,18 @@
 package firecracker
 
 import (
+	"bufio"
+	"context"
 	"fmt"
+	"net"
 	"path/filepath"
+	"strconv"
 	"strings"
 )
 
 const fixedFirecrackerAPISocket = "/run/firecracker.socket"
+
+const guestControlVSockPort = 10777
 
 // LinuxJailerHostConfig is the complete reviewed composition input for one Linux Jailer host.
 // Constructing it neither starts a Jailer nor verifies Linux/KVM execution.
@@ -41,7 +47,7 @@ func NewLinuxJailerHost(config LinuxJailerHostConfig) (*LinuxJailerHost, error) 
 	if err != nil {
 		return nil, err
 	}
-	guest, err := NewUnixGuestControlChannel(config.UnixDialer)
+	guest, err := NewUnixGuestControlChannel(firecrackerVSockDialer{dialer: config.UnixDialer})
 	if err != nil {
 		return nil, err
 	}
@@ -65,6 +71,46 @@ func NewLinuxJailerHost(config LinuxJailerHostConfig) (*LinuxJailerHost, error) 
 		host.hasNoRouteProxy = true
 	}
 	return host, nil
+}
+
+// firecrackerVSockDialer performs Firecracker's mandatory host-to-guest vsock
+// bridge handshake before handing the resulting stream to our guest protocol.
+// The guest protocol itself starts only after this fixed port is selected.
+type firecrackerVSockDialer struct{ dialer unixSocketDialer }
+
+func (dialer firecrackerVSockDialer) DialContext(ctx context.Context, network, address string) (net.Conn, error) {
+	if dialer.dialer == nil || network != "unix" {
+		return nil, fmt.Errorf("Firecracker vsock dialer requires an exact Unix socket")
+	}
+	connection, err := dialer.dialer.DialContext(ctx, network, address)
+	if err != nil {
+		return nil, err
+	}
+	if deadline, ok := ctx.Deadline(); ok {
+		if err := connection.SetDeadline(deadline); err != nil {
+			_ = connection.Close()
+			return nil, err
+		}
+	}
+	if _, err := fmt.Fprintf(connection, "CONNECT %d\n", guestControlVSockPort); err != nil {
+		_ = connection.Close()
+		return nil, fmt.Errorf("request Firecracker guest vsock port: %w", err)
+	}
+	line, err := bufio.NewReaderSize(connection, 64).ReadString('\n')
+	if err != nil || !validFirecrackerVSockAcknowledgement(line) {
+		_ = connection.Close()
+		return nil, fmt.Errorf("confirm Firecracker guest vsock port")
+	}
+	return connection, nil
+}
+
+func validFirecrackerVSockAcknowledgement(line string) bool {
+	fields := strings.Fields(line)
+	if len(fields) != 2 || fields[0] != "OK" {
+		return false
+	}
+	port, err := strconv.ParseUint(fields[1], 10, 32)
+	return err == nil && port != 0
 }
 
 // hostJailedPath maps one exact chroot-visible absolute path to its host-visible path.

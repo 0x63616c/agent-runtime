@@ -1,12 +1,44 @@
 package firecracker
 
 import (
+	"bufio"
 	"context"
 	"errors"
+	"net"
 	"path/filepath"
 	"reflect"
 	"testing"
 )
+
+func TestFirecrackerVSockDialerSelectsOnlyTheFixedGuestControlPort(t *testing.T) {
+	base := guestChannelDialerFunc(func(_ context.Context, network, address string) (net.Conn, error) {
+		if network != "unix" || address != "/run/firecracker.vsock" {
+			t.Fatalf("DialContext(%q, %q)", network, address)
+		}
+		client, server := net.Pipe()
+		go func() {
+			defer func() { _ = server.Close() }()
+			reader := bufio.NewReader(server)
+			if got := guestChannelTestReadLine(t, reader); got != "CONNECT 10777" {
+				t.Errorf("Firecracker CONNECT = %q", got)
+				return
+			}
+			_, _ = server.Write([]byte("OK 1073741824\n"))
+			if got := guestChannelTestReadLine(t, reader); got != "guest-frame" {
+				t.Errorf("guest frame = %q", got)
+			}
+		}()
+		return client, nil
+	})
+	connection, err := (firecrackerVSockDialer{dialer: base}).DialContext(context.Background(), "unix", "/run/firecracker.vsock")
+	if err != nil {
+		t.Fatalf("DialContext() error = %v", err)
+	}
+	defer func() { _ = connection.Close() }()
+	if _, err := connection.Write([]byte("guest-frame\n")); err != nil {
+		t.Fatalf("write guest frame: %v", err)
+	}
+}
 
 func TestNewLinuxJailerHostComposesReviewedJailerAndPrivateUnixPorts(t *testing.T) {
 	plan := mustCompile(t, validProfile())
@@ -33,7 +65,8 @@ func TestNewLinuxJailerHostComposesReviewedJailerAndPrivateUnixPorts(t *testing.
 		t.Fatalf("HTTP = %#v, want fixed private Unix REST port", host.HTTP)
 	}
 	guest, ok := host.Guest.(*UnixGuestControlChannel)
-	if !ok || guest.dial != dialer {
+	guestDialer, wrapped := guest.dial.(firecrackerVSockDialer)
+	if !ok || !wrapped || guestDialer.dialer != dialer {
 		t.Fatalf("Guest = %#v, want fixed private Unix guest-control port", host.Guest)
 	}
 	authority.arguments[0] = "--mutated"
