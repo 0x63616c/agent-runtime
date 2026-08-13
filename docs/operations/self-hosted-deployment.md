@@ -224,6 +224,23 @@ run, not a perpetual production guarantee.
 - Metrics/traces/log exporter endpoint, retention, redaction policy, alert
   ownership, and access to authorized diagnostics.
 
+### Isolated lab preflight
+
+Before dispatching the artifact-producing workflow, an operator may run the
+same protected observations without creating any report:
+
+```sh
+just runtime-operations-preflight
+```
+
+This requires the identical protected runner contract and environment inputs
+as `runtime-operations-drill`, and it contacts the configured drill endpoints.
+It is read-only with respect to the PostgreSQL authorities and creates no
+evidence file. Its audit-sink requests deliberately use only the configured
+`outage`/`recovery` drill protocol. A successful preflight is readiness
+evidence only: dispatch the protected workflow separately to create the one
+retained `agent-runtime.operations-evidence/v1` report.
+
 ## Running the implemented composition check
 
 Each workload's `RUNTIME_ROLE_CONFIG` value in the typed Stack is the sole role

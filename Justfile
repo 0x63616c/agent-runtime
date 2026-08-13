@@ -40,6 +40,12 @@ firecracker-integration report="evidence/firecracker-integration.json" vm_id="" 
 runtime-operations-drill report="evidence/runtime-operations-report.json":
     go run ./cmd/runtime-operations-drill -report "{{report}}"
 
+# Exercises the same protected database/audit/PITR observations without
+# creating an evidence artifact. Use it to validate the isolated lab before
+# the single retained protected drill.
+runtime-operations-preflight:
+    go run ./cmd/runtime-operations-drill -preflight
+
 # Installs the locked Astro Starlight toolchain and starts the local site.
 docs:
     npm --prefix website ci
