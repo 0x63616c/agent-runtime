@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"sync"
 	"time"
 )
@@ -18,6 +19,7 @@ const (
 	operationsRouteV1   = "/sandbox.control/v1/operations"
 	capabilitiesRouteV1 = "/sandbox.control/v1/capabilities"
 	processesRouteV1    = "/sandbox.control/v1/processes/"
+	volumesRouteV1      = "/sandbox.control/v1/volumes"
 	bindingHeaderV1     = "Sandbox-Binding"
 )
 
@@ -257,11 +259,33 @@ func (client *httpControlClient) ReplayOutput(ctx context.Context, id ProcessID,
 	// included in the response.
 	return newSliceOutputStream(events, "")
 }
-func (client *httpControlClient) GetVolume(context.Context, VolumeID) (VolumeInfo, error) {
-	return VolumeInfo{}, newFailure(FailureUnavailable, "sandbox resource transport is not implemented", RetryAfterReconcile)
+func (client *httpControlClient) GetVolume(ctx context.Context, id VolumeID) (VolumeInfo, error) {
+	if !validVolumeID(id) {
+		return VolumeInfo{}, newFailure(FailureInvalidArgument, "sandbox volume ID is invalid", RetryNever)
+	}
+	response, err := client.do(ctx, http.MethodGet, volumesRouteV1+"/"+url.PathEscape(string(id)), nil)
+	if err != nil {
+		return VolumeInfo{}, err
+	}
+	volume, err := decodeVolumeResponseV1(response)
+	if err != nil || volume.ID != id {
+		return VolumeInfo{}, newFailure(FailureUnavailable, "sandbox volume response is invalid", RetryAfterReconcile)
+	}
+	return volume, nil
 }
-func (client *httpControlClient) ListVolumes(context.Context, Page) (VolumePage, error) {
-	return VolumePage{}, newFailure(FailureUnavailable, "sandbox resource transport is not implemented", RetryAfterReconcile)
+func (client *httpControlClient) ListVolumes(ctx context.Context, page Page) (VolumePage, error) {
+	if page.Limit == 0 || page.Limit > 100 || (page.Cursor != "" && !validVolumeID(VolumeID(page.Cursor))) {
+		return VolumePage{}, newFailure(FailureInvalidArgument, "sandbox volume page is invalid", RetryNever)
+	}
+	target := volumesRouteV1 + "?limit=" + strconv.FormatUint(uint64(page.Limit), 10)
+	if page.Cursor != "" {
+		target += "&after=" + url.QueryEscape(string(page.Cursor))
+	}
+	response, err := client.do(ctx, http.MethodGet, target, nil)
+	if err != nil {
+		return VolumePage{}, err
+	}
+	return decodeVolumePageResponseV1(response)
 }
 func (client *httpControlClient) GetSnapshot(context.Context, SnapshotID) (SnapshotInfo, error) {
 	return SnapshotInfo{}, newFailure(FailureUnavailable, "sandbox resource transport is not implemented", RetryAfterReconcile)

@@ -132,10 +132,10 @@ func TestControlHandlerRejectsChangedInputOtherPrincipalAndBindingMismatch(t *te
 func TestControlHandlerAdmitsStableOpaqueVolumeProjection(t *testing.T) {
 	now := time.Date(2030, 8, 7, 2, 0, 0, 0, time.UTC)
 	fakeClock, _ := clock.NewFake(now)
-	store := &volumeAdmissionStore{MemoryLedger: sandboxcontrol.NewMemoryLedger()}
-	authenticator, err := NewStaticAuthenticator("Bearer token", Identity{Authority: "issuer", Tenant: "tenant", Subject: "subject", Principal: "tenant:subject"})
-	if err != nil {
-		t.Fatal(err)
+	store := &volumeAdmissionStore{MemoryLedger: sandboxcontrol.NewMemoryLedger(), resources: sandboxcontrol.NewMemoryResourceReadModel()}
+	authenticator := mapAuthenticator{
+		"Bearer token":       {Authority: "issuer", Tenant: "tenant", Subject: "subject", Principal: "tenant:subject"},
+		"Bearer other-token": {Authority: "issuer", Tenant: "tenant", Subject: "other", Principal: "tenant:other"},
 	}
 	server := newTestServer(t, testServerConfig(store, authenticator, fakeClock, bytes.Repeat([]byte{0x55}, 32)))
 	client := newPublicClient(t, server, "token")
@@ -153,6 +153,18 @@ func TestControlHandlerAdmitsStableOpaqueVolumeProjection(t *testing.T) {
 	if store.volume.ID != operation.Target.VolumeID || store.volume.SizeBytes != 512 || store.volume.Inodes != 8 || store.binding == nil || store.binding.Kind != sandboxcontrol.ResourceProjectionVolume || store.binding.ResourceID != string(operation.Target.VolumeID) {
 		t.Fatalf("admitted volume projection = %#v binding=%#v", store.volume, store.binding)
 	}
+	volume, err := client.GetVolume(context.Background(), operation.Target.VolumeID)
+	if err != nil || volume.ID != operation.Target.VolumeID || volume.SizeBytes != 512 || volume.Inodes != 8 {
+		t.Fatalf("GetVolume() = %#v, %v", volume, err)
+	}
+	page, err := client.ListVolumes(context.Background(), sandbox.Page{Limit: 1})
+	if err != nil || len(page.Items) != 1 || page.Items[0].ID != operation.Target.VolumeID || page.Next != "" {
+		t.Fatalf("ListVolumes() = %#v, %v", page, err)
+	}
+	other := newPublicClient(t, server, "other-token")
+	if _, err := other.GetVolume(context.Background(), operation.Target.VolumeID); failureCode(err) != sandbox.FailureNotFoundOrDenied {
+		t.Fatalf("GetVolume(cross principal) error = %v", err)
+	}
 }
 
 // volumeAdmissionStore is a test-only control admission seam. Production uses
@@ -160,14 +172,18 @@ func TestControlHandlerAdmitsStableOpaqueVolumeProjection(t *testing.T) {
 // covered by the PostgreSQL integration suite.
 type volumeAdmissionStore struct {
 	*sandboxcontrol.MemoryLedger
-	volume  sandbox.VolumeInfo
-	binding *sandboxcontrol.ResourceProjectionBinding
+	resources *sandboxcontrol.MemoryResourceReadModel
+	volume    sandbox.VolumeInfo
+	binding   *sandboxcontrol.ResourceProjectionBinding
 }
 
 func (store *volumeAdmissionStore) AcceptVolume(ctx context.Context, operation sandboxcontrol.Operation, value sandbox.VolumeInfo) (sandboxcontrol.Operation, bool, error) {
 	accepted, replay, err := store.Accept(ctx, operation)
 	if err == nil && !replay {
 		store.volume = value
+		if err := store.resources.ProjectVolume(ctx, operation.Principal, value); err != nil {
+			return sandboxcontrol.Operation{}, false, err
+		}
 		binding := *operation.ResourceProjectionBinding
 		store.binding = &binding
 	}
@@ -176,6 +192,13 @@ func (store *volumeAdmissionStore) AcceptVolume(ctx context.Context, operation s
 
 func (store *volumeAdmissionStore) TransitionVolume(ctx context.Context, principal, operationID string, version uint64, next sandboxcontrol.State, value sandbox.VolumeInfo) (sandboxcontrol.Operation, error) {
 	return sandboxcontrol.Operation{}, errors.New("test volume transition is not implemented")
+}
+
+func (store *volumeAdmissionStore) GetVolume(ctx context.Context, principal string, id sandbox.VolumeID) (sandbox.VolumeInfo, error) {
+	return store.resources.GetVolume(ctx, principal, id)
+}
+func (store *volumeAdmissionStore) ListVolumes(ctx context.Context, principal string, page sandbox.Page) (sandbox.VolumePage, error) {
+	return store.resources.ListVolumes(ctx, principal, page)
 }
 
 func TestControlHandlerBoundsBodiesAndHonorsCancelledWait(t *testing.T) {

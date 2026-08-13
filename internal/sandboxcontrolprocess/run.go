@@ -66,7 +66,7 @@ func RunWithReady(ctx context.Context, config Config, lookup SecretLookup, onRea
 	if err := pool.Ping(ctx); err != nil {
 		return errors.Wrap(err, "run sandbox-control process: ping database")
 	}
-	store, err := sandboxcontrol.NewPostgresLedger(pool)
+	store, err := sandboxcontrol.NewPostgresResourceReadModel(pool)
 	if err != nil {
 		return err
 	}
@@ -89,7 +89,11 @@ func RunWithReady(ctx context.Context, config Config, lookup SecretLookup, onRea
 	publicServer := boundedHTTPServer(mux, &tls.Config{MinVersion: tls.VersionTLS13, Certificates: []tls.Certificate{certificate}})
 	var hostServer *http.Server
 	if config.hostControl != nil {
-		hostServer, err = newHostControlServer(config.hostControl, lookup, store)
+		hostLedger, ledgerErr := sandboxcontrol.NewPostgresLedger(pool)
+		if ledgerErr != nil {
+			return ledgerErr
+		}
+		hostServer, err = newHostControlServer(config.hostControl, lookup, hostLedger)
 		if err != nil {
 			return err
 		}

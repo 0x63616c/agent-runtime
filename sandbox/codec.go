@@ -18,6 +18,8 @@ const (
 	operationEventsKind      = "operation-events"
 	capabilitiesResponseKind = "capabilities-response"
 	outputEventsResponseKind = "output-events"
+	volumeResponseKind       = "volume-response"
+	volumePageResponseKind   = "volume-page-response"
 	failureResponseKind      = "failure-response"
 )
 
@@ -55,6 +57,18 @@ type outputEventsResponseEnvelope struct {
 	Version string        `json:"version"`
 	Kind    string        `json:"kind"`
 	Events  []OutputEvent `json:"events"`
+}
+
+type volumeResponseEnvelope struct {
+	Version string     `json:"version"`
+	Kind    string     `json:"kind"`
+	Volume  VolumeInfo `json:"volume"`
+}
+
+type volumePageResponseEnvelope struct {
+	Version string     `json:"version"`
+	Kind    string     `json:"kind"`
+	Page    VolumePage `json:"page"`
 }
 
 type failureResponseEnvelope struct {
@@ -178,6 +192,39 @@ func decodeOutputEventsV1(data []byte) ([]OutputEvent, error) {
 		seen[event.Cursor] = struct{}{}
 	}
 	return copyOutputEvents(envelope.Events), nil
+}
+
+func decodeVolumeResponseV1(data []byte) (VolumeInfo, error) {
+	var envelope volumeResponseEnvelope
+	if err := decodeControlV1(data, volumeResponseKind, &envelope); err != nil {
+		return VolumeInfo{}, err
+	}
+	if !validVolumeID(envelope.Volume.ID) {
+		return VolumeInfo{}, newFailure(FailureInvalidArgument, "volume response violates sandbox.control/v1", RetryNever)
+	}
+	return copyVolumeInfo(envelope.Volume), nil
+}
+
+func decodeVolumePageResponseV1(data []byte) (VolumePage, error) {
+	var envelope volumePageResponseEnvelope
+	if err := decodeControlV1(data, volumePageResponseKind, &envelope); err != nil {
+		return VolumePage{}, err
+	}
+	if len(envelope.Page.Items) > 100 || (envelope.Page.Next != "" && !validVolumeID(VolumeID(envelope.Page.Next))) {
+		return VolumePage{}, newFailure(FailureInvalidArgument, "volume page response violates sandbox.control/v1", RetryNever)
+	}
+	previous := ""
+	for _, volume := range envelope.Page.Items {
+		if !validVolumeID(volume.ID) || string(volume.ID) <= previous {
+			return VolumePage{}, newFailure(FailureInvalidArgument, "volume page response violates sandbox.control/v1", RetryNever)
+		}
+		previous = string(volume.ID)
+	}
+	page := VolumePage{Next: envelope.Page.Next, Items: make([]VolumeInfo, len(envelope.Page.Items))}
+	for index, volume := range envelope.Page.Items {
+		page.Items[index] = copyVolumeInfo(volume)
+	}
+	return page, nil
 }
 
 func copyOutputEvents(events []OutputEvent) []OutputEvent {

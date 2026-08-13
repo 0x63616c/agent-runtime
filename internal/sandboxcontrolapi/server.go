@@ -27,6 +27,7 @@ const (
 	operationsPath        = "/sandbox.control/v1/operations"
 	capabilitiesPath      = "/sandbox.control/v1/capabilities"
 	processOutputPath     = "/sandbox.control/v1/processes/{id}/output"
+	volumesPath           = "/sandbox.control/v1/volumes"
 	bindingHeader         = "Sandbox-Binding"
 	maxRequestBytes       = 1 << 20
 	maxAssertionBytes     = 2048
@@ -86,6 +87,10 @@ func NewHandler(config Config) (http.Handler, error) {
 	mux.HandleFunc("GET "+operationsPath+"/{id}/events", server.watch)
 	mux.HandleFunc("GET "+capabilitiesPath, server.capabilities)
 	mux.HandleFunc("GET "+processOutputPath, server.replayOutput)
+	if _, ok := config.Store.(sandboxcontrol.VolumeReadModel); ok {
+		mux.HandleFunc("GET "+volumesPath, server.listVolumes)
+		mux.HandleFunc("GET "+volumesPath+"/{id}", server.getVolume)
+	}
 	return http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		writer.Header().Set("Cache-Control", "no-store")
 		writer.Header().Set("X-Content-Type-Options", "nosniff")
@@ -138,6 +143,18 @@ type outputEventsResponse struct {
 	Version string                `json:"version"`
 	Kind    string                `json:"kind"`
 	Events  []sandbox.OutputEvent `json:"events"`
+}
+
+type volumeResponse struct {
+	Version string             `json:"version"`
+	Kind    string             `json:"kind"`
+	Volume  sandbox.VolumeInfo `json:"volume"`
+}
+
+type volumePageResponse struct {
+	Version string             `json:"version"`
+	Kind    string             `json:"kind"`
+	Page    sandbox.VolumePage `json:"page"`
 }
 
 type failureResponse struct {
@@ -213,6 +230,57 @@ func (server *server) replayOutput(writer http.ResponseWriter, request *http.Req
 		return
 	}
 	writeJSON(writer, http.StatusOK, outputEventsResponse{Version: controlVersion, Kind: "output-events", Events: events})
+}
+
+func (server *server) getVolume(writer http.ResponseWriter, request *http.Request) {
+	identity, ok := server.authenticateBound(writer, request)
+	if !ok {
+		return
+	}
+	model, ok := server.config.Store.(sandboxcontrol.VolumeReadModel)
+	if !ok {
+		writeUnavailable(writer)
+		return
+	}
+	id := sandbox.VolumeID(request.PathValue("id"))
+	if id == "" || len(id) > 128 {
+		writeFailure(writer, http.StatusBadRequest, sandbox.Failure{Code: sandbox.FailureInvalidArgument, Message: "volume identifier is invalid", Retry: sandbox.RetryNever})
+		return
+	}
+	volume, err := model.GetVolume(request.Context(), identity.Principal, id)
+	if err != nil {
+		writeStoreError(writer, err)
+		return
+	}
+	writeJSON(writer, http.StatusOK, volumeResponse{Version: controlVersion, Kind: "volume-response", Volume: volume})
+}
+
+func (server *server) listVolumes(writer http.ResponseWriter, request *http.Request) {
+	identity, ok := server.authenticateBound(writer, request)
+	if !ok {
+		return
+	}
+	model, ok := server.config.Store.(sandboxcontrol.VolumeReadModel)
+	if !ok {
+		writeUnavailable(writer)
+		return
+	}
+	limit, err := strconv.ParseUint(request.URL.Query().Get("limit"), 10, 32)
+	if err != nil || limit == 0 || limit > 100 {
+		writeFailure(writer, http.StatusBadRequest, sandbox.Failure{Code: sandbox.FailureInvalidArgument, Message: "volume page limit is invalid", Retry: sandbox.RetryNever})
+		return
+	}
+	after := sandbox.PageCursor(request.URL.Query().Get("after"))
+	if len(after) > 128 {
+		writeFailure(writer, http.StatusBadRequest, sandbox.Failure{Code: sandbox.FailureInvalidArgument, Message: "volume page cursor is invalid", Retry: sandbox.RetryNever})
+		return
+	}
+	page, err := model.ListVolumes(request.Context(), identity.Principal, sandbox.Page{Cursor: after, Limit: uint32(limit)})
+	if err != nil {
+		writeStoreError(writer, err)
+		return
+	}
+	writeJSON(writer, http.StatusOK, volumePageResponse{Version: controlVersion, Kind: "volume-page-response", Page: page})
 }
 
 func (server *server) submit(writer http.ResponseWriter, request *http.Request) {

@@ -35,6 +35,14 @@ type ResourceReadModel interface {
 	ListSnapshots(context.Context, string, sandbox.Page) (sandbox.SnapshotPage, error)
 }
 
+// VolumeReadModel is the narrow durable projection required to serve the
+// public volume inspection endpoints. It intentionally does not imply that
+// sandbox, process, or snapshot projections are ready for transport.
+type VolumeReadModel interface {
+	GetVolume(context.Context, string, sandbox.VolumeID) (sandbox.VolumeInfo, error)
+	ListVolumes(context.Context, string, sandbox.Page) (sandbox.VolumePage, error)
+}
+
 // OutputReplayStore is the separately authenticated, durable output window
 // behind the public replay transport. It returns only retained redacted bytes;
 // callers cannot derive output from host metadata headers.

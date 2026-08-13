@@ -63,6 +63,14 @@ func TestSandboxControlSeparateProcessReconnectsAcrossRestart(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Submit() error = %v", err)
 	}
+	volumeRequest := sandbox.OperationRequest{ID: "op_volume_restart", Kind: sandbox.OperationCreateVolume, CreateVolume: &sandbox.CreateVolumeRequest{Spec: sandbox.VolumeSpec{SizeBytes: 512, Inodes: 8}}}
+	if _, err := client.Submit(context.Background(), volumeRequest); err != nil {
+		t.Fatalf("Submit(create-volume) error = %v", err)
+	}
+	volumeOperation, err := client.GetOperation(context.Background(), volumeRequest.ID)
+	if err != nil || volumeOperation.Target.VolumeID == "" {
+		t.Fatalf("GetOperation(create-volume) = %#v, %v", volumeOperation, err)
+	}
 	if err := client.Close(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -80,6 +88,14 @@ func TestSandboxControlSeparateProcessReconnectsAcrossRestart(t *testing.T) {
 	replayed, err := reconnected.Submit(context.Background(), request)
 	if err != nil || replayed != ref {
 		t.Fatalf("Submit(after restart) = %#v, %v; want %#v", replayed, err, ref)
+	}
+	volume, err := reconnected.GetVolume(context.Background(), volumeOperation.Target.VolumeID)
+	if err != nil || volume.ID != volumeOperation.Target.VolumeID || volume.SizeBytes != 512 || volume.Inodes != 8 {
+		t.Fatalf("GetVolume(after restart) = %#v, %v", volume, err)
+	}
+	volumes, err := reconnected.ListVolumes(context.Background(), sandbox.Page{Limit: 1})
+	if err != nil || len(volumes.Items) != 1 || volumes.Items[0].ID != volumeOperation.Target.VolumeID || volumes.Next != "" {
+		t.Fatalf("ListVolumes(after restart) = %#v, %v", volumes, err)
 	}
 }
 
