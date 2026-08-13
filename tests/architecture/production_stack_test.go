@@ -121,7 +121,7 @@ var _ = Describe("Self-hosted production Stack", func() {
 		Expect(api.Kubernetes.Image).To(Equal("ghcr.io/0x63616c/agent-runtime@sha256:aa96439dbda5207c31dea06d72a5f58c7e0f3a929c6a8bcfd2a24e67d3365207"))
 		Expect(api.Kubernetes.Command).To(ConsistOf("/agent-runtime-api"))
 		Expect(api.Kubernetes.Arguments).To(ConsistOf("--config-env", "RUNTIME_API_CONFIG"))
-		Expect(secretEnvironmentNames(api)).To(ConsistOf("STATE_DATABASE_DSN", "RUNTIME_API_ADMIN_TOKEN", "RUNTIME_API_DEVELOPER_TOKEN", "RUNTIME_API_CONTENT_ACCESS_KEY", "RUNTIME_API_CONTENT_SECRET_KEY"))
+		Expect(secretEnvironmentNames(api)).To(ConsistOf("STATE_DATABASE_DSN", "RUNTIME_API_ADMIN_TOKEN", "RUNTIME_API_DEVELOPER_TOKEN", "RUNTIME_API_CONTENT_ACCESS_KEY", "RUNTIME_API_CONTENT_SECRET_KEY", "OBSERVABILITY_CORRELATION_KEY"))
 		Expect(findResource(resources, "api-egress").Kubernetes.Network.AllowedEgress).To(ConsistOf(stack.ResourceID("state"), stack.ResourceID("otel-collector"), stack.ResourceID("blob")))
 		Expect(secretEnvironmentNames(findResource(resources, "model"))).NotTo(ContainElement("TEMPORAL_AUTH_TOKEN"))
 		Expect(findResource(resources, "model-egress").Kubernetes.Network.AllowedEgress).To(ContainElement(stack.ResourceID("egress-proxy")))
@@ -187,7 +187,7 @@ var _ = Describe("Self-hosted production Stack", func() {
 		Expect(expectedRoleConfigs).To(HaveLen(7))
 		apiConfig, found := environmentValue(api, "RUNTIME_API_CONFIG")
 		Expect(found).To(BeTrue())
-		Expect(apiConfig).To(Equal(`{"version":1,"listen_address":"0.0.0.0:8080","public_listen":true,"storage":{"mode":"postgres","database_dsn_environment":"STATE_DATABASE_DSN","content":{"endpoint":"blob.agent-runtime.svc:9000","access_key_environment":"RUNTIME_API_CONTENT_ACCESS_KEY","secret_key_environment":"RUNTIME_API_CONTENT_SECRET_KEY","bucket":"agent-runtime"}},"model_profiles":["balanced"],"max_request_bytes":4194304,"principals":[{"tenant":"public","principal":"admin","admin":true,"bearer_token_environment":"RUNTIME_API_ADMIN_TOKEN"},{"tenant":"public","principal":"developer","admin":false,"bearer_token_environment":"RUNTIME_API_DEVELOPER_TOKEN"}]}`))
+		Expect(apiConfig).To(Equal(`{"version":1,"listen_address":"0.0.0.0:8080","public_listen":true,"storage":{"mode":"postgres","database_dsn_environment":"STATE_DATABASE_DSN","content":{"endpoint":"blob.agent-runtime.svc:9000","access_key_environment":"RUNTIME_API_CONTENT_ACCESS_KEY","secret_key_environment":"RUNTIME_API_CONTENT_SECRET_KEY","bucket":"agent-runtime"}},"model_profiles":["balanced"],"max_request_bytes":4194304,"observability":{"identity_correlation_key_environment":"OBSERVABILITY_CORRELATION_KEY","otlp_grpc_endpoint":"otel-collector:4317"},"principals":[{"tenant":"public","principal":"admin","admin":true,"bearer_token_environment":"RUNTIME_API_ADMIN_TOKEN"},{"tenant":"public","principal":"developer","admin":false,"bearer_token_environment":"RUNTIME_API_DEVELOPER_TOKEN"}]}`))
 
 		controlService := findResource(resources, "sandbox-control-service")
 		Expect(controlService.Kubernetes.Ports).To(ConsistOf(stack.Port{Name: "http", Number: 8086, Protocol: "TCP"}))

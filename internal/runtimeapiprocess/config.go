@@ -173,7 +173,7 @@ func validOTLPGRPCEndpoint(value string) bool {
 		return false
 	}
 	host, port, err := net.SplitHostPort(value)
-	if err != nil || host == "" || port != "4317" || (host != "otel-collector" && !strings.HasPrefix(host, "otel-collector.")) {
+	if err != nil || host == "" || port != "4317" || !validOTLPCollectorHost(host) {
 		return false
 	}
 	for _, label := range strings.Split(host, ".") {
@@ -182,6 +182,23 @@ func validOTLPGRPCEndpoint(value string) bool {
 		}
 	}
 	return true
+}
+
+func validOTLPCollectorHost(host string) bool {
+	labels := strings.Split(host, ".")
+	if labels[0] != "otel-collector" {
+		return false
+	}
+	switch len(labels) {
+	case 1:
+		return true
+	case 3:
+		return labels[2] == "svc"
+	case 5:
+		return labels[2] == "svc" && labels[3] == "cluster" && labels[4] == "local"
+	default:
+		return false
+	}
 }
 
 func parseObservability(value json.RawMessage) (observabilityDocument, error) {
