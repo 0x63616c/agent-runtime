@@ -63,7 +63,7 @@ preflight() {
   ' >/dev/null || fail "direct rendered resources are not immutable and locally owned"
   printf '%s' "$manifests" | jq -e --arg namespace "$namespace" '
     .items[0].kind == "Namespace" and .items[0].metadata.name == $namespace and
-    ([.items[]|select(.kind == "Deployment" or .kind == "StatefulSet" or .kind == "Job")|.metadata.labels["agent-runtime.dev/resource"]] - [.items[]|select(.kind == "NetworkPolicy" and .spec.policyTypes|index("Egress"))|.spec.podSelector.matchLabels["agent-runtime.dev/resource"]]) == []
+    ([.items[]|select(.kind == "Deployment" or .kind == "StatefulSet" or .kind == "Job")|.metadata.labels["agent-runtime.dev/resource"]] - [.items[]|select(.kind == "NetworkPolicy" and (.spec.policyTypes | index("Egress")))|.spec.podSelector.matchLabels["agent-runtime.dev/resource"]]) == []
   ' >/dev/null || fail "each direct workload needs an egress policy"
   nodes="$(kubectl --kubeconfig "$kubeconfig" --context "$context_value" get nodes -o json)"
   printf '%s' "$nodes" | jq -e '[.items[]|select(.status.nodeInfo.operatingSystem == "linux" and .status.nodeInfo.architecture == "amd64" and (.spec.unschedulable // false | not) and ([.status.conditions[]?|select(.type == "Ready" and .status == "True")]|length == 1))]|length > 0' >/dev/null || fail "no Ready schedulable Linux/amd64 node"
