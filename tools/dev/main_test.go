@@ -106,7 +106,7 @@ func TestCIRenderUsesStackScopedTiltImagesWhileProductionRetainsPublishedImages(
 				ciImages[object.ID] = object.Kubernetes.Image
 				continue
 			}
-			want := "ghcr.io/0x63616c/agent-runtime@sha256:7c60d4d6078da20db1f3c4e19cec03d033f9a37e4f7ec98fe5b1858f806ee1b3"
+			want := "ghcr.io/0x63616c/agent-runtime@sha256:bef38a1e7b268a50db626879ada7e4fc7d9486641dfb76ca8d5d54f21f102603"
 			if object.ID == "api" {
 				want = "ghcr.io/0x63616c/agent-runtime@sha256:aa96439dbda5207c31dea06d72a5f58c7e0f3a929c6a8bcfd2a24e67d3365207"
 			}

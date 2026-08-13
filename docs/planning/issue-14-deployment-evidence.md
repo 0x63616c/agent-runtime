@@ -10,7 +10,7 @@ complete.
 
 On 2026-08-07, GitHub Actions run `31152555763` built and published the
 Linux AMD64/ARM64 index
-`ghcr.io/0x63616c/agent-runtime@sha256:7c60d4d6078da20db1f3c4e19cec03d033f9a37e4f7ec98fe5b1858f806ee1b3`
+`ghcr.io/0x63616c/agent-runtime@sha256:bef38a1e7b268a50db626879ada7e4fc7d9486641dfb76ca8d5d54f21f102603`
 from source revision `a372977`. The publisher completed its Buildx push,
 SBOM/provenance generation, GitHub signed attestation, and digest inspection
 successfully. A local

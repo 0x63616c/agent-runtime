@@ -739,7 +739,7 @@
             "kind": "Deployment",
             "name": "orchestration",
             "replicas": 3,
-            "image": "ghcr.io/0x63616c/agent-runtime@sha256:7c60d4d6078da20db1f3c4e19cec03d033f9a37e4f7ec98fe5b1858f806ee1b3",
+            "image": "ghcr.io/0x63616c/agent-runtime@sha256:bef38a1e7b268a50db626879ada7e4fc7d9486641dfb76ca8d5d54f21f102603",
             "service_account": "orchestration-account",
             "command": [
               "/runtime"
@@ -829,7 +829,7 @@
             "kind": "Deployment",
             "name": "model",
             "replicas": 1,
-            "image": "ghcr.io/0x63616c/agent-runtime@sha256:7c60d4d6078da20db1f3c4e19cec03d033f9a37e4f7ec98fe5b1858f806ee1b3",
+            "image": "ghcr.io/0x63616c/agent-runtime@sha256:bef38a1e7b268a50db626879ada7e4fc7d9486641dfb76ca8d5d54f21f102603",
             "service_account": "model-account",
             "command": [
               "/runtime"
@@ -924,7 +924,7 @@
             "kind": "Deployment",
             "name": "tool",
             "replicas": 1,
-            "image": "ghcr.io/0x63616c/agent-runtime@sha256:7c60d4d6078da20db1f3c4e19cec03d033f9a37e4f7ec98fe5b1858f806ee1b3",
+            "image": "ghcr.io/0x63616c/agent-runtime@sha256:bef38a1e7b268a50db626879ada7e4fc7d9486641dfb76ca8d5d54f21f102603",
             "service_account": "tool-account",
             "command": [
               "/runtime"
@@ -1018,7 +1018,7 @@
             "kind": "Deployment",
             "name": "blob-role",
             "replicas": 1,
-            "image": "ghcr.io/0x63616c/agent-runtime@sha256:7c60d4d6078da20db1f3c4e19cec03d033f9a37e4f7ec98fe5b1858f806ee1b3",
+            "image": "ghcr.io/0x63616c/agent-runtime@sha256:bef38a1e7b268a50db626879ada7e4fc7d9486641dfb76ca8d5d54f21f102603",
             "service_account": "blob-role-account",
             "command": [
               "/runtime"
@@ -1092,7 +1092,7 @@
             "kind": "Deployment",
             "name": "codec",
             "replicas": 1,
-            "image": "ghcr.io/0x63616c/agent-runtime@sha256:7c60d4d6078da20db1f3c4e19cec03d033f9a37e4f7ec98fe5b1858f806ee1b3",
+            "image": "ghcr.io/0x63616c/agent-runtime@sha256:bef38a1e7b268a50db626879ada7e4fc7d9486641dfb76ca8d5d54f21f102603",
             "service_account": "codec-account",
             "command": [
               "/runtime"
@@ -1171,7 +1171,7 @@
             "kind": "Deployment",
             "name": "sandbox-control",
             "replicas": 1,
-            "image": "ghcr.io/0x63616c/agent-runtime@sha256:7c60d4d6078da20db1f3c4e19cec03d033f9a37e4f7ec98fe5b1858f806ee1b3",
+            "image": "ghcr.io/0x63616c/agent-runtime@sha256:bef38a1e7b268a50db626879ada7e4fc7d9486641dfb76ca8d5d54f21f102603",
             "service_account": "sandbox-control-account",
             "command": [
               "/runtime"
@@ -1251,7 +1251,7 @@
             "kind": "Deployment",
             "name": "sandbox-host",
             "replicas": 1,
-            "image": "ghcr.io/0x63616c/agent-runtime@sha256:7c60d4d6078da20db1f3c4e19cec03d033f9a37e4f7ec98fe5b1858f806ee1b3",
+            "image": "ghcr.io/0x63616c/agent-runtime@sha256:bef38a1e7b268a50db626879ada7e4fc7d9486641dfb76ca8d5d54f21f102603",
             "service_account": "sandbox-host-account",
             "command": [
               "/runtime"
@@ -1626,7 +1626,7 @@
             "kind": "Deployment",
             "name": "egress-proxy",
             "replicas": 2,
-            "image": "ghcr.io/0x63616c/agent-runtime@sha256:7c60d4d6078da20db1f3c4e19cec03d033f9a37e4f7ec98fe5b1858f806ee1b3",
+            "image": "ghcr.io/0x63616c/agent-runtime@sha256:bef38a1e7b268a50db626879ada7e4fc7d9486641dfb76ca8d5d54f21f102603",
             "service_account": "egress-proxy-account",
             "command": [
               "/egress-proxy"
@@ -3945,7 +3945,7 @@
             "kind": "Deployment",
             "name": "orchestration",
             "replicas": 3,
-            "image": "ghcr.io/0x63616c/agent-runtime@sha256:7c60d4d6078da20db1f3c4e19cec03d033f9a37e4f7ec98fe5b1858f806ee1b3",
+            "image": "ghcr.io/0x63616c/agent-runtime@sha256:bef38a1e7b268a50db626879ada7e4fc7d9486641dfb76ca8d5d54f21f102603",
             "service_account": "orchestration-account",
             "command": [
               "/runtime"
@@ -4035,7 +4035,7 @@
             "kind": "Deployment",
             "name": "model",
             "replicas": 1,
-            "image": "ghcr.io/0x63616c/agent-runtime@sha256:7c60d4d6078da20db1f3c4e19cec03d033f9a37e4f7ec98fe5b1858f806ee1b3",
+            "image": "ghcr.io/0x63616c/agent-runtime@sha256:bef38a1e7b268a50db626879ada7e4fc7d9486641dfb76ca8d5d54f21f102603",
             "service_account": "model-account",
             "command": [
               "/runtime"
@@ -4115,7 +4115,7 @@
             "kind": "Deployment",
             "name": "tool",
             "replicas": 1,
-            "image": "ghcr.io/0x63616c/agent-runtime@sha256:7c60d4d6078da20db1f3c4e19cec03d033f9a37e4f7ec98fe5b1858f806ee1b3",
+            "image": "ghcr.io/0x63616c/agent-runtime@sha256:bef38a1e7b268a50db626879ada7e4fc7d9486641dfb76ca8d5d54f21f102603",
             "service_account": "tool-account",
             "command": [
               "/runtime"
@@ -4194,7 +4194,7 @@
             "kind": "Deployment",
             "name": "blob-role",
             "replicas": 1,
-            "image": "ghcr.io/0x63616c/agent-runtime@sha256:7c60d4d6078da20db1f3c4e19cec03d033f9a37e4f7ec98fe5b1858f806ee1b3",
+            "image": "ghcr.io/0x63616c/agent-runtime@sha256:bef38a1e7b268a50db626879ada7e4fc7d9486641dfb76ca8d5d54f21f102603",
             "service_account": "blob-role-account",
             "command": [
               "/runtime"
@@ -4268,7 +4268,7 @@
             "kind": "Deployment",
             "name": "codec",
             "replicas": 1,
-            "image": "ghcr.io/0x63616c/agent-runtime@sha256:7c60d4d6078da20db1f3c4e19cec03d033f9a37e4f7ec98fe5b1858f806ee1b3",
+            "image": "ghcr.io/0x63616c/agent-runtime@sha256:bef38a1e7b268a50db626879ada7e4fc7d9486641dfb76ca8d5d54f21f102603",
             "service_account": "codec-account",
             "command": [
               "/runtime"
@@ -4347,7 +4347,7 @@
             "kind": "Deployment",
             "name": "sandbox-control",
             "replicas": 1,
-            "image": "ghcr.io/0x63616c/agent-runtime@sha256:7c60d4d6078da20db1f3c4e19cec03d033f9a37e4f7ec98fe5b1858f806ee1b3",
+            "image": "ghcr.io/0x63616c/agent-runtime@sha256:bef38a1e7b268a50db626879ada7e4fc7d9486641dfb76ca8d5d54f21f102603",
             "service_account": "sandbox-control-account",
             "command": [
               "/runtime"
@@ -4427,7 +4427,7 @@
             "kind": "Deployment",
             "name": "sandbox-host",
             "replicas": 1,
-            "image": "ghcr.io/0x63616c/agent-runtime@sha256:7c60d4d6078da20db1f3c4e19cec03d033f9a37e4f7ec98fe5b1858f806ee1b3",
+            "image": "ghcr.io/0x63616c/agent-runtime@sha256:bef38a1e7b268a50db626879ada7e4fc7d9486641dfb76ca8d5d54f21f102603",
             "service_account": "sandbox-host-account",
             "command": [
               "/runtime"
@@ -4802,7 +4802,7 @@
             "kind": "Deployment",
             "name": "egress-proxy",
             "replicas": 2,
-            "image": "ghcr.io/0x63616c/agent-runtime@sha256:7c60d4d6078da20db1f3c4e19cec03d033f9a37e4f7ec98fe5b1858f806ee1b3",
+            "image": "ghcr.io/0x63616c/agent-runtime@sha256:bef38a1e7b268a50db626879ada7e4fc7d9486641dfb76ca8d5d54f21f102603",
             "service_account": "egress-proxy-account",
             "command": [
               "/egress-proxy"
@@ -7117,7 +7117,7 @@
             "kind": "Deployment",
             "name": "orchestration",
             "replicas": 3,
-            "image": "ghcr.io/0x63616c/agent-runtime@sha256:7c60d4d6078da20db1f3c4e19cec03d033f9a37e4f7ec98fe5b1858f806ee1b3",
+            "image": "ghcr.io/0x63616c/agent-runtime@sha256:bef38a1e7b268a50db626879ada7e4fc7d9486641dfb76ca8d5d54f21f102603",
             "service_account": "orchestration-account",
             "command": [
               "/runtime"
@@ -7207,7 +7207,7 @@
             "kind": "Deployment",
             "name": "model",
             "replicas": 1,
-            "image": "ghcr.io/0x63616c/agent-runtime@sha256:7c60d4d6078da20db1f3c4e19cec03d033f9a37e4f7ec98fe5b1858f806ee1b3",
+            "image": "ghcr.io/0x63616c/agent-runtime@sha256:bef38a1e7b268a50db626879ada7e4fc7d9486641dfb76ca8d5d54f21f102603",
             "service_account": "model-account",
             "command": [
               "/runtime"
@@ -7287,7 +7287,7 @@
             "kind": "Deployment",
             "name": "tool",
             "replicas": 1,
-            "image": "ghcr.io/0x63616c/agent-runtime@sha256:7c60d4d6078da20db1f3c4e19cec03d033f9a37e4f7ec98fe5b1858f806ee1b3",
+            "image": "ghcr.io/0x63616c/agent-runtime@sha256:bef38a1e7b268a50db626879ada7e4fc7d9486641dfb76ca8d5d54f21f102603",
             "service_account": "tool-account",
             "command": [
               "/runtime"
@@ -7366,7 +7366,7 @@
             "kind": "Deployment",
             "name": "blob-role",
             "replicas": 1,
-            "image": "ghcr.io/0x63616c/agent-runtime@sha256:7c60d4d6078da20db1f3c4e19cec03d033f9a37e4f7ec98fe5b1858f806ee1b3",
+            "image": "ghcr.io/0x63616c/agent-runtime@sha256:bef38a1e7b268a50db626879ada7e4fc7d9486641dfb76ca8d5d54f21f102603",
             "service_account": "blob-role-account",
             "command": [
               "/runtime"
@@ -7440,7 +7440,7 @@
             "kind": "Deployment",
             "name": "codec",
             "replicas": 1,
-            "image": "ghcr.io/0x63616c/agent-runtime@sha256:7c60d4d6078da20db1f3c4e19cec03d033f9a37e4f7ec98fe5b1858f806ee1b3",
+            "image": "ghcr.io/0x63616c/agent-runtime@sha256:bef38a1e7b268a50db626879ada7e4fc7d9486641dfb76ca8d5d54f21f102603",
             "service_account": "codec-account",
             "command": [
               "/runtime"
@@ -7519,7 +7519,7 @@
             "kind": "Deployment",
             "name": "sandbox-control",
             "replicas": 1,
-            "image": "ghcr.io/0x63616c/agent-runtime@sha256:7c60d4d6078da20db1f3c4e19cec03d033f9a37e4f7ec98fe5b1858f806ee1b3",
+            "image": "ghcr.io/0x63616c/agent-runtime@sha256:bef38a1e7b268a50db626879ada7e4fc7d9486641dfb76ca8d5d54f21f102603",
             "service_account": "sandbox-control-account",
             "command": [
               "/runtime"
@@ -7599,7 +7599,7 @@
             "kind": "Deployment",
             "name": "sandbox-host",
             "replicas": 1,
-            "image": "ghcr.io/0x63616c/agent-runtime@sha256:7c60d4d6078da20db1f3c4e19cec03d033f9a37e4f7ec98fe5b1858f806ee1b3",
+            "image": "ghcr.io/0x63616c/agent-runtime@sha256:bef38a1e7b268a50db626879ada7e4fc7d9486641dfb76ca8d5d54f21f102603",
             "service_account": "sandbox-host-account",
             "command": [
               "/runtime"
@@ -7974,7 +7974,7 @@
             "kind": "Deployment",
             "name": "egress-proxy",
             "replicas": 2,
-            "image": "ghcr.io/0x63616c/agent-runtime@sha256:7c60d4d6078da20db1f3c4e19cec03d033f9a37e4f7ec98fe5b1858f806ee1b3",
+            "image": "ghcr.io/0x63616c/agent-runtime@sha256:bef38a1e7b268a50db626879ada7e4fc7d9486641dfb76ca8d5d54f21f102603",
             "service_account": "egress-proxy-account",
             "command": [
               "/egress-proxy"
