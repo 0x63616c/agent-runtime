@@ -14,7 +14,6 @@ usage:
     --firecracker-version vX.Y.Z \
     --kernel-url HTTPS-URL \
     --kernel-version-id VERSION-ID \
-    --rootfs-builder-image ghcr.io/0x63616c/agent-runtime-firecracker-rootfs-builder@sha256:HEX \
     --source-date-epoch EPOCH --rootfs-bytes BYTES --rootfs-uuid UUID \
     --output /absolute/manifest.yaml
   direct-fixture-builder.sh --self-test
@@ -29,18 +28,22 @@ has already staged these root-owned, immutable inputs on the Linux node:
   /var/lib/agent-runtime/firecracker-fixture-inputs/home-server/rootfs-builder.json
 
 The pinned fixture-builder image must contain a clean checkout at /workspace,
-Go, Python, tar, sha256sum, and the reviewed Linux/amd64 rootfs toolchain. The
-rootfs builder image digest is independently bound by rootfs-builder.json;
-the Job verifies its schema, requested digest, source revision, Dockerfile and
-inputs-lock digests before it calls the existing rootfs and fixture assembly
-scripts. The Job has no network and no Kubernetes API token.
+Go, Python, tar, sha256sum, and the reviewed Linux/amd64 rootfs toolchain. It
+verifies the checked-in rootfs-builder source lock and required tool versions
+before it calls the existing rootfs and fixture assembly scripts. The Job has
+no network and no Kubernetes API token.
+
+The Job requires an explicitly labelled privileged namespace because a scoped
+hostPath is the reviewed publication mechanism. The Job itself is one-shot;
+the operator that applies it must delete the uniquely named namespace after
+recording its outcome. It refuses a pre-existing published fixture directory
+or source map, then atomically publishes the complete staged fixture directory.
 EOF
   exit 2
 }
 
 fail() { echo "direct fixture builder failed: $*" >&2; exit 1; }
 valid_run_id() { [[ "$1" =~ ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$ && ${#1} -le 24 ]]; }
-valid_digest_image() { [[ "$1" =~ ^ghcr\.io/0x63616c/agent-runtime-firecracker-(fixture-builder|rootfs-builder)@sha256:[0-9a-f]{64}$ ]]; }
 valid_revision() { [[ "$1" =~ ^[0-9a-f]{40}$ ]]; }
 valid_version() { [[ "$1" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; }
 valid_kernel_version() { [[ "$1" =~ ^[A-Za-z0-9._~-]+$ && "$1" != latest && "$1" != main ]]; }
@@ -51,23 +54,22 @@ valid_kernel_url() {
 valid_epoch() { [[ "$1" =~ ^[0-9]+$ ]]; }
 valid_bytes() { [[ "$1" =~ ^[0-9]+$ && "$1" -ge 1048576 ]]; }
 valid_uuid() { [[ "$1" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]]; }
-require_new_absolute() { [[ "$1" == /* && ! -e "$1" ]] || fail "$2 must be a new absolute path"; mkdir -p "$(dirname "$1")"; }
+require_new_absolute() { [[ "$1" == /* && ! -e "$1" && -d "$(dirname "$1")" ]] || fail "$2 must be a new absolute path beneath an existing directory"; }
 
 render() {
-  local run_id='' image='' revision='' firecracker_version='' kernel_url='' kernel_version_id='' rootfs_builder_image='' epoch='' rootfs_bytes='' rootfs_uuid='' output=''
+  local run_id='' image='' revision='' firecracker_version='' kernel_url='' kernel_version_id='' epoch='' rootfs_bytes='' rootfs_uuid='' output=''
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --run-id) run_id=$2; shift 2;; --image) image=$2; shift 2;; --revision) revision=$2; shift 2;;
       --firecracker-version) firecracker_version=$2; shift 2;; --kernel-url) kernel_url=$2; shift 2;;
-      --kernel-version-id) kernel_version_id=$2; shift 2;; --rootfs-builder-image) rootfs_builder_image=$2; shift 2;;
+      --kernel-version-id) kernel_version_id=$2; shift 2;;
       --source-date-epoch) epoch=$2; shift 2;; --rootfs-bytes) rootfs_bytes=$2; shift 2;;
       --rootfs-uuid) rootfs_uuid=$2; shift 2;; --output) output=$2; shift 2;; *) usage;;
     esac
   done
-  [[ -n "$run_id" && -n "$image" && -n "$revision" && -n "$firecracker_version" && -n "$kernel_url" && -n "$kernel_version_id" && -n "$rootfs_builder_image" && -n "$epoch" && -n "$rootfs_bytes" && -n "$rootfs_uuid" && -n "$output" ]] || usage
+  [[ -n "$run_id" && -n "$image" && -n "$revision" && -n "$firecracker_version" && -n "$kernel_url" && -n "$kernel_version_id" && -n "$epoch" && -n "$rootfs_bytes" && -n "$rootfs_uuid" && -n "$output" ]] || usage
   valid_run_id "$run_id" || fail 'run ID must be a lowercase DNS label of at most 24 characters'
   [[ "$image" =~ ^ghcr\.io/0x63616c/agent-runtime-firecracker-fixture-builder@sha256:[0-9a-f]{64}$ ]] || fail 'image must be the pinned reviewed fixture-builder image'
-  [[ "$rootfs_builder_image" =~ ^ghcr\.io/0x63616c/agent-runtime-firecracker-rootfs-builder@sha256:[0-9a-f]{64}$ ]] || fail 'rootfs builder image must be the pinned reviewed rootfs-builder image'
   valid_revision "$revision" || fail 'revision must be an exact lowercase 40-character commit'
   valid_version "$firecracker_version" || fail 'Firecracker version must be an exact release version'
   valid_kernel_version "$kernel_version_id" || fail 'kernel version ID must be immutable'
@@ -89,6 +91,9 @@ metadata:
   labels:
     app.kubernetes.io/part-of: agent-runtime
     agent-runtime.dev/direct-fixture-build: "$run_id"
+    pod-security.kubernetes.io/enforce: privileged
+    pod-security.kubernetes.io/audit: privileged
+    pod-security.kubernetes.io/warn: privileged
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
@@ -116,6 +121,9 @@ spec:
         app.kubernetes.io/part-of: agent-runtime
         agent-runtime.dev/direct-fixture-build: "$run_id"
     spec:
+      nodeSelector:
+        kubernetes.io/os: linux
+        kubernetes.io/arch: amd64
       automountServiceAccountToken: false
       restartPolicy: Never
       terminationGracePeriodSeconds: 10
@@ -131,20 +139,20 @@ spec:
               test "\$(uname -m)" = x86_64
               test "\$(git -C /workspace rev-parse HEAD)" = "$revision"
               test -z "\$(git -C /workspace status --porcelain)"
-              test ! -e /var/lib/agent-runtime/firecracker-fixtures/home-server/fixtures.lock
+              test ! -e /var/lib/agent-runtime/firecracker-fixtures/home-server
               test ! -e /etc/agent-runtime/firecracker-direct-fixtures.json
               for input in firecracker.tgz vmlinux rootfs-builder.json; do
                 test -f "/input/\$input"
                 test "\$(stat -c '%u %a' "/input/\$input")" = '0 600'
               done
-              python3 - /input/rootfs-builder.json "$rootfs_builder_image" "$revision" <<'PY'
+              python3 - /input/rootfs-builder.json "$revision" <<'PY'
               import hashlib, json, pathlib, re, sys
-              manifest, image, revision = sys.argv[1:]
+              manifest, revision = sys.argv[1:]
               value = json.load(open(manifest, encoding='utf-8'))
               expected = {'schema_version','image','platform','required_commands','e2fsprogs_version','binutils_version','source_revision','dockerfile_sha256','inputs_lock_sha256'}
               commands = ['awk','grep','install','mke2fs','mkdir','mktemp','readelf','rm','sha256sum','tr','truncate','wc']
               if set(value) != expected or value['schema_version'] != 'agent-runtime.firecracker.rootfs-builder/v1': raise SystemExit('invalid reviewed rootfs builder manifest')
-              if value['image'] != image or value['platform'] != {'os':'linux','architecture':'amd64'} or value['source_revision'] != revision: raise SystemExit('rootfs builder manifest does not bind requested image and revision')
+              if not re.fullmatch(r'ghcr\.io/0x63616c/agent-runtime-firecracker-rootfs-builder@sha256:[0-9a-f]{64}', value['image']) or value['platform'] != {'os':'linux','architecture':'amd64'} or value['source_revision'] != revision: raise SystemExit('rootfs builder manifest does not bind the reviewed source contract')
               if value['required_commands'] != commands or value['e2fsprogs_version'] != '1.47.2' or value['binutils_version'] != '2.44': raise SystemExit('rootfs builder manifest does not bind the reviewed toolchain')
               for field, path in [('dockerfile_sha256','/workspace/tools/firecracker/rootfs-builder/Dockerfile'), ('inputs_lock_sha256','/workspace/tools/firecracker/rootfs-builder/inputs.lock.json')]:
                 if not re.fullmatch(r'sha256:[0-9a-f]{64}', value[field]) or value[field] != 'sha256:' + hashlib.sha256(pathlib.Path(path).read_bytes()).hexdigest(): raise SystemExit('rootfs builder manifest does not bind reviewed '+field)
@@ -157,10 +165,12 @@ spec:
               /workspace/tools/firecracker/build-guest-agent.sh "\$work/guest-agent"
               SOURCE_DATE_EPOCH=$epoch /workspace/tools/firecracker/build-rootfs.sh "\$work/guest-agent" "\$work/rootfs.ext4" $rootfs_bytes $rootfs_uuid "\$work/rootfs-attestation.json"
               /workspace/tools/firecracker/assemble-fixtures.sh "\$work/assembled" $revision $firecracker_version /input/firecracker.tgz "$kernel_url" $kernel_version_id /input/vmlinux "\$work/rootfs.ext4" "\$work/rootfs-attestation.json" $epoch
-              install -d -o 0 -g 0 -m 0700 /var/lib/agent-runtime/firecracker-fixtures/home-server
-              cp -a "\$work/assembled/." /var/lib/agent-runtime/firecracker-fixtures/home-server/
-              find /var/lib/agent-runtime/firecracker-fixtures/home-server -type d -exec chown 0:0 {} + -exec chmod 0700 {} +
-              find /var/lib/agent-runtime/firecracker-fixtures/home-server -type f -exec chown 0:0 {} + -exec chmod 0600 {} +
+              stage=/var/lib/agent-runtime/firecracker-fixtures/.home-server-$run_id.staged
+              test ! -e "\$stage"
+              cp -a "\$work/assembled" "\$stage"
+              find "\$stage" -type d -exec chown 0:0 {} + -exec chmod 0700 {} +
+              find "\$stage" -type f -exec chown 0:0 {} + -exec chmod 0600 {} +
+              mv "\$stage" /var/lib/agent-runtime/firecracker-fixtures/home-server
               install -d -o 0 -g 0 -m 0700 /etc/agent-runtime
               /workspace/tools/firecracker/write-direct-fixture-source-map.sh /var/lib/agent-runtime/firecracker-fixtures/home-server /etc/agent-runtime/firecracker-direct-fixtures.json
           securityContext:
@@ -173,7 +183,7 @@ spec:
           volumeMounts:
             - { name: work, mountPath: /work }
             - { name: inputs, mountPath: /input, readOnly: true }
-            - { name: fixtures, mountPath: /var/lib/agent-runtime/firecracker-fixtures/home-server }
+            - { name: fixtures, mountPath: /var/lib/agent-runtime/firecracker-fixtures }
             - { name: direct-config, mountPath: /etc/agent-runtime }
       volumes:
         - name: work
@@ -181,7 +191,7 @@ spec:
         - name: inputs
           hostPath: { path: /var/lib/agent-runtime/firecracker-fixture-inputs/home-server, type: Directory }
         - name: fixtures
-          hostPath: { path: /var/lib/agent-runtime/firecracker-fixtures/home-server, type: DirectoryOrCreate }
+          hostPath: { path: /var/lib/agent-runtime/firecracker-fixtures, type: Directory }
         - name: direct-config
           hostPath: { path: /etc/agent-runtime, type: DirectoryOrCreate }
 EOF
@@ -192,16 +202,19 @@ self_test() {
   tmp="$(mktemp -d)"; trap 'rm -rf -- "${tmp:-}"' EXIT
   manifest="$tmp/fixture-builder.yaml"
   digest="$(printf 'a%.0s' {1..64})"
-  render --run-id fixture-test --image "ghcr.io/0x63616c/agent-runtime-firecracker-fixture-builder@sha256:$digest" --revision "$(git rev-parse HEAD)" --firecracker-version v1.16.1 --kernel-url https://s3.amazonaws.com/spec.ccfc.min/firecracker-ci/20260717-5ac3f5ffdcd7-0/x86_64/vmlinux-6.18.36 --kernel-version-id S8eTJ2TzOZVY__PbUPFfdzt2az2_GIqL --rootfs-builder-image "ghcr.io/0x63616c/agent-runtime-firecracker-rootfs-builder@sha256:$digest" --source-date-epoch 1704067200 --rootfs-bytes 16777216 --rootfs-uuid 00000000-0000-0000-0000-000000000001 --output "$manifest"
+  render --run-id fixture-test --image "ghcr.io/0x63616c/agent-runtime-firecracker-fixture-builder@sha256:$digest" --revision "$(git rev-parse HEAD)" --firecracker-version v1.16.1 --kernel-url https://s3.amazonaws.com/spec.ccfc.min/firecracker-ci/20260717-5ac3f5ffdcd7-0/x86_64/vmlinux-6.18.36 --kernel-version-id S8eTJ2TzOZVY__PbUPFfdzt2az2_GIqL --source-date-epoch 1704067200 --rootfs-bytes 16777216 --rootfs-uuid 00000000-0000-0000-0000-000000000001 --output "$manifest"
   grep -Fqx '  policyTypes: [Ingress, Egress]' "$manifest"
   grep -Fqx '      automountServiceAccountToken: false' "$manifest"
   grep -Fqx '            readOnlyRootFilesystem: true' "$manifest"
   grep -Fqx '            capabilities: { drop: ["ALL"] }' "$manifest"
-  grep -Fqx '          hostPath: { path: /var/lib/agent-runtime/firecracker-fixture-inputs/home-server, type: Directory }' "$manifest"
+  grep -Fqx '    pod-security.kubernetes.io/enforce: privileged' "$manifest"
+  grep -Fqx '        kubernetes.io/os: linux' "$manifest"
+  grep -Fqx '        kubernetes.io/arch: amd64' "$manifest"
+  grep -Fqx '          hostPath: { path: /var/lib/agent-runtime/firecracker-fixtures, type: Directory }' "$manifest"
   grep -Fq '/workspace/tools/firecracker/assemble-fixtures.sh "$work/assembled"' "$manifest"
   grep -Fq '/workspace/tools/firecracker/write-direct-fixture-source-map.sh /var/lib/agent-runtime/firecracker-fixtures/home-server /etc/agent-runtime/firecracker-direct-fixtures.json' "$manifest"
-  if "$0" render --run-id bad_ID --image "ghcr.io/0x63616c/agent-runtime-firecracker-fixture-builder@sha256:$digest" --revision "$(git rev-parse HEAD)" --firecracker-version v1.16.1 --kernel-url https://example.invalid/vmlinux?versionId=abc --kernel-version-id abc --rootfs-builder-image "ghcr.io/0x63616c/agent-runtime-firecracker-rootfs-builder@sha256:$digest" --source-date-epoch 1704067200 --rootfs-bytes 16777216 --rootfs-uuid 00000000-0000-0000-0000-000000000001 --output "$tmp/bad.yaml" >/dev/null 2>&1; then fail 'accepted invalid run ID'; fi
-  if "$0" render --run-id fixture-test --image ghcr.io/0x63616c/agent-runtime-firecracker-fixture-builder:latest --revision "$(git rev-parse HEAD)" --firecracker-version v1.16.1 --kernel-url https://example.invalid/vmlinux?versionId=abc --kernel-version-id abc --rootfs-builder-image "ghcr.io/0x63616c/agent-runtime-firecracker-rootfs-builder@sha256:$digest" --source-date-epoch 1704067200 --rootfs-bytes 16777216 --rootfs-uuid 00000000-0000-0000-0000-000000000001 --output "$tmp/bad.yaml" >/dev/null 2>&1; then fail 'accepted unpinned image'; fi
+  if "$0" render --run-id bad_ID --image "ghcr.io/0x63616c/agent-runtime-firecracker-fixture-builder@sha256:$digest" --revision "$(git rev-parse HEAD)" --firecracker-version v1.16.1 --kernel-url https://example.invalid/vmlinux?versionId=abc --kernel-version-id abc --source-date-epoch 1704067200 --rootfs-bytes 16777216 --rootfs-uuid 00000000-0000-0000-0000-000000000001 --output "$tmp/bad.yaml" >/dev/null 2>&1; then fail 'accepted invalid run ID'; fi
+  if "$0" render --run-id fixture-test --image ghcr.io/0x63616c/agent-runtime-firecracker-fixture-builder:latest --revision "$(git rev-parse HEAD)" --firecracker-version v1.16.1 --kernel-url https://example.invalid/vmlinux?versionId=abc --kernel-version-id abc --source-date-epoch 1704067200 --rootfs-bytes 16777216 --rootfs-uuid 00000000-0000-0000-0000-000001 --output "$tmp/bad.yaml" >/dev/null 2>&1; then fail 'accepted unpinned image'; fi
   echo 'direct fixture builder renders a pinned, no-network one-shot job and refuses mutable identities'
 }
 
