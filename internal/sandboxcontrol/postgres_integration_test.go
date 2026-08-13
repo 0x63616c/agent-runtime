@@ -597,6 +597,74 @@ func TestPostgresHostControlRecoversNormalUncertainResultAckAndRequeuesAfterClea
 	}
 }
 
+func TestPostgresResourceReadModelProjectsSandboxAndProcessAtomically(t *testing.T) {
+	dsn := os.Getenv("AR_SANDBOXCONTROL_POSTGRES_DSN")
+	if dsn == "" {
+		t.Fatal("AR_SANDBOXCONTROL_POSTGRES_DSN is required for the integration suite")
+	}
+	ctx := context.Background()
+	pool := openIntegrationPool(t, ctx, dsn)
+	t.Cleanup(pool.Close)
+	if _, err := pool.Exec(ctx, `TRUNCATE runtime.sandbox_resource_projections, runtime.firecracker_boot_probe_sessions, runtime.sandbox_host_outputs, runtime.sandbox_host_dispatches, runtime.sandbox_host_enrollments, runtime.sandbox_operation_outbox, runtime.sandbox_operations RESTART IDENTITY`); err != nil {
+		t.Fatalf("truncate resource projection tables: %v", err)
+	}
+	model, err := NewPostgresResourceReadModel(pool)
+	if err != nil {
+		t.Fatalf("NewPostgresResourceReadModel() error = %v", err)
+	}
+	now := time.Date(2026, time.August, 12, 12, 0, 0, 0, time.UTC)
+	sandboxOperation := Operation{Principal: "tenant-a:principal-a", Tenant: "tenant-a", ID: "op_projection_sandbox", Kind: "create-sandbox", TargetKind: "sandbox", TargetID: "sbx_projection", InputDigest: digest("a"), CanonicalDigest: digest("b"), EffectiveSpecDigest: digest("c"), CapabilityDigest: digest("d"), DispatchBody: `{"version":"sandbox.control/v1"}`, AcceptedAt: now, RetentionExpiresAt: now.Add(time.Hour), CleanupRequired: true}
+	initialSandbox := sandbox.SandboxInfo{ID: "sbx_projection", Desired: sandbox.SandboxActive, Actual: sandbox.SandboxPending}
+	accepted, replay, err := model.AcceptSandbox(ctx, sandboxOperation, initialSandbox)
+	if err != nil || replay || accepted.State != StateAccepted || accepted.Version != 1 {
+		t.Fatalf("AcceptSandbox() = %#v, %t, %v", accepted, replay, err)
+	}
+	if replayed, replay, err := model.AcceptSandbox(ctx, sandboxOperation, initialSandbox); err != nil || !replay || replayed != accepted {
+		t.Fatalf("AcceptSandbox(retry) = %#v, %t, %v; want exact replay", replayed, replay, err)
+	}
+	if _, err := model.GetSandbox(ctx, "tenant-b:principal-b", initialSandbox.ID); !errors.Is(err, ErrNotFoundOrDenied) {
+		t.Fatalf("GetSandbox(cross principal) error = %v; want ErrNotFoundOrDenied", err)
+	}
+	provisioning := initialSandbox
+	provisioning.Actual = sandbox.SandboxProvisioning
+	dispatched, err := model.TransitionSandbox(ctx, sandboxOperation.Principal, sandboxOperation.ID, accepted.Version, StateDispatched, provisioning)
+	if err != nil || dispatched.State != StateDispatched || dispatched.Version != accepted.Version+1 {
+		t.Fatalf("TransitionSandbox() = %#v, %v", dispatched, err)
+	}
+	gotSandbox, err := model.GetSandbox(ctx, sandboxOperation.Principal, initialSandbox.ID)
+	if err != nil || gotSandbox.Actual != sandbox.SandboxProvisioning {
+		t.Fatalf("GetSandbox() = %#v, %v; want atomically updated provisioning metadata", gotSandbox, err)
+	}
+	if replayed, replay, err := model.AcceptSandbox(ctx, sandboxOperation, initialSandbox); err != nil || !replay || replayed != dispatched {
+		t.Fatalf("AcceptSandbox(after transition retry) = %#v, %t, %v; want current exact replay", replayed, replay, err)
+	}
+	wrongSandbox := provisioning
+	wrongSandbox.ID = "sbx_other"
+	if _, err := model.TransitionSandbox(ctx, sandboxOperation.Principal, sandboxOperation.ID, dispatched.Version, StateStarted, wrongSandbox); !errors.Is(err, ErrConflict) {
+		t.Fatalf("TransitionSandbox(wrong target) error = %v; want ErrConflict", err)
+	}
+	if current, err := model.ledger.Get(ctx, sandboxOperation.Principal, sandboxOperation.ID); err != nil || current != dispatched {
+		t.Fatalf("operation changed after rejected projection = %#v, %v; want %#v", current, err, dispatched)
+	}
+
+	processOperation := Operation{Principal: sandboxOperation.Principal, Tenant: sandboxOperation.Tenant, ID: "op_projection_process", Kind: "exec-process", TargetKind: "process", TargetID: "prc_projection", InputDigest: digest("e"), CanonicalDigest: digest("f"), EffectiveSpecDigest: digest("0"), CapabilityDigest: digest("1"), DispatchBody: `{"version":"sandbox.control/v1"}`, AcceptedAt: now, RetentionExpiresAt: now.Add(time.Hour), CleanupRequired: true}
+	initialProcess := sandbox.ProcessInfo{ID: "prc_projection", SandboxID: initialSandbox.ID, State: sandbox.ProcessAccepted}
+	processAccepted, replay, err := model.AcceptProcess(ctx, processOperation, initialProcess)
+	if err != nil || replay || processAccepted.State != StateAccepted {
+		t.Fatalf("AcceptProcess() = %#v, %t, %v", processAccepted, replay, err)
+	}
+	running := initialProcess
+	running.State = sandbox.ProcessRunning
+	processDispatched, err := model.TransitionProcess(ctx, processOperation.Principal, processOperation.ID, processAccepted.Version, StateDispatched, running)
+	if err != nil || processDispatched.State != StateDispatched {
+		t.Fatalf("TransitionProcess() = %#v, %v", processDispatched, err)
+	}
+	gotProcess, err := model.GetProcess(ctx, processOperation.Principal, initialProcess.ID)
+	if err != nil || gotProcess.State != sandbox.ProcessRunning || gotProcess.SandboxID != initialSandbox.ID {
+		t.Fatalf("GetProcess() = %#v, %v; want atomically updated process metadata", gotProcess, err)
+	}
+}
+
 func openIntegrationPool(t *testing.T, ctx context.Context, dsn string) *pgxpool.Pool {
 	t.Helper()
 	config, err := pgxpool.ParseConfig(dsn)
