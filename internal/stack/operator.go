@@ -384,7 +384,7 @@ func (operator KubernetesOperator) Diff(ctx context.Context, request OperatorReq
 // explicit operator action for topologies such as local Tilt where the
 // controller replaces only development image references after rendering.
 func (operator KubernetesOperator) ReconcileProviders(ctx context.Context, request OperatorRequest, rendered Rendered) (ReconcileResult, error) {
-	_, document, err := operator.prepare(ctx, request, rendered)
+	manifests, document, err := operator.prepare(ctx, request, rendered)
 	if err != nil {
 		return ReconcileResult{}, err
 	}
@@ -396,6 +396,11 @@ func (operator KubernetesOperator) ReconcileProviders(ctx context.Context, reque
 	}
 	if migrationErr := operator.upgradeMigrations(ctx, request.Target, rendered, document, request.BootstrapAuthority); migrationErr != nil {
 		return ReconcileResult{}, operator.recordFailure(ctx, request, document, OperatorActionReconcile, migrationErr)
+	}
+	if deferred, ok := operator.adapter.(KubernetesPostMigrationAdapter); ok {
+		if _, postErr := deferred.ApplyPostMigration(ctx, request.Target, manifests, request.BootstrapAuthority); postErr != nil {
+			return ReconcileResult{}, operator.recordFailure(ctx, request, document, OperatorActionReconcile, postErr)
+		}
 	}
 	providerIDs, providerErr := operator.providers.ReconcileDeclared(ctx, request.Target, rendered, request.BootstrapAuthority)
 	if providerErr != nil {

@@ -104,11 +104,21 @@ func (manifests KubernetesManifests) JSON() []byte {
 	return append([]byte(nil), manifests.data...)
 }
 
-// WithoutPostMigration returns the initial manifest phase.  It deliberately
-// excludes one-shot Jobs whose creation is owned by KubernetesOperator after
-// the reviewed database migrations complete.
+// WithoutPostMigration returns the operator's early mutation phase. It omits
+// one-shot Jobs so stackctl never applies their raw development image values.
 func (manifests KubernetesManifests) WithoutPostMigration() (KubernetesManifests, error) {
 	return manifests.withoutPostMigration()
+}
+
+// InitialTiltManifests retains suspended post-migration Jobs so Tilt can
+// substitute/build their images, while Kubernetes guarantees they cannot run.
+func (manifests KubernetesManifests) InitialTiltManifests() (KubernetesManifests, error) {
+	for _, object := range manifests.objects {
+		if manifests.postMigration[object.Resource] && object.Kind != "Job" {
+			return KubernetesManifests{}, fmt.Errorf("render initial Tilt manifests: post-migration resource %s is not a Job", object.Resource)
+		}
+	}
+	return manifests, nil
 }
 
 func (manifests KubernetesManifests) withoutPostMigration() (KubernetesManifests, error) {
@@ -248,6 +258,7 @@ func renderKubernetesResource(resource Resource, namespace, stack string, profil
 
 type kubernetesWorkloadSpec struct {
 	Replicas *int                  `json:"replicas,omitempty"`
+	Suspend  bool                  `json:"suspend,omitempty"`
 	Selector kubernetesSelector    `json:"selector,omitempty"`
 	Service  string                `json:"serviceName,omitempty"`
 	Template kubernetesPodTemplate `json:"template"`
@@ -451,6 +462,7 @@ func marshalWorkloadSpec(resource Resource, namespace, stack string, profile Pro
 		spec.Service = object.Name
 	case "Job":
 		spec.Selector = kubernetesSelector{}
+		spec.Suspend = object.Suspend
 		spec.Template.Spec.RestartPolicy = "Never"
 	}
 	return marshalJSON(spec), nil

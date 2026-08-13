@@ -382,7 +382,7 @@ var _ = Describe("Audited Kubernetes operator", func() {
 		Expect(err).NotTo(HaveOccurred())
 		rendered, err := stack.Render(spec, stack.ProfileLocal)
 		Expect(err).NotTo(HaveOccurred())
-		adapter := &fakeKubernetesOperator{changes: []stack.Change{{Resource: "api", Kind: stack.ChangeModified}}}
+		adapter := &fakeKubernetesOperator{changes: []stack.Change{{Resource: "api", Kind: stack.ChangeModified}}, postPhase: true}
 		provider := &fakeDeclaredProvider{reconciled: []stack.ResourceID{"database", "database-secret"}}
 		audit := &recordedAudit{}
 		operator, err := stack.NewKubernetesOperatorWithProviders(adapter, provider, audit)
@@ -396,6 +396,7 @@ var _ = Describe("Audited Kubernetes operator", func() {
 		Expect(adapter.applies).To(BeZero())
 		Expect(adapter.diffs).To(BeZero())
 		Expect(adapter.upgrades).To(Equal(1))
+		Expect(adapter.events).To(Equal([]string{"upgrade", "post"}))
 		Expect(provider.reconciles).To(Equal(1))
 		Expect(audit.records).To(HaveLen(1))
 		Expect(audit.records[0].Action).To(Equal(stack.OperatorActionReconcile))

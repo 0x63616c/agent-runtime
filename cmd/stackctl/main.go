@@ -99,7 +99,7 @@ func runWithProbeAndOperator(ctx context.Context, arguments []string, output io.
 			return err
 		}
 		if phase == "initial" {
-			manifests, err = manifests.WithoutPostMigration()
+			manifests, err = manifests.InitialTiltManifests()
 			if err != nil {
 				return err
 			}

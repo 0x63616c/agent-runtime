@@ -275,6 +275,8 @@ var _ = Describe("M1 deployment safety boundaries", func() {
 		Expect(read("Tiltfile")).To(ContainSubstring("ci_settings(readiness_timeout=ci_readiness_timeout)"))
 		Expect(read("Tiltfile")).To(ContainSubstring("ci_readiness_timeout = '12m' if profile == 'ci' else '10m'"))
 		Expect(read("Tiltfile")).To(ContainSubstring("if profile == 'local':\n    local_resource('stack-reconcile'"))
+		Expect(read("Tiltfile")).To(ContainSubstring("resource_deps=['temporal', 'migration-runner', 'sandbox-host-bootstrap']"))
+		Expect(read("Tiltfile")).To(ContainSubstring("resource_deps=['temporal', 'migration-runner', 'blob-reconciler', 'sandbox-host-bootstrap']"))
 		Expect(read("Tiltfile")).To(ContainSubstring("deploy/dev/reconcile-ci-stack.sh --stack=' + stack + ' --context=' + ci_context"))
 		Expect(read("Tiltfile")).To(ContainSubstring("resource_deps=['state', 'temporal', 'telemetry', 'stack-reconcile']"))
 		ciBootstrap := read("deploy/dev/bootstrap-ci-stack.sh")
@@ -287,11 +289,11 @@ var _ = Describe("M1 deployment safety boundaries", func() {
 		Expect(unsafeBootstrapErr).To(HaveOccurred())
 		Expect(string(unsafeBootstrapOutput)).To(ContainSubstring("requires a generated Stack and private k3d context"))
 		ciReconcile := read("deploy/dev/reconcile-ci-stack.sh")
-		for _, required := range []string{"--profile ci", "stackctl apply", "--bootstrap-capability-file", "k3d-ar-ci-*", "CI Stack reconciliation accepts only --stack and --context", "requires existing rendered state and private authority"} {
+		for _, required := range []string{"--profile ci", "stackctl reconcile", "--providers-only", "--bootstrap-capability-file", "k3d-ar-ci-*", "CI Stack reconciliation accepts only --stack and --context", "requires existing rendered state and private authority"} {
 			Expect(ciReconcile).To(ContainSubstring(required))
 		}
-		Expect(ciReconcile).NotTo(ContainSubstring("--providers-only"))
 		Expect(read("Tiltfile")).To(ContainSubstring("--phase initial"))
+		Expect(read("Tiltfile")).To(ContainSubstring("k8s_resource('sandbox-host-bootstrap', pod_readiness='ignore')"))
 		unsafeCIReconcile := exec.Command("bash", "deploy/dev/reconcile-ci-stack.sh", "--stack=ci-fixture", "--context=orbstack")
 		unsafeCIReconcile.Dir = "../.."
 		unsafeOutput, unsafeErr := unsafeCIReconcile.CombinedOutput()

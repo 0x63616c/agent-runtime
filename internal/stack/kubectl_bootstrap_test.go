@@ -28,6 +28,37 @@ func (runner *bootstrapRunner) Run(_ context.Context, program string, arguments 
 }
 
 var _ = Describe("Kubectl namespace bootstrap", func() {
+	It("resumes an already Tilt-substituted suspended post-migration Job without applying its raw manifest", func() {
+		resources := `[
+  {"id":"runtime-account","kind":"kubernetes","owner":"platform-operator","scope":"namespace","dependencies":[],"retention":{"policy":"ephemeral","days":0},"backup_restore_owner":"none","delete_behavior":"delete","external_controller":false,"kubernetes":{"api_version":"v1","kind":"ServiceAccount","name":"runtime-account"}},
+  {"id":"bootstrap","kind":"kubernetes","owner":"runtime-operator","scope":"namespace","dependencies":["runtime-account"],"retention":{"policy":"ephemeral","days":0},"backup_restore_owner":"none","delete_behavior":"delete","external_controller":false,"kubernetes":{"api_version":"batch/v1","kind":"Job","name":"bootstrap","post_migration":true,"suspend":true,"image":"registry.invalid/bootstrap@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","service_account":"runtime-account","command":["/bootstrap"],"arguments":[],"ports":[],"compute":{"request_milli_cpu":100,"limit_milli_cpu":100,"request_memory_bytes":67108864,"limit_memory_bytes":67108864},"storage":[]}}
+]`
+		spec, err := stack.Parse(strings.NewReader(stackDocument(resources, resources, resources)))
+		Expect(err).NotTo(HaveOccurred())
+		rendered, err := stack.Render(spec, stack.ProfileLocal)
+		Expect(err).NotTo(HaveOccurred())
+		manifests, err := stack.RenderKubernetes(rendered)
+		Expect(err).NotTo(HaveOccurred())
+		authority := stack.BootstrapAuthority{Stack: "feature-a", Profile: stack.ProfileLocal, Namespace: "ar-feature-a", NamespaceUID: "uid-namespace", RenderDigest: rendered.Digest(), Nonce: "private-bootstrap-nonce"}
+		namespace := []byte(`{"metadata":{"uid":"uid-namespace","labels":{"app.kubernetes.io/part-of":"agent-runtime","agent-runtime.dev/stack":"feature-a","agent-runtime.dev/profile":"local"},"annotations":{"agent-runtime.dev/bootstrap-nonce-sha256":"` + authority.NonceDigest() + `"}}}`)
+		job := []byte(`{"metadata":{"uid":"uid-bootstrap","labels":{"app.kubernetes.io/part-of":"agent-runtime","agent-runtime.dev/stack":"feature-a","agent-runtime.dev/profile":"local"}}}`)
+		runner := &bootstrapRunner{results: []stack.KubectlCommandResult{{Output: namespace}, {Output: job}, {}, {}, {Output: namespace}, {Output: job}}}
+		adapter, err := stack.NewKubectlAdapter(runner)
+		Expect(err).NotTo(HaveOccurred())
+
+		observation, err := adapter.ApplyPostMigration(context.Background(), stack.OperatorTarget{Kubeconfig: "/explicit/kubeconfig", Context: "disposable"}, manifests, authority)
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(observation.ObjectIDs).To(Equal([]stack.ResourceID{"bootstrap"}))
+		Expect(runner.commands).To(HaveLen(6))
+		Expect(runner.commands[2].arguments).To(ContainElements("patch", "Job/bootstrap", "--type=merge", `{"spec":{"suspend":false}}`))
+		Expect(runner.commands[3].arguments).To(ContainElements("wait", "--for=condition=complete", "Job/bootstrap"))
+		for _, command := range runner.commands {
+			Expect(command.arguments).NotTo(ContainElement("apply"))
+			Expect(command.input).To(BeEmpty())
+		}
+	})
+
 	It("atomically creates only an absent rendered Namespace and re-observes its owned identity", func() {
 		rendered := renderIdentityStack()
 		manifests, err := stack.RenderKubernetes(rendered)

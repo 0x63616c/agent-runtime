@@ -154,6 +154,9 @@ type KubernetesResource struct {
 	// PostMigration defers a one-shot Job until every declared database migration
 	// has completed. It is only valid for local/CI bootstrap Jobs.
 	PostMigration bool `json:"post_migration,omitempty"`
+	// Suspend keeps a Job inert while an external development image controller
+	// substitutes and builds its image. Post-migration Jobs must start suspended.
+	Suspend bool `json:"suspend,omitempty"`
 	// Ports is explicit, including an empty array for workloads with no ports.
 	Ports []Port `json:"ports,omitempty"`
 	// Compute contains finite requests and limits for workloads.
@@ -514,6 +517,12 @@ func validateKubernetes(resource Resource, namespace string, profile Profile) er
 		}
 		if object.PostMigration && object.Kind != "Job" {
 			return errors.Newf("resource %s post_migration is valid only for a Job", resource.ID)
+		}
+		if object.Suspend && object.Kind != "Job" {
+			return errors.Newf("resource %s suspend is valid only for a Job", resource.ID)
+		}
+		if object.PostMigration && !object.Suspend {
+			return errors.Newf("resource %s post_migration Job must start suspended", resource.ID)
 		}
 		if object.ServiceAccount == "" || object.Ports == nil || object.Storage == nil {
 			return errors.Newf("resource %s workload must explicitly declare service account, ports, and storage", resource.ID)

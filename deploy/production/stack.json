@@ -3626,7 +3626,8 @@
                 "path": "/run/sandbox-host/signing.key"
               }
             ],
-            "environment": []
+            "environment": [],
+            "suspend": true
           }
         },
         {
@@ -7250,7 +7251,8 @@
                 "path": "/run/sandbox-host/signing.key"
               }
             ],
-            "environment": []
+            "environment": [],
+            "suspend": true
           }
         },
         {

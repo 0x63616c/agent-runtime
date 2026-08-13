@@ -118,6 +118,7 @@ var _ = Describe("Self-hosted production Stack", func() {
 			bootstrap := findResource(disposable.Resources(), "sandbox-host-bootstrap")
 			Expect(bootstrap.Kubernetes.Kind).To(Equal("Job"))
 			Expect(bootstrap.Kubernetes.PostMigration).To(BeTrue())
+			Expect(bootstrap.Kubernetes.Suspend).To(BeTrue())
 			Expect(findResource(disposable.Resources(), "sandbox-host").Dependencies).To(ContainElement(stack.ResourceID("sandbox-host-bootstrap")))
 		}
 	})
@@ -281,7 +282,7 @@ var _ = Describe("Self-hosted production Stack", func() {
 		tiltfile, err := os.ReadFile("../../Tiltfile")
 		Expect(err).NotTo(HaveOccurred())
 		Expect(string(tiltfile)).To(ContainSubstring("'sandbox'"))
-		Expect(string(tiltfile)).To(ContainSubstring("resource_deps=['temporal', 'migration-runner']"))
+		Expect(string(tiltfile)).To(ContainSubstring("resource_deps=['temporal', 'migration-runner', 'sandbox-host-bootstrap']"))
 
 		ignore, err := os.ReadFile("../../.dockerignore")
 		Expect(err).NotTo(HaveOccurred())

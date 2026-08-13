@@ -90,12 +90,20 @@ func (adapter KubectlAdapter) ApplyPostMigration(ctx context.Context, target Ope
 	if err != nil || len(post.objects) == 0 {
 		return KubernetesObservation{}, err
 	}
-	if err := adapter.runSuccess(ctx, target, []string{"apply", "--server-side", "--field-manager=agent-runtime-stackctl", "-f", "-"}, post.JSON()); err != nil {
-		return KubernetesObservation{}, errors.Wrap(err, "apply post-migration Kubernetes Jobs")
-	}
 	for _, object := range post.objects {
 		if object.Kind != "Job" {
 			return KubernetesObservation{}, errors.New("apply post-migration Kubernetes Jobs: only Jobs are allowed")
+		}
+		observed, observeErr := adapter.observeManifest(ctx, target, object)
+		expected := OwnershipLabels{PartOf: "agent-runtime", Stack: post.stack, Profile: post.profile}
+		if observeErr != nil || observed.UID() == "" || observed.labels() != expected {
+			if observeErr != nil {
+				return KubernetesObservation{}, errors.Wrapf(observeErr, "observe suspended post-migration Job %s", object.Resource)
+			}
+			return KubernetesObservation{}, errors.Newf("observe suspended post-migration Job %s: containment labels or UID do not match", object.Resource)
+		}
+		if err := adapter.runSuccess(ctx, target, []string{"patch", "Job/" + object.Metadata.Name, "--namespace", post.namespace.Metadata.Name, "--type=merge", "-p", `{"spec":{"suspend":false}}`}, nil); err != nil {
+			return KubernetesObservation{}, errors.Wrapf(err, "resume post-migration Job %s", object.Resource)
 		}
 		if err := adapter.runSuccess(ctx, target, []string{"wait", "--for=condition=complete", "Job/" + object.Metadata.Name, "--namespace", post.namespace.Metadata.Name, "--timeout=120s"}, nil); err != nil {
 			return KubernetesObservation{}, errors.Wrapf(err, "wait for post-migration Job %s", object.Resource)

@@ -1062,8 +1062,8 @@ func reconcile(ctx context.Context, stack, root string, output io.Writer) error 
 			return fmt.Errorf("wait for verified local Stack %s readiness: %w", deployment, err)
 		}
 	}
-	if err := runStackctl(ctx, root, output, "apply", state); err != nil {
-		return fmt.Errorf("apply verified local Stack migrations and post-migration Jobs: %w", err)
+	if err := runStackctl(ctx, root, output, "reconcile", state); err != nil {
+		return fmt.Errorf("reconcile verified local Stack migrations and post-migration Jobs: %w", err)
 	}
 	// Tilt owns the orchestration Deployment and intentionally waits for this
 	// local resource first. Waiting for that Deployment here would form a
@@ -1115,6 +1115,9 @@ func runStackctl(ctx context.Context, root string, output io.Writer, action stri
 		"--audit-file", operatorAuditPath(root, state.Stack),
 		"--migration-root", filepath.Join(root, "deploy", "production"),
 		"--bootstrap-capability-file", bootstrapCapabilityPath(root, state.Stack),
+	}
+	if action == "reconcile" {
+		arguments = append(arguments, "--providers-only")
 	}
 	command := exec.CommandContext(ctx, "go", arguments...)
 	command.Dir, command.Stdout, command.Stderr = root, output, output

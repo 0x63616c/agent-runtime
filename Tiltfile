@@ -74,9 +74,9 @@ k8s_resource('otel-collector', pod_readiness='wait')
 # private authority before Tilt applies the reviewed topology; runtime
 # processes never create their own namespace as a startup side effect.
 if profile == 'local':
-    local_resource('stack-reconcile', cmd='go run ./tools/dev reconcile --stack=' + stack + ' --root=.', resource_deps=['temporal', 'migration-runner'])
+    local_resource('stack-reconcile', cmd='go run ./tools/dev reconcile --stack=' + stack + ' --root=.', resource_deps=['temporal', 'migration-runner', 'sandbox-host-bootstrap'])
 else:
-    local_resource('stack-reconcile', cmd='deploy/dev/reconcile-ci-stack.sh --stack=' + stack + ' --context=' + ci_context, resource_deps=['temporal', 'migration-runner', 'blob-reconciler'])
+    local_resource('stack-reconcile', cmd='deploy/dev/reconcile-ci-stack.sh --stack=' + stack + ' --context=' + ci_context, resource_deps=['temporal', 'migration-runner', 'blob-reconciler', 'sandbox-host-bootstrap'])
 k8s_resource('blob', pod_readiness='wait')
 k8s_resource('telemetry', pod_readiness='wait')
 k8s_resource('egress-proxy', pod_readiness='wait')
@@ -88,4 +88,5 @@ k8s_resource('tool', resource_deps=['api', 'telemetry'], pod_readiness='wait')
 k8s_resource('blob-role', resource_deps=['blob', 'telemetry'], pod_readiness='wait')
 k8s_resource('codec', resource_deps=['blob', 'telemetry'], pod_readiness='wait', links=[link('http://codec:8085/readyz', 'Codec runtime readiness'), link('https://0x63616c.github.io/agent-runtime/', 'Agent Runtime docs')])
 k8s_resource('sandbox-control', resource_deps=['state', 'telemetry'], pod_readiness='wait')
+k8s_resource('sandbox-host-bootstrap', pod_readiness='ignore')
 k8s_resource('sandbox-host', resource_deps=['sandbox-control', 'telemetry', 'stack-reconcile'], pod_readiness='wait')
