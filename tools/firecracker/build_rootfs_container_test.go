@@ -55,7 +55,7 @@ func TestContainerRootFSRecipeRejectsAnUnreviewedDigestBeforeDocker(t *testing.T
 func writeRootFSBuilderManifest(t *testing.T, image string) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "rootfs-builder.json")
-	contents := `{"schema_version":"agent-runtime.firecracker.rootfs-builder/v1","image":"` + image + `","platform":{"os":"linux","architecture":"amd64"},"required_commands":["awk","grep","install","mke2fs","mkdir","mktemp","readelf","rm","sha256sum","tr","truncate","wc"],"e2fsprogs_version":"1.47.2","binutils_version":"2.44"}`
+	contents := `{"schema_version":"agent-runtime.firecracker.rootfs-builder/v1","image":"` + image + `","platform":{"os":"linux","architecture":"amd64"},"required_commands":["awk","grep","install","mke2fs","mkdir","mktemp","readelf","rm","sha256sum","tr","truncate","wc"],"e2fsprogs_version":"1.47.2","binutils_version":"2.44","source_revision":"` + strings.Repeat("a", 40) + `","dockerfile_sha256":"sha256:` + strings.Repeat("b", 64) + `","inputs_lock_sha256":"sha256:` + strings.Repeat("c", 64) + `"}`
 	if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
 		t.Fatalf("write builder manifest: %v", err)
 	}

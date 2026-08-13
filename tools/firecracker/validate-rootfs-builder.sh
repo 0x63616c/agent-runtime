@@ -27,7 +27,8 @@ image_pattern = re.compile(r'^[^@\s]+@sha256:[a-f0-9]{64}$')
 required_commands = ['awk', 'grep', 'install', 'mke2fs', 'mkdir', 'mktemp', 'readelf', 'rm', 'sha256sum', 'tr', 'truncate', 'wc']
 expected_keys = {
     'schema_version', 'image', 'platform', 'required_commands',
-    'e2fsprogs_version', 'binutils_version',
+    'e2fsprogs_version', 'binutils_version', 'source_revision',
+    'dockerfile_sha256', 'inputs_lock_sha256',
 }
 
 try:
@@ -51,4 +52,9 @@ if value['required_commands'] != required_commands:
 for key in ('e2fsprogs_version', 'binutils_version'):
     if not isinstance(value[key], str) or not value[key]:
         raise SystemExit(f'BUILDER-MANIFEST {key} must be a non-empty string')
+if not isinstance(value['source_revision'], str) or not re.fullmatch(r'[a-f0-9]{40}', value['source_revision']):
+    raise SystemExit('BUILDER-MANIFEST source_revision must be one lowercase Git revision')
+for key in ('dockerfile_sha256', 'inputs_lock_sha256'):
+    if not isinstance(value[key], str) or not re.fullmatch(r'sha256:[a-f0-9]{64}', value[key]):
+        raise SystemExit(f'BUILDER-MANIFEST {key} must be one lowercase sha256 digest')
 PY
