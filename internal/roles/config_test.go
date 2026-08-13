@@ -71,6 +71,16 @@ var _ = Describe("Operator role configuration", func() {
 		Expect(err).To(MatchError(ContainSubstring("tool dispatch is only allowed for tool-dispatch")))
 	})
 
+	It("requires the trigger capability outside an explicit local demo", func() {
+		configuration := roleConfig(roles.RoleTool, 8083, `[{"name":"telemetry","endpoint":"http://telemetry:4318"},{"name":"tool-broker","endpoint":"https://tool-dispatch.example.invalid","secret_environment":"TOOL_BROKER_TOKEN"}]`)
+		_, err := roles.Parse(strings.NewReader(configuration))
+		Expect(err).To(MatchError(ContainSubstring("tool trigger capability is required")))
+
+		localDemo := strings.TrimSuffix(configuration, "}") + `,"local_demo_worker":{"enabled":true,"mode":"local-demo-v1","fixture":"workspace-approval-v1","fixture_scenario":"workspace-approval-reset-v1","state_dsn_environment":"LOCAL_DEMO_STATE_DSN","content_endpoint":"blob:9000","content_access_key_environment":"LOCAL_DEMO_CONTENT_ACCESS_KEY","content_secret_key_environment":"LOCAL_DEMO_CONTENT_SECRET_KEY","content_bucket":"fixture"}}`
+		_, err = roles.Parse(strings.NewReader(localDemo))
+		Expect(err).NotTo(HaveOccurred())
+	})
+
 	It("permits only a bounded HTTPS optional audit sink on the codec worker", func() {
 		withSink := strings.Replace(orchestrationCodecConfig, `"payload_secret_key_environment":"ORCHESTRATION_PAYLOAD_BLOB_SECRET_KEY"`, `"payload_secret_key_environment":"ORCHESTRATION_PAYLOAD_BLOB_SECRET_KEY","audit_sink":{"endpoint":"https://audit.example.invalid/v1/facts","timeout_seconds":5}`, 1)
 		config, err := roles.Parse(strings.NewReader(withSink))
@@ -208,7 +218,7 @@ var roleFixtures = []roleFixture{
 	{roles.RoleOrchestration, orchestrationConfig, []string{"STATE_DATABASE_DSN", "TEMPORAL_AUTH_TOKEN"}},
 	{roles.RoleOrchestrationCodec, orchestrationCodecConfig, []string{"ORCHESTRATION_PAYLOAD_BLOB_ACCESS_KEY", "ORCHESTRATION_PAYLOAD_BLOB_SECRET_KEY", "STATE_DATABASE_DSN", "TEMPORAL_AUTH_TOKEN"}},
 	{roles.RoleModel, roleConfig(roles.RoleModel, 8082, `[{"name":"conversation","endpoint":"http://api:8080","secret_environment":"CONVERSATION_ACCESS_TOKEN"},{"name":"egress-proxy","endpoint":"http://egress-proxy:8088"},{"name":"model","endpoint":"https://model.example.invalid","secret_environment":"MODEL_API_KEY"},{"name":"telemetry","endpoint":"http://telemetry:4318"}]`), []string{"CONVERSATION_ACCESS_TOKEN", "MODEL_API_KEY"}},
-	{roles.RoleTool, roleConfig(roles.RoleTool, 8083, `[{"name":"telemetry","endpoint":"http://telemetry:4318"},{"name":"tool-broker","endpoint":"https://tool-dispatch.example.invalid","secret_environment":"TOOL_BROKER_TOKEN"}]`), []string{"TOOL_BROKER_TOKEN"}},
+	{roles.RoleTool, toolRoleConfig(), []string{"TOOL_BROKER_TOKEN"}},
 	{roles.RoleToolDispatch, `{"version":1,"role":"tool-dispatch","namespace":"agent-runtime","listen_address":"127.0.0.1:8089","dependencies":[{"name":"state","endpoint":"postgres://state:5432/runtime","secret_environment":"TOOL_DISPATCH_STATE_DSN"},{"name":"content","endpoint":"https://blob.example.invalid","secret_environment":"TOOL_DISPATCH_CONTENT_ACCESS_KEY"},{"name":"content-secret","endpoint":"https://blob.example.invalid","secret_environment":"TOOL_DISPATCH_CONTENT_SECRET_KEY"},{"name":"sandbox-control","endpoint":"https://control.example.invalid","secret_environment":"TOOL_DISPATCH_CONTROL_TOKEN"},{"name":"tool-broker","endpoint":"https://tool-dispatch.example.invalid","secret_environment":"TOOL_BROKER_TOKEN"},{"name":"telemetry","endpoint":"http://telemetry:4318"}],"tool_dispatch":{"content_endpoint":"https://blob.example.invalid","content_bucket":"runtime","content_access_key_environment":"TOOL_DISPATCH_CONTENT_ACCESS_KEY","content_secret_key_environment":"TOOL_DISPATCH_CONTENT_SECRET_KEY","control_server_name":"control.example.invalid","control_trust_bundle_ref":"trust/runtime","control_trust_bundle_path":"/var/run/trust/control.pem","control_credential_environment":"TOOL_DISPATCH_CONTROL_TOKEN","server_name":"tool-dispatch.example.invalid","server_certificate_path":"/var/run/tool-dispatch/tls.crt","server_private_key_path":"/var/run/tool-dispatch/tls.key","peer_policy":"bearer-token-v1"}}`, []string{"TOOL_BROKER_TOKEN", "TOOL_DISPATCH_CONTENT_ACCESS_KEY", "TOOL_DISPATCH_CONTENT_SECRET_KEY", "TOOL_DISPATCH_CONTROL_TOKEN", "TOOL_DISPATCH_STATE_DSN"}},
 	{roles.RoleBlob, roleConfig(roles.RoleBlob, 8084, `[{"name":"storage","endpoint":"http://blob:9000","secret_environment":"BLOB_STORAGE_CREDENTIAL"},{"name":"telemetry","endpoint":"http://telemetry:4318"}]`), []string{"BLOB_STORAGE_CREDENTIAL"}},
 	{roles.RoleCodec, roleConfig(roles.RoleCodec, 8085, `[{"name":"blob","endpoint":"http://blob:9000","secret_environment":"CODEC_BLOB_CREDENTIAL"},{"name":"telemetry","endpoint":"http://telemetry:4318"}]`), []string{"CODEC_BLOB_CREDENTIAL"}},
@@ -218,6 +228,11 @@ var roleFixtures = []roleFixture{
 
 func roleConfig(role roles.Role, port int, dependencies string) string {
 	return fmt.Sprintf(`{"version":1,"role":%q,"namespace":"agent-runtime","listen_address":"127.0.0.1:%d","dependencies":%s}`, role, port, dependencies)
+}
+
+func toolRoleConfig() string {
+	configuration := roleConfig(roles.RoleTool, 8083, `[{"name":"telemetry","endpoint":"http://telemetry:4318"},{"name":"tool-broker","endpoint":"https://tool-dispatch.example.invalid","secret_environment":"TOOL_BROKER_TOKEN"}]`)
+	return strings.TrimSuffix(configuration, "}") + `,"tool_trigger":{"server_name":"tool-dispatch.example.invalid","trust_bundle_ref":"trust/tool-dispatch","trust_bundle_path":"/var/run/tool-dispatch/ca.crt","interval_seconds":5}}`
 }
 
 const orchestrationConfig = `{
