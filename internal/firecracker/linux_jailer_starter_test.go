@@ -4,11 +4,43 @@ import (
 	"context"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"syscall"
 	"testing"
 )
+
+func TestLinuxJailerProcessAcceptsItsOwnSIGTERMAsExpectedCleanupTermination(t *testing.T) {
+	command := exec.Command("/bin/sleep", "60")
+	if err := command.Start(); err != nil {
+		t.Fatalf("start sleep: %v", err)
+	}
+	process := newLinuxJailerProcess(
+		&osJailerCommand{command: command, serial: newBoundedJailerOutput(64), diagnostics: newBoundedJailerOutput(64)},
+		newBoundedJailerOutput(64),
+		"agent-runtime/firecracker/sandbox-001",
+		t.TempDir(),
+		func(string) error { return nil },
+		func(string) error { return nil },
+	)
+	if err := process.Terminate(context.Background()); err != nil {
+		t.Fatalf("Terminate() error = %v", err)
+	}
+	if err := process.Wait(context.Background()); err != nil {
+		t.Fatalf("Wait() after its own SIGTERM error = %v, want nil", err)
+	}
+	proof, err := process.Cleanup(context.Background())
+	if err != nil || !proof.Proved {
+		t.Fatalf("Cleanup() = (%#v, %v), want proved cleanup", proof, err)
+	}
+}
+
+func TestExpectedJailerTerminationRefusesUnrelatedErrors(t *testing.T) {
+	if expectedJailerTermination(errors.New("arbitrary wait failure")) {
+		t.Fatal("expectedJailerTermination accepted unrelated failure")
+	}
+}
 
 func TestLinuxJailerStarterStartsOnlyTheAuthorityBoundJailerAndStage(t *testing.T) {
 	plan := mustCompile(t, validProfile())

@@ -286,13 +286,18 @@ type linuxJailerProcess struct {
 	removeNamespace func(string) error
 	removeCgroup    func(string) error
 
-	mu           sync.Mutex
-	terminated   bool
-	cleanupDone  bool
-	cleanupProof CleanupProof
-	cleanupErr   error
-	waitDone     chan struct{}
-	waitErr      error
+	mu         sync.Mutex
+	terminated bool
+	// terminationDelivered records that this process sent the expected
+	// terminal signal itself. A Jailer reports that normal shutdown as a
+	// non-zero Wait result ("signal: terminated"); that result proves the
+	// reaper ran, not that resource cleanup failed.
+	terminationDelivered bool
+	cleanupDone          bool
+	cleanupProof         CleanupProof
+	cleanupErr           error
+	waitDone             chan struct{}
+	waitErr              error
 }
 
 func newLinuxJailerProcess(command jailerCommand, serial *boundedJailerOutput, cgroupPath, namespacePath string, removeNamespace, removeCgroup func(string) error) *linuxJailerProcess {
@@ -352,6 +357,10 @@ func (process *linuxJailerProcess) Terminate(ctx context.Context) error {
 	process.mu.Unlock()
 	if err := process.command.Signal(syscall.SIGTERM); err != nil && !errors.Is(err, os.ErrProcessDone) {
 		return fmt.Errorf("terminate Jailer process: %w", err)
+	} else if err == nil {
+		process.mu.Lock()
+		process.terminationDelivered = true
+		process.mu.Unlock()
 	}
 	select {
 	case <-process.waitDone:
@@ -371,10 +380,26 @@ func (process *linuxJailerProcess) Wait(ctx context.Context) error {
 	case <-process.waitDone:
 		process.mu.Lock()
 		defer process.mu.Unlock()
+		if process.terminationDelivered && expectedJailerTermination(process.waitErr) {
+			return nil
+		}
 		return process.waitErr
 	case <-ctx.Done():
 		return ctx.Err()
 	}
+}
+
+// expectedJailerTermination recognizes only the OS exit status produced when
+// this process delivered SIGTERM to its own Jailer. It deliberately does not
+// accept arbitrary non-zero exits: those remain lifecycle failures, while the
+// intentional signal is the expected completion of a bounded smoke run.
+func expectedJailerTermination(err error) bool {
+	var exitErr *exec.ExitError
+	if !errors.As(err, &exitErr) || exitErr.ProcessState == nil {
+		return false
+	}
+	status, ok := exitErr.ProcessState.Sys().(syscall.WaitStatus)
+	return ok && status.Signaled() && status.Signal() == syscall.SIGTERM
 }
 
 // Cleanup removes only the reaped authority-bound cgroup and per-VM Jailer namespace.
