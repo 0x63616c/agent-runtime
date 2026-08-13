@@ -175,6 +175,38 @@ func TestWorkerFinalizesAuthorizedToolActionsAndReconcilesLostClaims(t *testing.
 	}
 }
 
+func TestWorkerDispatchesArgumentsSealedWithThePrivateActionDescriptor(t *testing.T) {
+	ctx := context.Background()
+	now := time.Date(2026, 8, 11, 14, 0, 0, 0, time.UTC)
+	content, err := runtimecontent.New("runtime-content", &toolObjects{values: map[string][]byte{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tenant, _ := runtimecontent.ParseTenantID("tenant-a")
+	principal, _ := runtimecontent.ParsePrincipalID("principal-a")
+	compiler, _ := runtimestate.NewCompiler(content)
+	source, _ := clock.NewFake(now)
+	planner, _ := runtimestate.NewRuntimeStatePlanner(source, &toolIDs{})
+	store, _ := runtimestate.NewMemoryRuntimeStateStore(planner)
+	rawDescriptor := []byte(`{"kind":"workspace.write"}`)
+	boundDescriptor, err := runtimecontent.BindToolActionDescriptor(rawDescriptor, []byte(`{"path":"workspace/report.txt"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _, _, _ = createToolExecutionWithDescriptor(t, ctx, content, compiler, store, tenant, principal, now, boundDescriptor)
+	adapter := &recordingAdapter{response: runtimetool.Response{Output: []byte("done")}}
+	worker, err := runtimetool.NewWorker(runtimetool.Config{Store: store, Tenants: store, Compiler: compiler, Planner: planner, Clock: source, Content: content, Adapter: adapter, Claimer: "tool-worker", LeaseScheduler: newInertLeaseScheduler()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := worker.ScanOnce(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if string(adapter.last.Descriptor) != string(rawDescriptor) || string(adapter.last.Arguments) != `{"path":"workspace/report.txt"}` {
+		t.Fatalf("authorized adapter request = descriptor=%q arguments=%q", adapter.last.Descriptor, adapter.last.Arguments)
+	}
+}
+
 // TestWorkerRenewsTheWholeClaimWhileAnAdapterIsStillExecuting proves that a
 // live execution is not recoverable merely because its original ten-second
 // crash-recovery lease elapses. The competing worker sees the renewed fence
