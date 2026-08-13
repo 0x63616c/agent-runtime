@@ -160,8 +160,13 @@ classify_tilt_ci_failure() {
   # is not evidence of a render failure. Match only an error/failure adjacent
   # to a renderer operation, and prefer a terminal readiness timeout when it
   # is present alongside earlier routine Tiltfile output.
-  if grep -Eiq '(^|[^[:alpha:]])(timed out waiting|readiness|resource .* failed)([^[:alpha:]]|$)' "$output"; then
+  if grep -Eiq '(^|[^[:alpha:]])(timed out waiting|resource .* failed)([^[:alpha:]]|$)' "$output"; then
     printf '%s' readiness
+  elif grep -Eiq '(^|[^[:alpha:]])(imagepullbackoff|errimagepull|failed to pull image|image pull failed|registry .* (unavailable|timeout|connection))([^[:alpha:]]|$)' "$output"; then
+    # A just-pushed image can briefly be unavailable through k3d's private
+    # registry path. This is the sole retryable class; render, apply, build,
+    # and readiness failures must remain immediately visible.
+    printf '%s' registry_sync
   elif grep -Eiq '(^|[^[:alpha:]])(docker build|build failed|failed to solve|error building image)([^[:alpha:]]|$)' "$output"; then
     printf '%s' image_build
   elif grep -Eiq '(^|[^[:alpha:]])(error from server|apply failed|failed to apply|unable to recognize)([^[:alpha:]]|$)' "$output"; then
@@ -354,7 +359,7 @@ write_safe_diagnostic_summary() {
     .kind == "diagnostic-summary/v3" and .version == 3 and
     (.stack | type == "string") and (.namespace | type == "string") and (.profile | type == "string") and
     (.tilt_ci_exit_code | type == "number") and (.tilt_ci_attempts | type == "number" and . >= 0 and . <= 2) and
-    (.tilt_ci_attempts as $attempts | .tilt_ci_failure_phases | type == "array" and (if $attempts == 0 then length <= 1 else length <= $attempts end) and all(.[]; . == "bootstrap" or . == "render" or . == "image_build" or . == "kubernetes_apply" or . == "readiness" or . == "unknown")) and
+    (.tilt_ci_attempts as $attempts | .tilt_ci_failure_phases | type == "array" and (if $attempts == 0 then length <= 1 else length <= $attempts end) and all(.[]; . == "bootstrap" or . == "render" or . == "image_build" or . == "kubernetes_apply" or . == "readiness" or . == "registry_sync" or . == "unknown")) and
     (.workload_probe | type == "string") and
     (.runtime_roles_observed | type == "number") and (.runtime_roles_ready | type == "boolean") and
     (.runtime_role_status | type == "array" and length == 8 and
@@ -416,6 +421,16 @@ if [[ "$diagnostic_self_test" == true ]]; then
   printf '%s\n' 'timed out waiting for resource api to become ready' >"$tilt_fixture"
   if [[ "$(classify_tilt_ci_failure "$tilt_fixture")" != readiness ]]; then
     echo "Tilt failure classifier did not classify a readiness failure" >&2
+    exit 1
+  fi
+  printf '%s\n' 'Error: Tiltfile execution failed while reading readiness_timeout' >"$tilt_fixture"
+  if [[ "$(classify_tilt_ci_failure "$tilt_fixture")" != render ]]; then
+    echo "Tilt failure classifier treated a render setting as a readiness failure" >&2
+    exit 1
+  fi
+  printf '%s\n' 'ErrImagePull: failed to pull image from the private registry' >"$tilt_fixture"
+  if [[ "$(classify_tilt_ci_failure "$tilt_fixture")" != registry_sync ]]; then
+    echo "Tilt failure classifier did not classify a private-registry catch-up failure" >&2
     exit 1
   fi
   printf '%s\n' 'unrecognized failure Bearer adversarial-header-token' >"$tilt_fixture"
@@ -768,18 +783,17 @@ start_stack() {
       tilt_ci_failure_phases="$(jq -nc --arg phase "$tilt_ci_failure_phase" '[ $phase ]')"
     fi
     # A disposable k3d node can transiently reject a just-built image while
-    # its local registry catch-up completes. Retrying the same reviewed Stack
-    # preserves its bootstrap authority, namespace, and image identities; it
-    # cannot adopt another Stack. A second failure remains a failed smoke run.
-    if [[ "$ci_status" != 0 && "$profile" == "ci" ]]; then
+    # its local registry catch-up completes. Only that classified condition
+    # may retry: retrying render, apply, or readiness failures could conceal a
+    # broken reviewed topology. Keep the first failure token even if retry
+    # succeeds so retained diagnostics show the exact execution history.
+    if [[ "$ci_status" != 0 && "$profile" == "ci" && "$tilt_ci_failure_phase" == "registry_sync" ]]; then
       ci_status=0
       tilt_ci_attempts=2
       sleep 5
       if ! tilt_ci_failure_phase="$(run_tilt_ci_attempt "$stack" "$namespace")"; then
         ci_status=1
         tilt_ci_failure_phases="$(jq -c --arg phase "$tilt_ci_failure_phase" '. + [ $phase ]' <<<"$tilt_ci_failure_phases")"
-      else
-        tilt_ci_failure_phases='[]'
       fi
     fi
   fi

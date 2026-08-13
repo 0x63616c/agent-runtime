@@ -102,7 +102,10 @@ jobs:
 
   two-stack-isolation:
     runs-on: ubuntu-24.04
-    timeout-minutes: 45
+    # The harness can run two serial stacks, each with two bounded 12-minute
+    # Tilt attempts.  Leave enough time for provisioning, diagnostics upload,
+    # and contained teardown after the 48-minute worst-case Tilt budget.
+    timeout-minutes: 70
     steps:
       - name: Check out immutable revision
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

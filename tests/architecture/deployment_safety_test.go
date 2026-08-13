@@ -188,6 +188,7 @@ var _ = Describe("M1 deployment safety boundaries", func() {
 		workflow := read(".github/workflows/ci.yml")
 		for _, required := range []string{
 			"two-stack-isolation:",
+			"timeout-minutes: 70",
 			"k3d-io/k3d/releases/download/v5.9.0/k3d-linux-amd64",
 			"06d8f25bc3a971c4eb29e0ff08429b180402db0f4dec838c9eac427e296800a0",
 			"tilt.0.37.6.linux.x86_64.tar.gz",
@@ -314,6 +315,8 @@ var _ = Describe("M1 deployment safety boundaries", func() {
 			`AGENT_RUNTIME_TWO_STACK_EVIDENCE`,
 			`AGENT_RUNTIME_TWO_STACK_DIAGNOSTICS`,
 			`readiness_timeout=12m`,
+			`"$tilt_ci_failure_phase" == "registry_sync"`,
+			`registry_sync`,
 			`write_safe_diagnostic_summary`,
 			`diagnostic-summary/v3`,
 			`runtime_role_status`,
