@@ -176,7 +176,16 @@ func (workspace *Workspace) CopyOut(ctx context.Context, sink ArtifactSink, requ
 		return sandbox.ArtifactRef{}, err
 	}
 	info, err := workspace.root.Lstat(source)
-	if err != nil || !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 || uint64(info.Size()) > workspace.maximumBytes {
+	if err != nil || info.Mode()&os.ModeSymlink != 0 || uint64(info.Size()) > workspace.maximumBytes {
+		return sandbox.ArtifactRef{}, fmt.Errorf("copy sandbox workspace artifact out: %w", ErrPathDenied)
+	}
+	if info.IsDir() {
+		if request.MediaType != ArchiveMediaType {
+			return sandbox.ArtifactRef{}, fmt.Errorf("copy sandbox workspace artifact out: directory requires %q: %w", ArchiveMediaType, ErrPathDenied)
+		}
+		return workspace.copyDirectoryOut(ctx, sink, source)
+	}
+	if !info.Mode().IsRegular() {
 		return sandbox.ArtifactRef{}, fmt.Errorf("copy sandbox workspace artifact out: %w", ErrPathDenied)
 	}
 	file, err := workspace.root.Open(source)

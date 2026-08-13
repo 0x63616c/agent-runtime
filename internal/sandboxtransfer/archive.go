@@ -10,6 +10,7 @@ import (
 	"io"
 	"os"
 	"path"
+	"sort"
 	"strings"
 
 	"github.com/0x63616c/agent-runtime/sandbox"
@@ -382,4 +383,130 @@ func (workspace *Workspace) checkArchiveTarget(target string) error {
 		return fmt.Errorf("inspect sandbox workspace archive target: %w", ErrPathDenied)
 	}
 	return ErrTargetExists
+}
+
+// copyDirectoryOut constructs one bounded tar stream in a private staging file
+// before giving an immutable descriptor to the artifact sink. Staging is needed
+// because the sink contract requires the exact digest and length up front.
+func (workspace *Workspace) copyDirectoryOut(ctx context.Context, sink ArtifactSink, source string) (result sandbox.ArtifactRef, err error) {
+	staging := workspace.stagingName(source) + ".tar"
+	defer func() { err = errors.Join(err, workspace.root.Remove(staging)) }()
+	file, err := workspace.root.OpenFile(staging, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		return sandbox.ArtifactRef{}, fmt.Errorf("copy sandbox workspace directory out: create archive staging: %w", err)
+	}
+	closed := false
+	defer func() {
+		if !closed {
+			err = errors.Join(err, file.Close())
+		}
+	}()
+	limited := &archiveLimitWriter{writer: file, remaining: workspace.maximumBytes}
+	writer := tar.NewWriter(limited)
+	if err := workspace.writeArchiveDirectory(ctx, writer, source, "", limited); err != nil {
+		_ = writer.Close()
+		return sandbox.ArtifactRef{}, err
+	}
+	if err := writer.Close(); err != nil {
+		return sandbox.ArtifactRef{}, fmt.Errorf("copy sandbox workspace directory out: finalize archive: %w", err)
+	}
+	if err := file.Close(); err != nil {
+		return sandbox.ArtifactRef{}, fmt.Errorf("copy sandbox workspace directory out: close archive staging: %w", err)
+	}
+	closed = true
+
+	archive, err := workspace.openArchive(staging)
+	if err != nil {
+		return sandbox.ArtifactRef{}, err
+	}
+	defer func() { err = errors.Join(err, archive.Close()) }()
+	hash := sha256.New()
+	count, err := io.Copy(hash, &contextReader{context: ctx, reader: io.LimitReader(archive, int64(workspace.maximumBytes)+1)})
+	if err != nil || count <= 0 || uint64(count) > workspace.maximumBytes {
+		return sandbox.ArtifactRef{}, fmt.Errorf("copy sandbox workspace directory out: %w", ErrIntegrity)
+	}
+	if err := ctx.Err(); err != nil {
+		return sandbox.ArtifactRef{}, fmt.Errorf("copy sandbox workspace directory out: %w", err)
+	}
+	if _, err := archive.Seek(0, io.SeekStart); err != nil {
+		return sandbox.ArtifactRef{}, fmt.Errorf("copy sandbox workspace directory out: rewind archive: %w", err)
+	}
+	descriptor := ArtifactDescriptor{Reference: sandbox.ArtifactRef{MediaType: ArchiveMediaType, SizeBytes: uint64(count), Digest: sandbox.Digest("sha256:" + hex.EncodeToString(hash.Sum(nil)))}}
+	result, err = sink.Put(ctx, descriptor, io.LimitReader(&contextReader{context: ctx, reader: archive}, count+1))
+	if err != nil {
+		return sandbox.ArtifactRef{}, fmt.Errorf("copy sandbox workspace directory out: store immutable artifact: %w", err)
+	}
+	if !validArtifact(result) || result.MediaType != descriptor.Reference.MediaType || result.SizeBytes != descriptor.Reference.SizeBytes || result.Digest != descriptor.Reference.Digest {
+		return sandbox.ArtifactRef{}, fmt.Errorf("copy sandbox workspace directory out: %w", ErrIntegrity)
+	}
+	return result, nil
+}
+
+func (workspace *Workspace) writeArchiveDirectory(ctx context.Context, writer *tar.Writer, directory, archivePath string, limited *archiveLimitWriter) error {
+	opened, err := workspace.root.Open(directory)
+	if err != nil {
+		return fmt.Errorf("copy sandbox workspace directory out: open directory: %w", err)
+	}
+	entries, readErr := opened.ReadDir(-1)
+	closeErr := opened.Close()
+	if readErr != nil || closeErr != nil {
+		return fmt.Errorf("copy sandbox workspace directory out: read directory: %w", errors.Join(readErr, closeErr))
+	}
+	sort.Slice(entries, func(left, right int) bool { return entries[left].Name() < entries[right].Name() })
+	for _, entry := range entries {
+		if err := ctx.Err(); err != nil {
+			return fmt.Errorf("copy sandbox workspace directory out: %w", err)
+		}
+		name := entry.Name()
+		member := path.Join(directory, name)
+		guestName := name
+		if archivePath != "" {
+			guestName = archivePath + "/" + name
+		}
+		info, err := workspace.root.Lstat(member)
+		if err != nil || info.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("copy sandbox workspace directory out: %w", ErrPathDenied)
+		}
+		if info.IsDir() {
+			if err := writer.WriteHeader(&tar.Header{Name: guestName, Mode: 0o700, Typeflag: tar.TypeDir}); err != nil {
+				return fmt.Errorf("copy sandbox workspace directory out: write directory header: %w", err)
+			}
+			if err := workspace.writeArchiveDirectory(ctx, writer, member, guestName, limited); err != nil {
+				return err
+			}
+			continue
+		}
+		if !info.Mode().IsRegular() || info.Size() < 0 || limited.files >= maximumArchiveEntries {
+			return fmt.Errorf("copy sandbox workspace directory out: %w", ErrPathDenied)
+		}
+		if err := writer.WriteHeader(&tar.Header{Name: guestName, Mode: 0o600, Size: info.Size(), Typeflag: tar.TypeReg}); err != nil {
+			return fmt.Errorf("copy sandbox workspace directory out: write file header: %w", err)
+		}
+		file, err := workspace.root.Open(member)
+		if err != nil {
+			return fmt.Errorf("copy sandbox workspace directory out: open source file: %w", err)
+		}
+		written, copyErr := io.Copy(writer, &contextReader{context: ctx, reader: io.LimitReader(file, info.Size()+1)})
+		closeErr := file.Close()
+		if copyErr != nil || closeErr != nil || written != info.Size() {
+			return fmt.Errorf("copy sandbox workspace directory out: %w", ErrIntegrity)
+		}
+		limited.files++
+	}
+	return nil
+}
+
+type archiveLimitWriter struct {
+	writer    io.Writer
+	remaining uint64
+	files     uint64
+}
+
+func (writer *archiveLimitWriter) Write(data []byte) (int, error) {
+	if uint64(len(data)) > writer.remaining {
+		return 0, ErrIntegrity
+	}
+	written, err := writer.writer.Write(data)
+	writer.remaining -= uint64(written)
+	return written, err
 }

@@ -108,6 +108,67 @@ func TestGuestWorkspaceBindingCopyArchiveInCancellationAndExistingTargetPreserve
 	}
 }
 
+func TestGuestWorkspaceBindingCopiesADirectoryOutAsABoundedImmutableArchive(t *testing.T) {
+	root := t.TempDir()
+	binding, err := BindGuestWorkspace("sandbox-001", root, 1<<20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer binding.Close()
+	if err := os.MkdirAll(filepath.Join(root, "results", "nested"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "results", "nested", "value.txt"), []byte("value"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	sink := &recordingSink{}
+	result, err := binding.CopyOut(context.Background(), sink, sandbox.CopyOutRequest{SandboxID: "sandbox-001", Source: "/workspace/results", MediaType: ArchiveMediaType})
+	if err != nil {
+		t.Fatalf("CopyOut(directory) = %v", err)
+	}
+	if result.MediaType != ArchiveMediaType || result.SizeBytes != uint64(len(sink.content)) || result.Digest == "" {
+		t.Fatalf("CopyOut(directory) result = %#v, want immutable archive metadata", result)
+	}
+	entries, err := ValidateArchive(context.Background(), bytes.NewReader(sink.content), 1<<20)
+	if err != nil || len(entries) != 2 || entries[0] != (ArchiveEntry{Path: "nested", Directory: true}) || entries[1] != (ArchiveEntry{Path: "nested/value.txt", SizeBytes: 5}) {
+		t.Fatalf("CopyOut(directory) archive entries = %#v, %v", entries, err)
+	}
+}
+
+func TestGuestWorkspaceBindingDirectoryCopyOutRefusesSymlinksAndCleansStagingAfterCancellation(t *testing.T) {
+	root := t.TempDir()
+	binding, err := BindGuestWorkspace("sandbox-001", root, 1<<20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer binding.Close()
+	if err := os.Mkdir(filepath.Join(root, "results"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(t.TempDir(), filepath.Join(root, "results", "escape")); err != nil {
+		t.Fatal(err)
+	}
+	request := sandbox.CopyOutRequest{SandboxID: "sandbox-001", Source: "/workspace/results", MediaType: ArchiveMediaType}
+	if _, err := binding.CopyOut(context.Background(), &recordingSink{}, request); !errors.Is(err, ErrPathDenied) {
+		t.Fatalf("CopyOut(directory with symlink) = %v, want path denial", err)
+	}
+	if err := os.Remove(filepath.Join(root, "results", "escape")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "results", "value.txt"), []byte("value"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	if _, err := binding.CopyOut(ctx, cancelSink{cancel: cancel}, request); !errors.Is(err, context.Canceled) {
+		t.Fatalf("CopyOut(cancelled directory) = %v, want cancellation", err)
+	}
+	entries, err := os.ReadDir(root)
+	if err != nil || len(entries) != 1 || entries[0].Name() != "results" {
+		t.Fatalf("workspace after cancelled directory copy-out = %#v, %v; want only results", entries, err)
+	}
+}
+
 type testArchiveMember struct {
 	name      string
 	directory bool
@@ -145,6 +206,14 @@ type archiveSource struct {
 	data   []byte
 	opens  int
 	cancel context.CancelFunc
+}
+
+type cancelSink struct{ cancel context.CancelFunc }
+
+func (sink cancelSink) Put(_ context.Context, _ ArtifactDescriptor, source io.Reader) (sandbox.ArtifactRef, error) {
+	sink.cancel()
+	_, err := io.ReadAll(source)
+	return sandbox.ArtifactRef{}, err
 }
 
 func (source *archiveSource) Open(_ context.Context, _ sandbox.ArtifactRef) (io.ReadCloser, error) {
