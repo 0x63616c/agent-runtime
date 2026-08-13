@@ -77,6 +77,8 @@ echo "two-Stack diagnostics will be retained at $diagnostics_dir"
 created_a=false
 created_b=false
 local_kubeconfig=""
+trust_wiring_a=""
+trust_wiring_b=""
 runtime_role_ids='["api","orchestration","model","tool","blob-role","codec","sandbox-control","sandbox-host"]'
 
 runtime_roles_ready() {
@@ -105,6 +107,131 @@ runtime_role_status() {
       }
     ]
   '
+}
+
+# Observe only stable identity and configuration metadata from the live Stack.
+# Kubernetes Secret values and workload output are intentionally never read or
+# retained. The strict credential-name mapping proves each runtime role is not
+# accidentally given another role's credentials.
+observe_stack_trust_wiring() {
+  local stack="$1"
+  local namespace="$2"
+  local deployments
+  local service_accounts
+  local orchestration_config
+  local temporal_description
+  local retention_days
+  local temporal_endpoint
+  local task_queue
+  local expected_wiring
+
+  deployments="$(kubectl --context "$context" --namespace "$namespace" get deployments -l "app.kubernetes.io/part-of=agent-runtime,agent-runtime.dev/profile=$profile,agent-runtime.dev/stack=$stack" -o json)"
+  service_accounts="$(kubectl --context "$context" --namespace "$namespace" get serviceaccounts -o json)"
+  # Derive expected, non-secret metadata from this Stack's own reviewed render.
+  # This keeps local and CI profiles truthful without duplicating their secret
+  # policy in the harness, while comparing exact Secret names and keys.
+  expected_wiring="$(jq -cer --arg profile "$profile" --argjson roles "$runtime_role_ids" '
+    .profiles[$profile].resources as $resources |
+    (reduce $resources[] as $resource ({};
+      if $resource.kind == "secret_reference" then .[$resource.id] = $resource.secret_reference.reference else . end
+    )) as $secret_references |
+    {
+      runtime_roles: [
+        $resources[] | select(.kind == "kubernetes" and .kubernetes.kind == "Deployment" and (.id as $id | $roles | index($id) != null)) |
+        {
+          id, service_account:.kubernetes.service_account,
+          secret_environment:([.kubernetes.secret_environment[]? | {name,secret:$secret_references[.secret],key}] | sort_by(.name,.secret,.key)),
+          secret_mounts:([.kubernetes.secret_mounts[]? | {secret:$secret_references[.secret],key,path}] | sort_by(.secret,.key,.path))
+        }
+      ] | sort_by(.id),
+      supporting_workloads: [
+        $resources[] | select(.kind == "kubernetes" and .kubernetes.kind == "Deployment" and (.id == "state" or .id == "blob" or .id == "telemetry")) |
+        {id,service_account:.kubernetes.service_account}
+      ] | sort_by(.id)
+    }
+  ' "$(local_file "$stack" stack)")"
+  if ! jq -e --argjson roles "$runtime_role_ids" --argjson expected "$expected_wiring" '
+    [.items[] | select(.metadata.labels["agent-runtime.dev/resource"] as $id | $roles | index($id) != null) |
+      {
+        id:.metadata.labels["agent-runtime.dev/resource"],
+        service_account:(.spec.template.spec.serviceAccountName // ""),
+        service_account_token:(.spec.template.spec.automountServiceAccountToken // true),
+        secret_environment:([.spec.template.spec.containers[].env[]? | select(.valueFrom.secretKeyRef != null) | {name,secret:.valueFrom.secretKeyRef.name,key:.valueFrom.secretKeyRef.key}] | sort_by(.name,.secret,.key)),
+        env_from:([.spec.template.spec.containers[].envFrom[]?]),
+        secret_mounts:([
+          .spec.template.spec.volumes[]? as $volume |
+          select($volume.secret != null) |
+          $volume.secret as $secret |
+          $secret.items[]? | {secret:$secret.secretName,key,path}
+        ] | sort_by(.secret,.key,.path)),
+        init_containers:(.spec.template.spec.initContainers // [])
+      }
+    ] | sort_by(.id) as $observed |
+    ($observed | length == ($roles | length)) and
+    ([ $observed[].id ] | unique | sort) == ($roles | sort) and
+    all($observed[];
+      (. as $role | $expected.runtime_roles[] | select(.id == $role.id)) as $expected_role |
+      .service_account == $expected_role.service_account and
+      .service_account_token == false and
+      .secret_environment == $expected_role.secret_environment and
+      .secret_mounts == $expected_role.secret_mounts and
+      (.env_from | length == 0) and (.init_containers | length == 0)
+    )
+  ' <<<"$deployments" >/dev/null; then
+    echo "runtime role trust wiring differs from the declared CI profile" >&2
+    return 1
+  fi
+  if ! jq -e --argjson expected "$expected_wiring" '
+    [.items[] | select(.metadata.labels["agent-runtime.dev/resource"] as $id | ["state","blob","telemetry"] | index($id) != null) |
+      {id:.metadata.labels["agent-runtime.dev/resource"],service_account:(.spec.template.spec.serviceAccountName // "")}]
+    | sort_by(.id) == $expected.supporting_workloads
+  ' <<<"$deployments" >/dev/null; then
+    echo "state, blob, or telemetry workload identity differs from the declared CI profile" >&2
+    return 1
+  fi
+  if ! jq -e --argjson expected "$expected_wiring" '
+    [.items[].metadata.name] as $accounts |
+    ($expected.runtime_roles + $expected.supporting_workloads | map(.service_account) | unique) |
+    all(. as $account | $accounts | index($account) != null)
+  ' <<<"$service_accounts" >/dev/null; then
+    echo "state, blob, or telemetry ServiceAccount is absent" >&2
+    return 1
+  fi
+
+  orchestration_config="$(jq -er '
+    [.items[] | select(.metadata.labels["agent-runtime.dev/resource"] == "orchestration") |
+      .spec.template.spec.containers[].env[]? | select(.name == "RUNTIME_ROLE_CONFIG") | .value] |
+    if length == 1 then .[0] else error("expected one orchestration role configuration") end
+  ' <<<"$deployments")"
+  retention_days="$(jq -er '.profiles.ci.resources[] | select(.id == "temporal-namespace") | .orchestration.retention_days' "$(local_file "$stack" stack)")"
+  temporal_endpoint="temporal.$namespace.svc:7233"
+  task_queue="$namespace-session-v1"
+  if ! jq -e --arg namespace "$namespace" --arg endpoint "$temporal_endpoint" --arg task_queue "$task_queue" '
+    .namespace == $namespace and
+    ([.dependencies[] | select(.name == "temporal") | .endpoint] == [$endpoint]) and
+    .worker.task_queue == $task_queue
+  ' <<<"$orchestration_config" >/dev/null; then
+    echo "orchestration Temporal endpoint, namespace, or task queue differs from the declared Stack identity" >&2
+    return 1
+  fi
+  temporal_description="$(kubectl --context "$context" --namespace "$namespace" exec deployment/temporal -- \
+    temporal --address 127.0.0.1:7233 --command-timeout 30s --output json \
+    operator namespace describe --namespace "$namespace")"
+  if ! jq -e --argjson retention_days "$retention_days" '
+    .config.workflowExecutionRetentionTtl == (($retention_days * 86400 | tostring) + "s")
+  ' <<<"$temporal_description" >/dev/null; then
+    echo "Temporal namespace does not retain the declared bounded retention" >&2
+    return 1
+  fi
+
+  jq -nc \
+    --arg stack "$stack" \
+    --arg namespace "$namespace" \
+    --arg temporal_endpoint "$temporal_endpoint" \
+    --arg task_queue "$task_queue" \
+    --argjson retention_days "$retention_days" \
+    --argjson expected "$expected_wiring" \
+    '{version:1,stack:$stack,namespace:$namespace,runtime_roles:{service_accounts:($expected.runtime_roles | map({key:.id,value:.service_account}) | from_entries),service_account_tokens_disabled:true,secret_references_scoped:true},temporal:{endpoint:$temporal_endpoint,namespace:$namespace,task_queue:$task_queue,retention_days:$retention_days},dependencies:($expected.supporting_workloads | map({key:(.id + "_service_account"),value:.service_account}) | from_entries)}'
 }
 
 # Diagnostics are a deliberately small, typed status record, not a redacted
@@ -185,9 +312,19 @@ if [[ "$diagnostic_self_test" == true ]]; then
     echo "preflight diagnostic summary did not retain bounded failed-plan metadata" >&2
     exit 1
   }
+  trust_fixture='{"items":[{"metadata":{"labels":{"agent-runtime.dev/resource":"api"}},"spec":{"template":{"spec":{"serviceAccountName":"api-account","automountServiceAccountToken":false,"containers":[{"env":[{"name":"TOKEN","valueFrom":{"secretKeyRef":{"name":"approved","key":"TOKEN"}}}]}],"volumes":[]}}}}]}'
+  expected_trust_fixture='{"runtime_roles":[{"id":"api","service_account":"api-account","secret_environment":[{"name":"TOKEN","secret":"approved","key":"TOKEN"}],"secret_mounts":[]}]}'
+  jq -e --argjson expected "$expected_trust_fixture" '
+    [.items[] | {id:.metadata.labels["agent-runtime.dev/resource"],service_account:.spec.template.spec.serviceAccountName,service_account_token:.spec.template.spec.automountServiceAccountToken,secret_environment:([.spec.template.spec.containers[].env[]? | select(.valueFrom.secretKeyRef != null) | {name,secret:.valueFrom.secretKeyRef.name,key:.valueFrom.secretKeyRef.key}] | sort_by(.name,.secret,.key)),env_from:([.spec.template.spec.containers[].envFrom[]?]),secret_mounts:([.spec.template.spec.volumes[]? | select(.secret != null) | .secret as $secret | $secret.items[]? | {secret:$secret.secretName,key,path}] | sort_by(.secret,.key,.path)),init_containers:(.spec.template.spec.initContainers // [])}] as $observed |
+    all($observed[]; (. as $role | $expected.runtime_roles[] | select(.id == $role.id)) as $expected_role | .service_account == $expected_role.service_account and .service_account_token == false and .secret_environment == $expected_role.secret_environment and .secret_mounts == $expected_role.secret_mounts and (.env_from | length == 0) and (.init_containers | length == 0))
+  ' <<<"$trust_fixture" >/dev/null || exit 1
+  if jq -e --argjson expected "$expected_trust_fixture" '.items[0].spec.template.spec.containers[0].envFrom = [{secretRef:{name:"foreign"}}]' <<<"$trust_fixture" | jq -e --argjson expected "$expected_trust_fixture" '[.items[] | {id:.metadata.labels["agent-runtime.dev/resource"],env_from:([.spec.template.spec.containers[].envFrom[]?])}] | all(.[]; (.env_from | length == 0))' >/dev/null; then
+    echo "trust wiring self-test accepted envFrom" >&2
+    exit 1
+  fi
   rm -f -- "$diagnostics_dir/fixture-stack.summary.json" "$diagnostics_dir/preflight-stack.summary.json"
   rmdir -- "$diagnostics_dir"
-  echo "safe diagnostic summary rejects raw JSON, header, and environment payloads"
+  echo "safe diagnostic summary rejects raw JSON, header, and environment payloads; trust wiring rejects envFrom"
   exit 0
 fi
 
@@ -337,9 +474,10 @@ prepare_evidence_draft() {
     --arg kubectl_version "$kubectl_version" --arg tilt_version "$tilt_version" \
     --arg stack_a "$stack_a" --arg stack_b "$stack_b" \
     --arg namespace_a "$namespace_a" --arg namespace_b "$namespace_b" \
-    --arg uid_a "$uid_a" --arg uid_b "$uid_b" '
+    --arg uid_a "$uid_a" --arg uid_b "$uid_b" \
+    --argjson trust_wiring_a "$trust_wiring_a" --argjson trust_wiring_b "$trust_wiring_b" '
     {
-      version:1,
+      version:2,
       milestone:"M1 local Stack instance isolation",
       proof_level:"isolated_kubernetes_integration",
       utc_time:$utc_time,
@@ -347,6 +485,7 @@ prepare_evidence_draft() {
       command:{path:"deploy/dev/run-two-stack-smoke.sh",kubernetes_context:$context,profile:$profile,result:"pending"},
 		toolchain:{cluster_runtime:$cluster_runtime,cluster_image:$cluster_image,registry_image:$registry_image,kubectl:$kubectl_version,tilt:$tilt_version},
       stacks:[{name:$stack_a,namespace:$namespace_a,namespace_uid:$uid_a},{name:$stack_b,namespace:$namespace_b,namespace_uid:$uid_b}],
+      trust_wiring:[$trust_wiring_a,$trust_wiring_b],
       both_stacks_concurrently_ready:true,
       distinct_namespace_and_workload_identities:true,
 		distinct_private_state:true,
@@ -355,7 +494,22 @@ prepare_evidence_draft() {
       cleanup:{namespaces_absent:false,local_state_absent:false},
       limitations:["does not claim Linux KVM or Firecracker isolation","does not mutate a production cluster"]
     }' >"$evidence_temporary"
-  if ! jq -e '.command.result == "pending" and .cleanup.namespaces_absent == false and .cleanup.local_state_absent == false' "$evidence_temporary" >/dev/null; then
+  if ! jq -e '
+    .version == 2 and
+    .command.result == "pending" and
+    .cleanup.namespaces_absent == false and .cleanup.local_state_absent == false and
+    (.trust_wiring | length == 2 and all(.[];
+      .version == 1 and
+      (.runtime_roles.service_accounts | length == 8) and
+      .runtime_roles.service_account_tokens_disabled == true and
+      .runtime_roles.secret_environment_scoped == true and
+      (.temporal.endpoint == ("temporal." + .namespace + ".svc:7233")) and
+      .temporal.namespace == .namespace and
+      .temporal.task_queue == (.namespace + "-session-v1") and
+      (.temporal.retention_days | type == "number" and . > 0) and
+      .dependencies == {state_service_account:"state-account",blob_service_account:"blob-account",telemetry_service_account:"telemetry-account"}
+    ))
+  ' "$evidence_temporary" >/dev/null; then
     echo "refusing destructive teardown because the owned two-Stack evidence draft is invalid" >&2
     return 1
   fi
@@ -483,6 +637,8 @@ created_a=true
 start_stack "$stack_a" "$namespace_a"
 created_b=true
 start_stack "$stack_b" "$namespace_b"
+trust_wiring_a="$(observe_stack_trust_wiring "$stack_a" "$namespace_a")"
+trust_wiring_b="$(observe_stack_trust_wiring "$stack_b" "$namespace_b")"
 
 uid_a="$(kubectl --context "$context" get "namespace/$namespace_a" -o json | jq -er '.metadata.uid')"
 uid_b="$(kubectl --context "$context" get "namespace/$namespace_b" -o json | jq -er '.metadata.uid')"
