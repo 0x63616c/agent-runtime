@@ -151,7 +151,8 @@ spec:
           command: ["/bin/sh", "-ec"]
           args:
             - >-
-              /usr/local/bin/firecracker-direct-preflight
+              chmod 0700 /var/lib/agent-runtime/firecracker-smoke
+              && /usr/local/bin/firecracker-direct-preflight
               -config /var/lib/agent-runtime/firecracker-direct/kvm-config.json
               -fixture-lock /var/lib/agent-runtime/firecracker-fixtures/home-server/fixtures.lock
               && exec /usr/local/bin/firecracker-smoke
