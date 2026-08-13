@@ -118,6 +118,7 @@ write_safe_diagnostic_summary() {
   local roles_observed="$5"
   local roles_ready="$6"
   local role_status="$7"
+  local tilt_ci_attempts="$8"
   local destination="$diagnostics_dir/$stack.summary.json"
 
   jq -n \
@@ -129,14 +130,15 @@ write_safe_diagnostic_summary() {
     --argjson runtime_roles_observed "$roles_observed" \
     --argjson runtime_roles_ready "$roles_ready" \
     --argjson runtime_role_status "$role_status" \
-    '{kind:"diagnostic-summary/v1",version:1,stack:$stack,namespace:$namespace,profile:$profile,tilt_ci_exit_code:$tilt_ci_exit_code,workload_probe:$probe_status,runtime_roles_observed:$runtime_roles_observed,runtime_roles_ready:$runtime_roles_ready,runtime_role_status:$runtime_role_status}' \
+    --argjson tilt_ci_attempts "$tilt_ci_attempts" \
+    '{kind:"diagnostic-summary/v1",version:1,stack:$stack,namespace:$namespace,profile:$profile,tilt_ci_exit_code:$tilt_ci_exit_code,tilt_ci_attempts:$tilt_ci_attempts,workload_probe:$probe_status,runtime_roles_observed:$runtime_roles_observed,runtime_roles_ready:$runtime_roles_ready,runtime_role_status:$runtime_role_status}' \
     >"$destination"
 
   jq -e '
-    keys == ["kind","namespace","profile","runtime_role_status","runtime_roles_observed","runtime_roles_ready","stack","tilt_ci_exit_code","version","workload_probe"] and
+    keys == ["kind","namespace","profile","runtime_role_status","runtime_roles_observed","runtime_roles_ready","stack","tilt_ci_attempts","tilt_ci_exit_code","version","workload_probe"] and
     .kind == "diagnostic-summary/v1" and .version == 1 and
     (.stack | type == "string") and (.namespace | type == "string") and (.profile | type == "string") and
-    (.tilt_ci_exit_code | type == "number") and (.workload_probe | type == "string") and
+    (.tilt_ci_exit_code | type == "number") and (.tilt_ci_attempts | type == "number" and . >= 0 and . <= 2) and (.workload_probe | type == "string") and
     (.runtime_roles_observed | type == "number") and (.runtime_roles_ready | type == "boolean") and
     (.runtime_role_status | type == "array" and length == 8 and
       ([.[].id] | unique | sort) == ["api","blob-role","codec","model","orchestration","sandbox-control","sandbox-host","tool"] and
@@ -156,7 +158,7 @@ write_safe_diagnostic_summary() {
 capture_plan_failure_diagnostics() {
   local stack="$1"
   local namespace="$2"
-  write_safe_diagnostic_summary "$stack" "$namespace" 1 "unavailable" 0 false "$(empty_runtime_role_status)"
+  write_safe_diagnostic_summary "$stack" "$namespace" 1 "unavailable" 0 false "$(empty_runtime_role_status)" 0
 }
 
 if [[ "$diagnostic_self_test" == true ]]; then
@@ -165,7 +167,7 @@ if [[ "$diagnostic_self_test" == true ]]; then
     exit 1
   }
   fixture_role_status="$(empty_runtime_role_status)"
-  write_safe_diagnostic_summary "fixture-stack" "ar-fixture-stack" 7 "unavailable" 0 false "$fixture_role_status"
+  write_safe_diagnostic_summary "fixture-stack" "ar-fixture-stack" 7 "unavailable" 0 false "$fixture_role_status" 2
   for unsafe_value in 'Bearer adversarial-header-token' 'MODEL_API_KEY=adversarial-env-secret' '{"token":"adversarial-json-secret"}'; do
     if grep -F -- "$unsafe_value" "$diagnostics_dir/fixture-stack.summary.json" >/dev/null; then
       echo "safe diagnostic summary retained an unsafe fixture value" >&2
@@ -175,7 +177,7 @@ if [[ "$diagnostic_self_test" == true ]]; then
   capture_plan_failure_diagnostics "preflight-stack" "ar-preflight-stack"
   jq -e '
     .stack == "preflight-stack" and .namespace == "ar-preflight-stack" and
-    .tilt_ci_exit_code == 1 and .workload_probe == "unavailable" and
+    .tilt_ci_exit_code == 1 and .tilt_ci_attempts == 0 and .workload_probe == "unavailable" and
     .runtime_roles_observed == 0 and .runtime_roles_ready == false and
     (.runtime_role_status | length == 8 and all(.[]; .replicas == 0 and .ready_replicas == 0 and .available_replicas == 0))
   ' "$diagnostics_dir/preflight-stack.summary.json" >/dev/null || {
@@ -390,6 +392,7 @@ capture_stack_diagnostics() {
   local stack="$1"
   local namespace="$2"
   local ci_status="$3"
+  local tilt_ci_attempts="$4"
   local probe_status="unavailable"
   local roles_observed=0
   local roles_ready=false
@@ -406,13 +409,14 @@ capture_stack_diagnostics() {
   else
     role_status="$(empty_runtime_role_status)"
   fi
-  write_safe_diagnostic_summary "$stack" "$namespace" "$ci_status" "$probe_status" "$roles_observed" "$roles_ready" "$role_status"
+  write_safe_diagnostic_summary "$stack" "$namespace" "$ci_status" "$probe_status" "$roles_observed" "$roles_ready" "$role_status" "$tilt_ci_attempts"
 }
 
 start_stack() {
   local stack="$1"
   local namespace="$2"
   local ci_status=0
+  local tilt_ci_attempts=0
   if [[ "$profile" == "ci" ]]; then
     # Bootstrap is deliberately outside the Tiltfile: plan rendering must be
     # side-effect free, and stackctl must create the Namespace before Tilt can
@@ -422,10 +426,22 @@ start_stack() {
   # Do not retain Tilt output: it may contain workload environment or headers.
   # The allowlisted summary below records only bounded readiness metadata.
   if [[ "$ci_status" == 0 ]]; then
+    tilt_ci_attempts=1
     tilt ci --context "$context" --namespace "$namespace" --port 0 --timeout "$readiness_timeout" \
       -- --stack="$stack" --profile="$profile" "${ci_tilt_args[@]}" >/dev/null 2>&1 || ci_status=$?
+    # A disposable k3d node can transiently reject a just-built image while
+    # its local registry catch-up completes. Retrying the same reviewed Stack
+    # preserves its bootstrap authority, namespace, and image identities; it
+    # cannot adopt another Stack. A second failure remains a failed smoke run.
+    if [[ "$ci_status" != 0 && "$profile" == "ci" ]]; then
+      ci_status=0
+      tilt_ci_attempts=2
+      sleep 5
+      tilt ci --context "$context" --namespace "$namespace" --port 0 --timeout "$readiness_timeout" \
+        -- --stack="$stack" --profile="$profile" "${ci_tilt_args[@]}" >/dev/null 2>&1 || ci_status=$?
+    fi
   fi
-  capture_stack_diagnostics "$stack" "$namespace" "$ci_status"
+  capture_stack_diagnostics "$stack" "$namespace" "$ci_status" "$tilt_ci_attempts"
   if [[ "$ci_status" != 0 ]]; then
     return "$ci_status"
   fi
