@@ -100,6 +100,24 @@ func TestApprovalContractGoldenSchemaCarriesTheSafeRequestProjection(t *testing.
 	}
 }
 
+func TestToolDefinitionContractExposesTheRegisteredInputSchema(t *testing.T) {
+	contract := readJSON(t, filepath.Join("..", "..", "api", "openapi", "openapi.yaml"))
+	schemas := object(t, object(t, contract, "components"), "schemas")
+	tool := object(t, schemas, "ToolDefinition")
+	if additional, ok := tool["additionalProperties"].(bool); !ok || additional {
+		t.Fatal("ToolDefinition contract must reject undocumented fields")
+	}
+	properties := object(t, tool, "properties")
+	version, exists := properties["input_schema_version"].(map[string]any)
+	if !exists || !contains(array(t, version, "enum"), "agent-runtime.tool-input/v1") {
+		t.Fatalf("ToolDefinition must expose the supported input-schema version: %#v", version)
+	}
+	schema, exists := properties["input_schema"].(map[string]any)
+	if !exists || schema["type"] != "object" {
+		t.Fatalf("ToolDefinition must expose the registered input schema object: %#v", schema)
+	}
+}
+
 func readJSON(t *testing.T, path string) map[string]any {
 	t.Helper()
 	contents, err := os.ReadFile(path)
