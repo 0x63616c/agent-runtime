@@ -25,6 +25,34 @@ func TestCompileProtectedSmokePlanBindsEveryVerifiedFixtureAndExternalOwner(t *t
 	}
 }
 
+func TestCompileDirectSmokePlanUsesTalosWritableJailerBaseWithoutChangingProtectedPlan(t *testing.T) {
+	fixtures := verifiedPlanFixtures(mustCompile(t, validProfile()))
+	config := ProtectedSmokeConfig{
+		VMID:          "direct-smoke-001",
+		UID:           1001,
+		GID:           1002,
+		ExternalOwner: "firecracker-direct-limits",
+		Cgroup:        JailerCgroupAssignment{Version: "firecracker.jailer-cgroup/v1", StackResource: "firecracker-direct-kvm", Parent: "agent-runtime/firecracker-direct"},
+	}
+	directPlan, directAuthority, err := CompileDirectSmokePlan(config, fixtures)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := jailerArgumentValue(directPlan.JailerArguments(), "--chroot-base-dir"); got != directJailerBaseDirectory {
+		t.Fatalf("direct chroot base = %q, want %q", got, directJailerBaseDirectory)
+	}
+	if !validJailerExecutionAuthority(directAuthority, directPlan) {
+		t.Fatal("direct authority must bind the fixed Talos writable base")
+	}
+	protectedPlan, _, err := CompileProtectedSmokePlan(config, fixtures)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := jailerArgumentValue(protectedPlan.JailerArguments(), "--chroot-base-dir"); got != declaredJailerBaseDirectory {
+		t.Fatalf("protected chroot base = %q, want unchanged %q", got, declaredJailerBaseDirectory)
+	}
+}
+
 func TestCompileProtectedSmokePlanRefusesIncompleteInputsBeforeAnyHostOperation(t *testing.T) {
 	fixtures := verifiedPlanFixtures(mustCompile(t, validProfile()))
 	valid := ProtectedSmokeConfig{

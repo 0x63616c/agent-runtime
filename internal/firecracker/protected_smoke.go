@@ -22,7 +22,18 @@ type ProtectedSmokeConfig struct {
 // limit remains explicitly assigned to ExternalOwner; the protected runner must
 // prove those owners before any resulting smoke evidence is accepted.
 func CompileProtectedSmokePlan(config ProtectedSmokeConfig, fixtures FixtureSet) (Plan, JailerExecutionAuthority, error) {
-	if config.VMID == "" || config.ExternalOwner == "" || config.UID == 0 || config.GID == 0 || !fixturesMatchSmokePlanInputs(fixtures) {
+	return compileSmokePlan(config, fixtures, declaredJailerBaseDirectory)
+}
+
+// CompileDirectSmokePlan derives the same fixed no-NIC Firecracker smoke plan
+// for the separately reviewed Talos direct-run authority. The jailer base is
+// fixed here rather than taken from any command line or operator input.
+func CompileDirectSmokePlan(config ProtectedSmokeConfig, fixtures FixtureSet) (Plan, JailerExecutionAuthority, error) {
+	return compileSmokePlan(config, fixtures, directJailerBaseDirectory)
+}
+
+func compileSmokePlan(config ProtectedSmokeConfig, fixtures FixtureSet, jailerBaseDirectory string) (Plan, JailerExecutionAuthority, error) {
+	if config.VMID == "" || config.ExternalOwner == "" || config.UID == 0 || config.GID == 0 || !approvedJailerBaseDirectory(jailerBaseDirectory) || !fixturesMatchSmokePlanInputs(fixtures) {
 		return Plan{}, JailerExecutionAuthority{}, fmt.Errorf("compile protected smoke plan: %w", ErrSmokeUnavailable)
 	}
 	firecrackerArtifact, firecrackerOK := fixtures.Artifact(FixtureFirecracker)
@@ -42,7 +53,7 @@ func CompileProtectedSmokePlan(config ProtectedSmokeConfig, fixtures FixtureSet)
 		RootFS:        rootFSArtifact,
 		GuestAgent:    guestAgentArtifact,
 		KVMDevice:     "/dev/kvm",
-		ChrootBaseDir: declaredJailerBaseDirectory,
+		ChrootBaseDir: jailerBaseDirectory,
 		UID:           config.UID,
 		GID:           config.GID,
 		Resources:     sandboxSmokeResources(),

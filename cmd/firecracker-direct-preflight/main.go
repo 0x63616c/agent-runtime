@@ -23,10 +23,10 @@ const (
 	directConfigVersion = "agent-runtime.firecracker-direct-kvm/v1"
 	// Talos keeps /etc immutable. Direct-run authority therefore lives under
 	// the root-owned state volume rather than the protected runner's /etc path.
-	directConfigPath    = "/var/lib/agent-runtime/firecracker-direct/kvm-config.json"
-	directEvidenceRoot  = "/var/lib/agent-runtime/firecracker-evidence"
-	directFixtureLock   = "/var/lib/agent-runtime/firecracker-fixtures/home-server/fixtures.lock"
-	fixtureLockVersion  = "firecracker.fixtures/v2"
+	directConfigPath   = "/var/lib/agent-runtime/firecracker-direct/kvm-config.json"
+	directEvidenceRoot = "/var/lib/agent-runtime/firecracker-evidence"
+	directFixtureLock  = "/var/lib/agent-runtime/firecracker-fixtures/home-server/fixtures.lock"
+	fixtureLockVersion = "firecracker.fixtures/v2"
 )
 
 // directConfig is root-owned operator configuration. It deliberately names
@@ -104,7 +104,7 @@ func readConfig(path string) (directConfig, error) {
 }
 
 func validateConfig(configured directConfig, stat func(string) (os.FileInfo, error)) error {
-	if configured.Version != directConfigVersion || !validName(configured.ExecutionNamespace) || !validEvidenceDirectory(configured.EvidenceDirectory) || configured.JailerChrootBaseDir != "/srv/agent-runtime/jailer" || !validRelativePath(configured.CgroupParent) || !validName(configured.StackResource) || !validName(configured.ExternalOwner) || configured.JailerUID == 0 || configured.JailerGID == 0 {
+	if configured.Version != directConfigVersion || !validName(configured.ExecutionNamespace) || !validEvidenceDirectory(configured.EvidenceDirectory) || configured.JailerChrootBaseDir != "/var/lib/agent-runtime/firecracker-jailer" || !validRelativePath(configured.CgroupParent) || !validName(configured.StackResource) || !validName(configured.ExternalOwner) || configured.JailerUID == 0 || configured.JailerGID == 0 {
 		return errors.New("root-owned direct config has invalid namespace, evidence, jailer, or cgroup authority")
 	}
 	for description, path := range map[string]string{

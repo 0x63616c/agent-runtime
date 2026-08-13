@@ -48,7 +48,7 @@ func TestCompileTrustedM4IdentityReturnsDeterministicRedactedBindings(t *testing
 	plan.kernel.Path = "/private/operator-secret/vmlinux"
 	plan.rootFS.Path = "/private/operator-secret/rootfs.ext4"
 	plan.guestAgent.Path = "/private/operator-secret/guest-agent"
-	plan.jailerArguments = baseJailerArguments(plan.VMID(), plan.Firecracker().Path, plan.UID(), plan.GID())
+	plan.jailerArguments = baseJailerArguments(plan.VMID(), plan.Firecracker().Path, plan.UID(), plan.GID(), plan.chrootBaseDir)
 	fixtures := verifiedPlanFixtures(plan)
 	fixtures.directory = "/private/operator-secret/fixture-staging"
 	stage := validBoundJailedResourceStage(plan, fixtures, "/private/operator-secret/rootfs-copy.ext4")

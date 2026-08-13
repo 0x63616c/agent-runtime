@@ -117,8 +117,10 @@ spec:
         - { name: fixture-map, mountPath: /var/lib/agent-runtime/firecracker-direct/fixture-source-map.json, readOnly: true }
         - { name: fixtures, mountPath: /var/lib/agent-runtime/firecracker-fixtures/home-server, readOnly: true }
         - { name: evidence, mountPath: /var/lib/agent-runtime/firecracker-evidence/home-server }
-        - { name: jailer, mountPath: /srv/agent-runtime/jailer }
-        - { name: cgroup, mountPath: /sys/fs/cgroup/agent-runtime/firecracker-direct }
+        - { name: jailer, mountPath: /var/lib/agent-runtime/firecracker-jailer }
+        # Bind only the delegated parent. The Jailer can create and remove its
+        # own per-VM child, but cannot inspect or modify sibling/host cgroups.
+        - { name: cgroup, mountPath: /sys/fs/cgroup/agent-runtime/firecracker-direct, readOnly: false }
   volumes:
     - name: tmp
       emptyDir: { sizeLimit: 2Gi }
@@ -133,7 +135,7 @@ spec:
     - name: evidence
       hostPath: { path: /var/lib/agent-runtime/firecracker-evidence/home-server, type: Directory }
     - name: jailer
-      hostPath: { path: /srv/agent-runtime/jailer, type: Directory }
+      hostPath: { path: /var/lib/agent-runtime/firecracker-jailer, type: Directory }
     - name: cgroup
       hostPath: { path: /sys/fs/cgroup/agent-runtime/firecracker-direct, type: Directory }
 EOF
@@ -179,6 +181,9 @@ self_test() {
   grep -Fqx '      emptyDir: { sizeLimit: 2Gi }' "$manifest"
   grep -Fqx '      hostPath: { path: /dev/kvm, type: CharDevice }' "$manifest"
   grep -Fqx '      hostPath: { path: /var/lib/agent-runtime/firecracker-direct/kvm-config.json, type: File }' "$manifest"
+  grep -Fqx '        - { name: jailer, mountPath: /var/lib/agent-runtime/firecracker-jailer }' "$manifest"
+  grep -Fqx '        - { name: cgroup, mountPath: /sys/fs/cgroup/agent-runtime/firecracker-direct, readOnly: false }' "$manifest"
+  grep -Fqx '      hostPath: { path: /var/lib/agent-runtime/firecracker-jailer, type: Directory }' "$manifest"
   grep -Fqx '          -report /var/lib/agent-runtime/firecracker-evidence/home-server/smoke-test.json' "$manifest"
   if "$0" render --run-id upperCase --image "ghcr.io/0x63616c/agent-runtime-direct-runner@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" --output "$tmp/bad" >/dev/null 2>&1; then fail "accepted invalid run ID"; fi
   if "$0" render --run-id smoke-test --image "example.invalid/unpinned:latest" --output "$tmp/bad" >/dev/null 2>&1; then fail "accepted unreviewed image"; fi

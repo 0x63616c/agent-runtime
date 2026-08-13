@@ -24,7 +24,16 @@ var (
 	ErrCapabilityUnavailable = errors.New("firecracker capability is unavailable")
 )
 
-const declaredJailerBaseDirectory = "/srv/agent-runtime/jailer"
+const (
+	// declaredJailerBaseDirectory is the protected runner's fixed Jailer root.
+	// It is intentionally unchanged: protected runners are provisioned outside
+	// the immutable Talos host filesystem.
+	declaredJailerBaseDirectory = "/srv/agent-runtime/jailer"
+	// directJailerBaseDirectory is the separately reviewed direct-run root. Talos
+	// keeps /srv immutable, so this lives on its durable writable state volume.
+	// It is not a caller-selected host path.
+	directJailerBaseDirectory = "/var/lib/agent-runtime/firecracker-jailer"
+)
 
 // NetworkMode identifies the only host-network authority represented by a profile.
 type NetworkMode string
@@ -93,6 +102,7 @@ type Plan struct {
 	vmID            string
 	uid             uint32
 	gid             uint32
+	chrootBaseDir   string
 	jailerArguments []string
 	machine         MachineConfig
 	resources       ResourceEnforcement
@@ -182,7 +192,7 @@ func Compile(profile Profile) (Plan, error) {
 			return Plan{}, fmt.Errorf("%w: every executable and guest artifact must be absolute and SHA-256 pinned", ErrInvalidProfile)
 		}
 	}
-	if profile.KVMDevice != "/dev/kvm" || profile.ChrootBaseDir != declaredJailerBaseDirectory || profile.UID == 0 || profile.GID == 0 {
+	if profile.KVMDevice != "/dev/kvm" || !approvedJailerBaseDirectory(profile.ChrootBaseDir) || profile.UID == 0 || profile.GID == 0 {
 		return Plan{}, fmt.Errorf("%w: KVM, declared Jailer root, and unprivileged jailer identity are required", ErrInvalidProfile)
 	}
 	if profile.Network.Mode != NetworkDenyAll || len(profile.Network.Allowlist) != 0 {
@@ -199,7 +209,8 @@ func Compile(profile Profile) (Plan, error) {
 		vmID:            profile.VMID,
 		uid:             profile.UID,
 		gid:             profile.GID,
-		jailerArguments: baseJailerArguments(profile.VMID, profile.Firecracker.Path, profile.UID, profile.GID),
+		chrootBaseDir:   profile.ChrootBaseDir,
+		jailerArguments: baseJailerArguments(profile.VMID, profile.Firecracker.Path, profile.UID, profile.GID, profile.ChrootBaseDir),
 		machine:         machine,
 		resources: ResourceEnforcement{
 			CgroupVersion:       2,
@@ -396,11 +407,19 @@ func hasPinnedLaunchPlan(plan Plan) bool {
 }
 
 func validCompiledPlan(plan Plan) bool {
-	return plan.compiled && validVMID(plan.vmID) && plan.uid != 0 && plan.gid != 0 && validArtifact(plan.firecracker) && validArtifact(plan.jailer) && validArtifact(plan.kernel) && validArtifact(plan.rootFS) && validArtifact(plan.guestAgent) && len(plan.jailerArguments) > 0 && plan.machine.VCPUCount > 0 && plan.machine.MemoryMiB >= 128 && validResourceEnforcement(plan.resources) && plan.network.Mode == NetworkDenyAll && len(plan.network.Allowlist) == 0
+	// The profile compiler, rather than generic staged-resource helpers, fixes
+	// the two approved bases. This preserves test-only staging under a private
+	// temporary root while execution authority still requires the exact compiled
+	// argv and one approved base in validJailerExecutionPlan.
+	return plan.compiled && validVMID(plan.vmID) && plan.uid != 0 && plan.gid != 0 && safeAbsolutePath(plan.chrootBaseDir) && validArtifact(plan.firecracker) && validArtifact(plan.jailer) && validArtifact(plan.kernel) && validArtifact(plan.rootFS) && validArtifact(plan.guestAgent) && len(plan.jailerArguments) > 0 && plan.machine.VCPUCount > 0 && plan.machine.MemoryMiB >= 128 && validResourceEnforcement(plan.resources) && plan.network.Mode == NetworkDenyAll && len(plan.network.Allowlist) == 0
 }
 
-func baseJailerArguments(vmID, firecrackerPath string, uid, gid uint32) []string {
-	return []string{"--id", vmID, "--exec-file", firecrackerPath, "--uid", strconv.FormatUint(uint64(uid), 10), "--gid", strconv.FormatUint(uint64(gid), 10), "--chroot-base-dir", declaredJailerBaseDirectory, "--cgroup-version", "2", "--", "--api-sock", "/run/firecracker.socket"}
+func approvedJailerBaseDirectory(value string) bool {
+	return value == declaredJailerBaseDirectory || value == directJailerBaseDirectory
+}
+
+func baseJailerArguments(vmID, firecrackerPath string, uid, gid uint32, chrootBaseDir string) []string {
+	return []string{"--id", vmID, "--exec-file", firecrackerPath, "--uid", strconv.FormatUint(uint64(uid), 10), "--gid", strconv.FormatUint(uint64(gid), 10), "--chroot-base-dir", chrootBaseDir, "--cgroup-version", "2", "--", "--api-sock", "/run/firecracker.socket"}
 }
 
 func validResourceEnforcement(resources ResourceEnforcement) bool {

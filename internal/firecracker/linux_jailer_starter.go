@@ -238,14 +238,15 @@ func validJailerExecutionStage(authority JailerExecutionAuthority, stage JailedR
 	if stage.BindingDigest != stage.bindingDigest() || !validArtifact(stage.Jailer) || !validArtifact(stage.Firecracker.Source) || parsed.execPath != stage.Firecracker.Source.Path || parsed.uid != stage.OwnerUID || parsed.gid != stage.OwnerGID || parsed.apiSocket != stage.APISocketPath {
 		return false
 	}
-	if stage.JailRoot != filepath.Join(declaredJailerBaseDirectory, filepath.Base(parsed.execPath), parsed.vmID, "root") || stage.Firecracker.JailedPath != "/"+filepath.Base(parsed.execPath) {
+	base := jailerArgumentValue(authority.Arguments(), "--chroot-base-dir")
+	if !approvedJailerBaseDirectory(base) || stage.JailRoot != filepath.Join(base, filepath.Base(parsed.execPath), parsed.vmID, "root") || stage.Firecracker.JailedPath != "/"+filepath.Base(parsed.execPath) {
 		return false
 	}
 	return safeAbsolutePath(stage.JailRoot) && safeAbsolutePath(stage.APISocketPath) && safeAbsolutePath(stage.VSockUDSPath) && jailDestinationContained(stage.JailRoot, stage.Firecracker.JailedPath) && jailDestinationContained(stage.JailRoot, stage.Kernel.JailedPath) && jailDestinationContained(stage.JailRoot, stage.RootFS.JailedPath)
 }
 
 func parseJailerExecutionArguments(arguments []string) (parsedJailerExecution, bool) {
-	if len(arguments) != 25 || arguments[0] != "--id" || arguments[2] != "--exec-file" || arguments[4] != "--uid" || arguments[6] != "--gid" || arguments[8] != "--chroot-base-dir" || arguments[9] != declaredJailerBaseDirectory || arguments[10] != "--cgroup-version" || arguments[11] != "2" || arguments[12] != "--parent-cgroup" || !validRelativeCgroupPath(arguments[13]) || arguments[14] != "--cgroup" || arguments[16] != "--cgroup" || arguments[18] != "--cgroup" || arguments[20] != "--resource-limit" || arguments[22] != "--" || arguments[23] != "--api-sock" {
+	if len(arguments) != 25 || arguments[0] != "--id" || arguments[2] != "--exec-file" || arguments[4] != "--uid" || arguments[6] != "--gid" || arguments[8] != "--chroot-base-dir" || !approvedJailerBaseDirectory(arguments[9]) || arguments[10] != "--cgroup-version" || arguments[11] != "2" || arguments[12] != "--parent-cgroup" || !validRelativeCgroupPath(arguments[13]) || arguments[14] != "--cgroup" || arguments[16] != "--cgroup" || arguments[18] != "--cgroup" || arguments[20] != "--resource-limit" || arguments[22] != "--" || arguments[23] != "--api-sock" {
 		return parsedJailerExecution{}, false
 	}
 	uid, uidErr := strconv.ParseUint(arguments[5], 10, 32)

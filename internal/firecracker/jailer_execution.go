@@ -164,7 +164,7 @@ func jailerExecutionArguments(plan Plan, parent string) ([]string, error) {
 }
 
 func validJailerExecutionPlan(plan Plan) bool {
-	return validCompiledPlan(plan) && sameStrings(plan.jailerArguments, baseJailerArguments(plan.vmID, plan.firecracker.Path, plan.uid, plan.gid))
+	return validCompiledPlan(plan) && sameStrings(plan.jailerArguments, baseJailerArguments(plan.vmID, plan.firecracker.Path, plan.uid, plan.gid, plan.chrootBaseDir))
 }
 
 func mustJailerExecutionArguments(plan Plan, parent string) []string {
