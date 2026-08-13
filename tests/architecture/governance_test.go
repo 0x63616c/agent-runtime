@@ -130,6 +130,30 @@ var _ = Describe("binding governance", func() {
 		}
 	})
 
+	It("keeps direct Firecracker operator images explicitly dispatch-only and provenance-bound", func() {
+		workflow := read(".github/workflows/publish-firecracker-direct-images.yml")
+		for _, required := range []string{
+			"workflow_dispatch:",
+			"ghcr.io/${{ github.repository }}-direct-runner",
+			"ghcr.io/${{ github.repository }}-firecracker-fixture-builder",
+			"file: deploy/production/Dockerfile.direct-kvm-runner",
+			"Dockerfile.direct-fixture-builder",
+			"platforms: linux/amd64",
+			"push: true",
+			"provenance: mode=max",
+			"sbom: true",
+			"subject-digest: ${{ steps.build.outputs.digest }}",
+			"git bundle create",
+			"docker buildx imagetools inspect",
+			"agent-runtime.firecracker-direct-image-publication/v1",
+			"retention-days: 90",
+		} {
+			Expect(workflow).To(ContainSubstring(required))
+		}
+		Expect(workflow).NotTo(ContainSubstring("push:\n"))
+		Expect(workflow).NotTo(ContainSubstring("pull_request:"))
+	})
+
 	It("keeps the documented Stack image and role handoff reviewable", func() {
 		document := read("docs/operations/self-hosted-deployment.md")
 		Expect(document).To(ContainSubstring("jq -c '.orchestration')"))

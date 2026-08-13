@@ -1,0 +1,173 @@
+name: publish-firecracker-direct-images
+
+# The direct KVM runner and offline fixture-builder images are operator inputs,
+# not part of the ordinary application release. Publishing therefore requires
+# a deliberate workflow dispatch at the exact source revision to be used by
+# the reviewed home-server operation.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+  attestations: write
+  id-token: write
+
+jobs:
+  direct-runner:
+    name: publish-direct-kvm-runner
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      IMAGE: ghcr.io/${{ github.repository }}-direct-runner
+    steps:
+      - name: Check out immutable revision
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Record exact source revision
+        id: source
+        run: |
+          revision="$(git rev-parse --verify HEAD)"
+          test "$revision" = "${{ github.sha }}"
+          test -z "$(git status --porcelain)"
+          {
+            printf 'revision=%s\n' "$revision"
+            printf 'source_date_epoch=%s\n' "$(git show -s --format=%ct HEAD)"
+          } >> "$GITHUB_OUTPUT"
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@e468171a9de216ec08956ac3ada2f0791b6bd435 # v3.11.1
+      - name: Authenticate to GitHub Container Registry
+        uses: docker/login-action@74a5d142397b4f367a81961eba4e8cd7edddf772 # v3.4.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+      - name: Build and publish immutable Linux amd64 direct runner
+        id: build
+        uses: docker/build-push-action@263435318d21b8e681c14492fe198d362a7d2c83 # v6.18.0
+        with:
+          context: .
+          file: deploy/production/Dockerfile.direct-kvm-runner
+          platforms: linux/amd64
+          push: true
+          tags: ${{ env.IMAGE }}:${{ steps.source.outputs.revision }}
+          build-args: |
+            SOURCE_REVISION=${{ steps.source.outputs.revision }}
+            SOURCE_DATE_EPOCH=${{ steps.source.outputs.source_date_epoch }}
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ steps.source.outputs.revision }}
+          provenance: mode=max
+          sbom: true
+      - name: Attach signed immutable build provenance
+        uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3.0.0
+        with:
+          subject-name: ${{ env.IMAGE }}
+          subject-digest: ${{ steps.build.outputs.digest }}
+          push-to-registry: true
+      - name: Verify and retain publication identity
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+          REVISION: ${{ steps.source.outputs.revision }}
+        run: |
+          docker buildx imagetools inspect "$IMAGE@$DIGEST"
+          jq -n \
+            --arg image "$IMAGE" \
+            --arg digest "$DIGEST" \
+            --arg revision "$REVISION" \
+            --arg platform linux/amd64 \
+            --arg workflow_run "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
+            '{schema_version:1,kind:"agent-runtime.firecracker-direct-image-publication/v1",image:$image,digest:$digest,revision:$revision,platform:$platform,provenance:"github-attestation",sbom:"registry-attestation",workflow_run:$workflow_run}' \
+            > direct-runner-publication.json
+      - name: Retain redacted direct-runner publication record
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: firecracker-direct-runner-${{ steps.source.outputs.revision }}
+          path: direct-runner-publication.json
+          if-no-files-found: error
+          retention-days: 90
+
+  fixture-builder:
+    name: publish-direct-fixture-builder
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      IMAGE: ghcr.io/${{ github.repository }}-firecracker-fixture-builder
+    steps:
+      - name: Check out immutable revision
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Verify and seal fixture-builder source context
+        id: source
+        run: |
+          revision="$(git rev-parse --verify HEAD)"
+          test "$revision" = "${{ github.sha }}"
+          test -z "$(git status --porcelain)"
+          tools/firecracker/rootfs-builder/verify-source.sh
+          context="$RUNNER_TEMP/firecracker-fixture-builder"
+          mkdir -p "$context"
+          git archive --format=tar "$revision" | tar -x -C "$context"
+          git bundle create "$context/fixture-source.bundle" HEAD
+          rm -f "$context/.dockerignore"
+          test -f "$context/deploy/production/Dockerfile.direct-fixture-builder"
+          {
+            printf 'revision=%s\n' "$revision"
+            printf 'source_date_epoch=%s\n' "$(git show -s --format=%ct HEAD)"
+            printf 'context=%s\n' "$context"
+          } >> "$GITHUB_OUTPUT"
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@e468171a9de216ec08956ac3ada2f0791b6bd435 # v3.11.1
+      - name: Authenticate to GitHub Container Registry
+        uses: docker/login-action@74a5d142397b4f367a81961eba4e8cd7edddf772 # v3.4.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+      - name: Build and publish immutable Linux amd64 fixture builder
+        id: build
+        uses: docker/build-push-action@263435318d21b8e681c14492fe198d362a7d2c83 # v6.18.0
+        with:
+          context: ${{ steps.source.outputs.context }}
+          file: ${{ steps.source.outputs.context }}/deploy/production/Dockerfile.direct-fixture-builder
+          platforms: linux/amd64
+          push: true
+          tags: ${{ env.IMAGE }}:${{ steps.source.outputs.revision }}
+          build-args: |
+            SOURCE_REVISION=${{ steps.source.outputs.revision }}
+            SOURCE_DATE_EPOCH=${{ steps.source.outputs.source_date_epoch }}
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ steps.source.outputs.revision }}
+          provenance: mode=max
+          sbom: true
+      - name: Attach signed immutable build provenance
+        uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3.0.0
+        with:
+          subject-name: ${{ env.IMAGE }}
+          subject-digest: ${{ steps.build.outputs.digest }}
+          push-to-registry: true
+      - name: Verify and retain publication identity
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+          REVISION: ${{ steps.source.outputs.revision }}
+        run: |
+          docker buildx imagetools inspect "$IMAGE@$DIGEST"
+          jq -n \
+            --arg image "$IMAGE" \
+            --arg digest "$DIGEST" \
+            --arg revision "$REVISION" \
+            --arg platform linux/amd64 \
+            --arg workflow_run "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
+            '{schema_version:1,kind:"agent-runtime.firecracker-direct-image-publication/v1",image:$image,digest:$digest,revision:$revision,platform:$platform,provenance:"github-attestation",sbom:"registry-attestation",workflow_run:$workflow_run}' \
+            > fixture-builder-publication.json
+      - name: Retain redacted fixture-builder publication record
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: firecracker-fixture-builder-${{ steps.source.outputs.revision }}
+          path: fixture-builder-publication.json
+          if-no-files-found: error
+          retention-days: 90
