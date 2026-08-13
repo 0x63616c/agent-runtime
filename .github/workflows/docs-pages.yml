@@ -3,12 +3,6 @@ name: documentation-pages
 on:
   push:
     branches: [main]
-    paths:
-      - website/**
-      - skills/refresh-agent-runtime-docs/**
-      - internal/docsrefresh/**
-      - .github/workflows/docs-pages.yml
-      - Justfile
   workflow_dispatch:
 
 permissions:

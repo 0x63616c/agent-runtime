@@ -148,6 +148,7 @@ This index is derived only from the declared public `sdk/go` source files. It li
 | `method` | `InputID.String` | String returns the canonical Input ID. |
 | `method` | `InputID.UnmarshalJSON` | UnmarshalJSON decodes and validates an Input ID. |
 | `const` | `MaxApprovalsPerPage` | MaxApprovalsPerPage bounds one owner-scoped approval inbox response. |
+| `const` | `MaxArtifactBytes` | MaxArtifactBytes is the largest immutable Artifact the public runtime contract can retain and serve. Applications that use ArtifactStreamer must admit this complete contract size by default rather than failing a valid large result at the client boundary. |
 | `const` | `MaxArtifactsPerSession` | MaxArtifactsPerSession bounds one owner-scoped Session Artifact index response. |
 | `const` | `MaxIdempotencyKeyBytes` | MaxIdempotencyKeyBytes bounds one public idempotency key before transport-specific limits apply. |
 | `const` | `MaxInputParts` | MaxInputParts bounds the number of public Input parts accepted in one request. |
