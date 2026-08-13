@@ -31,6 +31,12 @@ type SecretLookup func(string) (string, bool)
 
 // Run starts the public API role and blocks until cancellation or server failure.
 func Run(ctx context.Context, config Config, lookup SecretLookup, ready func(string)) error {
+	return RunWithTelemetry(ctx, config, lookup, TelemetryProviders{}, ready)
+}
+
+// RunWithTelemetry starts the public API role with explicit OpenTelemetry
+// provider composition and blocks until cancellation or server failure.
+func RunWithTelemetry(ctx context.Context, config Config, lookup SecretLookup, providers TelemetryProviders, ready func(string)) error {
 	if ctx == nil || lookup == nil || ready == nil {
 		return errors.New("run runtime API process: context, secret lookup, and readiness callback are required")
 	}
@@ -39,18 +45,24 @@ func Run(ctx context.Context, config Config, lookup SecretLookup, ready func(str
 		return errors.Wrap(err, "run runtime API process: listen")
 	}
 	defer func() { _ = listener.Close() }()
-	return serve(ctx, config, lookup, listener, ready)
+	return serveWithTelemetry(ctx, config, lookup, providers, listener, ready)
 }
 
 // Check validates the strict declaration and required injected values without binding a listener or contacting dependencies.
 func Check(config Config, lookup SecretLookup) error {
+	return CheckWithTelemetry(config, lookup, TelemetryProviders{})
+}
+
+// CheckWithTelemetry validates the strict declaration and explicit telemetry
+// composition without binding a listener or contacting dependencies.
+func CheckWithTelemetry(config Config, lookup SecretLookup, providers TelemetryProviders) error {
 	if lookup == nil {
 		return errors.New("check runtime API process: secret lookup is required")
 	}
 	if _, err := newAuthenticator(config, lookup); err != nil {
 		return errors.Wrap(err, "check runtime API process")
 	}
-	if _, err := requestObservability(config, lookup, slog.New(slog.NewJSONHandler(io.Discard, nil))); err != nil {
+	if _, err := requestObservabilityWithProviders(config, lookup, slog.New(slog.NewJSONHandler(io.Discard, nil)), providers); err != nil {
 		return errors.Wrap(err, "check runtime API process")
 	}
 	if config.storage.mode != "postgres" {
@@ -67,14 +79,20 @@ func Check(config Config, lookup SecretLookup) error {
 
 // Serve runs the role on an already-owned listener so process tests need no timing guesses.
 func Serve(ctx context.Context, config Config, lookup SecretLookup, listener net.Listener) error {
-	return serve(ctx, config, lookup, listener, nil)
+	return ServeWithTelemetry(ctx, config, lookup, TelemetryProviders{}, listener)
 }
 
-func serve(ctx context.Context, config Config, lookup SecretLookup, listener net.Listener, announceReady func(string)) error {
+// ServeWithTelemetry runs the API role with explicit OpenTelemetry provider
+// composition on an already-owned listener.
+func ServeWithTelemetry(ctx context.Context, config Config, lookup SecretLookup, providers TelemetryProviders, listener net.Listener) error {
+	return serveWithTelemetry(ctx, config, lookup, providers, listener, nil)
+}
+
+func serveWithTelemetry(ctx context.Context, config Config, lookup SecretLookup, providers TelemetryProviders, listener net.Listener, announceReady func(string)) error {
 	if ctx == nil || lookup == nil || listener == nil {
 		return errors.New("serve runtime API process: context, secret lookup, and listener are required")
 	}
-	observability, err := requestObservability(config, lookup, slog.New(slog.NewJSONHandler(os.Stdout, nil)))
+	observability, err := requestObservabilityWithProviders(config, lookup, slog.New(slog.NewJSONHandler(os.Stdout, nil)), providers)
 	if err != nil {
 		return err
 	}

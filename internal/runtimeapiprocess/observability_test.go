@@ -5,11 +5,15 @@ import (
 	"context"
 	"encoding/json"
 	"log/slog"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/0x63616c/agent-runtime/internal/runtimeapi"
 	agentruntime "github.com/0x63616c/agent-runtime/sdk/go"
+	"go.opentelemetry.io/otel/sdk/metric"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 )
 
 func TestRequestObservabilityIsInertUntilExplicitlyConfigured(t *testing.T) {
@@ -78,5 +82,47 @@ func TestRequestObservabilityRefusesMissingOrWeakConfiguredKey(t *testing.T) {
 				t.Fatal("requestObservability() error = nil")
 			}
 		})
+	}
+}
+
+func TestRequestObservabilityUsesExplicitTelemetryProvidersWithoutReadingExporterConfiguration(t *testing.T) {
+	t.Parallel()
+	reader := metric.NewManualReader()
+	meterProvider := metric.NewMeterProvider(metric.WithReader(reader))
+	defer func() { _ = meterProvider.Shutdown(context.Background()) }()
+	exporter := tracetest.NewInMemoryExporter()
+	tracerProvider := sdktrace.NewTracerProvider(sdktrace.WithSyncer(exporter))
+	defer func() { _ = tracerProvider.Shutdown(context.Background()) }()
+
+	configured, err := requestObservabilityWithProviders(
+		Config{observabilityKeyEnvironment: "OBSERVABILITY_CORRELATION_KEY"},
+		func(string) (string, bool) { return "0123456789abcdef0123456789abcdef", true },
+		slog.New(slog.NewJSONHandler(&bytes.Buffer{}, nil)),
+		TelemetryProviders{MeterProvider: meterProvider, TracerProvider: tracerProvider},
+	)
+	if err != nil {
+		t.Fatalf("requestObservabilityWithProviders(): %v", err)
+	}
+	configured.Observer.ObserveRequest(context.Background(), runtimeapi.RequestObservation{
+		RequestID: agentruntime.RequestID("req_0000000000000001"), Operation: "create_session", Status: 201,
+		Outcome: runtimeapi.RequestOutcomeSucceeded, StartedAt: time.Date(2026, 8, 12, 18, 0, 0, 0, time.UTC), Duration: time.Millisecond,
+	})
+	if len(exporter.GetSpans()) != 1 {
+		t.Fatalf("explicit trace exporter spans = %d, want 1", len(exporter.GetSpans()))
+	}
+}
+
+func TestRequestObservabilityRejectsPartialTelemetryProviderComposition(t *testing.T) {
+	t.Parallel()
+	meterProvider := metric.NewMeterProvider()
+	defer func() { _ = meterProvider.Shutdown(context.Background()) }()
+	_, err := requestObservabilityWithProviders(
+		Config{observabilityKeyEnvironment: "OBSERVABILITY_CORRELATION_KEY"},
+		func(string) (string, bool) { return "0123456789abcdef0123456789abcdef", true },
+		slog.New(slog.NewJSONHandler(&bytes.Buffer{}, nil)),
+		TelemetryProviders{MeterProvider: meterProvider},
+	)
+	if err == nil || !strings.Contains(err.Error(), "supplied together") {
+		t.Fatalf("requestObservabilityWithProviders(partial) error = %v, want paired-provider refusal", err)
 	}
 }
