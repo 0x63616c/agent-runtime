@@ -4,10 +4,14 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
+	"crypto/x509"
+	"errors"
 	"flag"
 	"fmt"
 	"log/slog"
 	"net"
+	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
@@ -16,6 +20,8 @@ import (
 	"github.com/0x63616c/agent-runtime/internal/localdemoworker"
 	"github.com/0x63616c/agent-runtime/internal/roles"
 	"github.com/0x63616c/agent-runtime/internal/runtimeorchestration"
+	"github.com/0x63616c/agent-runtime/internal/tooldispatch"
+	"github.com/0x63616c/agent-runtime/sandbox"
 )
 
 func main() {
@@ -94,10 +100,77 @@ func run(ctx context.Context, arguments []string, lookup func(string) (string, b
 	if config.Role() == roles.RoleOrchestrationCodec {
 		return serveCodecWorker(ctx, config, plan, listener, lookup)
 	}
+	if config.Role() == roles.RoleToolDispatch {
+		return serveToolDispatch(ctx, config, listener, lookup)
+	}
 	if worker := config.LocalDemoWorker(); worker != nil && worker.Enabled {
 		return serveLocalDemoWorker(ctx, config, plan, listener, lookup, logger)
 	}
 	return roles.Serve(ctx, plan, listener)
+}
+
+func serveToolDispatch(ctx context.Context, config roles.Config, listener net.Listener, lookup func(string) (string, bool)) error {
+	declaration := config.ToolDispatch()
+	controlEndpoint, controlDeclared := config.DependencyEndpoint("sandbox-control")
+	if declaration == nil || !controlDeclared {
+		return fmt.Errorf("compose tool-dispatch role: validated dispatch/control configuration is required")
+	}
+	dsn, dsnFound := lookup("TOOL_DISPATCH_STATE_DSN")
+	accessKey, accessFound := lookup(declaration.ContentAccessKeyEnvironment)
+	secretKey, secretFound := lookup(declaration.ContentSecretKeyEnvironment)
+	controlToken, controlTokenFound := lookup(declaration.ControlCredentialEnvironment)
+	triggerToken, triggerTokenFound := lookup("TOOL_BROKER_TOKEN")
+	if !dsnFound || !accessFound || !secretFound || !controlTokenFound || !triggerTokenFound {
+		return fmt.Errorf("compose tool-dispatch role: required private credential is unavailable")
+	}
+	process, err := tooldispatch.NewProcess(ctx, triggerToken, tooldispatch.ProcessConfig{
+		DatabaseDSN:       dsn,
+		ContentEndpoint:   declaration.ContentEndpoint,
+		ContentBucket:     declaration.ContentBucket,
+		ContentAccessKey:  accessKey,
+		ContentSecretKey:  secretKey,
+		ControlEndpoint:   controlEndpoint,
+		ControlServerName: declaration.ControlServerName,
+		ControlTrust:      tooldispatch.MountedTrustSource{Path: declaration.ControlTrustBundlePath, Reference: sandbox.TrustBundleRef(declaration.ControlTrustBundleRef)},
+		ControlToken:      controlToken,
+		Claimer:           "tool-dispatch/" + config.Namespace(),
+	})
+	if err != nil {
+		return err
+	}
+	defer process.Close()
+	certificate, err := tls.LoadX509KeyPair(declaration.ServerCertificatePath, declaration.ServerPrivateKeyPath)
+	if err != nil {
+		return fmt.Errorf("compose tool-dispatch role: load TLS identity: %w", err)
+	}
+	leaf, err := x509.ParseCertificate(certificate.Certificate[0])
+	if err != nil || leaf.VerifyHostname(declaration.ServerName) != nil {
+		return fmt.Errorf("compose tool-dispatch role: TLS identity does not match declared server name")
+	}
+	server, err := tooldispatch.NewHTTPServer(process, certificate, declaration.PeerPolicy)
+	if err != nil {
+		return err
+	}
+	results := make(chan error, 1)
+	go func() { results <- server.ServeTLS(listener, "", "") }()
+	select {
+	case err := <-results:
+		if err == nil || errors.Is(err, http.ErrServerClosed) {
+			return nil
+		}
+		return fmt.Errorf("serve tool-dispatch role: %w", err)
+	case <-ctx.Done():
+		shutdownContext, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+		defer cancel()
+		if err := server.Shutdown(shutdownContext); err != nil {
+			return fmt.Errorf("stop tool-dispatch role: %w", err)
+		}
+		err := <-results
+		if err == nil || errors.Is(err, http.ErrServerClosed) {
+			return nil
+		}
+		return fmt.Errorf("serve tool-dispatch role: %w", err)
+	}
 }
 
 func serveLocalDemoWorker(ctx context.Context, config roles.Config, plan roles.Plan, listener net.Listener, lookup func(string) (string, bool), logger *slog.Logger) error {

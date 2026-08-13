@@ -8,6 +8,7 @@ import (
 	"io"
 	"net"
 	"net/url"
+	"path/filepath"
 	"regexp"
 	"slices"
 	"sort"
@@ -37,6 +38,8 @@ const (
 	RoleModel Role = "model"
 	// RoleTool executes policy-authorized tools with narrow tool authority.
 	RoleTool Role = "tool"
+	// RoleToolDispatch owns the private broker worker and its declared control adapter.
+	RoleToolDispatch Role = "tool-dispatch"
 	// RoleBlob serves the immutable blob plane with storage authority.
 	RoleBlob Role = "blob"
 	// RoleCodec provides the inspection-only Temporal UI codec endpoint.
@@ -71,7 +74,25 @@ type Config struct {
 	listenAddress string
 	dependencies  []dependency
 	worker        *WorkerConfig
+	toolDispatch  *ToolDispatchConfig
 	localDemo     *LocalDemoWorkerConfig
+}
+
+// ToolDispatchConfig declares the bounded private content and authenticated
+// sandbox-control capabilities of the broker-owned dispatch process.
+type ToolDispatchConfig struct {
+	ContentEndpoint              string `json:"content_endpoint"`
+	ContentBucket                string `json:"content_bucket"`
+	ContentAccessKeyEnvironment  string `json:"content_access_key_environment"`
+	ContentSecretKeyEnvironment  string `json:"content_secret_key_environment"`
+	ControlServerName            string `json:"control_server_name"`
+	ControlTrustBundleRef        string `json:"control_trust_bundle_ref"`
+	ControlTrustBundlePath       string `json:"control_trust_bundle_path"`
+	ControlCredentialEnvironment string `json:"control_credential_environment"`
+	ServerName                   string `json:"server_name"`
+	ServerCertificatePath        string `json:"server_certificate_path"`
+	ServerPrivateKeyPath         string `json:"server_private_key_path"`
+	PeerPolicy                   string `json:"peer_policy"`
 }
 
 // LocalDemoWorker returns the explicitly declared local-only fixture
@@ -198,6 +219,7 @@ type document struct {
 	ListenAddress string                 `json:"listen_address"`
 	Dependencies  []Dependency           `json:"dependencies"`
 	Worker        *WorkerConfig          `json:"worker,omitempty"`
+	ToolDispatch  *ToolDispatchConfig    `json:"tool_dispatch,omitempty"`
 	LocalDemo     *LocalDemoWorkerConfig `json:"local_demo_worker,omitempty"`
 }
 
@@ -227,6 +249,9 @@ var roleRequirements = map[Role][]requirement{
 	},
 	RoleTool: {
 		{name: "telemetry"}, {name: "tool-broker", secretEnvironment: "TOOL_BROKER_TOKEN"},
+	},
+	RoleToolDispatch: {
+		{name: "state", secretEnvironment: "TOOL_DISPATCH_STATE_DSN"}, {name: "content", secretEnvironment: "TOOL_DISPATCH_CONTENT_ACCESS_KEY"}, {name: "content-secret", secretEnvironment: "TOOL_DISPATCH_CONTENT_SECRET_KEY"}, {name: "sandbox-control", secretEnvironment: "TOOL_DISPATCH_CONTROL_TOKEN"}, {name: "tool-broker", secretEnvironment: "TOOL_BROKER_TOKEN"}, {name: "telemetry"},
 	},
 	RoleBlob: {
 		{name: "storage", secretEnvironment: "BLOB_STORAGE_CREDENTIAL"}, {name: "telemetry"},
@@ -313,7 +338,55 @@ func Parse(input io.Reader) (Config, error) {
 	if err := validateWorker(decoded.Role, decoded.Worker, decoded.LocalDemo); err != nil {
 		return Config{}, err
 	}
-	return Config{role: decoded.Role, namespace: decoded.Namespace, listenAddress: decoded.ListenAddress, dependencies: dependencies, worker: decoded.Worker, localDemo: decoded.LocalDemo}, nil
+	if err := validateToolDispatch(decoded.Role, decoded.ToolDispatch); err != nil {
+		return Config{}, err
+	}
+	if err := validateToolDispatchDependencies(decoded.Role, dependencies, decoded.ToolDispatch); err != nil {
+		return Config{}, err
+	}
+	return Config{role: decoded.Role, namespace: decoded.Namespace, listenAddress: decoded.ListenAddress, dependencies: dependencies, worker: decoded.Worker, toolDispatch: decoded.ToolDispatch, localDemo: decoded.LocalDemo}, nil
+}
+
+func (config Config) ToolDispatch() *ToolDispatchConfig {
+	if config.toolDispatch == nil {
+		return nil
+	}
+	clone := *config.toolDispatch
+	return &clone
+}
+
+func validateToolDispatch(role Role, config *ToolDispatchConfig) error {
+	if role != RoleToolDispatch {
+		if config != nil {
+			return errors.New("validate runtime role configuration: tool dispatch is only allowed for tool-dispatch")
+		}
+		return nil
+	}
+	if config == nil || !validHTTPSOrigin(config.ContentEndpoint) || !validWorkerSegment(config.ContentBucket) || config.ContentAccessKeyEnvironment != "TOOL_DISPATCH_CONTENT_ACCESS_KEY" || config.ContentSecretKeyEnvironment != "TOOL_DISPATCH_CONTENT_SECRET_KEY" || config.ControlCredentialEnvironment != "TOOL_DISPATCH_CONTROL_TOKEN" || config.ControlServerName == "" || config.ControlTrustBundleRef == "" || !filepath.IsAbs(config.ControlTrustBundlePath) || config.ServerName == "" || !filepath.IsAbs(config.ServerCertificatePath) || !filepath.IsAbs(config.ServerPrivateKeyPath) || config.PeerPolicy != "bearer-token-v1" {
+		return errors.New("validate runtime role configuration: tool dispatch capability is incomplete")
+	}
+	return nil
+}
+
+func validateToolDispatchDependencies(role Role, dependencies []dependency, config *ToolDispatchConfig) error {
+	for _, dependency := range dependencies {
+		if dependency.name == "tool-broker" && !validHTTPSOrigin(dependency.endpoint) {
+			return errors.New("validate runtime role configuration: tool broker requires an HTTPS origin")
+		}
+		if role == RoleToolDispatch && dependency.name == "content" && (config == nil || dependency.endpoint != config.ContentEndpoint) {
+			return errors.New("validate runtime role configuration: tool dispatch content dependency must equal declared content endpoint")
+		}
+		if role == RoleToolDispatch && dependency.name == "sandbox-control" && !validHTTPSOrigin(dependency.endpoint) {
+			return errors.New("validate runtime role configuration: tool dispatch sandbox control requires an HTTPS origin")
+		}
+		if role == RoleToolDispatch && dependency.name == "tool-broker" {
+			endpoint, err := url.Parse(dependency.endpoint)
+			if err != nil || config == nil || endpoint.Hostname() != config.ServerName {
+				return errors.New("validate runtime role configuration: tool dispatch server name must equal tool broker host")
+			}
+		}
+	}
+	return nil
 }
 
 // WithLocalDemoFixtureScenario replaces one already-declared local fixture
@@ -480,6 +553,11 @@ func validEndpoint(endpoint string) bool {
 	}
 	_, port, err := net.SplitHostPort(endpoint)
 	return err == nil && port != ""
+}
+
+func validHTTPSOrigin(endpoint string) bool {
+	parsed, err := url.Parse(endpoint)
+	return err == nil && parsed.Scheme == "https" && parsed.Host != "" && parsed.User == nil && parsed.RawQuery == "" && !parsed.ForceQuery && parsed.Fragment == "" && (parsed.Path == "" || parsed.Path == "/")
 }
 
 // Plan is a secret-safe prepared process composition. Secret values remain private.

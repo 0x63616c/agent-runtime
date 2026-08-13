@@ -5,11 +5,18 @@ package runtimetool_test
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
+	"crypto/rsa"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"encoding/pem"
 	"errors"
 	"fmt"
 	"io"
+	"math/big"
+	"net"
+	"net/http"
 	"net/http/httptest"
 	"os"
 	"runtime"
@@ -26,6 +33,7 @@ import (
 	"github.com/0x63616c/agent-runtime/internal/runtimetool"
 	"github.com/0x63616c/agent-runtime/internal/sandboxcontrol"
 	"github.com/0x63616c/agent-runtime/internal/sandboxcontrolapi"
+	"github.com/0x63616c/agent-runtime/internal/tooldispatch"
 	"github.com/0x63616c/agent-runtime/sandbox"
 	agentruntime "github.com/0x63616c/agent-runtime/sdk/go"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -34,6 +42,48 @@ import (
 )
 
 const durableOversizedToolOutputBytes = 8<<20 + 1
+
+// durableDispatchTLSServer exercises the same bounded TLS server constructor
+// used by the tool-dispatch process, rather than wrapping its handler in the
+// test server's unrelated TLS defaults.
+func durableDispatchTLSServer(t *testing.T, handler http.Handler) (string, *http.Client) {
+	t.Helper()
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	template := &x509.Certificate{SerialNumber: big.NewInt(1), DNSNames: []string{"localhost"}, NotBefore: time.Now().Add(-time.Minute), NotAfter: time.Now().Add(time.Hour), KeyUsage: x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment, ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}}
+	der, err := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	certificate := tls.Certificate{Certificate: [][]byte{der}, PrivateKey: key}
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	server, err := tooldispatch.NewHTTPServer(handler, certificate, "bearer-token-v1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	results := make(chan error, 1)
+	go func() { results <- server.ServeTLS(listener, "", "") }()
+	t.Cleanup(func() {
+		shutdown, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		_ = server.Shutdown(shutdown)
+		if err := <-results; err != nil && !errors.Is(err, http.ErrServerClosed) {
+			t.Errorf("stop durable dispatch TLS server: %v", err)
+		}
+	})
+	roots := x509.NewCertPool()
+	parsed, err := x509.ParseCertificate(der)
+	if err != nil {
+		t.Fatal(err)
+	}
+	roots.AddCert(parsed)
+	return "https://" + listener.Addr().String(), &http.Client{Transport: &http.Transport{TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS13, ServerName: "localhost", RootCAs: roots}}}
+}
 
 // TestDurableBrokeredToolLifecyclePersistsApprovalAndFinalization proves the
 // broker-to-artifact lifecycle against disposable PostgreSQL and MinIO. The
@@ -190,12 +240,44 @@ func TestDurableBrokeredToolLifecyclePersistsApprovalAndFinalization(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := worker.ScanOnce(ctx); err != nil {
+	dispatch, err := tooldispatch.NewBrokerServer("durable-trigger-token", worker)
+	if err != nil {
 		t.Fatal(err)
 	}
-	// A restart/replay finds the published outbox and immutable terminal state,
-	// so it cannot submit the external application operation a second time.
-	if err := worker.ScanOnce(ctx); err != nil {
+	dispatchURL, dispatchHTTPClient := durableDispatchTLSServer(t, dispatch)
+	dispatchClient, err := tooldispatch.NewClient(dispatchURL, "durable-trigger-token", dispatchHTTPClient)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := dispatchClient.DispatchOnce(ctx); err != nil {
+		t.Fatal(err)
+	}
+	// Restart the broker-owned worker after the effect has been durably
+	// finalized. Its trigger may scan only the same terminal state; it cannot
+	// submit the external application operation a second time.
+	pool.Close()
+	pool, err = pgxpool.New(ctx, dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err = runtimepostgres.NewRuntimeStateStore(pool, source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	restartedWorker, err := runtimetool.NewWorker(runtimetool.Config{Store: store, Tenants: store, Compiler: compiler, Planner: planner, Clock: source, Content: content, Adapter: adapter, Claimer: "durable-tool-worker-restarted", LeaseScheduler: newInertLeaseScheduler()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	restartedDispatch, err := tooldispatch.NewBrokerServer("durable-trigger-token", restartedWorker)
+	if err != nil {
+		t.Fatal(err)
+	}
+	restartedURL, restartedHTTPClient := durableDispatchTLSServer(t, restartedDispatch)
+	restartedClient, err := tooldispatch.NewClient(restartedURL, "durable-trigger-token", restartedHTTPClient)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := restartedClient.DispatchOnce(ctx); err != nil {
 		t.Fatal(err)
 	}
 	state, err = store.LoadRuntimeState(ctx, workerScope)
