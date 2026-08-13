@@ -5,17 +5,18 @@
 # fixture, alter a fixture lock, or start a microVM.
 set -eu
 
-if [ "$#" -ne 6 ]; then
-    echo "usage: $0 BUILDER-IMAGE@sha256:DIGEST STATIC-GUEST-AGENT OUTPUT EXT4-BYTES FIXED-UUID ATTESTATION-JSON" >&2
+if [ "$#" -ne 7 ]; then
+    echo "usage: $0 BUILDER-MANIFEST BUILDER-IMAGE@sha256:DIGEST STATIC-GUEST-AGENT OUTPUT EXT4-BYTES FIXED-UUID ATTESTATION-JSON" >&2
     exit 2
 fi
 
-builder_image=$1
-agent=$2
-output=$3
-size_bytes=$4
-uuid=$5
-attestation=$6
+builder_manifest=$1
+builder_image=$2
+agent=$3
+output=$4
+size_bytes=$5
+uuid=$6
+attestation=$7
 
 case "$builder_image" in
     *@sha256:????????????????????????????????????????????????????????????????) ;;
@@ -30,6 +31,9 @@ case "${builder_image#*@sha256:}" in
         exit 2
         ;;
 esac
+
+script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)
+"$script_dir/validate-rootfs-builder.sh" "$builder_manifest" "$builder_image"
 
 if [ -z "${SOURCE_DATE_EPOCH:-}" ] || printf '%s' "$SOURCE_DATE_EPOCH" | grep -q '[^0-9]'; then
     echo "SOURCE_DATE_EPOCH must be a fixed integer for a reproducible rootfs" >&2
@@ -79,6 +83,33 @@ if [ "$image_platform" != "linux/amd64" ]; then
     echo "BUILDER-IMAGE must be a locally present linux/amd64 image, got $image_platform" >&2
     exit 2
 fi
+
+builder_versions=$(python3 - "$builder_manifest" <<'PY'
+import json
+import sys
+with open(sys.argv[1], encoding='utf-8') as handle:
+    value = json.load(handle)
+print(value['e2fsprogs_version'])
+print(value['binutils_version'])
+PY
+)
+e2fsprogs_version=$(printf '%s\n' "$builder_versions" | sed -n '1p')
+binutils_version=$(printf '%s\n' "$builder_versions" | sed -n '2p')
+
+# Verify the reviewed toolchain before mounting any project or output bytes.
+# This invocation has no network, no writable filesystem, no capabilities, and
+# no project bind mount.
+docker run --rm --pull=never --platform linux/amd64 --network none --read-only \
+    --cap-drop ALL --security-opt no-new-privileges --tmpfs /tmp:rw,noexec,nosuid,size=32m \
+    -e "EXPECTED_E2FSPROGS_VERSION=$e2fsprogs_version" \
+    -e "EXPECTED_BINUTILS_VERSION=$binutils_version" \
+    "$builder_image" sh -ceu '
+        for command in awk grep install mke2fs mkdir mktemp readelf rm sha256sum tr truncate wc; do
+            command -v "$command" >/dev/null
+        done
+        mke2fs -V 2>&1 | grep -F "mke2fs $EXPECTED_E2FSPROGS_VERSION" >/dev/null
+        readelf --version 2>&1 | grep -F "$EXPECTED_BINUTILS_VERSION" >/dev/null
+    '
 
 exec docker run --rm --pull=never --platform linux/amd64 --network none --read-only \
     --cap-drop ALL --security-opt no-new-privileges --tmpfs /tmp:rw,noexec,nosuid,size=32m \
