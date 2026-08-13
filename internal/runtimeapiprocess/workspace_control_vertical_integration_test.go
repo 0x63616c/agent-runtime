@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"runtime"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -22,6 +23,7 @@ import (
 	"github.com/0x63616c/agent-runtime/internal/runtimetool"
 	"github.com/0x63616c/agent-runtime/internal/sandboxcontrol"
 	"github.com/0x63616c/agent-runtime/internal/sandboxcontrolapi"
+	"github.com/0x63616c/agent-runtime/internal/toolschema"
 	"github.com/0x63616c/agent-runtime/sandbox"
 	agentruntime "github.com/0x63616c/agent-runtime/sdk/go"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -61,9 +63,17 @@ func TestWorkspaceApprovalDispatchesOnlyItsSealedActionToSandboxControl(t *testi
 	defer stopAPI()
 	admin := durableProcessClient(t, baseURL, secrets["ADMIN_TOKEN"], &durableRequestIDs{})
 	alice := durableProcessClient(t, baseURL, secrets["ALICE_TOKEN"], &durableRequestIDs{})
-	agent, err := admin.CreateAgent(ctx, agentruntime.CreateAgentRequest{IdempotencyKey: "workspace-control-agent", Name: "workspace-control", ModelProfile: "balanced", Instructions: "request one approved workspace copy", Tools: []agentruntime.ToolDefinition{{Name: "workspace.copy", Description: "copy one declared artifact into a workspace"}}})
+	if _, err := admin.CreateAgent(ctx, agentruntime.CreateAgentRequest{IdempotencyKey: "workspace-control-invalid-tool-schema", Name: "invalid-tool-schema", ModelProfile: "balanced", Instructions: "must fail closed", Tools: []agentruntime.ToolDefinition{{Name: "workspace.copy", Description: "invalid catalog schema", InputSchemaVersion: toolschema.VersionV1, InputSchema: []byte(`{"type":"array"}`)}}}); err == nil {
+		t.Fatal("public Agent registration accepted an unsupported Tool input schema")
+	}
+	copySchema := []byte(`{"additionalProperties":false,"properties":{"copy_mode":{"enum":["safe"],"type":"string"}},"required":["copy_mode"],"type":"object"}`)
+	agent, err := admin.CreateAgent(ctx, agentruntime.CreateAgentRequest{IdempotencyKey: "workspace-control-agent", Name: "workspace-control", ModelProfile: "balanced", Instructions: "request one approved workspace copy", Tools: []agentruntime.ToolDefinition{{Name: "workspace.copy", Description: "copy one declared artifact into a workspace", InputSchemaVersion: toolschema.VersionV1, InputSchema: copySchema}}})
 	if err != nil {
 		t.Fatal(err)
+	}
+	registered, err := admin.GetAgentRevision(ctx, agent.ID, agent.RevisionID)
+	if err != nil || len(registered.Tools) != 1 || registered.Tools[0].Name != "workspace.copy" || registered.Tools[0].InputSchemaVersion != toolschema.VersionV1 || !bytes.Equal(registered.Tools[0].InputSchema, copySchema) {
+		t.Fatalf("public registered Tool schema = %#v, %v", registered.Tools, err)
 	}
 	policy, err := admin.CreatePolicy(ctx, agentruntime.CreatePolicyRequest{IdempotencyKey: "workspace-control-policy", Name: "workspace-copy", Rules: []agentruntime.PolicyRule{{ToolName: "workspace.copy", Decision: agentruntime.PolicyRequiresApproval}}})
 	if err != nil {
@@ -157,7 +167,8 @@ func TestWorkspaceApprovalDispatchesOnlyItsSealedActionToSandboxControl(t *testi
 		t.Fatalf("approve Workspace action through public API: %v", err)
 	}
 
-	ledger, adapter := workspaceControlAdapter(t, source)
+	ledger, sandboxAdapter := workspaceControlAdapter(t, source)
+	adapter := &recordingWorkspaceControlAdapter{delegate: sandboxAdapter}
 	tool, err := runtimetool.NewWorker(runtimetool.Config{Store: store, Tenants: store, Compiler: compiler, Planner: planner, Clock: source, Content: content, Adapter: adapter, Claimer: "workspace-control-tool", LeaseScheduler: runtimetool.NewRealtimeLeaseScheduler()})
 	if err != nil {
 		t.Fatal(err)
@@ -211,6 +222,10 @@ func TestWorkspaceApprovalDispatchesOnlyItsSealedActionToSandboxControl(t *testi
 	if err := <-completed; err != nil {
 		t.Fatalf("finalize approved sandbox-control action: %v", err)
 	}
+	requests := adapter.requests()
+	if len(requests) != 1 || string(requests[0].Arguments) != `{"copy_mode":"safe"}` {
+		t.Fatalf("registered Tool schema arguments at authorized adapter = %#v", requests)
+	}
 	tools, err := alice.InspectToolCalls(ctx, session.ID, accepted.Turn.ID)
 	if err != nil || len(tools.Calls) != 1 || tools.Calls[0].State != agentruntime.ToolCallSucceeded || tools.Calls[0].Execution == nil {
 		t.Fatalf("public finalized tool projection = %#v, %v", tools, err)
@@ -240,7 +255,51 @@ func (model workspaceControlModel) response(request runtimemodel.Request) (runti
 	if err != nil {
 		return runtimemodel.Response{}, err
 	}
-	return runtimemodel.Response{Tool: &runtimemodel.ToolRequest{ToolCallID: "tcall_workspace0000000", ApprovalID: "appr_workspace0000000", PolicyName: model.policy.Name, PolicyRevision: model.policy.Revision, ToolName: "workspace.copy", ActionDigest: "sha256:" + strings.Repeat("a", 64), CapabilityDigest: "sha256:" + strings.Repeat("b", 64), Action: agentruntime.ApprovalAction{Verb: "write", Target: "workspace-service"}, MaximumUses: 1, ExpiresAt: model.now.Add(time.Hour), Descriptor: descriptor, Arguments: []byte(`{}`)}}, nil
+	return runtimemodel.Response{Tool: &runtimemodel.ToolRequest{ToolCallID: "tcall_workspace0000000", ApprovalID: "appr_workspace0000000", PolicyName: model.policy.Name, PolicyRevision: model.policy.Revision, ToolName: "workspace.copy", ActionDigest: "sha256:" + strings.Repeat("a", 64), CapabilityDigest: "sha256:" + strings.Repeat("b", 64), Action: agentruntime.ApprovalAction{Verb: "write", Target: "workspace-service"}, MaximumUses: 1, ExpiresAt: model.now.Add(time.Hour), Descriptor: descriptor, Arguments: []byte(`{"copy_mode":"safe"}`)}}, nil
+}
+
+// recordingWorkspaceControlAdapter makes the private adapter boundary visible
+// to this vertical without granting the model a way to manufacture a control
+// request. The delegate retains the production dispatch capability check.
+type recordingWorkspaceControlAdapter struct {
+	delegate *runtimetool.SandboxAdapter
+	mu       sync.Mutex
+	values   []runtimetool.Request
+}
+
+func (adapter *recordingWorkspaceControlAdapter) ExternalEffectContract() runtimetool.ExternalEffectContract {
+	return adapter.delegate.ExternalEffectContract()
+}
+
+func (adapter *recordingWorkspaceControlAdapter) Execute(ctx context.Context, request runtimetool.Request) (runtimetool.Response, error) {
+	adapter.record(request)
+	return adapter.delegate.Execute(ctx, request)
+}
+
+func (adapter *recordingWorkspaceControlAdapter) Reconcile(ctx context.Context, request runtimetool.Request) (runtimetool.Response, error) {
+	adapter.record(request)
+	return adapter.delegate.Reconcile(ctx, request)
+}
+
+func (adapter *recordingWorkspaceControlAdapter) record(request runtimetool.Request) {
+	copy := request
+	copy.Descriptor = append([]byte(nil), request.Descriptor...)
+	copy.Arguments = append([]byte(nil), request.Arguments...)
+	adapter.mu.Lock()
+	adapter.values = append(adapter.values, copy)
+	adapter.mu.Unlock()
+}
+
+func (adapter *recordingWorkspaceControlAdapter) requests() []runtimetool.Request {
+	adapter.mu.Lock()
+	defer adapter.mu.Unlock()
+	values := make([]runtimetool.Request, len(adapter.values))
+	for index, request := range adapter.values {
+		values[index] = request
+		values[index].Descriptor = append([]byte(nil), request.Descriptor...)
+		values[index].Arguments = append([]byte(nil), request.Arguments...)
+	}
+	return values
 }
 
 func workspaceControlAdapter(t *testing.T, source clock.Clock) (*sandboxcontrol.MemoryLedger, *runtimetool.SandboxAdapter) {
