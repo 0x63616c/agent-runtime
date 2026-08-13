@@ -210,6 +210,12 @@ func smokeObservationFailureReason(err error) string {
 	switch {
 	case strings.Contains(message, "prepare jailed rootfs:"):
 		return prefix + ": Jailer fixture staging failed"
+	case strings.Contains(message, "await Firecracker API socket"):
+		// The Jailer has been started, but Firecracker did not expose its
+		// private API socket before the bounded launch context ended. Keep the
+		// host-specific Jailer stderr out of the durable report while retaining
+		// the actionable lifecycle boundary.
+		return prefix + ": Firecracker API socket was not observed"
 	case strings.Contains(message, "launch jailer:"):
 		return prefix + ": Jailer or Firecracker launch failed"
 	case strings.Contains(message, "await guest serial marker:"):
