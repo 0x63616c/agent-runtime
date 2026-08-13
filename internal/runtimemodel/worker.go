@@ -30,6 +30,11 @@ type Request struct {
 	SessionID   agentruntime.SessionID
 	TurnID      agentruntime.TurnID
 	OperationID runtimestate.OperationID
+	// ModelProfile is the immutable Agent-revision selection key. It is a
+	// declarative profile name, not a provider model identifier, endpoint, or
+	// credential. The model worker resolves it locally through its reviewed
+	// profile adapter before it contacts any provider.
+	ModelProfile string
 	// CreatedAt is the durable invocation creation time. Adapters use it only
 	// for deterministic response values that must remain identical during
 	// recovery; it is not the current wall clock.
@@ -176,7 +181,14 @@ func (worker *Worker) process(ctx context.Context, record runtimestate.OutboxRec
 	if invocation.State != runtimestate.InvocationIntent {
 		return nil
 	}
-	request := Request{Tenant: record.Tenant, SessionID: record.SessionID, TurnID: record.TurnID, OperationID: record.OperationID, CreatedAt: invocation.CreatedAt}
+	// Read the revision-owned specification before calling the provider. This
+	// both makes model selection revision-pinned and prevents an adapter from
+	// inferring a profile from prompt content or a mutable public request.
+	specification, err := worker.agentSpecification(ctx, record.Tenant, session)
+	if err != nil {
+		return err
+	}
+	request := Request{Tenant: record.Tenant, SessionID: record.SessionID, TurnID: record.TurnID, OperationID: record.OperationID, ModelProfile: specification.ModelProfile, CreatedAt: invocation.CreatedAt}
 	var response Response
 	if recovering {
 		response, err = worker.adapter.Reconcile(ctx, request)
@@ -189,10 +201,6 @@ func (worker *Worker) process(ctx context.Context, record runtimestate.OutboxRec
 	if response.Tool != nil {
 		if worker.broker == nil {
 			return errors.New("admit model tool request: broker is unavailable")
-		}
-		specification, readErr := worker.agentSpecification(ctx, record.Tenant, session)
-		if readErr != nil {
-			return readErr
 		}
 		definition, found := declaredTool(specification.Tools, response.Tool.ToolName)
 		if !found {

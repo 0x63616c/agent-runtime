@@ -80,6 +80,9 @@ func TestWorkerFinalizesNewAndRecoveredModelIntentsWithoutBlindReinvoke(t *testi
 			if adapter.invocations != test.wantInvoke || adapter.reconciliations != test.wantRecon || adapter.last.OperationID != invocation.OperationID {
 				t.Fatalf("adapter calls = invoke=%d reconcile=%d request=%#v", adapter.invocations, adapter.reconciliations, adapter.last)
 			}
+			if adapter.last.ModelProfile != "balanced" {
+				t.Fatalf("adapter request model profile = %q, want revision-pinned balanced", adapter.last.ModelProfile)
+			}
 			state, err := store.LoadRuntimeState(ctx, runtimestate.MutationScope{Tenant: tenant, Authority: runtimestate.AuthorityRuntimeWorker})
 			if err != nil {
 				t.Fatal(err)
