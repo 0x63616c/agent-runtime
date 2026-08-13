@@ -31,6 +31,11 @@ func run() error {
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
+	if config.HasOTLPExporter() {
+		return runtimeapiprocess.RunWithExportingTelemetry(ctx, config, os.LookupEnv, func(address string) {
+			logger.Info("runtime API ready", "role", "agent-runtime-api", "address", address)
+		})
+	}
 	return runtimeapiprocess.Run(ctx, config, os.LookupEnv, func(address string) {
 		logger.Info("runtime API ready", "role", "agent-runtime-api", "address", address)
 	})

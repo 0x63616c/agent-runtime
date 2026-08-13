@@ -48,6 +48,24 @@ func RunWithTelemetry(ctx context.Context, config Config, lookup SecretLookup, p
 	return serveWithTelemetry(ctx, config, lookup, providers, listener, ready)
 }
 
+// RunWithExportingTelemetry starts the API with its declared paired OTLP
+// telemetry pipeline and flushes it during process shutdown.
+func RunWithExportingTelemetry(ctx context.Context, config Config, lookup SecretLookup, ready func(string)) error {
+	if config.observabilityOTLPGRPCEndpoint == "" {
+		return errors.New("run runtime API process: observability OTLP gRPC endpoint is required for exporter composition")
+	}
+	telemetry, err := NewExportingTelemetry(ctx, config.observabilityOTLPGRPCEndpoint)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		shutdownContext, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		_ = telemetry.Shutdown(shutdownContext)
+	}()
+	return RunWithTelemetry(ctx, config, lookup, telemetry.Providers, ready)
+}
+
 // Check validates the strict declaration and required injected values without binding a listener or contacting dependencies.
 func Check(config Config, lookup SecretLookup) error {
 	return CheckWithTelemetry(config, lookup, TelemetryProviders{})

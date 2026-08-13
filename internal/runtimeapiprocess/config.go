@@ -7,6 +7,7 @@ import (
 	"io"
 	"net"
 	"regexp"
+	"strings"
 
 	"github.com/0x63616c/agent-runtime/internal/runtimeapi"
 	"github.com/0x63616c/agent-runtime/internal/runtimecontent"
@@ -17,12 +18,13 @@ var environmentName = regexp.MustCompile(`^[A-Z_][A-Z0-9_]{0,127}$`)
 
 // Config is a validated immutable runtime API process declaration.
 type Config struct {
-	listenAddress               string
-	modelProfiles               []string
-	maxRequestBytes             int64
-	principals                  []principal
-	observabilityKeyEnvironment string
-	storage                     storage
+	listenAddress                 string
+	modelProfiles                 []string
+	maxRequestBytes               int64
+	principals                    []principal
+	observabilityKeyEnvironment   string
+	observabilityOTLPGRPCEndpoint string
+	storage                       storage
 }
 
 type document struct {
@@ -56,6 +58,7 @@ type storage struct {
 
 type observabilityDocument struct {
 	IdentityCorrelationKeyEnvironment string `json:"identity_correlation_key_environment"`
+	OTLPGRPCEndpoint                  string `json:"otlp_grpc_endpoint"`
 }
 
 type principalDocument struct {
@@ -69,6 +72,10 @@ type principal struct {
 	identity    runtimeapi.Identity
 	environment string
 }
+
+// HasOTLPExporter reports whether this exact declaration opts into the
+// explicit paired exporter path. It never reads ambient environment settings.
+func (config Config) HasOTLPExporter() bool { return config.observabilityOTLPGRPCEndpoint != "" }
 
 // Parse decodes exactly one strict, versioned process declaration.
 func Parse(input io.Reader) (Config, error) {
@@ -134,6 +141,7 @@ func Parse(input io.Reader) (Config, error) {
 		principals[index] = principal{identity: runtimeapi.Identity{Tenant: configured.Tenant, Principal: configured.Principal, Admin: configured.Admin}, environment: configured.BearerTokenEnvironment}
 	}
 	observabilityKeyEnvironment := ""
+	observabilityOTLPGRPCEndpoint := ""
 	if decoded.Observability != nil {
 		if bytes.Equal(bytes.TrimSpace(decoded.Observability), []byte("null")) {
 			return Config{}, errors.New("validate runtime API configuration: observability must be an object")
@@ -145,9 +153,35 @@ func Parse(input io.Reader) (Config, error) {
 		if !environmentName.MatchString(observability.IdentityCorrelationKeyEnvironment) {
 			return Config{}, errors.New("validate runtime API configuration: observability identity correlation key environment is invalid")
 		}
+		if !validOTLPGRPCEndpoint(observability.OTLPGRPCEndpoint) {
+			return Config{}, errors.New("validate runtime API configuration: observability OTLP gRPC endpoint is invalid")
+		}
 		observabilityKeyEnvironment = observability.IdentityCorrelationKeyEnvironment
+		observabilityOTLPGRPCEndpoint = observability.OTLPGRPCEndpoint
 	}
-	return Config{listenAddress: decoded.ListenAddress, modelProfiles: append([]string(nil), decoded.ModelProfiles...), maxRequestBytes: decoded.MaxRequestBytes, principals: principals, observabilityKeyEnvironment: observabilityKeyEnvironment, storage: storage}, nil
+	return Config{listenAddress: decoded.ListenAddress, modelProfiles: append([]string(nil), decoded.ModelProfiles...), maxRequestBytes: decoded.MaxRequestBytes, principals: principals, observabilityKeyEnvironment: observabilityKeyEnvironment, observabilityOTLPGRPCEndpoint: observabilityOTLPGRPCEndpoint, storage: storage}, nil
+}
+
+// validOTLPGRPCEndpoint accepts only an explicit in-cluster DNS name and port.
+// A telemetry endpoint is a routing declaration, never a URL, credential, or
+// caller-controlled header source.
+func validOTLPGRPCEndpoint(value string) bool {
+	if value == "" {
+		return true
+	}
+	if len(value) > 253 || strings.ContainsAny(value, "/?#@ \t\r\n") {
+		return false
+	}
+	host, port, err := net.SplitHostPort(value)
+	if err != nil || host == "" || port != "4317" || (host != "otel-collector" && !strings.HasPrefix(host, "otel-collector.")) {
+		return false
+	}
+	for _, label := range strings.Split(host, ".") {
+		if label == "" || len(label) > 63 || !regexp.MustCompile(`^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$`).MatchString(label) {
+			return false
+		}
+	}
+	return true
 }
 
 func parseObservability(value json.RawMessage) (observabilityDocument, error) {
