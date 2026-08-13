@@ -175,7 +175,7 @@ func (daemon *LinuxJailedSharingDaemon) Attach(ctx context.Context, request Jail
 	if err != nil {
 		return fmt.Errorf("attach Linux jailed share: %w", ErrCapabilityUnavailable)
 	}
-	defer unix.Close(targetFD)
+	defer func() { _ = unix.Close(targetFD) }()
 	if err := mountLinuxShare(ctx, daemon.namespaceFD, export.fd, targetFD, request.Mode); err != nil {
 		return err
 	}
@@ -215,7 +215,7 @@ func (daemon *LinuxJailedSharingDaemon) Detach(ctx context.Context, request Jail
 	if err != nil {
 		return fmt.Errorf("detach Linux jailed share: %w", ErrCapabilityUnavailable)
 	}
-	defer unix.Close(targetFD)
+	defer func() { _ = unix.Close(targetFD) }()
 	if err := unmountLinuxShare(ctx, daemon.namespaceFD, targetFD); err != nil {
 		return err
 	}
@@ -331,7 +331,7 @@ func withLinuxMountNamespace(namespaceFD int, action func() error) (err error) {
 	if openErr != nil {
 		return fmt.Errorf("open current Linux mount namespace: %w", openErr)
 	}
-	defer unix.Close(currentFD)
+	defer func() { _ = unix.Close(currentFD) }()
 	if err := unix.Setns(namespaceFD, unix.CLONE_NEWNS); err != nil {
 		return fmt.Errorf("enter Linux jailed mount namespace: %w", err)
 	}

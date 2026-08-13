@@ -5,7 +5,9 @@ package main
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
+	"os"
 	"os/exec"
 	"testing"
 	"time"
@@ -95,8 +97,16 @@ func TestGuestSecretSinkRefusesAProcessWithoutTheFixedAnonymousDescriptor(t *tes
 	if err := command.Start(); err != nil {
 		t.Fatal(err)
 	}
-	defer command.Process.Kill()
-	defer stdinWriter.Close()
+	defer func() {
+		if killErr := command.Process.Kill(); killErr != nil && !errors.Is(killErr, os.ErrProcessDone) {
+			t.Error(killErr)
+		}
+	}()
+	defer func() {
+		if closeErr := stdinWriter.Close(); closeErr != nil {
+			t.Error(closeErr)
+		}
+	}()
 	if err := sink.BindRunningProcess(context.Background(), request, command.Process.Pid); err == nil {
 		t.Fatal("BindRunningProcess() accepted a process without the secret fd")
 	}

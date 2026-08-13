@@ -5,7 +5,6 @@ package main
 import (
 	"context"
 	"fmt"
-	"os"
 	"path"
 	"strconv"
 	"strings"
@@ -48,38 +47,6 @@ type guestCgroupTreeReapVerifier struct {
 	expectedPath  string
 	root          guestCgroupRoot
 	processCgroup func(int) ([]byte, error)
-}
-
-func newGuestCgroupTreeReapVerifier(cgroupDirectory string) (*guestCgroupTreeReapVerifier, error) {
-	if !validGuestSecretCgroupDirectory(cgroupDirectory) {
-		return nil, fmt.Errorf("create guest secret cgroup verifier: exact cgroup v2 subtree is required")
-	}
-	root, err := os.OpenRoot(cgroupDirectory)
-	if err != nil {
-		return nil, fmt.Errorf("create guest secret cgroup verifier: open protected subtree: %w", err)
-	}
-	verifier, err := newGuestCgroupTreeReapVerifierWithRoot(strings.TrimPrefix(cgroupDirectory, guestCgroupV2Root), root, func(pid int) ([]byte, error) {
-		return os.ReadFile("/proc/" + strconv.Itoa(pid) + "/cgroup")
-	})
-	if err != nil {
-		_ = root.Close()
-		return nil, err
-	}
-	return verifier, nil
-}
-
-// newGuestCgroupTreeReapVerifierFromManifest is the narrow guest-side wiring
-// point for the host-composed unavailable secret-containment manifest. The
-// manifest must retain every fixed cgroup, tmpfs, proc and snapshot-exclusion
-// declaration before the verifier opens its cgroup subtree. It does not make
-// those declarations true; the protected Jailer/rootfs profile must prove
-// them before secret capability promotion.
-func newGuestCgroupTreeReapVerifierFromManifest(manifest firecracker.SecretContainmentManifest, vmID string) (*guestCgroupTreeReapVerifier, error) {
-	directory, err := guestSecretCgroupDirectoryFromManifest(manifest, vmID)
-	if err != nil {
-		return nil, err
-	}
-	return newGuestCgroupTreeReapVerifier(directory)
 }
 
 func guestSecretCgroupDirectoryFromManifest(manifest firecracker.SecretContainmentManifest, vmID string) (string, error) {

@@ -29,7 +29,11 @@ func TestLinuxJailedSharingDaemonPinsDescriptorAcrossExportReplacement(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer daemon.Close()
+	defer func() {
+		if closeErr := daemon.Close(); closeErr != nil {
+			t.Error(closeErr)
+		}
+	}()
 	stalePath := filepath.Join(root, "export-stale")
 	if err := os.Rename(exportPath, stalePath); err != nil {
 		t.Fatal(err)

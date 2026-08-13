@@ -9,6 +9,7 @@ check:
     go mod verify
     go test -race ./...
     go vet ./...
+    GOOS=linux GOARCH=amd64 golangci-lint run --timeout=5m
     go run ./cmd/no-real-wait --root .
     go run ./cmd/ledger-report --catalog evidence/requirements-catalog.json --ledger evidence/requirements-ledger.json
 
