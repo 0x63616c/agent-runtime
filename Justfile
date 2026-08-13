@@ -25,6 +25,11 @@ verify: check
 # Compatibility alias for the final completion gate.
 completion-check: verify
 
+# Writes the exact immutable release hand-off for a clean main checkout. This
+# command is read-only: it neither tags nor publishes a release.
+release-readiness tag="":
+    go run ./cmd/release-readiness -tag "{{tag}}"
+
 # Runs the Research Dossier public end-to-end proof against a freshly composed
 # disposable PostgreSQL and MinIO dependency set. The test starts its own
 # disposable Temporal dev server and retains no evidence artifact.
