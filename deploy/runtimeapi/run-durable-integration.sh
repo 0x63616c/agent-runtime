@@ -5,6 +5,7 @@ repository_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 compose_file="$repository_root/deploy/runtimeapi/compose.integration.yaml"
 migration_root="$repository_root/deploy/production/migrations"
 mode="full"
+report_file=""
 case "$#" in
   0) ;;
   1)
@@ -17,14 +18,32 @@ case "$#" in
         ;;
     esac
     ;;
+  2)
+    if [[ "$1" == "--research-dossier-only" && "$2" == --report=* ]]; then
+      mode="research-dossier-only"
+      report_file=${2#--report=}
+    else
+      echo "usage: run-durable-integration.sh [--research-dossier-only [--report=path]|--runtime-api-binary-only]" >&2
+      exit 1
+    fi
+    ;;
   *)
-    echo "usage: run-durable-integration.sh [--research-dossier-only|--runtime-api-binary-only]" >&2
+    echo "usage: run-durable-integration.sh [--research-dossier-only [--report=path]|--runtime-api-binary-only]" >&2
     exit 1
     ;;
 esac
 environment_file=$(mktemp)
 backup_directory=$(mktemp -d)
 project_name="agent-runtime-api-$RANDOM-$RANDOM"
+if [[ "$mode" == "research-dossier-only" && -n "$report_file" ]]; then
+  if [[ "$(git -C "$repository_root" symbolic-ref --quiet --short HEAD)" != "main" ]] ||
+    [[ "$(git -C "$repository_root" rev-parse HEAD)" != "$(git -C "$repository_root" rev-parse refs/heads/main)" ]] ||
+    [[ -n "$(git -C "$repository_root" status --porcelain)" ]]; then
+    echo "refusing to run report-producing Research Dossier proof outside a clean current main checkout" >&2
+    exit 1
+  fi
+  proof_revision=$(git -C "$repository_root" rev-parse HEAD)
+fi
 
 cleanup() {
   docker compose --project-name "$project_name" --env-file "$environment_file" --file "$compose_file" down --volumes --remove-orphans >/dev/null 2>&1 || true
@@ -77,6 +96,11 @@ if [[ "$mode" == "research-dossier-only" ]]; then
   AR_RUNTIME_API_WORKER_POSTGRES_DSN="$runtime_worker_dsn" \
     go test -race -tags=integration ./internal/runtimeapiprocess \
     -run '^TestResearchDossierRecoversLongRunningToolResearchThroughThePublicContract$' -count=1
+  if [[ -n "$report_file" ]]; then
+    completed_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+    go run ./cmd/research-dossier-evidence -mode record -repository-root "$repository_root" -file "$report_file" -revision "$proof_revision" -completed-at "$completed_at"
+    go run ./cmd/research-dossier-evidence -mode validate -file "$report_file"
+  fi
   exit 0
 fi
 

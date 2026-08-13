@@ -30,11 +30,11 @@ completion-check: verify
 release-readiness tag="" hosted_runs="":
     go run ./cmd/release-readiness -tag "{{tag}}" -hosted-runs "{{hosted_runs}}"
 
-# Runs the Research Dossier public end-to-end proof against a freshly composed
-# disposable PostgreSQL and MinIO dependency set. The test starts its own
-# disposable Temporal dev server and retains no evidence artifact.
-research-dossier-e2e:
-    deploy/runtimeapi/run-durable-integration.sh --research-dossier-only
+# Runs the Research Dossier public end-to-end proof against freshly composed
+# disposable PostgreSQL, MinIO, and Temporal dependencies. Supplying `report`
+# writes a strict redacted report only after the command passes.
+research-dossier-e2e report="":
+    if [ -n "{{report}}" ]; then deploy/runtimeapi/run-durable-integration.sh --research-dossier-only --report="{{report}}"; else deploy/runtimeapi/run-durable-integration.sh --research-dossier-only; fi
 
 # Builds and starts the separately deployed durable API binary with the
 # production Stack's config-env/secret naming against disposable PostgreSQL
