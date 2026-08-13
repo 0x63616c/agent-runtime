@@ -44,7 +44,11 @@ git archive --format=tar "$revision" | tar -x -C "$staging_root"
 # The repository production .dockerignore intentionally excludes the fixture
 # source and bundle.  This isolated, generated build context needs both.
 rm -f "$staging_root/.dockerignore"
-git bundle create "$staging_root/fixture-source.bundle" "$revision"
+# `git bundle create` expects a revision expression which resolves through a
+# ref on older Git versions; the full object ID alone can be rejected as an
+# empty bundle.  HEAD is safe here because the clean-checkout check above and
+# SOURCE_REVISION bind the image to this exact commit.
+git bundle create "$staging_root/fixture-source.bundle" HEAD
 cp "$workspace_root/deploy/production/Dockerfile.direct-fixture-builder" "$staging_root/deploy/production/Dockerfile.direct-fixture-builder"
 
 arguments=(
