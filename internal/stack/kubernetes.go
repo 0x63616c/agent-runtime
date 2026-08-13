@@ -265,6 +265,17 @@ type kubernetesVolume struct {
 	Name                  string                           `json:"name"`
 	PersistentVolumeClaim *kubernetesPersistentVolumeClaim `json:"persistentVolumeClaim,omitempty"`
 	ConfigMap             *kubernetesConfigMapVolume       `json:"configMap,omitempty"`
+	Secret                *kubernetesSecretVolume          `json:"secret,omitempty"`
+}
+
+type kubernetesSecretVolume struct {
+	SecretName string                       `json:"secretName"`
+	Items      []kubernetesSecretVolumeItem `json:"items"`
+}
+
+type kubernetesSecretVolumeItem struct {
+	Key  string `json:"key"`
+	Path string `json:"path"`
 }
 
 type kubernetesPersistentVolumeClaim struct {
@@ -353,8 +364,8 @@ func marshalWorkloadSpec(resource Resource, namespace, stack string, profile Pro
 		secret := resources[variable.Secret].SecretReference
 		environment = append(environment, kubernetesEnvironmentVariable{Name: variable.Name, ValueFrom: &kubernetesEnvironmentValueFrom{SecretKeyRef: kubernetesSecretKeyReference{Name: secret.Reference, Key: variable.Key}}})
 	}
-	volumes := make([]kubernetesVolume, 0, len(object.VolumeMounts)+len(object.ConfigMapMounts))
-	mounts := make([]kubernetesVolumeMount, 0, len(object.VolumeMounts)+len(object.ConfigMapMounts))
+	volumes := make([]kubernetesVolume, 0, len(object.VolumeMounts)+len(object.ConfigMapMounts)+len(object.SecretMounts))
+	mounts := make([]kubernetesVolumeMount, 0, len(object.VolumeMounts)+len(object.ConfigMapMounts)+len(object.SecretMounts))
 	for _, mount := range object.VolumeMounts {
 		claim := resources[mount.Claim].Kubernetes
 		volumes = append(volumes, kubernetesVolume{Name: string(mount.Claim), PersistentVolumeClaim: &kubernetesPersistentVolumeClaim{ClaimName: claim.Name, ReadOnly: mount.ReadOnly}})
@@ -367,6 +378,12 @@ func marshalWorkloadSpec(resource Resource, namespace, stack string, profile Pro
 		// A ConfigMap volume is a directory. The Stack contract names Path as a
 		// file path, so project its one declared key through subPath rather than
 		// replacing that file with a directory.
+		mounts = append(mounts, kubernetesVolumeMount{Name: volumeName, MountPath: mount.Path, SubPath: mount.Key, ReadOnly: true})
+	}
+	for index, mount := range object.SecretMounts {
+		secret := resources[mount.Secret].SecretReference
+		volumeName := fmt.Sprintf("%s-%d", mount.Secret, index)
+		volumes = append(volumes, kubernetesVolume{Name: volumeName, Secret: &kubernetesSecretVolume{SecretName: secret.Reference, Items: []kubernetesSecretVolumeItem{{Key: mount.Key, Path: mount.Key}}}})
 		mounts = append(mounts, kubernetesVolumeMount{Name: volumeName, MountPath: mount.Path, SubPath: mount.Key, ReadOnly: true})
 	}
 	container := kubernetesContainer{

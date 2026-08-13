@@ -294,6 +294,9 @@ func validateTypedReferences(resource Resource, resources map[ResourceID]Resourc
 		for _, mount := range resource.Kubernetes.ConfigMapMounts {
 			required[mount.ConfigMap] = ResourceKubernetes
 		}
+		for _, mount := range resource.Kubernetes.SecretMounts {
+			required[mount.Secret] = ResourceSecretReference
+		}
 		for _, rule := range resource.Kubernetes.IngressRules {
 			required[rule.Service] = ResourceKubernetes
 		}
@@ -335,6 +338,11 @@ func validateTypedReferences(resource Resource, resources map[ResourceID]Resourc
 					if _, found := target.Kubernetes.Data[mount.Key]; !found {
 						return errors.Newf("resource %s ConfigMap mount key %s is not declared by %s", resource.ID, mount.Key, reference)
 					}
+				}
+			}
+			for _, mount := range resource.Kubernetes.SecretMounts {
+				if mount.Secret == reference && !containsSecretKey(target.SecretReference, mount.Key) {
+					return errors.Newf("resource %s Secret mount key %s is not declared by %s", resource.ID, mount.Key, reference)
 				}
 			}
 			for _, rule := range resource.Kubernetes.IngressRules {

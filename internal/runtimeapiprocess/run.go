@@ -5,6 +5,8 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/subtle"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"io"
 	"log/slog"
@@ -86,7 +88,7 @@ func CheckWithTelemetry(config Config, lookup SecretLookup, providers TelemetryP
 	if config.storage.mode != "postgres" {
 		return nil
 	}
-	for _, environment := range []string{config.storage.databaseDSNEnvironment, config.storage.content.AccessKeyEnvironment, config.storage.content.SecretKeyEnvironment} {
+	for _, environment := range []string{config.storage.databaseDSNEnvironment, config.storage.content.accessKeyEnvironment, config.storage.content.secretKeyEnvironment} {
 		value, found := lookup(environment)
 		if !found || value == "" {
 			return errors.New("check runtime API process: required durable storage environment value is missing")
@@ -246,11 +248,11 @@ func composeRuntime(ctx context.Context, config Config, lookup SecretLookup, ids
 	if !found || dsn == "" {
 		return nil, nil, errors.New("compose runtime API process: required PostgreSQL DSN is missing")
 	}
-	accessKey, found := lookup(config.storage.content.AccessKeyEnvironment)
+	accessKey, found := lookup(config.storage.content.accessKeyEnvironment)
 	if !found || accessKey == "" {
 		return nil, nil, errors.New("compose runtime API process: required content access key is missing")
 	}
-	secretKey, found := lookup(config.storage.content.SecretKeyEnvironment)
+	secretKey, found := lookup(config.storage.content.secretKeyEnvironment)
 	if !found || secretKey == "" {
 		return nil, nil, errors.New("compose runtime API process: required content secret key is missing")
 	}
@@ -268,7 +270,20 @@ func composeRuntime(ctx context.Context, config Config, lookup SecretLookup, ids
 		cleanup()
 		return nil, nil, err
 	}
-	client, err := minio.New(config.storage.content.Endpoint, &minio.Options{Creds: credentials.NewStaticV4(accessKey, secretKey, ""), Secure: false})
+	options := &minio.Options{Creds: credentials.NewStaticV4(accessKey, secretKey, ""), Secure: config.storage.content.secure}
+	if config.storage.content.secure {
+		roots, err := x509.SystemCertPool()
+		if err != nil || roots == nil {
+			roots = x509.NewCertPool()
+		}
+		certificate, err := os.ReadFile(config.storage.content.caFile)
+		if err != nil || !roots.AppendCertsFromPEM(certificate) {
+			cleanup()
+			return nil, nil, errors.New("compose runtime API process: read declared content TLS CA")
+		}
+		options.Transport = &http.Transport{TLSClientConfig: &tls.Config{RootCAs: roots, MinVersion: tls.VersionTLS12}}
+	}
+	client, err := minio.New(config.storage.content.endpoint, options)
 	if err != nil {
 		cleanup()
 		return nil, nil, errors.Wrap(err, "compose runtime API process: create MinIO client")
@@ -278,7 +293,7 @@ func composeRuntime(ctx context.Context, config Config, lookup SecretLookup, ids
 		cleanup()
 		return nil, nil, err
 	}
-	objects, err := runtimecontent.NewS3ImmutableObjects(immutable, config.storage.content.Bucket)
+	objects, err := runtimecontent.NewS3ImmutableObjects(immutable, config.storage.content.bucket)
 	if err != nil {
 		cleanup()
 		return nil, nil, err

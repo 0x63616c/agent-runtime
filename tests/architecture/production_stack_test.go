@@ -45,7 +45,7 @@ var _ = Describe("Self-hosted production Stack", func() {
 		}
 	})
 
-	It("derives disposable profiles from production with only identity, lifecycle, and test-secret differences", func() {
+	It("derives disposable profiles from production with only identity, lifecycle, test-secret, and declared local transport differences", func() {
 		file, err := os.Open("../../deploy/production/stack.json")
 		Expect(err).NotTo(HaveOccurred())
 		spec, err := stack.Parse(file)
@@ -60,6 +60,10 @@ var _ = Describe("Self-hosted production Stack", func() {
 		Expect(err).NotTo(HaveOccurred())
 		Expect(normalizedProfile(local.Resources(), "ar-agent-runtime", true)).To(Equal(normalizedProfile(production.Resources(), "agent-runtime", false)))
 		Expect(normalizedProfile(ci.Resources(), "ar-ci-agent-runtime", false)).To(Equal(normalizedProfile(production.Resources(), "agent-runtime", false)))
+		localAPIConfig, found := environmentValue(findResource(local.Resources(), "api"), "RUNTIME_API_CONFIG")
+		Expect(found).To(BeTrue())
+		Expect(localAPIConfig).To(ContainSubstring(`"endpoint":"http://blob.ar-agent-runtime.svc:9000"`))
+		Expect(localAPIConfig).To(ContainSubstring(`"profile":"local"`))
 		for _, rendered := range []stack.Rendered{local, ci} {
 			for _, resource := range rendered.Resources() {
 				if resource.Kind != stack.ResourceSecretReference {
@@ -187,7 +191,7 @@ var _ = Describe("Self-hosted production Stack", func() {
 		Expect(expectedRoleConfigs).To(HaveLen(7))
 		apiConfig, found := environmentValue(api, "RUNTIME_API_CONFIG")
 		Expect(found).To(BeTrue())
-		Expect(apiConfig).To(Equal(`{"version":1,"listen_address":"0.0.0.0:8080","public_listen":true,"storage":{"mode":"postgres","database_dsn_environment":"STATE_DATABASE_DSN","content":{"endpoint":"blob.agent-runtime.svc:9000","access_key_environment":"RUNTIME_API_CONTENT_ACCESS_KEY","secret_key_environment":"RUNTIME_API_CONTENT_SECRET_KEY","bucket":"agent-runtime"}},"model_profiles":["balanced"],"max_request_bytes":4194304,"observability":{"identity_correlation_key_environment":"OBSERVABILITY_CORRELATION_KEY","otlp_grpc_endpoint":"otel-collector:4317"},"principals":[{"tenant":"public","principal":"admin","admin":true,"bearer_token_environment":"RUNTIME_API_ADMIN_TOKEN"},{"tenant":"public","principal":"developer","admin":false,"bearer_token_environment":"RUNTIME_API_DEVELOPER_TOKEN"}]}`))
+		Expect(apiConfig).To(Equal(`{"version":1,"listen_address":"0.0.0.0:8080","public_listen":true,"storage":{"mode":"postgres","database_dsn_environment":"STATE_DATABASE_DSN","content":{"endpoint":"https://blob.agent-runtime.svc:9000","access_key_environment":"RUNTIME_API_CONTENT_ACCESS_KEY","secret_key_environment":"RUNTIME_API_CONTENT_SECRET_KEY","bucket":"agent-runtime","ca_file":"/etc/agent-runtime/blob-ca.crt"}},"model_profiles":["balanced"],"max_request_bytes":4194304,"observability":{"identity_correlation_key_environment":"OBSERVABILITY_CORRELATION_KEY","otlp_grpc_endpoint":"otel-collector:4317"},"principals":[{"tenant":"public","principal":"admin","admin":true,"bearer_token_environment":"RUNTIME_API_ADMIN_TOKEN"},{"tenant":"public","principal":"developer","admin":false,"bearer_token_environment":"RUNTIME_API_DEVELOPER_TOKEN"}],"profile":"production"}`))
 
 		controlService := findResource(resources, "sandbox-control-service")
 		Expect(controlService.Kubernetes.Ports).To(ConsistOf(stack.Port{Name: "http", Number: 8086, Protocol: "TCP"}))
@@ -256,6 +260,15 @@ func normalizedProfile(resources []stack.Resource, namespace string, localFixtur
 			resource.Blob.Prefix = "<namespace>/payloads"
 		}
 		if resource.Kubernetes != nil {
+			if resource.ID == "blob" {
+				// The local profile is deliberately HTTP-only. CI and production
+				// enable MinIO's reviewed TLS certificate directory instead.
+				resource.Kubernetes.Arguments = nil
+			}
+			if resource.ID == "blob-reconciler" {
+				resource.Kubernetes.Arguments = nil
+				resource.Kubernetes.Environment = removeEnvironment(resource.Kubernetes.Environment, "MC_CERTS_DIR")
+			}
 			if localFixture && (resource.ID == "model" || resource.ID == "tool") {
 				resource.Kubernetes.SecretEnvironment = removeLocalDemoEnvironment(resource.Kubernetes.SecretEnvironment)
 			}
@@ -273,9 +286,20 @@ func normalizedProfile(resources []stack.Resource, namespace string, localFixtur
 				}
 				var document any
 				Expect(json.Unmarshal([]byte(environment.Value), &document)).To(Succeed())
-				if localFixture {
-					if object, ok := document.(map[string]any); ok {
+				if object, ok := document.(map[string]any); ok {
+					if environment.Name == "RUNTIME_API_CONFIG" {
+						storage := object["storage"].(map[string]any)
+						content := storage["content"].(map[string]any)
+						delete(content, "ca_file")
+						delete(object, "profile")
+					}
+					if localFixture {
 						delete(object, "local_demo_worker")
+						if environment.Name == "RUNTIME_API_CONFIG" {
+							storage := object["storage"].(map[string]any)
+							content := storage["content"].(map[string]any)
+							content["endpoint"] = strings.Replace(content["endpoint"].(string), "http://", "https://", 1)
+						}
 					}
 				}
 				document = normalizeNamespaceStrings(document, namespace)
@@ -288,6 +312,16 @@ func normalizedProfile(resources []stack.Resource, namespace string, localFixtur
 	encoded, err := json.Marshal(normalized)
 	Expect(err).NotTo(HaveOccurred())
 	return bytes.TrimSpace(encoded)
+}
+
+func removeEnvironment(values []stack.EnvironmentVariable, name string) []stack.EnvironmentVariable {
+	filtered := make([]stack.EnvironmentVariable, 0, len(values))
+	for _, value := range values {
+		if value.Name != name {
+			filtered = append(filtered, value)
+		}
+	}
+	return filtered
 }
 
 func removeLocalDemoKeys(keys []string) []string { return removeLocalDemoStrings(keys) }

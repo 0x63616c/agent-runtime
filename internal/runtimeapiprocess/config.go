@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"io"
 	"net"
+	"net/url"
 	"regexp"
 	"strings"
 
@@ -29,6 +30,7 @@ type Config struct {
 
 type document struct {
 	Version         int                 `json:"version"`
+	Profile         string              `json:"profile"`
 	ListenAddress   string              `json:"listen_address"`
 	PublicListen    bool                `json:"public_listen,omitempty"`
 	Storage         storageDocument     `json:"storage"`
@@ -46,6 +48,7 @@ type storageDocument struct {
 
 type contentDocument struct {
 	Endpoint             string `json:"endpoint"`
+	CAFile               string `json:"ca_file,omitempty"`
 	AccessKeyEnvironment string `json:"access_key_environment"`
 	SecretKeyEnvironment string `json:"secret_key_environment"`
 	Bucket               string `json:"bucket"`
@@ -53,7 +56,14 @@ type contentDocument struct {
 
 type storage struct {
 	mode, databaseDSNEnvironment string
-	content                      contentDocument
+	content                      content
+}
+
+// content is the validated runtime-owned object-store configuration.
+type content struct {
+	endpoint, accessKeyEnvironment, secretKeyEnvironment, bucket string
+	caFile                                                       string
+	secure                                                       bool
 }
 
 type observabilityDocument struct {
@@ -102,16 +112,18 @@ func Parse(input io.Reader) (Config, error) {
 	if (host == "0.0.0.0" || host == "::") && !decoded.PublicListen {
 		return Config{}, errors.New("validate runtime API configuration: all-interface bind requires public_listen")
 	}
-	storage := storage{mode: decoded.Storage.Mode, databaseDSNEnvironment: decoded.Storage.DatabaseDSNEnvironment, content: decoded.Storage.Content}
+	storage := storage{mode: decoded.Storage.Mode, databaseDSNEnvironment: decoded.Storage.DatabaseDSNEnvironment}
 	switch storage.mode {
 	case "memory-unsafe":
-		if storage.databaseDSNEnvironment != "" || storage.content != (contentDocument{}) {
+		if storage.databaseDSNEnvironment != "" || decoded.Storage.Content != (contentDocument{}) {
 			return Config{}, errors.New("validate runtime API configuration: memory-unsafe storage has durable fields")
 		}
 	case "postgres":
-		if !environmentName.MatchString(storage.databaseDSNEnvironment) || storage.content.Endpoint == "" || !environmentName.MatchString(storage.content.AccessKeyEnvironment) || !environmentName.MatchString(storage.content.SecretKeyEnvironment) || storage.content.Bucket == "" {
+		content, err := parseContent(decoded.Profile, decoded.Storage.Content)
+		if err != nil || !environmentName.MatchString(storage.databaseDSNEnvironment) {
 			return Config{}, errors.New("validate runtime API configuration: durable PostgreSQL and MinIO storage is incomplete")
 		}
+		storage.content = content
 	default:
 		return Config{}, errors.New("validate runtime API configuration: storage mode is unsupported")
 	}
@@ -160,6 +172,30 @@ func Parse(input io.Reader) (Config, error) {
 		observabilityOTLPGRPCEndpoint = observability.OTLPGRPCEndpoint
 	}
 	return Config{listenAddress: decoded.ListenAddress, modelProfiles: append([]string(nil), decoded.ModelProfiles...), maxRequestBytes: decoded.MaxRequestBytes, principals: principals, observabilityKeyEnvironment: observabilityKeyEnvironment, observabilityOTLPGRPCEndpoint: observabilityOTLPGRPCEndpoint, storage: storage}, nil
+}
+
+func parseContent(profile string, document contentDocument) (content, error) {
+	if document.Endpoint == "" || !environmentName.MatchString(document.AccessKeyEnvironment) || !environmentName.MatchString(document.SecretKeyEnvironment) || document.Bucket == "" {
+		return content{}, errors.New("runtime API content store is incomplete")
+	}
+	endpoint, err := url.Parse(document.Endpoint)
+	if err != nil || endpoint.Host == "" || endpoint.User != nil || endpoint.RawQuery != "" || endpoint.Fragment != "" || endpoint.Path != "" {
+		return content{}, errors.New("runtime API content endpoint must be an absolute origin")
+	}
+	switch endpoint.Scheme {
+	case "https":
+		if profile != "ci" && profile != "production" || !strings.HasPrefix(document.CAFile, "/") || strings.Contains(document.CAFile, "..") {
+			return content{}, errors.New("runtime API content TLS requires a CI or production profile and declared CA file")
+		}
+		return content{endpoint: endpoint.Host, accessKeyEnvironment: document.AccessKeyEnvironment, secretKeyEnvironment: document.SecretKeyEnvironment, bucket: document.Bucket, caFile: document.CAFile, secure: true}, nil
+	case "http":
+		if profile != "local" || document.CAFile != "" {
+			return content{}, errors.New("runtime API content HTTP is limited to the local profile")
+		}
+		return content{endpoint: endpoint.Host, accessKeyEnvironment: document.AccessKeyEnvironment, secretKeyEnvironment: document.SecretKeyEnvironment, bucket: document.Bucket}, nil
+	default:
+		return content{}, errors.New("runtime API content endpoint scheme is unsupported")
+	}
 }
 
 // validOTLPGRPCEndpoint accepts only an explicit in-cluster DNS name and port.

@@ -38,7 +38,7 @@ func TestDurablePostgresMinIOAPIProcessSurvivesRestart(t *testing.T) {
 	if err := minioClient.MakeBucket(context.Background(), bucket, minio.MakeBucketOptions{}); err != nil && minio.ToErrorResponse(err).Code != "BucketAlreadyOwnedByYou" {
 		t.Fatalf("create declared integration bucket: %v", err)
 	}
-	config, err := runtimeapiprocess.Parse(strings.NewReader(fmt.Sprintf(`{"version":1,"listen_address":"127.0.0.1:0","storage":{"mode":"postgres","database_dsn_environment":"STATE_DSN","content":{"endpoint":%q,"access_key_environment":"CONTENT_ACCESS","secret_key_environment":"CONTENT_SECRET","bucket":%q}},"model_profiles":["balanced"],"max_request_bytes":4194304,"principals":[{"tenant":"durable","principal":"admin","admin":true,"bearer_token_environment":"ADMIN_TOKEN"},{"tenant":"durable","principal":"alice","admin":false,"bearer_token_environment":"ALICE_TOKEN"}]}`, endpoint, bucket)))
+	config, err := runtimeapiprocess.Parse(strings.NewReader(fmt.Sprintf(`{"version":1,"profile":"local","listen_address":"127.0.0.1:0","storage":{"mode":"postgres","database_dsn_environment":"STATE_DSN","content":{"endpoint":%q,"access_key_environment":"CONTENT_ACCESS","secret_key_environment":"CONTENT_SECRET","bucket":%q}},"model_profiles":["balanced"],"max_request_bytes":4194304,"principals":[{"tenant":"durable","principal":"admin","admin":true,"bearer_token_environment":"ADMIN_TOKEN"},{"tenant":"durable","principal":"alice","admin":false,"bearer_token_environment":"ALICE_TOKEN"}]}`, "http://"+endpoint, bucket)))
 	if err != nil {
 		t.Fatalf("parse durable process configuration: %v", err)
 	}
@@ -115,7 +115,7 @@ func TestDurableRuntimeAPIBinaryUsesProductionStyleConfig(t *testing.T) {
 	if err := listener.Close(); err != nil {
 		t.Fatalf("release loopback address: %v", err)
 	}
-	config := fmt.Sprintf(`{"version":1,"listen_address":%q,"public_listen":true,"storage":{"mode":"postgres","database_dsn_environment":"STATE_DATABASE_DSN","content":{"endpoint":%q,"access_key_environment":"RUNTIME_API_CONTENT_ACCESS_KEY","secret_key_environment":"RUNTIME_API_CONTENT_SECRET_KEY","bucket":%q}},"model_profiles":["balanced"],"max_request_bytes":4194304,"principals":[{"tenant":"api-binary-e2e","principal":"admin","admin":true,"bearer_token_environment":"RUNTIME_API_ADMIN_TOKEN"},{"tenant":"api-binary-e2e","principal":"developer","admin":false,"bearer_token_environment":"RUNTIME_API_DEVELOPER_TOKEN"}]}`, address, endpoint, bucket)
+	config := fmt.Sprintf(`{"version":1,"profile":"local","listen_address":%q,"public_listen":true,"storage":{"mode":"postgres","database_dsn_environment":"STATE_DATABASE_DSN","content":{"endpoint":%q,"access_key_environment":"RUNTIME_API_CONTENT_ACCESS_KEY","secret_key_environment":"RUNTIME_API_CONTENT_SECRET_KEY","bucket":%q}},"model_profiles":["balanced"],"max_request_bytes":4194304,"principals":[{"tenant":"api-binary-e2e","principal":"admin","admin":true,"bearer_token_environment":"RUNTIME_API_ADMIN_TOKEN"},{"tenant":"api-binary-e2e","principal":"developer","admin":false,"bearer_token_environment":"RUNTIME_API_DEVELOPER_TOKEN"}]}`, address, "http://"+endpoint, bucket)
 	secrets := []string{
 		"RUNTIME_API_CONFIG=" + config,
 		"STATE_DATABASE_DSN=" + postgresDSN,

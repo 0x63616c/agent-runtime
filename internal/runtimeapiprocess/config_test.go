@@ -15,6 +15,7 @@ import (
 
 const validConfig = `{
   "version": 1,
+  "profile": "local",
   "listen_address": "127.0.0.1:8088",
   "storage": {"mode":"memory-unsafe"},
   "model_profiles": ["balanced"],
@@ -67,7 +68,8 @@ func TestConfigurationIsStrictAndRequiresExplicitUnsafeMemoryStorage(t *testing.
 }
 
 func TestConfigurationAcceptsOnlyCompleteDurablePostgresAndMinIOStorage(t *testing.T) {
-	durable := strings.Replace(validConfig, `"storage": {"mode":"memory-unsafe"}`, `"storage":{"mode":"postgres","database_dsn_environment":"STATE_DATABASE_DSN","content":{"endpoint":"minio.runtime.svc:9000","access_key_environment":"CONTENT_ACCESS_KEY","secret_key_environment":"CONTENT_SECRET_KEY","bucket":"agent-runtime-content"}}`, 1)
+	durable := strings.Replace(validConfig, `"profile": "local",`, `"profile":"production",`, 1)
+	durable = strings.Replace(durable, `"storage": {"mode":"memory-unsafe"}`, `"storage":{"mode":"postgres","database_dsn_environment":"STATE_DATABASE_DSN","content":{"endpoint":"https://minio.runtime.svc:9000","ca_file":"/etc/runtime/content-ca.crt","access_key_environment":"CONTENT_ACCESS_KEY","secret_key_environment":"CONTENT_SECRET_KEY","bucket":"agent-runtime-content"}}`, 1)
 	if _, err := runtimeapiprocess.Parse(strings.NewReader(durable)); err != nil {
 		t.Fatalf("Parse(durable): %v", err)
 	}
@@ -77,8 +79,41 @@ func TestConfigurationAcceptsOnlyCompleteDurablePostgresAndMinIOStorage(t *testi
 	}
 }
 
+func TestConfigurationRequiresTLSExceptForExplicitLocalContentStore(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		profile string
+		content string
+		wantErr bool
+	}{
+		{name: "production TLS", profile: "production", content: `"endpoint":"https://minio.runtime.svc:9000","ca_file":"/etc/runtime/content-ca.crt","access_key_environment":"CONTENT_ACCESS_KEY","secret_key_environment":"CONTENT_SECRET_KEY","bucket":"agent-runtime-content"`},
+		{name: "explicit local HTTP", content: `"endpoint":"http://minio.local.svc:9000","access_key_environment":"CONTENT_ACCESS_KEY","secret_key_environment":"CONTENT_SECRET_KEY","bucket":"agent-runtime-content"`},
+		{name: "production HTTP", profile: "production", content: `"endpoint":"http://minio.runtime.svc:9000","access_key_environment":"CONTENT_ACCESS_KEY","secret_key_environment":"CONTENT_SECRET_KEY","bucket":"agent-runtime-content"`, wantErr: true},
+		{name: "local with TLS", content: `"endpoint":"https://minio.runtime.svc:9000","ca_file":"/etc/runtime/content-ca.crt","access_key_environment":"CONTENT_ACCESS_KEY","secret_key_environment":"CONTENT_SECRET_KEY","bucket":"agent-runtime-content"`, wantErr: true},
+		{name: "bare endpoint", content: `"endpoint":"minio.runtime.svc:9000","access_key_environment":"CONTENT_ACCESS_KEY","secret_key_environment":"CONTENT_SECRET_KEY","bucket":"agent-runtime-content"`, wantErr: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			input := strings.Replace(validConfig, `"storage": {"mode":"memory-unsafe"}`, `"storage":{"mode":"postgres","database_dsn_environment":"STATE_DATABASE_DSN","content":{`+test.content+`}}`, 1)
+			if test.profile != "" {
+				input = strings.Replace(input, `"profile": "local"`, `"profile":"`+test.profile+`"`, 1)
+			}
+			err := func() error {
+				_, err := runtimeapiprocess.Parse(strings.NewReader(input))
+				return err
+			}()
+			if test.wantErr && err == nil {
+				t.Fatal("Parse(insecure content configuration) error = nil")
+			}
+			if !test.wantErr && err != nil {
+				t.Fatalf("Parse(content configuration) error = %v", err)
+			}
+		})
+	}
+}
+
 func TestCheckRequiresEveryDeclaredEnvironmentValueWithoutStartingThePublicListener(t *testing.T) {
-	durable := strings.Replace(validConfig, `"storage": {"mode":"memory-unsafe"}`, `"storage":{"mode":"postgres","database_dsn_environment":"STATE_DATABASE_DSN","content":{"endpoint":"minio.runtime.svc:9000","access_key_environment":"CONTENT_ACCESS_KEY","secret_key_environment":"CONTENT_SECRET_KEY","bucket":"agent-runtime-content"}}`, 1)
+	durable := strings.Replace(validConfig, `"profile": "local",`, `"profile":"production",`, 1)
+	durable = strings.Replace(durable, `"storage": {"mode":"memory-unsafe"}`, `"storage":{"mode":"postgres","database_dsn_environment":"STATE_DATABASE_DSN","content":{"endpoint":"https://minio.runtime.svc:9000","ca_file":"/etc/runtime/content-ca.crt","access_key_environment":"CONTENT_ACCESS_KEY","secret_key_environment":"CONTENT_SECRET_KEY","bucket":"agent-runtime-content"}}`, 1)
 	config, err := runtimeapiprocess.Parse(strings.NewReader(durable))
 	if err != nil {
 		t.Fatalf("Parse(durable): %v", err)

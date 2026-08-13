@@ -40,7 +40,7 @@ func TestDurableChatReconnectsAndCancelsThroughRestartedDurableAPIProcess(t *tes
 		t.Fatalf("build API role: %v: %s", err, output)
 	}
 	configPath := filepath.Join(temporary, "runtime-api.json")
-	config := `{"version":1,"listen_address":"127.0.0.1:0","storage":{"mode":"postgres","database_dsn_environment":"AR_RUNTIME_POSTGRES_DSN","content":{"endpoint":"` + os.Getenv("AR_RUNTIME_MINIO_ENDPOINT") + `","access_key_environment":"AR_RUNTIME_MINIO_ACCESS_KEY","secret_key_environment":"AR_RUNTIME_MINIO_SECRET_KEY","bucket":"` + os.Getenv("AR_RUNTIME_MINIO_BUCKET") + `"}},"model_profiles":["balanced"],"max_request_bytes":4194304,"principals":[{"tenant":"durable-chat-e2e","principal":"admin","admin":true,"bearer_token_environment":"DURABLE_CHAT_ADMIN_TOKEN"},{"tenant":"durable-chat-e2e","principal":"user","admin":false,"bearer_token_environment":"DURABLE_CHAT_USER_TOKEN"}]}`
+	config := `{"version":1,"profile":"local","listen_address":"127.0.0.1:0","storage":{"mode":"postgres","database_dsn_environment":"AR_RUNTIME_POSTGRES_DSN","content":{"endpoint":"http://` + os.Getenv("AR_RUNTIME_MINIO_ENDPOINT") + `","access_key_environment":"AR_RUNTIME_MINIO_ACCESS_KEY","secret_key_environment":"AR_RUNTIME_MINIO_SECRET_KEY","bucket":"` + os.Getenv("AR_RUNTIME_MINIO_BUCKET") + `"}},"model_profiles":["balanced"],"max_request_bytes":4194304,"principals":[{"tenant":"durable-chat-e2e","principal":"admin","admin":true,"bearer_token_environment":"DURABLE_CHAT_ADMIN_TOKEN"},{"tenant":"durable-chat-e2e","principal":"user","admin":false,"bearer_token_environment":"DURABLE_CHAT_USER_TOKEN"}]}`
 	if err := os.WriteFile(configPath, []byte(config), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -179,7 +179,7 @@ func TestDurableChatTerminalAndWebBinariesUseOnlyPublicPathAcrossRestart(t *test
 func writeDurableAPIConfig(t *testing.T, directory string) string {
 	t.Helper()
 	path := filepath.Join(directory, "runtime-api.json")
-	config := `{"version":1,"listen_address":"127.0.0.1:0","storage":{"mode":"postgres","database_dsn_environment":"AR_RUNTIME_POSTGRES_DSN","content":{"endpoint":"` + os.Getenv("AR_RUNTIME_MINIO_ENDPOINT") + `","access_key_environment":"AR_RUNTIME_MINIO_ACCESS_KEY","secret_key_environment":"AR_RUNTIME_MINIO_SECRET_KEY","bucket":"` + os.Getenv("AR_RUNTIME_MINIO_BUCKET") + `"}},"model_profiles":["balanced"],"max_request_bytes":4194304,"principals":[{"tenant":"durable-chat-e2e","principal":"admin","admin":true,"bearer_token_environment":"DURABLE_CHAT_ADMIN_TOKEN"},{"tenant":"durable-chat-e2e","principal":"user","admin":false,"bearer_token_environment":"DURABLE_CHAT_USER_TOKEN"}]}`
+	config := `{"version":1,"profile":"local","listen_address":"127.0.0.1:0","storage":{"mode":"postgres","database_dsn_environment":"AR_RUNTIME_POSTGRES_DSN","content":{"endpoint":"http://` + os.Getenv("AR_RUNTIME_MINIO_ENDPOINT") + `","access_key_environment":"AR_RUNTIME_MINIO_ACCESS_KEY","secret_key_environment":"AR_RUNTIME_MINIO_SECRET_KEY","bucket":"` + os.Getenv("AR_RUNTIME_MINIO_BUCKET") + `"}},"model_profiles":["balanced"],"max_request_bytes":4194304,"principals":[{"tenant":"durable-chat-e2e","principal":"admin","admin":true,"bearer_token_environment":"DURABLE_CHAT_ADMIN_TOKEN"},{"tenant":"durable-chat-e2e","principal":"user","admin":false,"bearer_token_environment":"DURABLE_CHAT_USER_TOKEN"}]}`
 	if err := os.WriteFile(path, []byte(config), 0o600); err != nil {
 		t.Fatal(err)
 	}

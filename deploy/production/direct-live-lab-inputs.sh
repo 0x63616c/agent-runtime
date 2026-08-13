@@ -27,7 +27,7 @@ EOF
 file_mode() { stat -f '%Lp' "$1" 2>/dev/null || stat -c '%a' "$1"; }
 
 compose() {
-	local stack="" secrets="" rendered name key state_secret sandbox_state_secret blob_secret orchestration_secret runtime_api_secret state_password blob_user blob_password
+	local stack="" secrets="" rendered name key state_secret sandbox_state_secret blob_secret blob_tls_secret orchestration_secret runtime_api_secret state_password blob_user blob_password tls_dir ca_key request extensions serial
 	while [[ $# -gt 0 ]]; do
 		case "$1" in
 		--stack-file)
@@ -59,6 +59,7 @@ compose() {
 	blob_secret="$(printf '%s' "$rendered" | jq -er '.resources[]|select(.id == "blob-storage-secret")|.secret_reference.reference')"
 	orchestration_secret="$(printf '%s' "$rendered" | jq -er '.resources[]|select(.id == "orchestration-payload-blob-secret")|.secret_reference.reference')"
 	runtime_api_secret="$(printf '%s' "$rendered" | jq -er '.resources[]|select(.id == "runtime-api-secret")|.secret_reference.reference')"
+	blob_tls_secret="$(printf '%s' "$rendered" | jq -er '.resources[]|select(.id == "blob-tls-secret")|.secret_reference.reference')"
 	# MinIO credentials are also the S3 credentials used by orchestration and
 	# the public API.  Use a bounded AWS-compatible access key rather than a
 	# generic 64-character random value.
@@ -73,6 +74,20 @@ compose() {
 	printf '%s' "$blob_password" >"$secrets/$orchestration_secret/ORCHESTRATION_PAYLOAD_BLOB_SECRET_KEY"
 	printf '%s' "$blob_user" >"$secrets/$runtime_api_secret/RUNTIME_API_CONTENT_ACCESS_KEY"
 	printf '%s' "$blob_password" >"$secrets/$runtime_api_secret/RUNTIME_API_CONTENT_SECRET_KEY"
+	# CI uses TLS end-to-end between the API and in-namespace MinIO.  Generate a
+	# throwaway CA and service certificate; the private CA key never enters the
+	# Kubernetes Secret inventory.
+	tls_dir="$(mktemp -d)"
+	ca_key="$tls_dir/ca.key"
+	request="$tls_dir/blob.csr"
+	extensions="$tls_dir/extensions.cnf"
+	serial="$tls_dir/ca.srl"
+	printf 'subjectAltName=DNS:blob,DNS:blob.%s.svc,DNS:blob.%s.svc.cluster.local\n' "$(printf '%s' "$rendered" | jq -er '.namespace')" "$(printf '%s' "$rendered" | jq -er '.namespace')" >"$extensions"
+	openssl req -x509 -newkey rsa:2048 -nodes -keyout "$ca_key" -out "$secrets/$blob_tls_secret/BLOB_TLS_CA" -days 1 -subj '/CN=agent-runtime-direct-lab-blob-ca' >/dev/null 2>&1
+	openssl req -newkey rsa:2048 -nodes -keyout "$secrets/$blob_tls_secret/BLOB_TLS_KEY" -out "$request" -subj '/CN=blob' >/dev/null 2>&1
+	openssl x509 -req -in "$request" -CA "$secrets/$blob_tls_secret/BLOB_TLS_CA" -CAkey "$ca_key" -CAcreateserial -CAserial "$serial" -out "$secrets/$blob_tls_secret/BLOB_TLS_CERT" -days 1 -sha256 -extfile "$extensions" >/dev/null 2>&1
+	rm -rf -- "$tls_dir"
+	chmod 600 "$secrets/$blob_tls_secret/BLOB_TLS_CA" "$secrets/$blob_tls_secret/BLOB_TLS_CERT" "$secrets/$blob_tls_secret/BLOB_TLS_KEY"
 	chmod 600 "$secrets/$state_secret/STATE_DATABASE_DSN" "$secrets/$sandbox_state_secret/SANDBOX_STATE_DSN" \
 		"$secrets/$orchestration_secret/ORCHESTRATION_PAYLOAD_BLOB_ACCESS_KEY" "$secrets/$orchestration_secret/ORCHESTRATION_PAYLOAD_BLOB_SECRET_KEY" \
 		"$secrets/$runtime_api_secret/RUNTIME_API_CONTENT_ACCESS_KEY" "$secrets/$runtime_api_secret/RUNTIME_API_CONTENT_SECRET_KEY"
@@ -120,7 +135,7 @@ validate() {
 }
 
 self_test() {
-	local tmp stack secrets name key bad_output rendered state_secret sandbox_state_secret blob_secret orchestration_secret runtime_api_secret
+	local tmp stack secrets name key bad_output rendered state_secret sandbox_state_secret blob_secret blob_tls_secret orchestration_secret runtime_api_secret
 	tmp="$(mktemp -d)"
 	trap "rm -rf -- $(printf '%q' "$tmp")" EXIT
 	stack="$tmp/stack.json"
@@ -134,6 +149,7 @@ self_test() {
 	blob_secret="$(printf '%s' "$rendered" | jq -er '.resources[]|select(.id == "blob-storage-secret")|.secret_reference.reference')"
 	orchestration_secret="$(printf '%s' "$rendered" | jq -er '.resources[]|select(.id == "orchestration-payload-blob-secret")|.secret_reference.reference')"
 	runtime_api_secret="$(printf '%s' "$rendered" | jq -er '.resources[]|select(.id == "runtime-api-secret")|.secret_reference.reference')"
+	blob_tls_secret="$(printf '%s' "$rendered" | jq -er '.resources[]|select(.id == "blob-tls-secret")|.secret_reference.reference')"
 	[[ "$(<"$secrets/$state_secret/STATE_DATABASE_DSN")" == "postgres://postgres:$(<"$secrets/$state_secret/POSTGRES_PASSWORD")@state:5432/agent_runtime?sslmode=disable" ]] || fail "self-test did not bind the state DSN to its password"
 	[[ "$(<"$secrets/$sandbox_state_secret/SANDBOX_STATE_DSN")" == "$(<"$secrets/$state_secret/STATE_DATABASE_DSN")" ]] || fail "self-test did not bind the sandbox DSN to state"
 	[[ "$(<"$secrets/$blob_secret/MINIO_ROOT_USER")" =~ ^ARLAB[A-F0-9]{14}$ ]] || fail "self-test did not compose an AWS-compatible MinIO access key"
@@ -141,6 +157,7 @@ self_test() {
 	cmp -s "$secrets/$blob_secret/MINIO_ROOT_PASSWORD" "$secrets/$orchestration_secret/ORCHESTRATION_PAYLOAD_BLOB_SECRET_KEY" || fail "self-test did not bind orchestration to MinIO secret credentials"
 	cmp -s "$secrets/$blob_secret/MINIO_ROOT_USER" "$secrets/$runtime_api_secret/RUNTIME_API_CONTENT_ACCESS_KEY" || fail "self-test did not bind API content access credentials"
 	cmp -s "$secrets/$blob_secret/MINIO_ROOT_PASSWORD" "$secrets/$runtime_api_secret/RUNTIME_API_CONTENT_SECRET_KEY" || fail "self-test did not bind API content secret credentials"
+	openssl verify -CAfile "$secrets/$blob_tls_secret/BLOB_TLS_CA" "$secrets/$blob_tls_secret/BLOB_TLS_CERT" >/dev/null || fail "self-test did not compose a MinIO certificate trusted by the API CA"
 
 	name="$(go run "$root/cmd/stackctl" render --stack-file "$stack" --profile ci | jq -r '[.resources[] | select(.kind == "secret_reference") | .secret_reference.reference] | first')"
 	key="$(go run "$root/cmd/stackctl" render --stack-file "$stack" --profile ci | jq -r --arg name "$name" '.resources[] | select(.kind == "secret_reference" and .secret_reference.reference == $name) | .secret_reference.keys[0]')"

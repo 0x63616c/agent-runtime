@@ -51,7 +51,7 @@ func TestDurableWorkspaceAgentBinariesUseOnlyThePublicAPI(t *testing.T) {
 	if err := minioClient.MakeBucket(ctx, bucket, minio.MakeBucketOptions{}); err != nil && minio.ToErrorResponse(err).Code != "BucketAlreadyOwnedByYou" {
 		t.Fatal(err)
 	}
-	config, err := runtimeapiprocess.Parse(strings.NewReader(fmt.Sprintf(`{"version":1,"listen_address":"127.0.0.1:0","storage":{"mode":"postgres","database_dsn_environment":"STATE_DSN","content":{"endpoint":%q,"access_key_environment":"CONTENT_ACCESS","secret_key_environment":"CONTENT_SECRET","bucket":%q}},"model_profiles":["balanced"],"max_request_bytes":4194304,"principals":[{"tenant":"workspacee2e","principal":"admin","admin":true,"bearer_token_environment":"ADMIN_TOKEN"},{"tenant":"workspacee2e","principal":"alice","admin":false,"bearer_token_environment":"ALICE_TOKEN"},{"tenant":"workspacee2e","principal":"bob","admin":false,"bearer_token_environment":"BOB_TOKEN"}]}`, endpoint, bucket)))
+	config, err := runtimeapiprocess.Parse(strings.NewReader(fmt.Sprintf(`{"version":1,"profile":"local","listen_address":"127.0.0.1:0","storage":{"mode":"postgres","database_dsn_environment":"STATE_DSN","content":{"endpoint":%q,"access_key_environment":"CONTENT_ACCESS","secret_key_environment":"CONTENT_SECRET","bucket":%q}},"model_profiles":["balanced"],"max_request_bytes":4194304,"principals":[{"tenant":"workspacee2e","principal":"admin","admin":true,"bearer_token_environment":"ADMIN_TOKEN"},{"tenant":"workspacee2e","principal":"alice","admin":false,"bearer_token_environment":"ALICE_TOKEN"},{"tenant":"workspacee2e","principal":"bob","admin":false,"bearer_token_environment":"BOB_TOKEN"}]}`, "http://"+endpoint, bucket)))
 	if err != nil {
 		t.Fatal(err)
 	}

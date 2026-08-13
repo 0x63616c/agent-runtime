@@ -147,6 +147,8 @@ type KubernetesResource struct {
 	VolumeMounts []PersistentVolumeMount `json:"volume_mounts,omitempty"`
 	// ConfigMapMounts binds reviewed ConfigMap keys read-only into a workload.
 	ConfigMapMounts []ConfigMapMount `json:"config_map_mounts,omitempty"`
+	// SecretMounts binds reviewed Secret keys read-only into a workload.
+	SecretMounts []SecretMount `json:"secret_mounts,omitempty"`
 	// Readiness is the explicit workload health probe when an operator must await service readiness.
 	Readiness *ReadinessProbe `json:"readiness,omitempty"`
 	// Ports is explicit, including an empty array for workloads with no ports.
@@ -216,6 +218,13 @@ type ConfigMapMount struct {
 	Key string `json:"key"`
 	// Path is the absolute in-container file path for the projected key.
 	Path string `json:"path"`
+}
+
+// SecretMount binds one reviewed Secret key read-only at an absolute path.
+type SecretMount struct {
+	Secret ResourceID `json:"secret"`
+	Key    string     `json:"key"`
+	Path   string     `json:"path"`
 }
 
 // ReadinessProbe is a bounded exec health check declared with a workload.
@@ -520,7 +529,7 @@ func validateKubernetes(resource Resource, namespace string, profile Profile) er
 			names[variable.Name] = struct{}{}
 		}
 		claims := make(map[ResourceID]struct{}, len(object.VolumeMounts))
-		paths := make(map[string]struct{}, len(object.VolumeMounts)+len(object.ConfigMapMounts))
+		paths := make(map[string]struct{}, len(object.VolumeMounts)+len(object.ConfigMapMounts)+len(object.SecretMounts))
 		for _, variable := range object.SecretEnvironment {
 			if !environmentNamePattern.MatchString(variable.Name) || variable.Secret == "" || !environmentNamePattern.MatchString(variable.Key) || len(variable.Key) > 253 {
 				return errors.Newf("resource %s secret environment must name a declared key and Secret reference", resource.ID)
@@ -554,6 +563,15 @@ func validateKubernetes(resource Resource, namespace string, profile Profile) er
 				return errors.Newf("resource %s mount path %s is declared more than once", resource.ID, mount.Path)
 			}
 			configMaps[mount.ConfigMap], paths[mount.Path] = struct{}{}, struct{}{}
+		}
+		for _, mount := range object.SecretMounts {
+			if mount.Secret == "" || !environmentNamePattern.MatchString(mount.Key) || !strings.HasPrefix(mount.Path, "/") || strings.Contains(mount.Path, "..") || len(mount.Path) > 1024 {
+				return errors.Newf("resource %s Secret mount must use a declared key and bounded absolute path", resource.ID)
+			}
+			if _, duplicate := paths[mount.Path]; duplicate {
+				return errors.Newf("resource %s mount path %s is declared more than once", resource.ID, mount.Path)
+			}
+			paths[mount.Path] = struct{}{}
 		}
 		if object.Readiness != nil {
 			if object.Readiness.InitialDelaySeconds < 0 || object.Readiness.PeriodSeconds <= 0 || object.Readiness.FailureThreshold <= 0 || len(object.Readiness.Command) == 0 {

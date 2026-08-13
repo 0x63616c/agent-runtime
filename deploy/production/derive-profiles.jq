@@ -10,7 +10,7 @@ def lifecycle($profile):
     .backup_restore_owner = "none"
   end;
 
-def role_config_namespace($namespace):
+def role_config_namespace($namespace; $profile):
   if .kubernetes then
     .kubernetes.environment |= ((. // []) | map(
       if .name == "RUNTIME_ROLE_CONFIG" then
@@ -25,7 +25,14 @@ def role_config_namespace($namespace):
           tojson)
       elif .name == "RUNTIME_API_CONFIG" then
         .value |= (fromjson |
-          .storage.content.endpoint |= gsub("\\.agent-runtime\\.svc"; "." + $namespace + ".svc") |
+      .profile = $profile |
+          if $profile == "local" then
+            .storage.content.endpoint = ("http://blob." + $namespace + ".svc:9000") |
+      del(.storage.content.ca_file)
+          else
+            .storage.content.endpoint |= gsub("\\.agent-runtime\\.svc"; "." + $namespace + ".svc") |
+      .storage.content.ca_file = "/etc/agent-runtime/blob-ca.crt"
+          end |
           .storage.content.bucket = $namespace |
           tojson)
       else . end))
@@ -65,9 +72,30 @@ def dns_capability:
 
 def profile_resource($namespace; $profile):
   lifecycle($profile) |
-  role_config_namespace($namespace) |
-	local_demo_fixture($namespace; $profile) |
+  role_config_namespace($namespace; $profile) |
+  local_demo_fixture($namespace; $profile) |
   dns_capability |
+  if .id == "api" then
+    .dependencies += ["blob-tls-secret"] | .dependencies |= unique |
+    .kubernetes.secret_mounts = [{secret:"blob-tls-secret",key:"BLOB_TLS_CA",path:"/etc/agent-runtime/blob-ca.crt"}]
+  elif .id == "blob" then
+    .dependencies += ["blob-tls-secret"] | .dependencies |= unique |
+    .kubernetes.secret_mounts = [
+      {secret:"blob-tls-secret",key:"BLOB_TLS_CERT",path:"/etc/minio/certs/public.crt"},
+      {secret:"blob-tls-secret",key:"BLOB_TLS_KEY",path:"/etc/minio/certs/private.key"}
+    ] |
+    if $profile != "local" then
+      .kubernetes.arguments = ["server","--certs-dir","/etc/minio/certs","/data"] |
+      .
+    else . end
+  elif .id == "blob-reconciler" then
+    .dependencies += ["blob-tls-secret"] | .dependencies |= unique |
+    .kubernetes.secret_mounts = [{secret:"blob-tls-secret",key:"BLOB_TLS_CA",path:"/etc/mc/certs/CAs/blob-ca.crt"}] |
+    if $profile != "local" then
+      .kubernetes.environment += [{name:"MC_CERTS_DIR",value:"/etc/mc/certs"}] |
+      .kubernetes.arguments[1] |= sub("http://blob:9000"; "https://blob:9000")
+    else . end
+  else . end |
   if .kind == "secret_reference" then
     .secret_reference.provider = (if $profile == "production" then "external-secrets" else "local-generated" end) |
     .secret_reference.reference |= sub("^agent-runtime-"; $namespace + "-")
@@ -130,6 +158,12 @@ def extras($namespace; $profile):
       delete_behavior:(if $profile == "production" then "retain" else "delete" end),external_controller:true,
       secret_reference:{provider:(if $profile == "production" then "external-secrets" else "local-generated" end),reference:($namespace + "-temporal-db-secret"),version:"v1",keys:["POSTGRES_PASSWORD"]}
     }),
+    ({
+      id:"blob-tls-secret",kind:"secret_reference",owner:"security-operator",scope:"namespace",dependencies:[],
+      retention:(if $profile == "production" then {policy:"external",days:0} else {policy:"ephemeral",days:0} end),backup_restore_owner:(if $profile == "production" then "platform-operator" else "none" end),
+      delete_behavior:(if $profile == "production" then "retain" else "delete" end),external_controller:true,
+      secret_reference:{provider:(if $profile == "production" then "external-secrets" else "local-generated" end),reference:($namespace + "-blob-tls-secret"),version:"v1",keys:["BLOB_TLS_CA","BLOB_TLS_CERT","BLOB_TLS_KEY"]}
+    }),
     common("temporal-state-account";"kubernetes";"platform-operator";$profile;{kubernetes:{api_version:"v1",kind:"ServiceAccount",name:"temporal-state-account"}}),
     common("state-data";"kubernetes";"database-operator";$profile;{kubernetes:{api_version:"v1",kind:"PersistentVolumeClaim",name:"state-data",storage:[{name:"data",size_bytes:1073741824,class:"local-path"}]}}),
     common("temporal-state-data";"kubernetes";"database-operator";$profile;{kubernetes:{api_version:"v1",kind:"PersistentVolumeClaim",name:"temporal-state-data",storage:[{name:"data",size_bytes:1073741824,class:"local-path"}]}}),
@@ -171,10 +205,10 @@ def extras($namespace; $profile):
   ];
 
 def resources_for($base; $namespace; $profile):
-  (($base | map(profile_resource($namespace; $profile))) + extras($namespace; $profile));
+  (($base + extras($namespace; $profile)) | map(profile_resource($namespace; $profile)));
 
 def generated_extra:
-  . == "temporal-db-secret" or . == "temporal-state-account" or . == "state-data" or
+  . == "temporal-db-secret" or . == "blob-tls-secret" or . == "temporal-state-account" or . == "state-data" or
   . == "temporal-state-data" or . == "blob-data" or . == "telemetry-data" or
   . == "temporal-state" or . == "temporal-state-service" or . == "temporal-state-egress" or
   . == "blob-reconciler" or . == "blob-reconciler-egress" or . == "temporal-persistence" or
