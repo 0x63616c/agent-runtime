@@ -68,6 +68,31 @@
           }
         },
         {
+          "id": "runtime-api-secret",
+          "kind": "secret_reference",
+          "owner": "security-operator",
+          "scope": "namespace",
+          "dependencies": [],
+          "retention": {
+            "policy": "ephemeral",
+            "days": 0
+          },
+          "backup_restore_owner": "none",
+          "delete_behavior": "delete",
+          "external_controller": true,
+          "secret_reference": {
+            "provider": "local-generated",
+            "reference": "ar-agent-runtime-runtime-api-secret",
+            "version": "v1",
+            "keys": [
+              "RUNTIME_API_ADMIN_TOKEN",
+              "RUNTIME_API_DEVELOPER_TOKEN",
+              "RUNTIME_API_CONTENT_ACCESS_KEY",
+              "RUNTIME_API_CONTENT_SECRET_KEY"
+            ]
+          }
+        },
+        {
           "id": "temporal-auth-secret",
           "kind": "secret_reference",
           "owner": "security-operator",
@@ -604,7 +629,10 @@
           "owner": "runtime-operator",
           "scope": "namespace",
           "dependencies": [
-            "api-account"
+            "api-account",
+            "state-db-secret",
+            "runtime-api-secret",
+            "blob-service"
           ],
           "retention": {
             "policy": "ephemeral",
@@ -618,31 +646,53 @@
             "kind": "Deployment",
             "name": "api",
             "replicas": 1,
-            "image": "ghcr.io/0x63616c/agent-runtime@sha256:7c60d4d6078da20db1f3c4e19cec03d033f9a37e4f7ec98fe5b1858f806ee1b3",
+            "image": "ghcr.io/0x63616c/agent-runtime@sha256:aa96439dbda5207c31dea06d72a5f58c7e0f3a929c6a8bcfd2a24e67d3365207",
             "service_account": "api-account",
             "command": [
-              "/runtime"
+              "/agent-runtime-api"
             ],
             "arguments": [
               "--config-env",
-              "RUNTIME_ROLE_CONFIG",
-              "--role",
-              "api"
+              "RUNTIME_API_CONFIG"
             ],
             "environment": [
               {
-                "name": "RUNTIME_ROLE_CONFIG",
-                "value": "{\"version\":1,\"role\":\"api\",\"namespace\":\"ar-agent-runtime\",\"listen_address\":\"0.0.0.0:8080\",\"dependencies\":[{\"name\":\"state\",\"endpoint\":\"http://state.ar-agent-runtime.svc:8080\"},{\"name\":\"telemetry\",\"endpoint\":\"http://telemetry.ar-agent-runtime.svc:4318\"}]}"
+                "name": "RUNTIME_API_CONFIG",
+                "value": "{\"version\":1,\"listen_address\":\"0.0.0.0:8080\",\"public_listen\":true,\"storage\":{\"mode\":\"postgres\",\"database_dsn_environment\":\"STATE_DATABASE_DSN\",\"content\":{\"endpoint\":\"blob.ar-agent-runtime.svc:9000\",\"access_key_environment\":\"RUNTIME_API_CONTENT_ACCESS_KEY\",\"secret_key_environment\":\"RUNTIME_API_CONTENT_SECRET_KEY\",\"bucket\":\"ar-agent-runtime\"}},\"model_profiles\":[\"balanced\"],\"max_request_bytes\":4194304,\"principals\":[{\"tenant\":\"public\",\"principal\":\"admin\",\"admin\":true,\"bearer_token_environment\":\"RUNTIME_API_ADMIN_TOKEN\"},{\"tenant\":\"public\",\"principal\":\"developer\",\"admin\":false,\"bearer_token_environment\":\"RUNTIME_API_DEVELOPER_TOKEN\"}]}"
               }
             ],
-            "secret_environment": [],
+            "secret_environment": [
+              {
+                "name": "STATE_DATABASE_DSN",
+                "secret": "state-db-secret",
+                "key": "STATE_DATABASE_DSN"
+              },
+              {
+                "name": "RUNTIME_API_ADMIN_TOKEN",
+                "secret": "runtime-api-secret",
+                "key": "RUNTIME_API_ADMIN_TOKEN"
+              },
+              {
+                "name": "RUNTIME_API_DEVELOPER_TOKEN",
+                "secret": "runtime-api-secret",
+                "key": "RUNTIME_API_DEVELOPER_TOKEN"
+              },
+              {
+                "name": "RUNTIME_API_CONTENT_ACCESS_KEY",
+                "secret": "runtime-api-secret",
+                "key": "RUNTIME_API_CONTENT_ACCESS_KEY"
+              },
+              {
+                "name": "RUNTIME_API_CONTENT_SECRET_KEY",
+                "secret": "runtime-api-secret",
+                "key": "RUNTIME_API_CONTENT_SECRET_KEY"
+              }
+            ],
             "readiness": {
               "command": [
-                "/runtime",
+                "/agent-runtime-api",
                 "--config-env",
-                "RUNTIME_ROLE_CONFIG",
-                "--role",
-                "api",
+                "RUNTIME_API_CONFIG",
                 "--check"
               ],
               "initial_delay_seconds": 1,
@@ -1932,7 +1982,8 @@
           "dependencies": [
             "api",
             "state",
-            "telemetry"
+            "telemetry",
+            "blob"
           ],
           "retention": {
             "policy": "ephemeral",
@@ -1950,7 +2001,8 @@
               "subject": "api",
               "allowed_egress": [
                 "state",
-                "telemetry"
+                "telemetry",
+                "blob"
               ],
               "allow_dns": true
             },
@@ -2995,6 +3047,31 @@
           }
         },
         {
+          "id": "runtime-api-secret",
+          "kind": "secret_reference",
+          "owner": "security-operator",
+          "scope": "namespace",
+          "dependencies": [],
+          "retention": {
+            "policy": "ephemeral",
+            "days": 0
+          },
+          "backup_restore_owner": "none",
+          "delete_behavior": "delete",
+          "external_controller": true,
+          "secret_reference": {
+            "provider": "local-generated",
+            "reference": "ar-ci-agent-runtime-runtime-api-secret",
+            "version": "v1",
+            "keys": [
+              "RUNTIME_API_ADMIN_TOKEN",
+              "RUNTIME_API_DEVELOPER_TOKEN",
+              "RUNTIME_API_CONTENT_ACCESS_KEY",
+              "RUNTIME_API_CONTENT_SECRET_KEY"
+            ]
+          }
+        },
+        {
           "id": "temporal-auth-secret",
           "kind": "secret_reference",
           "owner": "security-operator",
@@ -3525,7 +3602,10 @@
           "owner": "runtime-operator",
           "scope": "namespace",
           "dependencies": [
-            "api-account"
+            "api-account",
+            "state-db-secret",
+            "runtime-api-secret",
+            "blob-service"
           ],
           "retention": {
             "policy": "ephemeral",
@@ -3539,31 +3619,53 @@
             "kind": "Deployment",
             "name": "api",
             "replicas": 1,
-            "image": "ghcr.io/0x63616c/agent-runtime@sha256:7c60d4d6078da20db1f3c4e19cec03d033f9a37e4f7ec98fe5b1858f806ee1b3",
+            "image": "ghcr.io/0x63616c/agent-runtime@sha256:aa96439dbda5207c31dea06d72a5f58c7e0f3a929c6a8bcfd2a24e67d3365207",
             "service_account": "api-account",
             "command": [
-              "/runtime"
+              "/agent-runtime-api"
             ],
             "arguments": [
               "--config-env",
-              "RUNTIME_ROLE_CONFIG",
-              "--role",
-              "api"
+              "RUNTIME_API_CONFIG"
             ],
             "environment": [
               {
-                "name": "RUNTIME_ROLE_CONFIG",
-                "value": "{\"version\":1,\"role\":\"api\",\"namespace\":\"ar-ci-agent-runtime\",\"listen_address\":\"0.0.0.0:8080\",\"dependencies\":[{\"name\":\"state\",\"endpoint\":\"http://state.ar-ci-agent-runtime.svc:8080\"},{\"name\":\"telemetry\",\"endpoint\":\"http://telemetry.ar-ci-agent-runtime.svc:4318\"}]}"
+                "name": "RUNTIME_API_CONFIG",
+                "value": "{\"version\":1,\"listen_address\":\"0.0.0.0:8080\",\"public_listen\":true,\"storage\":{\"mode\":\"postgres\",\"database_dsn_environment\":\"STATE_DATABASE_DSN\",\"content\":{\"endpoint\":\"blob.ar-ci-agent-runtime.svc:9000\",\"access_key_environment\":\"RUNTIME_API_CONTENT_ACCESS_KEY\",\"secret_key_environment\":\"RUNTIME_API_CONTENT_SECRET_KEY\",\"bucket\":\"ar-ci-agent-runtime\"}},\"model_profiles\":[\"balanced\"],\"max_request_bytes\":4194304,\"principals\":[{\"tenant\":\"public\",\"principal\":\"admin\",\"admin\":true,\"bearer_token_environment\":\"RUNTIME_API_ADMIN_TOKEN\"},{\"tenant\":\"public\",\"principal\":\"developer\",\"admin\":false,\"bearer_token_environment\":\"RUNTIME_API_DEVELOPER_TOKEN\"}]}"
               }
             ],
-            "secret_environment": [],
+            "secret_environment": [
+              {
+                "name": "STATE_DATABASE_DSN",
+                "secret": "state-db-secret",
+                "key": "STATE_DATABASE_DSN"
+              },
+              {
+                "name": "RUNTIME_API_ADMIN_TOKEN",
+                "secret": "runtime-api-secret",
+                "key": "RUNTIME_API_ADMIN_TOKEN"
+              },
+              {
+                "name": "RUNTIME_API_DEVELOPER_TOKEN",
+                "secret": "runtime-api-secret",
+                "key": "RUNTIME_API_DEVELOPER_TOKEN"
+              },
+              {
+                "name": "RUNTIME_API_CONTENT_ACCESS_KEY",
+                "secret": "runtime-api-secret",
+                "key": "RUNTIME_API_CONTENT_ACCESS_KEY"
+              },
+              {
+                "name": "RUNTIME_API_CONTENT_SECRET_KEY",
+                "secret": "runtime-api-secret",
+                "key": "RUNTIME_API_CONTENT_SECRET_KEY"
+              }
+            ],
             "readiness": {
               "command": [
-                "/runtime",
+                "/agent-runtime-api",
                 "--config-env",
-                "RUNTIME_ROLE_CONFIG",
-                "--role",
-                "api",
+                "RUNTIME_API_CONFIG",
                 "--check"
               ],
               "initial_delay_seconds": 1,
@@ -4823,7 +4925,8 @@
           "dependencies": [
             "api",
             "state",
-            "telemetry"
+            "telemetry",
+            "blob"
           ],
           "retention": {
             "policy": "ephemeral",
@@ -4841,7 +4944,8 @@
               "subject": "api",
               "allowed_egress": [
                 "state",
-                "telemetry"
+                "telemetry",
+                "blob"
               ],
               "allow_dns": true
             },
@@ -5882,6 +5986,31 @@
           }
         },
         {
+          "id": "runtime-api-secret",
+          "kind": "secret_reference",
+          "owner": "security-operator",
+          "scope": "namespace",
+          "dependencies": [],
+          "retention": {
+            "policy": "external",
+            "days": 0
+          },
+          "backup_restore_owner": "platform-operator",
+          "delete_behavior": "retain",
+          "external_controller": true,
+          "secret_reference": {
+            "provider": "external-secrets",
+            "reference": "agent-runtime-runtime-api-secret",
+            "version": "v1",
+            "keys": [
+              "RUNTIME_API_ADMIN_TOKEN",
+              "RUNTIME_API_DEVELOPER_TOKEN",
+              "RUNTIME_API_CONTENT_ACCESS_KEY",
+              "RUNTIME_API_CONTENT_SECRET_KEY"
+            ]
+          }
+        },
+        {
           "id": "temporal-auth-secret",
           "kind": "secret_reference",
           "owner": "security-operator",
@@ -6412,7 +6541,10 @@
           "owner": "runtime-operator",
           "scope": "namespace",
           "dependencies": [
-            "api-account"
+            "api-account",
+            "state-db-secret",
+            "runtime-api-secret",
+            "blob-service"
           ],
           "retention": {
             "policy": "persistent",
@@ -6426,31 +6558,53 @@
             "kind": "Deployment",
             "name": "api",
             "replicas": 1,
-            "image": "ghcr.io/0x63616c/agent-runtime@sha256:7c60d4d6078da20db1f3c4e19cec03d033f9a37e4f7ec98fe5b1858f806ee1b3",
+            "image": "ghcr.io/0x63616c/agent-runtime@sha256:aa96439dbda5207c31dea06d72a5f58c7e0f3a929c6a8bcfd2a24e67d3365207",
             "service_account": "api-account",
             "command": [
-              "/runtime"
+              "/agent-runtime-api"
             ],
             "arguments": [
               "--config-env",
-              "RUNTIME_ROLE_CONFIG",
-              "--role",
-              "api"
+              "RUNTIME_API_CONFIG"
             ],
             "environment": [
               {
-                "name": "RUNTIME_ROLE_CONFIG",
-                "value": "{\"version\":1,\"role\":\"api\",\"namespace\":\"agent-runtime\",\"listen_address\":\"0.0.0.0:8080\",\"dependencies\":[{\"name\":\"state\",\"endpoint\":\"http://state.agent-runtime.svc:8080\"},{\"name\":\"telemetry\",\"endpoint\":\"http://telemetry.agent-runtime.svc:4318\"}]}"
+                "name": "RUNTIME_API_CONFIG",
+                "value": "{\"version\":1,\"listen_address\":\"0.0.0.0:8080\",\"public_listen\":true,\"storage\":{\"mode\":\"postgres\",\"database_dsn_environment\":\"STATE_DATABASE_DSN\",\"content\":{\"endpoint\":\"blob.agent-runtime.svc:9000\",\"access_key_environment\":\"RUNTIME_API_CONTENT_ACCESS_KEY\",\"secret_key_environment\":\"RUNTIME_API_CONTENT_SECRET_KEY\",\"bucket\":\"agent-runtime\"}},\"model_profiles\":[\"balanced\"],\"max_request_bytes\":4194304,\"principals\":[{\"tenant\":\"public\",\"principal\":\"admin\",\"admin\":true,\"bearer_token_environment\":\"RUNTIME_API_ADMIN_TOKEN\"},{\"tenant\":\"public\",\"principal\":\"developer\",\"admin\":false,\"bearer_token_environment\":\"RUNTIME_API_DEVELOPER_TOKEN\"}]}"
               }
             ],
-            "secret_environment": [],
+            "secret_environment": [
+              {
+                "name": "STATE_DATABASE_DSN",
+                "secret": "state-db-secret",
+                "key": "STATE_DATABASE_DSN"
+              },
+              {
+                "name": "RUNTIME_API_ADMIN_TOKEN",
+                "secret": "runtime-api-secret",
+                "key": "RUNTIME_API_ADMIN_TOKEN"
+              },
+              {
+                "name": "RUNTIME_API_DEVELOPER_TOKEN",
+                "secret": "runtime-api-secret",
+                "key": "RUNTIME_API_DEVELOPER_TOKEN"
+              },
+              {
+                "name": "RUNTIME_API_CONTENT_ACCESS_KEY",
+                "secret": "runtime-api-secret",
+                "key": "RUNTIME_API_CONTENT_ACCESS_KEY"
+              },
+              {
+                "name": "RUNTIME_API_CONTENT_SECRET_KEY",
+                "secret": "runtime-api-secret",
+                "key": "RUNTIME_API_CONTENT_SECRET_KEY"
+              }
+            ],
             "readiness": {
               "command": [
-                "/runtime",
+                "/agent-runtime-api",
                 "--config-env",
-                "RUNTIME_ROLE_CONFIG",
-                "--role",
-                "api",
+                "RUNTIME_API_CONFIG",
                 "--check"
               ],
               "initial_delay_seconds": 1,
@@ -7710,7 +7864,8 @@
           "dependencies": [
             "api",
             "state",
-            "telemetry"
+            "telemetry",
+            "blob"
           ],
           "retention": {
             "policy": "persistent",
@@ -7728,7 +7883,8 @@
               "subject": "api",
               "allowed_egress": [
                 "state",
-                "telemetry"
+                "telemetry",
+                "blob"
               ],
               "allow_dns": true
             },

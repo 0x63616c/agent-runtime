@@ -95,9 +95,9 @@ var _ = Describe("Self-hosted production Stack", func() {
 		Expect(string(manifests.JSON())).To(ContainSubstring(`"enableServiceLinks": false`))
 
 		resources := rendered.Resources()
-		for _, absent := range []stack.ResourceID{"runtime-api", "runtime-api-account", "runtime-api-secret", "runtime-api-service", "runtime-api-egress"} {
+		for _, absent := range []stack.ResourceID{"runtime-api", "runtime-api-account", "runtime-api-service", "runtime-api-egress"} {
 			for _, resource := range resources {
-				Expect(resource.ID).NotTo(Equal(absent), "the pinned image does not contain agent-runtime-api; production desired state must defer it")
+				Expect(resource.ID).NotTo(Equal(absent), "the durable API replaces the health-only api workload rather than creating a second public endpoint")
 			}
 		}
 		for _, role := range []stack.ResourceID{"api", "orchestration", "model", "tool", "blob-role", "codec", "sandbox-control", "sandbox-host"} {
@@ -117,6 +117,12 @@ var _ = Describe("Self-hosted production Stack", func() {
 		}
 
 		Expect(secretEnvironmentNames(findResource(resources, "orchestration"))).To(ContainElement("TEMPORAL_AUTH_TOKEN"))
+		api := findResource(resources, "api")
+		Expect(api.Kubernetes.Image).To(Equal("ghcr.io/0x63616c/agent-runtime@sha256:aa96439dbda5207c31dea06d72a5f58c7e0f3a929c6a8bcfd2a24e67d3365207"))
+		Expect(api.Kubernetes.Command).To(ConsistOf("/agent-runtime-api"))
+		Expect(api.Kubernetes.Arguments).To(ConsistOf("--config-env", "RUNTIME_API_CONFIG"))
+		Expect(secretEnvironmentNames(api)).To(ConsistOf("STATE_DATABASE_DSN", "RUNTIME_API_ADMIN_TOKEN", "RUNTIME_API_DEVELOPER_TOKEN", "RUNTIME_API_CONTENT_ACCESS_KEY", "RUNTIME_API_CONTENT_SECRET_KEY"))
+		Expect(findResource(resources, "api-egress").Kubernetes.Network.AllowedEgress).To(ConsistOf(stack.ResourceID("state"), stack.ResourceID("telemetry"), stack.ResourceID("blob")))
 		Expect(secretEnvironmentNames(findResource(resources, "model"))).NotTo(ContainElement("TEMPORAL_AUTH_TOKEN"))
 		Expect(findResource(resources, "model-egress").Kubernetes.Network.AllowedEgress).To(ContainElement(stack.ResourceID("egress-proxy")))
 		Expect(findResource(resources, "temporal-namespace").Orchestration.RetentionDays).To(BeNumerically(">", 0))
@@ -139,7 +145,6 @@ var _ = Describe("Self-hosted production Stack", func() {
 		Expect(telemetryTTL).To(Equal("720h"))
 		Expect(findResource(resources, "migration-runner").Kubernetes.Image).To(Equal("postgres@sha256:e5507c984377515b8c9922b0eb19f55aba2063fdc7bccf268cefd53133f97054"))
 		expectedRoleConfigs := map[stack.ResourceID]string{
-			"api":             `{"version":1,"role":"api","namespace":"agent-runtime","listen_address":"0.0.0.0:8080","dependencies":[{"name":"state","endpoint":"http://state.agent-runtime.svc:8080"},{"name":"telemetry","endpoint":"http://telemetry.agent-runtime.svc:4318"}]}`,
 			"orchestration":   `{"version":1,"role":"orchestration-codec","namespace":"agent-runtime","listen_address":"0.0.0.0:8081","dependencies":[{"name":"state","endpoint":"postgres://state.agent-runtime.svc:5432/agent_runtime","secret_environment":"STATE_DATABASE_DSN"},{"name":"telemetry","endpoint":"http://telemetry.agent-runtime.svc:4318"},{"name":"temporal","endpoint":"temporal.agent-runtime.svc:7233","secret_environment":"TEMPORAL_AUTH_TOKEN"},{"name":"payload-blob","endpoint":"http://blob.agent-runtime.svc:9000","secret_environment":"ORCHESTRATION_PAYLOAD_BLOB_ACCESS_KEY"},{"name":"payload-blob-secret","endpoint":"http://blob.agent-runtime.svc:9000","secret_environment":"ORCHESTRATION_PAYLOAD_BLOB_SECRET_KEY"}],"worker":{"task_queue":"agent-runtime-session-v1","payload_blob_endpoint":"http://blob.agent-runtime.svc:9000","payload_blob_bucket":"agent-runtime-temporal-payload","payload_blob_prefix":"temporal-payload","payload_access_key_environment":"ORCHESTRATION_PAYLOAD_BLOB_ACCESS_KEY","payload_secret_key_environment":"ORCHESTRATION_PAYLOAD_BLOB_SECRET_KEY"}}`,
 			"model":           `{"version":1,"role":"model","namespace":"agent-runtime","listen_address":"0.0.0.0:8082","dependencies":[{"name":"conversation","endpoint":"http://api.agent-runtime.svc:8080","secret_environment":"CONVERSATION_ACCESS_TOKEN"},{"name":"egress-proxy","endpoint":"http://egress-proxy.agent-runtime.svc:8088"},{"name":"model","endpoint":"https://model-provider.example.invalid","secret_environment":"MODEL_API_KEY"},{"name":"telemetry","endpoint":"http://telemetry.agent-runtime.svc:4318"}]}`,
 			"tool":            `{"version":1,"role":"tool","namespace":"agent-runtime","listen_address":"0.0.0.0:8083","dependencies":[{"name":"sandbox-control","endpoint":"http://sandbox-control.agent-runtime.svc:8086","secret_environment":"SANDBOX_CONTROL_TOKEN"},{"name":"telemetry","endpoint":"http://telemetry.agent-runtime.svc:4318"},{"name":"tool-broker","endpoint":"http://api.agent-runtime.svc:8080","secret_environment":"TOOL_BROKER_TOKEN"}]}`,
@@ -158,7 +163,10 @@ var _ = Describe("Self-hosted production Stack", func() {
 			Expect(prepareErr).NotTo(HaveOccurred(), "resource %s", role)
 			Expect(secretEnvironmentNames(findResource(resources, role))).To(ConsistOf(plan.SecretEnvironmentNames()), "resource %s", role)
 		}
-		Expect(expectedRoleConfigs).To(HaveLen(8))
+		Expect(expectedRoleConfigs).To(HaveLen(7))
+		apiConfig, found := environmentValue(api, "RUNTIME_API_CONFIG")
+		Expect(found).To(BeTrue())
+		Expect(apiConfig).To(Equal(`{"version":1,"listen_address":"0.0.0.0:8080","public_listen":true,"storage":{"mode":"postgres","database_dsn_environment":"STATE_DATABASE_DSN","content":{"endpoint":"blob.agent-runtime.svc:9000","access_key_environment":"RUNTIME_API_CONTENT_ACCESS_KEY","secret_key_environment":"RUNTIME_API_CONTENT_SECRET_KEY","bucket":"agent-runtime"}},"model_profiles":["balanced"],"max_request_bytes":4194304,"principals":[{"tenant":"public","principal":"admin","admin":true,"bearer_token_environment":"RUNTIME_API_ADMIN_TOKEN"},{"tenant":"public","principal":"developer","admin":false,"bearer_token_environment":"RUNTIME_API_DEVELOPER_TOKEN"}]}`))
 
 		controlService := findResource(resources, "sandbox-control-service")
 		Expect(controlService.Kubernetes.Ports).To(ConsistOf(stack.Port{Name: "http", Number: 8086, Protocol: "TCP"}))
@@ -239,7 +247,7 @@ func normalizedProfile(resources []stack.Resource, namespace string, localFixtur
 					environment.Value = "<namespace>"
 					continue
 				}
-				if environment.Name != "RUNTIME_ROLE_CONFIG" {
+				if environment.Name != "RUNTIME_ROLE_CONFIG" && environment.Name != "RUNTIME_API_CONFIG" {
 					continue
 				}
 				var document any

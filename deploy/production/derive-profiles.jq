@@ -23,6 +23,11 @@ def role_config_namespace($namespace):
             .worker.task_queue = ($namespace + "-session-v1")
           else . end |
           tojson)
+      elif .name == "RUNTIME_API_CONFIG" then
+        .value |= (fromjson |
+          .storage.content.endpoint |= gsub("\\.agent-runtime\\.svc"; "." + $namespace + ".svc") |
+          .storage.content.bucket = $namespace |
+          tojson)
       else . end))
   else . end;
 

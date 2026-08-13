@@ -106,7 +106,11 @@ func TestCIRenderUsesStackScopedTiltImagesWhileProductionRetainsPublishedImages(
 				ciImages[object.ID] = object.Kubernetes.Image
 				continue
 			}
-			if object.Kubernetes.Image != "ghcr.io/0x63616c/agent-runtime@sha256:7c60d4d6078da20db1f3c4e19cec03d033f9a37e4f7ec98fe5b1858f806ee1b3" {
+			want := "ghcr.io/0x63616c/agent-runtime@sha256:7c60d4d6078da20db1f3c4e19cec03d033f9a37e4f7ec98fe5b1858f806ee1b3"
+			if object.ID == "api" {
+				want = "ghcr.io/0x63616c/agent-runtime@sha256:aa96439dbda5207c31dea06d72a5f58c7e0f3a929c6a8bcfd2a24e67d3365207"
+			}
+			if object.Kubernetes.Image != want {
 				t.Fatalf("production %s image must remain the reviewed published digest, got %q", object.ID, object.Kubernetes.Image)
 			}
 		}
@@ -383,7 +387,7 @@ func TestLocalStackProjectsTheReviewedEightRoleTopology(t *testing.T) {
 		t.Fatalf("render local stack: %v", err)
 	}
 	expectedRoleCredentials := map[stack.ResourceID][]string{
-		"api":             nil,
+		"api":             {"STATE_DATABASE_DSN", "RUNTIME_API_ADMIN_TOKEN", "RUNTIME_API_DEVELOPER_TOKEN", "RUNTIME_API_CONTENT_ACCESS_KEY", "RUNTIME_API_CONTENT_SECRET_KEY"},
 		"orchestration":   {"STATE_DATABASE_DSN", "TEMPORAL_AUTH_TOKEN", "ORCHESTRATION_PAYLOAD_BLOB_ACCESS_KEY", "ORCHESTRATION_PAYLOAD_BLOB_SECRET_KEY"},
 		"model":           {"CONVERSATION_ACCESS_TOKEN", "MODEL_API_KEY", "LOCAL_DEMO_STATE_DSN", "LOCAL_DEMO_CONTENT_ACCESS_KEY", "LOCAL_DEMO_CONTENT_SECRET_KEY"},
 		"tool":            {"SANDBOX_CONTROL_TOKEN", "TOOL_BROKER_TOKEN", "LOCAL_DEMO_STATE_DSN", "LOCAL_DEMO_CONTENT_ACCESS_KEY", "LOCAL_DEMO_CONTENT_SECRET_KEY"},
@@ -393,12 +397,12 @@ func TestLocalStackProjectsTheReviewedEightRoleTopology(t *testing.T) {
 		"sandbox-host":    {"SANDBOX_HOST_IDENTITY", "SANDBOX_CONTROL_TOKEN"},
 	}
 	expectedRoles := map[stack.ResourceID]roles.Role{
-		"api": roles.RoleAPI, "orchestration": roles.RoleOrchestrationCodec,
-		"model": roles.RoleModel, "tool": roles.RoleTool, "blob-role": roles.RoleBlob,
+		"orchestration": roles.RoleOrchestrationCodec,
+		"model":         roles.RoleModel, "tool": roles.RoleTool, "blob-role": roles.RoleBlob,
 		"codec": roles.RoleCodec, "sandbox-control": roles.RoleSandboxControl, "sandbox-host": roles.RoleSandboxHost,
 	}
 	expectedEgress := map[stack.ResourceID][]stack.ResourceID{
-		"api":             {"state", "telemetry"},
+		"api":             {"blob", "state", "telemetry"},
 		"orchestration":   {"blob", "state", "telemetry", "temporal"},
 		"model":           {"api", "blob", "egress-proxy", "state", "telemetry"},
 		"tool":            {"api", "blob", "sandbox-control", "state", "telemetry"},
@@ -408,6 +412,35 @@ func TestLocalStackProjectsTheReviewedEightRoleTopology(t *testing.T) {
 		"sandbox-host":    {"sandbox-control", "telemetry"},
 	}
 	seenAccounts := map[string]struct{}{}
+	api := renderedResource(t, rendered.Resources(), "api")
+	if got := api.Kubernetes.Command; len(got) != 1 || got[0] != "/agent-runtime-api" {
+		t.Fatalf("api command = %v, want /agent-runtime-api", got)
+	}
+	if got := api.Kubernetes.Arguments; len(got) != 2 || got[0] != "--config-env" || got[1] != "RUNTIME_API_CONFIG" {
+		t.Fatalf("api arguments = %v, want runtime API configuration arguments", got)
+	}
+	apiConfig, found := "", false
+	for _, environment := range api.Kubernetes.Environment {
+		if environment.Name == "RUNTIME_API_CONFIG" {
+			apiConfig, found = environment.Value, true
+			break
+		}
+	}
+	if !found || !strings.Contains(apiConfig, `"storage":{"mode":"postgres"`) || !strings.Contains(apiConfig, `"bucket":"ar-role-proof"`) {
+		t.Fatalf("api durable configuration = %q", apiConfig)
+	}
+	actualAPICredentials := make([]string, 0, len(api.Kubernetes.SecretEnvironment))
+	for _, environment := range api.Kubernetes.SecretEnvironment {
+		actualAPICredentials = append(actualAPICredentials, environment.Name)
+	}
+	if strings.Join(actualAPICredentials, ",") != strings.Join(expectedRoleCredentials["api"], ",") {
+		t.Fatalf("api credentials = %v, want %v", actualAPICredentials, expectedRoleCredentials["api"])
+	}
+	apiPolicy := renderedResource(t, rendered.Resources(), "api-egress")
+	if strings.Join(resourceIDs(apiPolicy.Kubernetes.Network.AllowedEgress), ",") != strings.Join(resourceIDs(expectedEgress["api"]), ",") {
+		t.Fatalf("api egress = %v, want %v", apiPolicy.Kubernetes.Network.AllowedEgress, expectedEgress["api"])
+	}
+	seenAccounts[api.Kubernetes.ServiceAccount] = struct{}{}
 	for resourceID, expectedRole := range expectedRoles {
 		expected := struct {
 			resource stack.ResourceID
@@ -518,6 +551,7 @@ func TestMaterializeSecretsKeepsValuesPrivateAndStablePerStack(t *testing.T) {
 		"ar-safe-stack-sandbox-control-secret":            {"SANDBOX_CONTROL_TOKEN"},
 		"ar-safe-stack-blob-storage-secret":               {"BLOB_STORAGE_CREDENTIAL", "MINIO_ROOT_PASSWORD", "MINIO_ROOT_USER"},
 		"ar-safe-stack-orchestration-payload-blob-secret": {"ORCHESTRATION_PAYLOAD_BLOB_ACCESS_KEY", "ORCHESTRATION_PAYLOAD_BLOB_SECRET_KEY"},
+		"ar-safe-stack-runtime-api-secret":                {"RUNTIME_API_ADMIN_TOKEN", "RUNTIME_API_CONTENT_ACCESS_KEY", "RUNTIME_API_CONTENT_SECRET_KEY", "RUNTIME_API_DEVELOPER_TOKEN"},
 		"ar-safe-stack-codec-blob-secret":                 {"CODEC_BLOB_CREDENTIAL"},
 		"ar-safe-stack-sandbox-host-ca-secret":            {"SANDBOX_HOST_CA"},
 		"ar-safe-stack-sandbox-state-secret":              {"SANDBOX_STATE_DSN"},
