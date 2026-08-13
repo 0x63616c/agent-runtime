@@ -1,0 +1,21 @@
+{
+  "annotations": {"list": []},
+  "editable": false,
+  "panels": [
+    {"id": 1, "title": "Sessions and turns", "type": "timeseries", "targets": [{"expr": "sum by (runtime_operation) (rate(runtime_api_request_completed_total{runtime_operation=~\"create_session|send_input|inspect_session|inspect_turn\"}[5m]))"}]},
+    {"id": 2, "title": "Model usage and retries", "type": "timeseries", "targets": [{"expr": "sum(rate(runtime_model_invocation_completed_total[5m])) by (outcome)"}]},
+    {"id": 3, "title": "Tool authorization and execution", "type": "timeseries", "targets": [{"expr": "sum(rate(runtime_tool_authorization_decision_total[5m])) by (decision)"}]},
+    {"id": 4, "title": "Approval queue and expiry", "type": "timeseries", "targets": [{"expr": "runtime_approval_pending"}, {"expr": "sum(rate(runtime_approval_expired_total[5m]))"}]},
+    {"id": 5, "title": "Sandbox provisioning and reaping", "type": "timeseries", "targets": [{"expr": "sum(rate(runtime_sandbox_operation_completed_total[5m])) by (operation,outcome)"}]},
+    {"id": 6, "title": "Event lag and gaps", "type": "timeseries", "targets": [{"expr": "max(runtime_event_delivery_lag_seconds)"}, {"expr": "sum(rate(runtime_event_cursor_gap_total[5m]))"}]},
+    {"id": 7, "title": "Blob and codec health", "type": "timeseries", "targets": [{"expr": "sum(rate(runtime_blob_operation_failed_total[5m]))"}, {"expr": "sum(rate(runtime_codec_operation_failed_total[5m]))"}]},
+    {"id": 8, "title": "Temporal polling and schedule-to-start", "type": "timeseries", "targets": [{"expr": "max(temporal_workflow_task_schedule_to_start_latency_seconds)"}]},
+    {"id": 9, "title": "Redaction and oversize protection", "type": "timeseries", "targets": [{"expr": "sum(rate(runtime_observability_redaction_total[5m]))"}, {"expr": "sum(rate(runtime_observability_oversize_rejected_total[5m]))"}]},
+    {"id": 10, "title": "Public API completion", "type": "timeseries", "targets": [{"expr": "sum(rate(runtime_api_request_completed_total[5m])) by (runtime_outcome,http_response_status_code)"}, {"expr": "histogram_quantile(0.95, sum(rate(runtime_api_request_duration_milliseconds_bucket[5m])) by (le,runtime_operation))"}]}
+  ],
+  "schemaVersion": 39,
+  "tags": ["agent-runtime", "operator"],
+  "title": "Agent Runtime / operator overview",
+  "uid": "agent-runtime-operator-overview",
+  "version": 1
+}

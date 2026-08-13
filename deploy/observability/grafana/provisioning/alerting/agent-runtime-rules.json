@@ -1,0 +1,20 @@
+{
+  "apiVersion": 1,
+  "groups": [
+    {
+      "name": "agent-runtime-operator",
+      "folder": "Agent Runtime",
+      "interval": "1m",
+      "rules": [
+        {"uid": "runtime-api-failures", "title": "Runtime API failures", "condition": "A", "for": "5m", "data": [{"refId": "A", "model": {"expr": "sum(rate(runtime_api_request_completed_total{runtime_outcome=\"failed\"}[5m])) > 0"}}]},
+        {"uid": "runtime-model-retries", "title": "Model retries elevated", "condition": "A", "for": "10m", "data": [{"refId": "A", "model": {"expr": "sum(rate(runtime_model_invocation_retry_total[10m])) > 5"}}]},
+        {"uid": "runtime-approval-expiry", "title": "Approval expirations", "condition": "A", "for": "5m", "data": [{"refId": "A", "model": {"expr": "sum(rate(runtime_approval_expired_total[5m])) > 0"}}]},
+        {"uid": "runtime-sandbox-failures", "title": "Sandbox provisioning or reaping failures", "condition": "A", "for": "5m", "data": [{"refId": "A", "model": {"expr": "sum(rate(runtime_sandbox_operation_completed_total{outcome=\"failed\"}[5m])) > 0"}}]},
+        {"uid": "runtime-event-gap", "title": "Product event cursor gap", "condition": "A", "for": "1m", "data": [{"refId": "A", "model": {"expr": "sum(rate(runtime_event_cursor_gap_total[5m])) > 0"}}]},
+        {"uid": "runtime-blob-codec-failure", "title": "Blob or codec health failure", "condition": "A", "for": "5m", "data": [{"refId": "A", "model": {"expr": "sum(rate(runtime_blob_operation_failed_total[5m])) + sum(rate(runtime_codec_operation_failed_total[5m])) > 0"}}]},
+        {"uid": "runtime-temporal-schedule", "title": "Temporal schedule-to-start latency", "condition": "A", "for": "10m", "data": [{"refId": "A", "model": {"expr": "max(temporal_workflow_task_schedule_to_start_latency_seconds) > 30"}}]},
+        {"uid": "runtime-redaction-oversize", "title": "Observability redaction or oversize rejection", "condition": "A", "for": "5m", "data": [{"refId": "A", "model": {"expr": "sum(rate(runtime_observability_redaction_total[5m])) + sum(rate(runtime_observability_oversize_rejected_total[5m])) > 0"}}]}
+      ]
+    }
+  ]
+}
