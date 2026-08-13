@@ -80,6 +80,10 @@ local_kubeconfig=""
 trust_wiring_a=""
 trust_wiring_b=""
 runtime_role_ids='["api","orchestration","model","tool","blob-role","codec","sandbox-control","sandbox-host"]'
+# These are Tilt resource names declared in the reviewed Tiltfile. Snapshot
+# extraction rejects every other resource name, so a future Tilt extension or
+# an adversarial manifest cannot turn this diagnostic into an inventory dump.
+tilt_resource_ids='["api","blob","blob-role","blob-reconciler","codec","egress-proxy","migration-runner","model","orchestration","otel-collector","sandbox-control","sandbox-host","sandbox-host-bootstrap","stack-reconcile","state","telemetry","temporal","temporal-state","tool"]'
 
 runtime_roles_ready() {
   jq -e --argjson roles "$runtime_role_ids" '
@@ -149,6 +153,81 @@ empty_runtime_role_startup_status() {
   jq -nc --argjson roles "$runtime_role_ids" '$roles | map({id:.,pods:[]})'
 }
 
+# A Tilt snapshot contains the complete UI log store, links, status messages,
+# and resource metadata. It is an unsafe, short-lived diagnostic input. This
+# extractor retains only declared resource names and three bounded state enums.
+# It deliberately does not retain build errors, log spans, URLs, pod names, or
+# condition messages/reasons.
+tilt_snapshot_diagnostics() {
+  local snapshot="$1"
+  if [[ ! -s "$snapshot" ]]; then
+    printf '%s' '{"snapshot_state":"unavailable","resource_status":[]}'
+    return 0
+  fi
+  jq -c --argjson resources "$tilt_resource_ids" '
+    def safe_build:
+      if (.status | type) != "object" then "unknown"
+      elif (.status.currentBuild? | type) == "object" then "running"
+      elif (.status.buildHistory? | type) != "array" then "not_observed"
+      elif (.status.buildHistory | length) == 0 then "not_observed"
+      elif (.status.buildHistory[-1].error? | type) == "string" and (.status.buildHistory[-1].error | length) > 0 then "failed"
+      elif (.status.buildHistory[-1].error? == null) or ((.status.buildHistory[-1].error? | type) == "string") then "succeeded"
+      else "unknown" end;
+    def safe_runtime:
+      if (.status.runtimeStatus? | type) != "string" then "unknown"
+      elif .status.runtimeStatus == "ok" then "healthy"
+      elif .status.runtimeStatus == "error" then "unhealthy"
+      elif .status.runtimeStatus == "pending" then "pending"
+      elif .status.runtimeStatus == "not_applicable" then "not_applicable"
+      else "unknown" end;
+    def safe_update:
+      if (.status.updateStatus? | type) != "string" then "unknown"
+      elif .status.updateStatus == "ok" then "succeeded"
+      elif .status.updateStatus == "error" then "failed"
+      elif .status.updateStatus == "pending" then "pending"
+      elif .status.updateStatus == "not_applicable" then "not_applicable"
+      else "unknown" end;
+    if (.view | type) != "object" or (.view.uiResources | type) != "array" then
+      error("snapshot is missing its resource list")
+    else
+      [(.view.uiResources)[]? |
+        .metadata.name? as $id |
+        select(($id | type) == "string" and ($resources | index($id))) |
+        {id:$id,build_state:safe_build,runtime_state:safe_runtime,update_state:safe_update}
+      ] | unique_by(.id) | sort_by(.id) as $resource_status |
+      {snapshot_state:"observed",resource_status:$resource_status}
+    end
+  ' "$snapshot" 2>/dev/null || printf '%s' '{"snapshot_state":"unavailable","resource_status":[]}'
+}
+
+# This is intentionally narrower than the existing aggregate pod state: the
+# only numeric termination detail retained is the reviewed API container's
+# latest exit code. Kubernetes messages are never copied into diagnostics.
+api_last_termination() {
+  jq -c '
+    def safe_reason:
+      if . == "ContainerCreating" or . == "CrashLoopBackOff" or . == "CreateContainerConfigError" or
+         . == "CreateContainerError" or . == "ErrImageNeverPull" or . == "ErrImagePull" or
+         . == "ImagePullBackOff" or . == "InvalidImageName" or . == "OOMKilled" or
+         . == "PodInitializing" or . == "RunContainerError" or . == "ContainerCannotRun" or
+         . == "Error" or . == "Completed" then . else "other" end;
+    [ .items[]? |
+      select(.metadata.labels["agent-runtime.dev/resource"] == "api") |
+      .status.containerStatuses[]? |
+      select(.name == "api" and (.lastState.terminated? | type) == "object") |
+      .lastState.terminated |
+      select((.exitCode? | type) == "number" and .exitCode >= 0 and .exitCode <= 255) |
+      {exit_code:.exitCode,reason:(.reason? | safe_reason),finished_at:(.finishedAt? // "")}
+    ] as $terminations |
+    if ($terminations | length) == 0 then
+      {observed:false,exit_code:0,reason:"not_observed"}
+    else
+      ($terminations | sort_by(.finished_at) | last) as $latest |
+      {observed:true,exit_code:$latest.exit_code,reason:$latest.reason}
+    end
+  '
+}
+
 # Tilt output can include rendered workload configuration, so it is never
 # retained. This classifier reads a private, short-lived output file and emits
 # one bounded phase token only. The token separates failures before Kubernetes
@@ -182,18 +261,29 @@ run_tilt_ci_attempt() {
   local stack="$1"
   local namespace="$2"
   local output
+  local snapshot
   output="$(mktemp "${TMPDIR:-/tmp}/agent-runtime-tilt-ci-output.XXXXXX")"
+  snapshot="$(mktemp "${TMPDIR:-/tmp}/agent-runtime-tilt-ci-snapshot.XXXXXX")"
   chmod 600 "$output"
-  if tilt ci --context "$context" --namespace "$namespace" --port 0 --timeout "$readiness_timeout" \
+  chmod 600 "$snapshot"
+  local exit_code=0
+  if ! tilt ci --context "$context" --namespace "$namespace" --port 0 --timeout "$readiness_timeout" --output-snapshot-on-exit "$snapshot" \
     -- --stack="$stack" --profile="$profile" "${ci_tilt_args[@]}" >"$output" 2>&1; then
-    rm -f -- "$output"
-    printf '%s' none
+    exit_code=1
+  fi
+  local snapshot_diagnostics resource_status snapshot_state phase
+  snapshot_diagnostics="$(tilt_snapshot_diagnostics "$snapshot")"
+  resource_status="$(jq -ec '.resource_status' <<<"$snapshot_diagnostics")"
+  snapshot_state="$(jq -er '.snapshot_state' <<<"$snapshot_diagnostics")"
+  if [[ "$exit_code" != 0 ]]; then
+    phase="$(classify_tilt_ci_failure "$output")"
+  fi
+  rm -f -- "$snapshot" "$output"
+  if [[ "$exit_code" == 0 ]]; then
+    jq -nc --argjson resource_status "$resource_status" --arg snapshot_state "$snapshot_state" '{phase:"none",snapshot_state:$snapshot_state,resource_status:$resource_status}'
     return 0
   fi
-  local phase
-  phase="$(classify_tilt_ci_failure "$output")"
-  rm -f -- "$output"
-  printf '%s' "$phase"
+  jq -nc --arg phase "$phase" --arg snapshot_state "$snapshot_state" --argjson resource_status "$resource_status" '{phase:$phase,snapshot_state:$snapshot_state,resource_status:$resource_status}'
   return 1
 }
 
@@ -337,6 +427,9 @@ write_safe_diagnostic_summary() {
   local tilt_ci_attempts="$8"
   local startup_status="$9"
   local tilt_ci_failure_phases="${10}"
+  local tilt_resource_status="${11}"
+  local api_termination="${12}"
+  local tilt_snapshot_state="${13}"
   local destination="$diagnostics_dir/$stack.summary.json"
 
   jq -n \
@@ -351,15 +444,29 @@ write_safe_diagnostic_summary() {
     --argjson tilt_ci_attempts "$tilt_ci_attempts" \
     --argjson runtime_role_startup_status "$startup_status" \
     --argjson tilt_ci_failure_phases "$tilt_ci_failure_phases" \
-    '{kind:"diagnostic-summary/v3",version:3,stack:$stack,namespace:$namespace,profile:$profile,tilt_ci_exit_code:$tilt_ci_exit_code,tilt_ci_attempts:$tilt_ci_attempts,tilt_ci_failure_phases:$tilt_ci_failure_phases,workload_probe:$probe_status,runtime_roles_observed:$runtime_roles_observed,runtime_roles_ready:$runtime_roles_ready,runtime_role_status:$runtime_role_status,runtime_role_startup_status:$runtime_role_startup_status}' \
+    --argjson tilt_resource_status "$tilt_resource_status" \
+    --argjson api_last_termination "$api_termination" \
+    --arg tilt_snapshot_state "$tilt_snapshot_state" \
+    '{kind:"diagnostic-summary/v4",version:4,stack:$stack,namespace:$namespace,profile:$profile,tilt_ci_exit_code:$tilt_ci_exit_code,tilt_ci_attempts:$tilt_ci_attempts,tilt_ci_failure_phases:$tilt_ci_failure_phases,tilt_snapshot_state:$tilt_snapshot_state,tilt_resource_status:$tilt_resource_status,workload_probe:$probe_status,runtime_roles_observed:$runtime_roles_observed,runtime_roles_ready:$runtime_roles_ready,runtime_role_status:$runtime_role_status,runtime_role_startup_status:$runtime_role_startup_status,api_last_termination:$api_last_termination}' \
     >"$destination"
 
   jq -e '
-    keys == ["kind","namespace","profile","runtime_role_startup_status","runtime_role_status","runtime_roles_observed","runtime_roles_ready","stack","tilt_ci_attempts","tilt_ci_exit_code","tilt_ci_failure_phases","version","workload_probe"] and
-    .kind == "diagnostic-summary/v3" and .version == 3 and
+    keys == ["api_last_termination","kind","namespace","profile","runtime_role_startup_status","runtime_role_status","runtime_roles_observed","runtime_roles_ready","stack","tilt_ci_attempts","tilt_ci_exit_code","tilt_ci_failure_phases","tilt_resource_status","tilt_snapshot_state","version","workload_probe"] and
+    .kind == "diagnostic-summary/v4" and .version == 4 and
     (.stack | type == "string") and (.namespace | type == "string") and (.profile | type == "string") and
     (.tilt_ci_exit_code | type == "number") and (.tilt_ci_attempts | type == "number" and . >= 0 and . <= 2) and
     (.tilt_ci_attempts as $attempts | .tilt_ci_failure_phases | type == "array" and (if $attempts == 0 then length <= 1 else length <= $attempts end) and all(.[]; . == "bootstrap" or . == "render" or . == "image_build" or . == "kubernetes_apply" or . == "readiness" or . == "registry_sync" or . == "unknown")) and
+    (.tilt_snapshot_state == "observed" or .tilt_snapshot_state == "unavailable") and
+    (.tilt_resource_status | type == "array" and length <= 19 and
+      ([.[].id] | unique | length) == length and all(.[];
+        keys == ["build_state","id","runtime_state","update_state"] and
+        (.id == "api" or .id == "blob" or .id == "blob-role" or .id == "blob-reconciler" or .id == "codec" or .id == "egress-proxy" or .id == "migration-runner" or .id == "model" or .id == "orchestration" or .id == "otel-collector" or .id == "sandbox-control" or .id == "sandbox-host" or .id == "sandbox-host-bootstrap" or .id == "stack-reconcile" or .id == "state" or .id == "telemetry" or .id == "temporal" or .id == "temporal-state" or .id == "tool") and
+        (.build_state == "failed" or .build_state == "not_observed" or .build_state == "running" or .build_state == "succeeded" or .build_state == "unknown") and
+        (.runtime_state == "healthy" or .runtime_state == "not_applicable" or .runtime_state == "pending" or .runtime_state == "unhealthy" or .runtime_state == "unknown") and
+        (.update_state == "failed" or .update_state == "not_applicable" or .update_state == "pending" or .update_state == "succeeded" or .update_state == "unknown"))) and
+    (.api_last_termination | keys == ["exit_code","observed","reason"] and
+      (.observed | type == "boolean") and (.exit_code | type == "number" and . >= 0 and . <= 255) and
+      (.reason == "not_observed" or .reason == "ContainerCreating" or .reason == "CrashLoopBackOff" or .reason == "CreateContainerConfigError" or .reason == "CreateContainerError" or .reason == "ErrImageNeverPull" or .reason == "ErrImagePull" or .reason == "ImagePullBackOff" or .reason == "InvalidImageName" or .reason == "OOMKilled" or .reason == "PodInitializing" or .reason == "RunContainerError" or .reason == "ContainerCannotRun" or .reason == "Error" or .reason == "Completed" or .reason == "other")) and
     (.workload_probe | type == "string") and
     (.runtime_roles_observed | type == "number") and (.runtime_roles_ready | type == "boolean") and
     (.runtime_role_status | type == "array" and length == 8 and
@@ -390,7 +497,7 @@ write_safe_diagnostic_summary() {
 capture_plan_failure_diagnostics() {
   local stack="$1"
   local namespace="$2"
-  write_safe_diagnostic_summary "$stack" "$namespace" 1 "unavailable" 0 false "$(empty_runtime_role_status)" 0 "$(empty_runtime_role_startup_status)" '["render"]'
+  write_safe_diagnostic_summary "$stack" "$namespace" 1 "unavailable" 0 false "$(empty_runtime_role_status)" 0 "$(empty_runtime_role_startup_status)" '["render"]' '[]' '{"observed":false,"exit_code":0,"reason":"not_observed"}' unavailable
 }
 
 if [[ "$diagnostic_self_test" == true ]]; then
@@ -401,7 +508,44 @@ if [[ "$diagnostic_self_test" == true ]]; then
   fixture_role_status="$(empty_runtime_role_status)"
   pod_status_fixture='{"items":[{"metadata":{"labels":{"agent-runtime.dev/resource":"api"}},"status":{"phase":"Pending","containerStatuses":[{"ready":false,"restartCount":1,"state":{"waiting":{"reason":"adversarial-runtime-detail"}}}]}}]}'
   fixture_startup_status="$(printf '%s' "$pod_status_fixture" | runtime_role_startup_status)"
-  write_safe_diagnostic_summary "fixture-stack" "ar-fixture-stack" 7 "unavailable" 0 false "$fixture_role_status" 2 "$fixture_startup_status" '["image_build","unknown"]'
+  snapshot_fixture="$(mktemp "${TMPDIR:-/tmp}/agent-runtime-tilt-snapshot-fixture.XXXXXX")"
+  cat >"$snapshot_fixture" <<'EOF'
+{"view":{"log":"Bearer adversarial-header-token","uiResources":[{"metadata":{"name":"api"},"status":{"buildHistory":[{"error":"MODEL_API_KEY=adversarial-env-secret"}],"runtimeStatus":"error","updateStatus":"error","endpointLinks":[{"url":"https://token:adversarial-json-secret@example.invalid"}]}},{"metadata":{"name":"foreign-resource"},"status":{"buildHistory":[{"error":"foreign secret"}],"runtimeStatus":"error","updateStatus":"error"}}]}}
+EOF
+  fixture_snapshot_diagnostics="$(tilt_snapshot_diagnostics "$snapshot_fixture")"
+  fixture_tilt_resource_status="$(jq -ec '.resource_status' <<<"$fixture_snapshot_diagnostics")"
+  fixture_tilt_snapshot_state="$(jq -er '.snapshot_state' <<<"$fixture_snapshot_diagnostics")"
+  rm -f -- "$snapshot_fixture"
+  empty_snapshot_fixture="$(mktemp "${TMPDIR:-/tmp}/agent-runtime-tilt-snapshot-empty-fixture.XXXXXX")"
+  printf '%s' '{"view":{"uiResources":[]}}' >"$empty_snapshot_fixture"
+  if [[ "$(tilt_snapshot_diagnostics "$empty_snapshot_fixture")" != '{"snapshot_state":"observed","resource_status":[]}' ]]; then
+    echo "safe diagnostic summary did not distinguish an observed empty Tilt snapshot" >&2
+    exit 1
+  fi
+  rm -f -- "$empty_snapshot_fixture"
+  malformed_snapshot_fixture="$(mktemp "${TMPDIR:-/tmp}/agent-runtime-tilt-snapshot-malformed-fixture.XXXXXX")"
+  printf '%s' '{"view":' >"$malformed_snapshot_fixture"
+  if [[ "$(tilt_snapshot_diagnostics "$malformed_snapshot_fixture")" != '{"snapshot_state":"unavailable","resource_status":[]}' ]]; then
+    echo "safe diagnostic summary accepted a malformed Tilt snapshot" >&2
+    exit 1
+  fi
+  rm -f -- "$malformed_snapshot_fixture"
+  missing_view_snapshot_fixture="$(mktemp "${TMPDIR:-/tmp}/agent-runtime-tilt-snapshot-missing-view-fixture.XXXXXX")"
+  printf '%s' '{}' >"$missing_view_snapshot_fixture"
+  if [[ "$(tilt_snapshot_diagnostics "$missing_view_snapshot_fixture")" != '{"snapshot_state":"unavailable","resource_status":[]}' ]]; then
+    echo "safe diagnostic summary accepted a snapshot without a view" >&2
+    exit 1
+  fi
+  rm -f -- "$missing_view_snapshot_fixture"
+  missing_resource_list_fixture="$(mktemp "${TMPDIR:-/tmp}/agent-runtime-tilt-snapshot-missing-resource-list-fixture.XXXXXX")"
+  printf '%s' '{"view":{}}' >"$missing_resource_list_fixture"
+  if [[ "$(tilt_snapshot_diagnostics "$missing_resource_list_fixture")" != '{"snapshot_state":"unavailable","resource_status":[]}' ]]; then
+    echo "safe diagnostic summary accepted a snapshot without a resource list" >&2
+    exit 1
+  fi
+  rm -f -- "$missing_resource_list_fixture"
+  fixture_api_termination="$(printf '%s' '{"items":[{"metadata":{"labels":{"agent-runtime.dev/resource":"api"}},"status":{"containerStatuses":[{"name":"api","lastState":{"terminated":{"exitCode":137,"reason":"OOMKilled","message":"adversarial termination message"}}},{"name":"sidecar","lastState":{"terminated":{"exitCode":9,"reason":"Error"}}}]}}]}' | api_last_termination)"
+  write_safe_diagnostic_summary "fixture-stack" "ar-fixture-stack" 7 "unavailable" 0 false "$fixture_role_status" 2 "$fixture_startup_status" '["image_build","unknown"]' "$fixture_tilt_resource_status" "$fixture_api_termination" "$fixture_tilt_snapshot_state"
   tilt_fixture="$(mktemp "${TMPDIR:-/tmp}/agent-runtime-tilt-classifier.XXXXXX")"
   printf '%s\n' 'Build Failed: MODEL_API_KEY=adversarial-env-secret' >"$tilt_fixture"
   if [[ "$(classify_tilt_ci_failure "$tilt_fixture")" != image_build ]]; then
@@ -439,7 +583,7 @@ if [[ "$diagnostic_self_test" == true ]]; then
     exit 1
   fi
   rm -f -- "$tilt_fixture"
-  for unsafe_value in 'Bearer adversarial-header-token' 'MODEL_API_KEY=adversarial-env-secret' '{"token":"adversarial-json-secret"}' 'adversarial-runtime-detail'; do
+  for unsafe_value in 'Bearer adversarial-header-token' 'MODEL_API_KEY=adversarial-env-secret' 'adversarial-json-secret' 'adversarial termination message' 'adversarial-runtime-detail' 'foreign-resource' 'foreign secret'; do
     if grep -F -- "$unsafe_value" "$diagnostics_dir/fixture-stack.summary.json" >/dev/null; then
       echo "safe diagnostic summary retained an unsafe fixture value" >&2
       exit 1
@@ -470,7 +614,7 @@ if [[ "$diagnostic_self_test" == true ]]; then
     echo "safe diagnostic summary did not replace an unapproved pod state reason" >&2
     exit 1
   }
-  jq -e '.kind == "diagnostic-summary/v3" and .version == 3 and .tilt_ci_failure_phases == ["image_build","unknown"]' "$diagnostics_dir/fixture-stack.summary.json" >/dev/null || {
+  jq -e '.kind == "diagnostic-summary/v4" and .version == 4 and .tilt_ci_failure_phases == ["image_build","unknown"] and .tilt_snapshot_state == "observed" and .tilt_resource_status == [{id:"api",build_state:"failed",runtime_state:"unhealthy",update_state:"failed"}] and .api_last_termination == {observed:true,exit_code:137,reason:"OOMKilled"}' "$diagnostics_dir/fixture-stack.summary.json" >/dev/null || {
     echo "safe diagnostic summary did not retain typed Tilt failure phases" >&2
     exit 1
   }
@@ -727,11 +871,14 @@ capture_stack_diagnostics() {
   local ci_status="$3"
   local tilt_ci_attempts="$4"
   local tilt_ci_failure_phases="$5"
+  local tilt_resource_status="$6"
+  local tilt_snapshot_state="$7"
   local probe_status="unavailable"
   local roles_observed=0
   local roles_ready=false
   local role_status
   local startup_status
+  local api_termination
   local deployment_state
   local pod_state
 
@@ -747,10 +894,12 @@ capture_stack_diagnostics() {
   fi
   if pod_state="$(kubectl --context "$context" --namespace "$namespace" get pods -l "app.kubernetes.io/part-of=agent-runtime,agent-runtime.dev/profile=$profile,agent-runtime.dev/stack=$stack" -o json 2>/dev/null)"; then
     startup_status="$(printf '%s' "$pod_state" | runtime_role_startup_status)"
+    api_termination="$(printf '%s' "$pod_state" | api_last_termination)"
   else
     startup_status="$(empty_runtime_role_startup_status)"
+    api_termination='{"observed":false,"exit_code":0,"reason":"not_observed"}'
   fi
-  write_safe_diagnostic_summary "$stack" "$namespace" "$ci_status" "$probe_status" "$roles_observed" "$roles_ready" "$role_status" "$tilt_ci_attempts" "$startup_status" "$tilt_ci_failure_phases"
+  write_safe_diagnostic_summary "$stack" "$namespace" "$ci_status" "$probe_status" "$roles_observed" "$roles_ready" "$role_status" "$tilt_ci_attempts" "$startup_status" "$tilt_ci_failure_phases" "$tilt_resource_status" "$api_termination" "$tilt_snapshot_state"
 }
 
 start_stack() {
@@ -759,6 +908,9 @@ start_stack() {
   local ci_status=0
   local tilt_ci_attempts=0
   local tilt_ci_failure_phases='[]'
+  local tilt_resource_status='[]'
+  local tilt_snapshot_state='unavailable'
+  local tilt_ci_attempt
   local tilt_ci_failure_phase
   if [[ "$profile" == "ci" ]]; then
     # Bootstrap is deliberately outside the Tiltfile: plan rendering must be
@@ -778,9 +930,15 @@ start_stack() {
   # The allowlisted summary below records only bounded readiness metadata.
   if [[ "$ci_status" == 0 ]]; then
     tilt_ci_attempts=1
-    if ! tilt_ci_failure_phase="$(run_tilt_ci_attempt "$stack" "$namespace")"; then
+    if ! tilt_ci_attempt="$(run_tilt_ci_attempt "$stack" "$namespace")"; then
       ci_status=1
+      tilt_ci_failure_phase="$(jq -er '.phase' <<<"$tilt_ci_attempt")"
+      tilt_resource_status="$(jq -ec '.resource_status' <<<"$tilt_ci_attempt")"
+      tilt_snapshot_state="$(jq -er '.snapshot_state' <<<"$tilt_ci_attempt")"
       tilt_ci_failure_phases="$(jq -nc --arg phase "$tilt_ci_failure_phase" '[ $phase ]')"
+    else
+      tilt_resource_status="$(jq -ec '.resource_status' <<<"$tilt_ci_attempt")"
+      tilt_snapshot_state="$(jq -er '.snapshot_state' <<<"$tilt_ci_attempt")"
     fi
     # A disposable k3d node can transiently reject a just-built image while
     # its local registry catch-up completes. Only that classified condition
@@ -791,13 +949,19 @@ start_stack() {
       ci_status=0
       tilt_ci_attempts=2
       sleep 5
-      if ! tilt_ci_failure_phase="$(run_tilt_ci_attempt "$stack" "$namespace")"; then
+      if ! tilt_ci_attempt="$(run_tilt_ci_attempt "$stack" "$namespace")"; then
         ci_status=1
+        tilt_ci_failure_phase="$(jq -er '.phase' <<<"$tilt_ci_attempt")"
+        tilt_resource_status="$(jq -ec '.resource_status' <<<"$tilt_ci_attempt")"
+        tilt_snapshot_state="$(jq -er '.snapshot_state' <<<"$tilt_ci_attempt")"
         tilt_ci_failure_phases="$(jq -c --arg phase "$tilt_ci_failure_phase" '. + [ $phase ]' <<<"$tilt_ci_failure_phases")"
+      else
+        tilt_resource_status="$(jq -ec '.resource_status' <<<"$tilt_ci_attempt")"
+        tilt_snapshot_state="$(jq -er '.snapshot_state' <<<"$tilt_ci_attempt")"
       fi
     fi
   fi
-  capture_stack_diagnostics "$stack" "$namespace" "$ci_status" "$tilt_ci_attempts" "$tilt_ci_failure_phases"
+  capture_stack_diagnostics "$stack" "$namespace" "$ci_status" "$tilt_ci_attempts" "$tilt_ci_failure_phases" "$tilt_resource_status" "$tilt_snapshot_state"
   if [[ "$ci_status" != 0 ]]; then
     return "$ci_status"
   fi
