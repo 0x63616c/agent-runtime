@@ -433,10 +433,17 @@ func (authorization CompiledReadAuthorization) ToolActionDescriptor() (agentrunt
 
 // CompileAuthorizeAgentSpecificationBodyRead validates a tenant-scoped metadata reader request.
 func (compiler *Compiler) CompileAuthorizeAgentSpecificationBodyRead(command AgentSpecificationBodyReadCommand) (CompiledReadAuthorization, error) {
-	if err := validateScope(command.Scope, AuthorityTenantAdministrator, false); err != nil || validAgent(command.AgentID) != nil || validRevision(command.RevisionID) != nil {
+	if err := validateAgentSpecificationBodyReaderScope(command.Scope); err != nil || validAgent(command.AgentID) != nil || validRevision(command.RevisionID) != nil {
 		return CompiledReadAuthorization{}, errors.New("compile Agent specification body reader: invalid scope or target")
 	}
 	return CompiledReadAuthorization{scope: command.Scope, agentID: command.AgentID, revisionID: command.RevisionID}, nil
+}
+
+func validateAgentSpecificationBodyReaderScope(scope MutationScope) error {
+	if scope.Authority != AuthorityTenantAdministrator && scope.Authority != AuthorityRuntimeWorker {
+		return errors.New("unsupported Agent specification body reader authority")
+	}
+	return validateScope(scope, scope.Authority, false)
 }
 
 // CompileAuthorizeInputEnvelopeRead validates a principal-owned metadata reader request.

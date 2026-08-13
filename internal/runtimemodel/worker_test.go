@@ -145,9 +145,44 @@ func TestWorkerRoutesNormalizedModelToolThroughBrokerAndPausesTurn(t *testing.T)
 	}
 }
 
+func TestWorkerRefusesToolArgumentsOutsideDeclaredSchemaBeforeBrokerAdmission(t *testing.T) {
+	ctx := context.Background()
+	now := time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC)
+	content, _ := runtimecontent.New("runtime-content", &modelObjects{values: map[string][]byte{}})
+	tenant, _ := runtimecontent.ParseTenantID("tenant-a")
+	principal, _ := runtimecontent.ParsePrincipalID("principal-a")
+	compiler, _ := runtimestate.NewCompiler(content)
+	source, _ := clock.NewFake(now)
+	planner, _ := runtimestate.NewRuntimeStatePlanner(source, &modelIDs{})
+	store, _ := runtimestate.NewMemoryRuntimeStateStore(planner)
+	session, _, _ := createModelIntentWithTools(t, ctx, content, compiler, store, tenant, principal, []agentruntime.ToolDefinition{{Name: "write", Description: "write", InputSchemaVersion: "agent-runtime.tool-input/v1", InputSchema: []byte(`{"type":"object","properties":{"path":{"type":"string"}},"required":["path"],"additionalProperties":false}`)}})
+	policy, _ := compiler.CompileRegisterPolicyRevision(runtimestate.RegisterPolicyRevisionCommand{Scope: runtimestate.MutationScope{Tenant: tenant, Authority: runtimestate.AuthorityTenantAdministrator}, IdempotencyKey: "tool-policy", Name: "workspace-write", Rules: []agentruntime.PolicyRule{{ToolName: "write", Decision: agentruntime.PolicyRequiresApproval}}})
+	if _, err := store.Apply(ctx, policy); err != nil {
+		t.Fatal(err)
+	}
+	broker, _ := runtimetool.NewBroker(runtimetool.BrokerConfig{Store: store, Compiler: compiler, Planner: planner, Clock: source})
+	adapter := &recordingAdapter{response: runtimemodel.Response{Tool: &runtimemodel.ToolRequest{ToolCallID: "tcall_1234567890ABCDEF", ApprovalID: "appr_1234567890ABCDEF", PolicyName: "workspace-write", PolicyRevision: 1, ToolName: "write", ActionDigest: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", CapabilityDigest: "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", Action: agentruntime.ApprovalAction{Verb: "write", Target: "workspace-service"}, MaximumUses: 1, ExpiresAt: now.Add(time.Hour), Descriptor: []byte(`{"safe":true}`), Arguments: []byte(`{"unexpected":true}`)}}}
+	worker, err := runtimemodel.NewWorker(runtimemodel.WorkerConfig{Store: store, Tenants: store, Compiler: compiler, Planner: planner, Clock: source, Content: content, Adapter: adapter, Broker: broker, Claimer: "model-worker"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := worker.ScanOnce(ctx); err == nil {
+		t.Fatal("model tool with invalid arguments was admitted")
+	}
+	state, err := store.LoadRuntimeState(ctx, runtimestate.MutationScope{Tenant: tenant, Principal: principal, Authority: runtimestate.AuthorityRuntimeWorker})
+	if err != nil || len(state.Approvals) != 0 || len(state.ToolIntents) != 0 || state.Sessions[0].SessionID != session {
+		t.Fatalf("invalid arguments reached broker state = %#v, %v", state, err)
+	}
+}
+
 func createModelIntent(t *testing.T, ctx context.Context, content *runtimecontent.Store, compiler *runtimestate.Compiler, store *runtimestate.MemoryRuntimeStateStore, tenant runtimecontent.TenantID, principal runtimecontent.PrincipalID) (agentruntime.SessionID, agentruntime.TurnID, runtimestate.InvocationRecord) {
 	t.Helper()
-	body, err := content.StageAgentSpecificationBody(ctx, tenant, runtimecontent.AgentSpecificationBody{Name: "model-worker", ModelProfile: "balanced", Instructions: "safe"})
+	return createModelIntentWithTools(t, ctx, content, compiler, store, tenant, principal, []agentruntime.ToolDefinition{{Name: "write", Description: "write a bounded workspace value"}})
+}
+
+func createModelIntentWithTools(t *testing.T, ctx context.Context, content *runtimecontent.Store, compiler *runtimestate.Compiler, store *runtimestate.MemoryRuntimeStateStore, tenant runtimecontent.TenantID, principal runtimecontent.PrincipalID, tools []agentruntime.ToolDefinition) (agentruntime.SessionID, agentruntime.TurnID, runtimestate.InvocationRecord) {
+	t.Helper()
+	body, err := content.StageAgentSpecificationBody(ctx, tenant, runtimecontent.AgentSpecificationBody{Name: "model-worker", ModelProfile: "balanced", Instructions: "safe", Tools: tools})
 	if err != nil {
 		t.Fatal(err)
 	}

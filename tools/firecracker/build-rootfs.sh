@@ -11,6 +11,11 @@ if [ "$#" -ne 5 ]; then
     exit 2
 fi
 
+if [ -z "${SOURCE_DATE_EPOCH:-}" ] || printf '%s' "$SOURCE_DATE_EPOCH" | grep -q '[^0-9]'; then
+    echo "SOURCE_DATE_EPOCH must be a fixed integer for a reproducible rootfs" >&2
+    exit 2
+fi
+
 agent=$1
 output=$2
 size_bytes=$3
@@ -55,7 +60,7 @@ trap cleanup EXIT HUP INT TERM
 mkdir -p "$stage_dir/sbin"
 install -m 0755 "$agent" "$stage_dir/sbin/init"
 truncate -s "$size_bytes" "$output"
-mke2fs -q -t ext4 -F -d "$stage_dir" -U "$uuid" -E lazy_itable_init=0,lazy_journal_init=0 "$output"
+E2FSPROGS_FAKE_TIME="$SOURCE_DATE_EPOCH" mke2fs -q -t ext4 -F -d "$stage_dir" -U "$uuid" -E lazy_itable_init=0,lazy_journal_init=0 "$output"
 
 agent_size=$(wc -c < "$agent" | tr -d ' ')
 rootfs_size=$(wc -c < "$output" | tr -d ' ')

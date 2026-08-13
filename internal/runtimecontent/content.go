@@ -11,6 +11,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/0x63616c/agent-runtime/internal/toolschema"
 	agentruntime "github.com/0x63616c/agent-runtime/sdk/go"
 	"github.com/cockroachdb/errors"
 )
@@ -87,7 +88,15 @@ type AgentSpecificationBody struct {
 // Clone returns an independent Agent specification body.
 func (body AgentSpecificationBody) Clone() AgentSpecificationBody {
 	clone := body
-	clone.Tools = append([]agentruntime.ToolDefinition(nil), body.Tools...)
+	clone.Tools = cloneToolDefinitions(body.Tools)
+	return clone
+}
+
+func cloneToolDefinitions(tools []agentruntime.ToolDefinition) []agentruntime.ToolDefinition {
+	clone := append([]agentruntime.ToolDefinition(nil), tools...)
+	for index := range clone {
+		clone[index].InputSchema = append([]byte(nil), clone[index].InputSchema...)
+	}
 	return clone
 }
 
@@ -959,8 +968,13 @@ func encode(specification agentruntime.AgentSpecification) ([]byte, error) {
 		return nil, err
 	}
 	var encoded bytes.Buffer
+	hasSchemas := hasToolSchemas(specification.Tools)
 	head(&encoded, 4, 9)
-	uintv(&encoded, 1)
+	if hasSchemas {
+		uintv(&encoded, 2)
+	} else {
+		uintv(&encoded, 1)
+	}
 	text(&encoded, specification.ID.String())
 	text(&encoded, specification.RevisionID.String())
 	uintv(&encoded, specification.Revision)
@@ -969,9 +983,21 @@ func encode(specification agentruntime.AgentSpecification) ([]byte, error) {
 	text(&encoded, specification.Instructions)
 	head(&encoded, 4, uint64(len(specification.Tools)))
 	for _, tool := range specification.Tools {
-		head(&encoded, 4, 2)
-		text(&encoded, tool.Name)
-		text(&encoded, tool.Description)
+		if hasSchemas {
+			version, schema, err := toolschema.CanonicalSchema(tool.InputSchemaVersion, tool.InputSchema)
+			if err != nil {
+				return nil, err
+			}
+			head(&encoded, 4, 4)
+			text(&encoded, tool.Name)
+			text(&encoded, tool.Description)
+			text(&encoded, version)
+			text(&encoded, string(schema))
+		} else {
+			head(&encoded, 4, 2)
+			text(&encoded, tool.Name)
+			text(&encoded, tool.Description)
+		}
 	}
 	text(&encoded, specification.CreatedAt.UTC().Format(time.RFC3339Nano))
 	if encoded.Len() > maximumSpecificationBytes {
@@ -985,21 +1011,47 @@ func encodeAgentSpecificationBody(body AgentSpecificationBody) ([]byte, error) {
 		return nil, err
 	}
 	var encoded bytes.Buffer
+	hasSchemas := hasToolSchemas(body.Tools)
 	head(&encoded, 4, 5)
-	uintv(&encoded, 1)
+	if hasSchemas {
+		uintv(&encoded, 2)
+	} else {
+		uintv(&encoded, 1)
+	}
 	text(&encoded, body.Name)
 	text(&encoded, body.ModelProfile)
 	text(&encoded, body.Instructions)
 	head(&encoded, 4, uint64(len(body.Tools)))
 	for _, tool := range body.Tools {
-		head(&encoded, 4, 2)
-		text(&encoded, tool.Name)
-		text(&encoded, tool.Description)
+		if hasSchemas {
+			version, schema, err := toolschema.CanonicalSchema(tool.InputSchemaVersion, tool.InputSchema)
+			if err != nil {
+				return nil, err
+			}
+			head(&encoded, 4, 4)
+			text(&encoded, tool.Name)
+			text(&encoded, tool.Description)
+			text(&encoded, version)
+			text(&encoded, string(schema))
+		} else {
+			head(&encoded, 4, 2)
+			text(&encoded, tool.Name)
+			text(&encoded, tool.Description)
+		}
 	}
 	if encoded.Len() > maximumSpecificationBytes {
 		return nil, errors.New("canonical Agent specification body exceeds bound")
 	}
 	return encoded.Bytes(), nil
+}
+
+func hasToolSchemas(tools []agentruntime.ToolDefinition) bool {
+	for _, tool := range tools {
+		if tool.InputSchemaVersion != "" || len(tool.InputSchema) != 0 {
+			return true
+		}
+	}
+	return false
 }
 
 func encodeInputEnvelope(parts []agentruntime.ContentPart) ([]byte, error) {
@@ -1114,7 +1166,8 @@ func decodeAgentSpecificationBody(raw []byte) (AgentSpecificationBody, error) {
 	if err != nil || major != 4 || count != 5 {
 		return AgentSpecificationBody{}, errors.New("invalid Agent specification body envelope")
 	}
-	if version, err := decoder.uint(); err != nil || version != 1 {
+	version, err := decoder.uint()
+	if err != nil || (version != 1 && version != 2) {
 		return AgentSpecificationBody{}, errors.New("unsupported Agent specification body version")
 	}
 	name, err := decoder.text()
@@ -1136,7 +1189,7 @@ func decodeAgentSpecificationBody(raw []byte) (AgentSpecificationBody, error) {
 	tools := make([]agentruntime.ToolDefinition, 0, count)
 	for index := uint64(0); index < count; index++ {
 		major, fields, err := decoder.head()
-		if err != nil || major != 4 || fields != 2 {
+		if err != nil || major != 4 || (fields != 2 && (version != 2 || fields != 4)) {
 			return AgentSpecificationBody{}, errors.New("invalid Agent specification body tool")
 		}
 		toolName, err := decoder.text()
@@ -1147,14 +1200,26 @@ func decodeAgentSpecificationBody(raw []byte) (AgentSpecificationBody, error) {
 		if err != nil {
 			return AgentSpecificationBody{}, errors.New("invalid Agent specification body tool")
 		}
-		tools = append(tools, agentruntime.ToolDefinition{Name: toolName, Description: description})
+		tool := agentruntime.ToolDefinition{Name: toolName, Description: description}
+		if version == 2 {
+			tool.InputSchemaVersion, err = decoder.text()
+			if err != nil {
+				return AgentSpecificationBody{}, errors.New("invalid Agent specification body tool")
+			}
+			schema, readErr := decoder.text()
+			if readErr != nil {
+				return AgentSpecificationBody{}, errors.New("invalid Agent specification body tool")
+			}
+			tool.InputSchema = []byte(schema)
+		}
+		tools = append(tools, tool)
 	}
 	if decoder.at != len(raw) {
 		return AgentSpecificationBody{}, errors.New("invalid Agent specification body")
 	}
 	body := AgentSpecificationBody{Name: name, ModelProfile: modelProfile, Instructions: instructions, Tools: tools}
 	canonical, err := encodeAgentSpecificationBody(body)
-	if err != nil || !bytes.Equal(canonical, raw) {
+	if err != nil || (version == 2 && !bytes.Equal(canonical, raw)) {
 		return AgentSpecificationBody{}, errors.New("noncanonical Agent specification body")
 	}
 	return body, nil
@@ -1169,7 +1234,8 @@ func decode(raw []byte) (agentruntime.AgentSpecification, error) {
 	if err != nil || major != 4 || count != 9 {
 		return agentruntime.AgentSpecification{}, errors.New("invalid Agent specification envelope")
 	}
-	if version, err := decoder.uint(); err != nil || version != 1 {
+	version, err := decoder.uint()
+	if err != nil || (version != 1 && version != 2) {
 		return agentruntime.AgentSpecification{}, errors.New("unsupported Agent specification version")
 	}
 	id, err := decoder.text()
@@ -1203,7 +1269,7 @@ func decode(raw []byte) (agentruntime.AgentSpecification, error) {
 	tools := make([]agentruntime.ToolDefinition, 0, count)
 	for index := uint64(0); index < count; index++ {
 		major, fields, err := decoder.head()
-		if err != nil || major != 4 || fields != 2 {
+		if err != nil || major != 4 || (fields != 2 && (version != 2 || fields != 4)) {
 			return agentruntime.AgentSpecification{}, errors.New("invalid Agent specification tool")
 		}
 		name, err := decoder.text()
@@ -1214,7 +1280,19 @@ func decode(raw []byte) (agentruntime.AgentSpecification, error) {
 		if err != nil {
 			return agentruntime.AgentSpecification{}, errors.New("invalid Agent specification tool")
 		}
-		tools = append(tools, agentruntime.ToolDefinition{Name: name, Description: description})
+		tool := agentruntime.ToolDefinition{Name: name, Description: description}
+		if version == 2 {
+			tool.InputSchemaVersion, err = decoder.text()
+			if err != nil {
+				return agentruntime.AgentSpecification{}, errors.New("invalid Agent specification tool")
+			}
+			schema, readErr := decoder.text()
+			if readErr != nil {
+				return agentruntime.AgentSpecification{}, errors.New("invalid Agent specification tool")
+			}
+			tool.InputSchema = []byte(schema)
+		}
+		tools = append(tools, tool)
 	}
 	createdAt, err := decoder.text()
 	if err != nil || decoder.at != len(raw) {
@@ -1234,7 +1312,7 @@ func decode(raw []byte) (agentruntime.AgentSpecification, error) {
 	}
 	specification := agentruntime.AgentSpecification{ID: agentID, RevisionID: agentRevisionID, Revision: revision, Name: name, ModelProfile: model, Instructions: instructions, Tools: tools, CreatedAt: parsedCreatedAt}
 	canonical, err := encode(specification)
-	if err != nil || !bytes.Equal(canonical, raw) {
+	if err != nil || (version == 2 && !bytes.Equal(canonical, raw)) {
 		return agentruntime.AgentSpecification{}, errors.New("noncanonical Agent specification")
 	}
 	return specification, nil
@@ -1247,6 +1325,9 @@ func validate(specification agentruntime.AgentSpecification) error {
 	seenTools := make(map[string]struct{}, len(specification.Tools))
 	for _, tool := range specification.Tools {
 		if !validName(tool.Name) || !validText(tool.Description, maximumToolDescriptionBytes) {
+			return errors.New("invalid Agent specification")
+		}
+		if _, _, err := toolschema.CanonicalSchema(tool.InputSchemaVersion, tool.InputSchema); err != nil {
 			return errors.New("invalid Agent specification")
 		}
 		if _, found := seenTools[tool.Name]; found {
@@ -1264,6 +1345,9 @@ func validateAgentSpecificationBody(body AgentSpecificationBody) error {
 	seenTools := make(map[string]struct{}, len(body.Tools))
 	for _, tool := range body.Tools {
 		if !validName(tool.Name) || !validText(tool.Description, maximumToolDescriptionBytes) {
+			return errors.New("invalid Agent specification body")
+		}
+		if _, _, err := toolschema.CanonicalSchema(tool.InputSchemaVersion, tool.InputSchema); err != nil {
 			return errors.New("invalid Agent specification body")
 		}
 		if _, found := seenTools[tool.Name]; found {

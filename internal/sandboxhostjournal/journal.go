@@ -323,7 +323,7 @@ func (journal *Journal) StageTypedTransferReceipt(envelope sandboxhostprotocol.E
 	}
 	digest := sandboxhostprotocol.Digest(wire)
 	if entry.TransferReceiptDigest != "" {
-		if (entry.TransferReceiptKind != kind && !(entry.TransferReceiptKind == "" && kind == "transfer")) || entry.TransferReceiptDigest != digest || !bytes.Equal(entry.TransferReceiptWire, wire) {
+		if (entry.TransferReceiptKind != kind && (entry.TransferReceiptKind != "" || kind != "transfer")) || entry.TransferReceiptDigest != digest || !bytes.Equal(entry.TransferReceiptWire, wire) {
 			return errors.New("stage sandbox host transfer receipt: altered receipt refused")
 		}
 		return nil

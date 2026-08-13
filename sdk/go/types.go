@@ -1,6 +1,7 @@
 package agentruntime
 
 import (
+	"encoding/json"
 	"io"
 	"time"
 )
@@ -122,8 +123,10 @@ func (page ToolCallPage) Clone() ToolCallPage {
 
 // ToolDefinition describes model-visible intent without granting execution authority.
 type ToolDefinition struct {
-	Name        string `json:"name"`
-	Description string `json:"description"`
+	Name               string          `json:"name"`
+	Description        string          `json:"description"`
+	InputSchemaVersion string          `json:"input_schema_version,omitempty"`
+	InputSchema        json.RawMessage `json:"input_schema,omitempty"`
 }
 
 // PolicyDecision is the closed disposition an immutable Policy revision gives
@@ -209,7 +212,15 @@ type AgentSpecification struct {
 // Clone returns an independent Agent specification snapshot.
 func (specification AgentSpecification) Clone() AgentSpecification {
 	clone := specification
-	clone.Tools = append([]ToolDefinition(nil), specification.Tools...)
+	clone.Tools = cloneToolDefinitions(specification.Tools)
+	return clone
+}
+
+func cloneToolDefinitions(tools []ToolDefinition) []ToolDefinition {
+	clone := append([]ToolDefinition(nil), tools...)
+	for index := range clone {
+		clone[index].InputSchema = append(json.RawMessage(nil), clone[index].InputSchema...)
+	}
 	return clone
 }
 

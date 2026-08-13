@@ -83,9 +83,40 @@ fixture.
 
 `build-guest-agent.sh` builds the binary with Linux/amd64, CGO disabled and
 deterministic Go flags. `build-rootfs.sh` accepts only that explicit binary,
-an exact ext4 byte size, UUID, and new attestation output path. It rejects a
+an exact ext4 byte size, UUID, and new attestation output path. It requires a
+fixed `SOURCE_DATE_EPOCH`, rejects a
 non-ELF64/non-x86_64 or dynamically linked init, creates `/sbin/init`, then
 emits the attestation for lock-bundle assembly. It does not download a distro
 or install packages. The output still requires a reviewed final SHA-256, SBOM,
 reproducible build evidence and a real Linux/KVM/Jailer boot before it can enter
 a lock or count as evidence.
+
+## Reviewed fixture assembly
+
+`assemble-fixtures.sh` is the only supported assembly path for a candidate
+lock. It accepts already-downloaded bytes for an immutable upstream Firecracker
+release archive, a kernel object whose URL has one exact `versionId`, and a
+rootfs built with the two project recipes. It builds the static guest agent,
+records measured input manifests/SBOMs, creates deterministic project bundles,
+and derives every candidate lock digest/size from those bytes. It never fetches
+a floating artifact, uploads an asset, changes `fixtures.lock`, or starts a
+guest.
+
+Run it on Linux with GNU tar and e2fsprogs, using an empty output directory:
+
+```text
+SOURCE_DATE_EPOCH=1704067200 ./tools/firecracker/build-rootfs.sh ...
+./tools/firecracker/assemble-fixtures.sh OUT REVISION vX.Y.Z FIRECRACKER.tgz \
+  'https://object.example/vmlinux?versionId=EXACT' EXACT KERNEL ROOTFS ATTESTATION 1704067200
+```
+
+Assembly refuses a dirty worktree or a revision other than `HEAD`; run it from
+a clean detached checkout so the recorded source-tree digest and source
+revision describe the bytes that built the guest agent.
+
+Review the emitted `fixtures.lock.candidate.json`, the input manifests and
+SBOMs, and the exact archive/member identities. Then publish only the two
+project bundles to the exact `commit-<revision>` GitHub release URLs named in
+the candidate. A separate review must verify those uploaded bytes before the
+candidate is copied to `tools/firecracker/fixtures.lock`; without that review
+and publication the smoke command remains correctly blocked.

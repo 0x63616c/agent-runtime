@@ -22,7 +22,7 @@ import (
 func TestUnixGuestControlChannelExchangesOnlyTheBoundIdentityAndUnavailableDispatch(t *testing.T) {
 	dialer := &guestChannelDialer{}
 	dialer.handler = func(connection net.Conn) {
-		defer connection.Close()
+		defer func() { _ = connection.Close() }()
 		reader := bufio.NewReader(connection)
 		if line := guestChannelTestReadLine(t, reader); line != "CONNECT sandbox-001 fixture-v1" {
 			t.Errorf("CONNECT = %q, want bound identity", line)
@@ -132,7 +132,7 @@ func TestUnixGuestControlChannelRefusesIdentitySubstitutionAndUseAfterReaperClos
 func TestUnixGuestControlChannelReaperCloseInterruptsAnActivePrivateExchange(t *testing.T) {
 	peerClosed := make(chan struct{})
 	dialer := &guestChannelDialer{handler: func(connection net.Conn) {
-		defer connection.Close()
+		defer func() { _ = connection.Close() }()
 		reader := bufio.NewReader(connection)
 		if line := guestChannelTestReadLine(t, reader); line != "CONNECT sandbox-001 fixture-v1" {
 			t.Errorf("CONNECT = %q, want bound identity", line)
@@ -211,7 +211,7 @@ func TestUnixGuestControlChannelRelaysOnlyTheSignedLeaseBoundProxyRequest(t *tes
 	remoteDone := make(chan struct{})
 	go func() {
 		defer close(remoteDone)
-		defer remoteServer.Close()
+		defer func() { _ = remoteServer.Close() }()
 		got := make([]byte, len("request"))
 		if _, err := io.ReadFull(remoteServer, got); err != nil || string(got) != "request" {
 			return
@@ -219,7 +219,7 @@ func TestUnixGuestControlChannelRelaysOnlyTheSignedLeaseBoundProxyRequest(t *tes
 		_, _ = remoteServer.Write([]byte("response"))
 	}()
 	dialer := &guestChannelDialer{handler: func(connection net.Conn) {
-		defer connection.Close()
+		defer func() { _ = connection.Close() }()
 		reader := bufio.NewReader(connection)
 		if line := guestChannelTestReadLine(t, reader); line != "CONNECT sandbox-001 fixture-v1" {
 			t.Errorf("CONNECT = %q", line)
@@ -300,7 +300,7 @@ func TestUnixGuestControlChannelRefusesSubstitutedProxyOpenBeforeDialing(t *test
 	envelope.PayloadDigest = sandboxhostprotocol.Digest(payload)
 	authenticated, _ := json.Marshal(envelope)
 	dialer := &guestChannelDialer{handler: func(connection net.Conn) {
-		defer connection.Close()
+		defer func() { _ = connection.Close() }()
 		reader := bufio.NewReader(connection)
 		_ = guestChannelTestReadLine(t, reader)
 		_, _ = connection.Write([]byte("OK sandbox-001 fixture-v1\n"))
@@ -341,7 +341,7 @@ func TestUnixGuestControlChannelReaperClosesTheBoundProxySession(t *testing.T) {
 	}()
 	connected := make(chan struct{})
 	dialer := &guestChannelDialer{handler: func(connection net.Conn) {
-		defer connection.Close()
+		defer func() { _ = connection.Close() }()
 		reader := bufio.NewReader(connection)
 		_ = guestChannelTestReadLine(t, reader)
 		_, _ = connection.Write([]byte("OK sandbox-001 fixture-v1\n"))
@@ -399,7 +399,7 @@ func TestUnixGuestControlChannelDeliversOneExactSecretSessionThenRedactsAfterRea
 		t.Fatal(err)
 	}
 	dialer := &guestChannelDialer{handler: func(connection net.Conn) {
-		defer connection.Close()
+		defer func() { _ = connection.Close() }()
 		reader := bufio.NewReader(connection)
 		if line := guestChannelTestReadLine(t, reader); line != "CONNECT sandbox-001 fixture-v1" {
 			t.Errorf("CONNECT = %q", line)
@@ -412,6 +412,10 @@ func TestUnixGuestControlChannelDeliversOneExactSecretSessionThenRedactsAfterRea
 			return
 		}
 		frame, decodeErr := base64.RawURLEncoding.DecodeString(fields[1])
+		if decodeErr != nil {
+			t.Errorf("decode envelope frame: %v", decodeErr)
+			return
+		}
 		gotEnvelope, _, decodeErr := DecodeAuthenticatedGuestDispatch(frame)
 		if decodeErr != nil || gotEnvelope.EnvelopeID != envelope.EnvelopeID {
 			t.Errorf("DecodeAuthenticatedGuestDispatch() = %#v, %v", gotEnvelope, decodeErr)
@@ -476,7 +480,7 @@ func TestUnixGuestControlChannelRefusesSubstitutedSecretRequestBeforeResolution(
 	source, _ := clock.NewFake(now)
 	authority, _ := NewSecretExecutionAuthority(manager, source)
 	dialer := &guestChannelDialer{handler: func(connection net.Conn) {
-		defer connection.Close()
+		defer func() { _ = connection.Close() }()
 		reader := bufio.NewReader(connection)
 		_ = guestChannelTestReadLine(t, reader)
 		_, _ = connection.Write([]byte("OK sandbox-001 fixture-v1\n"))
@@ -509,7 +513,7 @@ func TestUnixGuestControlChannelLostSecretAcknowledgementZerosHostCopyAndRequire
 	started := make(chan struct{})
 	peerClosed := make(chan struct{})
 	dialer := &guestChannelDialer{handler: func(connection net.Conn) {
-		defer connection.Close()
+		defer func() { _ = connection.Close() }()
 		defer close(peerClosed)
 		reader := bufio.NewReader(connection)
 		_ = guestChannelTestReadLine(t, reader)

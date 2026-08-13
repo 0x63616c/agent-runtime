@@ -46,7 +46,7 @@ func TestGuestWorkspaceBindingCopyArchiveInMaterializesOnlyValidatedArchiveAtomi
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer binding.Close()
+	defer func() { _ = binding.Close() }()
 	source := &archiveSource{data: archive}
 	request := sandbox.CopyInRequest{SandboxID: "sandbox-001", Source: archiveArtifact(archive), Destination: "/workspace/restored", Options: sandbox.TransferOptions{Overwrite: sandbox.OverwriteFailIfExists, Durable: true}}
 	if err := binding.CopyArchiveIn(context.Background(), source, request); err != nil {
@@ -65,7 +65,7 @@ func TestGuestWorkspaceBindingCopyArchiveInRefusesTraversalAndLeavesNoTarget(t *
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer binding.Close()
+	defer func() { _ = binding.Close() }()
 	if err := binding.CopyArchiveIn(context.Background(), &archiveSource{data: archive}, sandbox.CopyInRequest{SandboxID: "sandbox-001", Source: archiveArtifact(archive), Destination: "/workspace/rejected", Options: sandbox.TransferOptions{Overwrite: sandbox.OverwriteFailIfExists}}); !errors.Is(err, ErrPathDenied) {
 		t.Fatalf("CopyArchiveIn() error = %v, want path denial", err)
 	}
@@ -81,7 +81,7 @@ func TestGuestWorkspaceBindingCopyArchiveInCancellationAndExistingTargetPreserve
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer binding.Close()
+	defer func() { _ = binding.Close() }()
 	ctx, cancel := context.WithCancel(context.Background())
 	source := &archiveSource{data: archive, cancel: cancel}
 	request := sandbox.CopyInRequest{SandboxID: "sandbox-001", Source: archiveArtifact(archive), Destination: "/workspace/cancelled", Options: sandbox.TransferOptions{Overwrite: sandbox.OverwriteFailIfExists}}
@@ -114,7 +114,7 @@ func TestGuestWorkspaceBindingCopiesADirectoryOutAsABoundedImmutableArchive(t *t
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer binding.Close()
+	defer func() { _ = binding.Close() }()
 	if err := os.MkdirAll(filepath.Join(root, "results", "nested"), 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -142,7 +142,7 @@ func TestGuestWorkspaceBindingDirectoryCopyOutRefusesSymlinksAndCleansStagingAft
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer binding.Close()
+	defer func() { _ = binding.Close() }()
 	if err := os.Mkdir(filepath.Join(root, "results"), 0o700); err != nil {
 		t.Fatal(err)
 	}

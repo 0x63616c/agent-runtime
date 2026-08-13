@@ -425,7 +425,7 @@ func (channel *UnixGuestControlChannel) ProxyAuthenticated(ctx context.Context, 
 	if err != nil {
 		return GuestDispatchResult{}, err
 	}
-	defer remote.Close()
+	defer func() { _ = remote.Close() }()
 	if deadline, ok := ctx.Deadline(); ok {
 		if err := remote.SetDeadline(deadline); err != nil {
 			return GuestDispatchResult{}, fmt.Errorf("bound guest proxy deadline: %w", err)

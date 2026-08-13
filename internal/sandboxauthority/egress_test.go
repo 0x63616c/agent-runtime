@@ -15,7 +15,7 @@ func TestEgressLeaseAllowsOnlyFrozenDomainPortAndPinsOnePublicResolution(t *test
 	}
 	dialed := ""
 	client, server := net.Pipe()
-	defer server.Close()
+	defer func() { _ = server.Close() }()
 	connection, err := lease.Connect(context.Background(), EgressDestination{Domain: "api.example.invalid", Protocol: "tcp", Port: 443}, now, resolverFunc(func(context.Context, string) ([]net.IPAddr, error) {
 		return []net.IPAddr{{IP: net.ParseIP("8.8.8.8")}}, nil
 	}), dialerFunc(func(_ context.Context, _ string, address string) (net.Conn, error) {
@@ -25,7 +25,9 @@ func TestEgressLeaseAllowsOnlyFrozenDomainPortAndPinsOnePublicResolution(t *test
 	if err != nil {
 		t.Fatal(err)
 	}
-	connection.Close()
+	if err := connection.Close(); err != nil {
+		t.Fatal(err)
+	}
 	if dialed != "8.8.8.8:443" {
 		t.Fatalf("dialed %q", dialed)
 	}

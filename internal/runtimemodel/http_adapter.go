@@ -142,6 +142,7 @@ type normalizedTool struct {
 	MaximumUses    uint32           `json:"maximum_uses"`
 	ExpiresAt      time.Time        `json:"expires_at"`
 	Descriptor     json.RawMessage  `json:"descriptor"`
+	Arguments      json.RawMessage  `json:"arguments,omitempty"`
 }
 
 type normalizedAction struct {
@@ -239,6 +240,10 @@ func parseNormalizedTool(raw json.RawMessage) (ToolRequest, error) {
 	if err != nil {
 		return ToolRequest{}, err
 	}
+	arguments, err := canonicalToolArguments(tool.Arguments)
+	if err != nil {
+		return ToolRequest{}, err
+	}
 	actionDigest := digestToolBytes(descriptor)
 	capability, err := json.Marshal(struct {
 		PolicyName     string           `json:"policy_name"`
@@ -251,7 +256,27 @@ func parseNormalizedTool(raw json.RawMessage) (ToolRequest, error) {
 	if err != nil {
 		return ToolRequest{}, errors.New("decode normalized model stream: canonicalize tool capability")
 	}
-	return ToolRequest{ToolCallID: tool.ToolCallID, ApprovalID: tool.ApprovalID, PolicyName: tool.PolicyName, PolicyRevision: tool.PolicyRevision, ToolName: tool.ToolName, ActionDigest: actionDigest, CapabilityDigest: digestToolBytes(capability), Action: agentruntime.ApprovalAction{Verb: tool.Action.Verb, Target: tool.Action.Target}, MaximumUses: tool.MaximumUses, ExpiresAt: tool.ExpiresAt, Descriptor: descriptor}, nil
+	return ToolRequest{ToolCallID: tool.ToolCallID, ApprovalID: tool.ApprovalID, PolicyName: tool.PolicyName, PolicyRevision: tool.PolicyRevision, ToolName: tool.ToolName, ActionDigest: actionDigest, CapabilityDigest: digestToolBytes(capability), Action: agentruntime.ApprovalAction{Verb: tool.Action.Verb, Target: tool.Action.Target}, MaximumUses: tool.MaximumUses, ExpiresAt: tool.ExpiresAt, Descriptor: descriptor, Arguments: arguments}, nil
+}
+
+func canonicalToolArguments(raw json.RawMessage) ([]byte, error) {
+	if len(raw) == 0 {
+		return []byte(`{}`), nil
+	}
+	if len(raw) > maxToolDescriptor {
+		return nil, errors.New("decode normalized model stream: tool arguments are oversized")
+	}
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.UseNumber()
+	var value map[string]any
+	if err := decoder.Decode(&value); err != nil || decoder.More() || value == nil {
+		return nil, errors.New("decode normalized model stream: tool arguments must be an object")
+	}
+	canonical, err := json.Marshal(value)
+	if err != nil || len(canonical) > maxToolDescriptor {
+		return nil, errors.New("decode normalized model stream: canonical tool arguments are invalid")
+	}
+	return canonical, nil
 }
 
 func canonicalToolDescriptor(raw json.RawMessage) ([]byte, error) {

@@ -113,7 +113,7 @@ func validLocalEnvironmentEntry(key, value string) bool {
 		return false
 	}
 	for index, character := range key {
-		if !(character == '_' || (character >= 'A' && character <= 'Z') || (index > 0 && character >= '0' && character <= '9')) {
+		if character != '_' && (character < 'A' || character > 'Z') && (index == 0 || character < '0' || character > '9') {
 			return false
 		}
 	}

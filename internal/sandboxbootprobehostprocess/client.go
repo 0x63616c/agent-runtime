@@ -80,7 +80,7 @@ func SubmitStageReady(ctx context.Context, client *http.Client, origin string, s
 	if err != nil {
 		return firecrackerbootprobeprotocol.VerifiedCommand{}, errors.Wrap(err, "submit M4 stage-ready: call control")
 	}
-	defer response.Body.Close()
+	defer func() { _ = response.Body.Close() }()
 	command, err := io.ReadAll(io.LimitReader(response.Body, 32<<10+1))
 	if err != nil || len(command) > 32<<10 {
 		return firecrackerbootprobeprotocol.VerifiedCommand{}, errors.New("submit M4 stage-ready: control command is unreadable or exceeds its bound")

@@ -587,7 +587,7 @@ func validBootProbeName(value string, rejectMutable bool) bool {
 		return false
 	}
 	for _, character := range value {
-		if !(character >= 'a' && character <= 'z' || character >= '0' && character <= '9' || character == '-') {
+		if (character < 'a' || character > 'z') && (character < '0' || character > '9') && character != '-' {
 			return false
 		}
 	}
@@ -599,7 +599,7 @@ func validBootProbeDigest(value sandbox.Digest) bool {
 		return false
 	}
 	for _, character := range value[7:] {
-		if !(character >= '0' && character <= '9' || character >= 'a' && character <= 'f') {
+		if (character < '0' || character > '9') && (character < 'a' || character > 'f') {
 			return false
 		}
 	}

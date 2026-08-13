@@ -11,6 +11,7 @@ import (
 	"github.com/0x63616c/agent-runtime/internal/runtimecontent"
 	"github.com/0x63616c/agent-runtime/internal/runtimestate"
 	"github.com/0x63616c/agent-runtime/internal/runtimetool"
+	"github.com/0x63616c/agent-runtime/internal/toolschema"
 	agentruntime "github.com/0x63616c/agent-runtime/sdk/go"
 )
 
@@ -58,6 +59,9 @@ type ToolRequest struct {
 	MaximumUses                        uint32
 	ExpiresAt                          time.Time
 	Descriptor                         []byte
+	// Arguments are the canonical model-supplied input validated against the
+	// immutable Agent tool catalog before Broker admission.
+	Arguments []byte
 }
 
 // Adapter is the model-provider seam. Invoke is allowed exactly once for a
@@ -184,6 +188,19 @@ func (worker *Worker) process(ctx context.Context, record runtimestate.OutboxRec
 		if worker.broker == nil {
 			return errors.New("admit model tool request: broker is unavailable")
 		}
+		specification, readErr := worker.agentSpecification(ctx, record.Tenant, session)
+		if readErr != nil {
+			return readErr
+		}
+		definition, found := declaredTool(specification.Tools, response.Tool.ToolName)
+		if !found {
+			return errors.New("admit model tool request: tool is not declared by the Agent revision")
+		}
+		arguments, validateErr := toolschema.CanonicalArguments(definition.InputSchemaVersion, definition.InputSchema, response.Tool.Arguments)
+		if validateErr != nil {
+			return fmt.Errorf("admit model tool request: arguments do not match declared input schema: %w", validateErr)
+		}
+		_ = arguments // Canonical validation is complete before any broker state exists.
 		handoff, stageErr := worker.content.StageToolActionDescriptor(ctx, record.Tenant, response.Tool.Descriptor)
 		if stageErr != nil {
 			return stageErr
@@ -192,6 +209,42 @@ func (worker *Worker) process(ctx context.Context, record runtimestate.OutboxRec
 		return admitErr
 	}
 	return worker.finalize(ctx, record, invocation, session, turn, response)
+}
+
+func (worker *Worker) agentSpecification(ctx context.Context, tenant runtimecontent.TenantID, session runtimestate.SessionRecord) (agentruntime.AgentSpecification, error) {
+	authorization, err := worker.compiler.CompileAuthorizeAgentSpecificationBodyRead(runtimestate.AgentSpecificationBodyReadCommand{Scope: runtimestate.MutationScope{Tenant: tenant, Authority: runtimestate.AuthorityRuntimeWorker}, AgentID: session.AgentID, RevisionID: session.RevisionID})
+	if err != nil {
+		return agentruntime.AgentSpecification{}, fmt.Errorf("authorize Agent tool catalog: %w", err)
+	}
+	record, err := worker.store.AuthorizeAgentSpecificationBodyRead(ctx, authorization)
+	if err != nil {
+		return agentruntime.AgentSpecification{}, fmt.Errorf("read Agent tool catalog: %w", err)
+	}
+	reader, err := runtimecontent.NewAgentSpecificationBodyReader(worker.content, runtimeSpecificationRepository{record: record})
+	if err != nil {
+		return agentruntime.AgentSpecification{}, err
+	}
+	return reader.ReadAgentSpecification(ctx, tenant, session.AgentID, session.RevisionID)
+}
+
+type runtimeSpecificationRepository struct {
+	record runtimecontent.AgentSpecificationBodyRecord
+}
+
+func (repository runtimeSpecificationRepository) AuthorizeAgentSpecificationBodyRead(_ context.Context, tenant runtimecontent.TenantID, agentID agentruntime.AgentID, revisionID agentruntime.AgentRevisionID) (runtimecontent.AgentSpecificationBodyRecord, error) {
+	if repository.record.Tenant != tenant || repository.record.AgentID != agentID || repository.record.RevisionID != revisionID {
+		return runtimecontent.AgentSpecificationBodyRecord{}, runtimecontent.ErrNotFoundOrDenied
+	}
+	return repository.record, nil
+}
+
+func declaredTool(tools []agentruntime.ToolDefinition, name string) (agentruntime.ToolDefinition, bool) {
+	for _, tool := range tools {
+		if tool.Name == name {
+			return tool, true
+		}
+	}
+	return agentruntime.ToolDefinition{}, false
 }
 
 func (worker *Worker) finalize(ctx context.Context, record runtimestate.OutboxRecord, invocation runtimestate.InvocationRecord, session runtimestate.SessionRecord, turn runtimestate.TurnRecord, response Response) error {

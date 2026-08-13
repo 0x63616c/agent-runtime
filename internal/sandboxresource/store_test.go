@@ -111,7 +111,9 @@ func TestStoreEncryptsPublishesVerifiesAndTombstonesSnapshot(t *testing.T) {
 		t.Fatal(err)
 	}
 	content, err := io.ReadAll(reader)
-	reader.Close()
+	if err := reader.Close(); err != nil {
+		t.Fatal(err)
+	}
 	if err != nil || string(content) != "quiesced disk bytes" || observed.ID != manifest.ID {
 		t.Fatalf("snapshot contents = %q, %#v, %v", content, observed, err)
 	}

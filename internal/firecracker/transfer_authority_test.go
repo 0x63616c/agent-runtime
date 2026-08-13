@@ -39,7 +39,7 @@ func TestTransferExecutionAuthorityFencesDurableReceiptAndLostAckReplay(t *testi
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer journal.Close()
+	defer func() { _ = journal.Close() }()
 	data := []byte("immutable artifact")
 	artifact := transferArtifact("artifact-001", "text/plain", data)
 	source := &transferSource{data: data}
@@ -113,7 +113,7 @@ func TestTransferExecutionAuthorityRefusesCrossSandboxBeforeEffect(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer journal.Close()
+	defer func() { _ = journal.Close() }()
 	source, sink := &transferSource{data: []byte("x")}, &transferSink{}
 	authority, err := NewTransferExecutionAuthority(binding, source, sink, journal, sourceClock)
 	if err != nil {
@@ -183,7 +183,7 @@ func TestTransferExecutionAuthorityArchiveInReplaysReceiptWithoutSecondExtractio
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer journal.Close()
+	defer func() { _ = journal.Close() }()
 	authority, err = NewTransferExecutionAuthority(binding, source, &transferSink{}, journal, sourceClock)
 	if err != nil {
 		t.Fatal(err)
@@ -227,7 +227,7 @@ func TestSnapshotRestoreAuthorityReplaysLostReceiptWithoutSecondSinkEffect(t *te
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer journal.Close()
+	defer func() { _ = journal.Close() }()
 	sink := &snapshotSink{}
 	authority, err := NewSnapshotRestoreExecutionAuthority(store, sink, journal, sourceClock)
 	if err != nil {
@@ -286,7 +286,7 @@ func TestSnapshotRestoreAuthorityReapsFailedSinkAndReleasesOnlyExactLease(t *tes
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer journal.Close()
+	defer func() { _ = journal.Close() }()
 	sink := &snapshotSink{restoreErr: context.Canceled}
 	authority, err := NewSnapshotRestoreExecutionAuthority(store, sink, journal, sourceClock)
 	if err != nil {

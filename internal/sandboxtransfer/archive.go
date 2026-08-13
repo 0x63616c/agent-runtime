@@ -93,7 +93,7 @@ func archivePath(header *tar.Header) (string, bool, bool) {
 		}
 	}
 	switch header.Typeflag {
-	case tar.TypeReg, tar.TypeRegA:
+	case tar.TypeReg:
 		return name, false, true
 	case tar.TypeDir:
 		return name, true, true

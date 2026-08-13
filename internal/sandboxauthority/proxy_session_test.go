@@ -12,7 +12,7 @@ func TestProxySessionBindsLeaseVMFenceDestinationAndReaper(t *testing.T) {
 	now := time.Date(2026, 8, 10, 0, 0, 0, 0, time.UTC)
 	session := newTestProxySession(t, now)
 	client, server := net.Pipe()
-	defer server.Close()
+	defer func() { _ = server.Close() }()
 	request := testProxySessionRequest()
 	connection, err := session.Connect(context.Background(), request, now, publicResolver("8.8.8.8"), dialerFunc(func(context.Context, string, string) (net.Conn, error) {
 		return client, nil
@@ -53,7 +53,7 @@ func TestProxySessionRefusesReplayIdentitySubstitutionAndUnadmittedDestination(t
 	t.Run("replay", func(t *testing.T) {
 		session := newTestProxySession(t, now)
 		first, peer := net.Pipe()
-		defer peer.Close()
+		defer func() { _ = peer.Close() }()
 		request := testProxySessionRequest()
 		if _, err := session.Connect(context.Background(), request, now, publicResolver("8.8.8.8"), dialerFunc(func(context.Context, string, string) (net.Conn, error) {
 			return first, nil

@@ -297,7 +297,10 @@ func (store *MemoryRuntimeStateStore) ListOutboxTenants(ctx context.Context) ([]
 	return tenants, nil
 }
 func (store *MemoryRuntimeStateStore) AuthorizeAgentSpecificationBodyRead(ctx context.Context, authorization CompiledReadAuthorization) (runtimecontent.AgentSpecificationBodyRecord, error) {
-	if err := requireScope(ctx, authorization.scope, AuthorityTenantAdministrator, false); err != nil {
+	if authorization.scope.Authority != AuthorityTenantAdministrator && authorization.scope.Authority != AuthorityRuntimeWorker {
+		return runtimecontent.AgentSpecificationBodyRecord{}, ErrNotFoundOrDenied
+	}
+	if err := requireScope(ctx, authorization.scope, authorization.scope.Authority, false); err != nil {
 		return runtimecontent.AgentSpecificationBodyRecord{}, err
 	}
 	state := store.snapshot(authorization.scope.Tenant)

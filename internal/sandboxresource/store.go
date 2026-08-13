@@ -610,7 +610,7 @@ func (store *Store) RestoreSnapshot(ctx context.Context, request SnapshotRestore
 	if err != nil {
 		return SnapshotManifest{}, err
 	}
-	defer reader.Close()
+	defer func() { _ = reader.Close() }()
 	if err := sink.RestoreSnapshot(ctx, copySnapshot(manifest), reader); err != nil {
 		return SnapshotManifest{}, fmt.Errorf("restore sandbox snapshot: sink unavailable")
 	}
@@ -675,7 +675,7 @@ func validResourceID(id string) bool {
 		return false
 	}
 	for _, character := range id {
-		if !(character >= 'a' && character <= 'z' || character >= 'A' && character <= 'Z' || character >= '0' && character <= '9' || character == '_' || character == '-') {
+		if (character < 'a' || character > 'z') && (character < 'A' || character > 'Z') && (character < '0' || character > '9') && character != '_' && character != '-' {
 			return false
 		}
 	}
@@ -803,17 +803,17 @@ func writeState(filename string, state persistentState) error {
 		return err
 	}
 	temporary := file.Name()
-	defer os.Remove(temporary)
+	defer func() { _ = os.Remove(temporary) }()
 	if err := file.Chmod(0o600); err != nil {
-		file.Close()
+		_ = file.Close()
 		return err
 	}
 	if _, err := file.Write(content); err != nil {
-		file.Close()
+		_ = file.Close()
 		return err
 	}
 	if err := file.Sync(); err != nil {
-		file.Close()
+		_ = file.Close()
 		return err
 	}
 	if err := file.Close(); err != nil {
@@ -826,7 +826,7 @@ func writeState(filename string, state persistentState) error {
 	if err != nil {
 		return err
 	}
-	defer directoryFile.Close()
+	defer func() { _ = directoryFile.Close() }()
 	return directoryFile.Sync()
 }
 
@@ -882,22 +882,22 @@ func (plane *FileDataPlane) Stage(ctx context.Context, id string, input io.Reade
 	}
 	temporary := file.Name()
 	if err := file.Chmod(0o600); err != nil {
-		file.Close()
-		os.Remove(temporary)
+		_ = file.Close()
+		_ = os.Remove(temporary)
 		return StagedSnapshot{}, err
 	}
 	if _, err := file.Write(ciphertext); err != nil {
-		file.Close()
-		os.Remove(temporary)
+		_ = file.Close()
+		_ = os.Remove(temporary)
 		return StagedSnapshot{}, err
 	}
 	if err := file.Sync(); err != nil {
-		file.Close()
-		os.Remove(temporary)
+		_ = file.Close()
+		_ = os.Remove(temporary)
 		return StagedSnapshot{}, err
 	}
 	if err := file.Close(); err != nil {
-		os.Remove(temporary)
+		_ = os.Remove(temporary)
 		return StagedSnapshot{}, err
 	}
 	return StagedSnapshot{id: id, path: temporary, PlaintextDigest: plainDigest, CiphertextDigest: digest(ciphertext), SizeBytes: uint64(len(plain))}, nil
@@ -921,7 +921,7 @@ func (plane *FileDataPlane) Publish(stage StagedSnapshot) error {
 	if err != nil {
 		return err
 	}
-	defer directory.Close()
+	defer func() { _ = directory.Close() }()
 	return directory.Sync()
 }
 

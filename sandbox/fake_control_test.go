@@ -64,7 +64,7 @@ func TestFakeControlClientAdvancesOnlyItsInjectedClockAndReplaysScriptedStatesAn
 	if err != nil {
 		t.Fatalf("WatchOperation() error = %v", err)
 	}
-	defer stream.Close()
+	defer func() { _ = stream.Close() }()
 	var kinds []OperationEventKind
 	for {
 		event, nextErr := stream.Next(context.Background())

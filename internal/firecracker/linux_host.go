@@ -307,7 +307,7 @@ func (host *LinuxJailerHost) DispatchAuthenticatedProxy(ctx context.Context, env
 	if err != nil {
 		return GuestDispatchResult{}, err
 	}
-	defer session.Close(context.Background())
+	defer func() { _ = session.Close(context.Background()) }()
 	return channel.ProxyAuthenticated(ctx, envelope, authenticatedEnvelope, session, authority.now(), authority.resolve(), authority.dial())
 }
 

@@ -12,6 +12,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/0x63616c/agent-runtime/internal/clock"
+	"github.com/0x63616c/agent-runtime/internal/toolschema"
 	agentruntime "github.com/0x63616c/agent-runtime/sdk/go"
 	"github.com/cockroachdb/errors"
 )
@@ -714,6 +715,9 @@ func (kernel *Kernel) validateAgent(name, profile, instructions string, tools []
 	for _, tool := range tools {
 		if !safeName(tool.Name) || len(tool.Description) == 0 || len(tool.Description) > 4096 || !utf8.ValidString(tool.Description) {
 			return invalid("Tool definition is invalid or unbounded")
+		}
+		if _, _, err := toolschema.CanonicalSchema(tool.InputSchemaVersion, tool.InputSchema); err != nil {
+			return invalid("Tool definition input schema is invalid or unsupported")
 		}
 		if _, exists := seen[tool.Name]; exists {
 			return invalid("Tool definition name is duplicated")

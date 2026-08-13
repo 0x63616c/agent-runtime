@@ -250,7 +250,7 @@ func testLogger() *slog.Logger {
 
 func createFixtureModelIntent(t *testing.T, ctx context.Context, content *runtimecontent.Store, compiler *runtimestate.Compiler, store *runtimestate.MemoryRuntimeStateStore, tenant runtimecontent.TenantID, principal runtimecontent.PrincipalID) (agentruntime.SessionID, agentruntime.TurnID, runtimestate.InvocationRecord) {
 	t.Helper()
-	body, err := content.StageAgentSpecificationBody(ctx, tenant, runtimecontent.AgentSpecificationBody{Name: "local-demo-model", ModelProfile: "balanced", Instructions: "recover one local fixture admission"})
+	body, err := content.StageAgentSpecificationBody(ctx, tenant, runtimecontent.AgentSpecificationBody{Name: "local-demo-model", ModelProfile: "balanced", Instructions: "recover one local fixture admission", Tools: []agentruntime.ToolDefinition{{Name: "workspace.write", Description: "write a bounded workspace fixture"}}})
 	if err != nil {
 		t.Fatal(err)
 	}

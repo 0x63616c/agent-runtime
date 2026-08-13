@@ -33,7 +33,7 @@ func TestMountExecutionAuthorityFencesSourceAndReapsLostAckShare(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer journal.Close()
+	defer func() { _ = journal.Close() }()
 	observer := &sharingObserver{identity: lease.Source}
 	daemon := &sharingDaemon{}
 	authority, err := NewMountExecutionAuthority(store, lease, "process-001", "mount-op-001", 7, sourceClock, observer, daemon, journal)
@@ -94,7 +94,7 @@ func TestMountExecutionAuthorityRefusesSourceReplacementBeforeDaemonAttach(t *te
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer journal.Close()
+	defer func() { _ = journal.Close() }()
 	changed := lease.Source
 	changed.Inode++
 	daemon := &sharingDaemon{}

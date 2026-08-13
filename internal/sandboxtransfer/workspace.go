@@ -192,7 +192,7 @@ func (workspace *Workspace) CopyOut(ctx context.Context, sink ArtifactSink, requ
 	if err != nil {
 		return sandbox.ArtifactRef{}, fmt.Errorf("copy sandbox workspace artifact out: open source: %w", err)
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 	hash := sha256.New()
 	count, err := io.Copy(hash, &contextReader{context: ctx, reader: io.LimitReader(file, info.Size()+1)})
 	if err != nil || count != info.Size() {
