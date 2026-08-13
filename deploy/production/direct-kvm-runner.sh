@@ -9,24 +9,70 @@ usage() {
   cat >&2 <<'EOF'
 usage:
   direct-kvm-runner.sh render --run-id ID --image ghcr.io/0x63616c/agent-runtime-direct-runner@sha256:HEX --output /absolute/manifest.yaml
-  direct-kvm-runner.sh execute --run-id ID --image ghcr.io/0x63616c/agent-runtime-direct-runner@sha256:HEX --kubeconfig /absolute/KUBECONFIG --context CONTEXT --evidence-file /absolute/EVIDENCE.json --execute-authorized-direct-kvm
+  direct-kvm-runner.sh execute --run-id ID --image ghcr.io/0x63616c/agent-runtime-direct-runner@sha256:HEX --kubeconfig /absolute/KUBECONFIG --context CONTEXT --registry-docker-config /absolute/config.json --evidence-file /absolute/EVIDENCE.json --execute-authorized-direct-kvm
   direct-kvm-runner.sh --self-test
 
-render is offline. execute is the only mutating mode. It refuses to reuse a
-namespace, creates one privileged Pod Security namespace containing a single
-no-network pod, waits for its bounded smoke run, retains only redacted stdout
-and the root-owned smoke report, then deletes and waits for deletion of that
-exact namespace even when the smoke command fails.
+render is offline and emits a suspended Job. execute is the only mutating
+mode. It requires an absolute Docker registry config JSON that authenticates
+to ghcr.io, refuses to reuse a namespace, creates one privileged Pod Security
+namespace with a namespace-scoped immutable image-pull secret, then applies an
+unsuspended private copy of the Job. It waits for the bounded smoke run,
+retains only bounded redacted stdout and the root-owned smoke report, then
+deletes and waits for deletion of that exact namespace even when the smoke
+command fails. The Docker config is passed directly to kubectl: it is never
+rendered, logged, copied into evidence, or retained by this script.
 EOF
   exit 2
 }
 
 fail() { echo "direct KVM runner failed: $*" >&2; exit 1; }
+readonly registry_secret_name='direct-kvm-runner-registry'
 valid_run_id() { [[ "$1" =~ ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$ && ${#1} -le 24 ]]; }
 valid_context() { [[ "$1" =~ ^[A-Za-z0-9@._:-]{1,128}$ ]]; }
 valid_image() { [[ "$1" =~ ^ghcr\.io/0x63616c/agent-runtime-direct-runner@sha256:[0-9a-f]{64}$ ]]; }
 require_new_absolute() { [[ "$1" == /* && ! -e "$1" ]] || fail "$2 must be a new absolute path"; mkdir -p "$(dirname "$1")"; }
 require_file() { [[ "$1" == /* && -f "$1" ]] || fail "$2 must be an existing absolute file"; }
+
+validate_registry_docker_config() {
+  local config="$1"
+  python3 - "$config" <<'PY'
+import base64
+import json
+import os
+import re
+import sys
+
+path = sys.argv[1]
+try:
+    stat = os.stat(path)
+    if stat.st_size <= 0 or stat.st_size > 1024 * 1024:
+        raise ValueError('registry Docker config must be between 1 byte and 1 MiB')
+    with open(path, encoding='utf-8') as handle:
+        value = json.load(handle)
+    entry = value['auths']['ghcr.io']
+    encoded = entry['auth']
+    if not isinstance(encoded, str) or not re.fullmatch(r'[A-Za-z0-9+/]+={0,2}', encoded):
+        raise ValueError('ghcr.io auth must be a base64 basic-auth value')
+    decoded = base64.b64decode(encoded, validate=True).decode('utf-8')
+    if ':' not in decoded or any(character in decoded for character in '\r\n'):
+        raise ValueError('ghcr.io auth must decode to a single basic-auth identity')
+except (OSError, KeyError, TypeError, ValueError, UnicodeDecodeError, json.JSONDecodeError) as error:
+    raise SystemExit('registry Docker config is invalid: %s' % error)
+PY
+}
+
+redact_logs() {
+  python3 - <<'PY'
+import re
+import sys
+
+text = sys.stdin.read(65536)
+text = re.sub(r'(?i)(authorization|token|password|secret|auth)\s*([:=])\s*[^\s]+', r'\1\2[REDACTED]', text)
+text = re.sub(r'(?i)bearer\s+[^\s]+', 'Bearer [REDACTED]', text)
+text = re.sub(r'(?<![A-Za-z0-9+/=])[A-Za-z0-9+/]{40,}={0,2}(?![A-Za-z0-9+/=])', '[REDACTED]', text)
+sys.stdout.write(text)
+PY
+}
 
 identity() {
   local run_id="$1"
@@ -68,8 +114,8 @@ spec:
   podSelector: {}
   policyTypes: [Ingress, Egress]
 ---
-apiVersion: v1
-kind: Pod
+apiVersion: batch/v1
+kind: Job
 metadata:
   namespace: $namespace
   name: $pod
@@ -77,118 +123,144 @@ metadata:
     app.kubernetes.io/part-of: agent-runtime
     agent-runtime.dev/direct-kvm-run: "$run_id"
 spec:
-  automountServiceAccountToken: false
-  restartPolicy: Never
-  terminationGracePeriodSeconds: 5
-  containers:
-    - name: firecracker
-      image: $image
-      imagePullPolicy: Always
-      command: ["/bin/sh", "-ec"]
-      args:
-        - >-
-          /usr/local/bin/firecracker-direct-preflight
-          -config /var/lib/agent-runtime/firecracker-direct/kvm-config.json
-          -fixture-lock /var/lib/agent-runtime/firecracker-fixtures/home-server/fixtures.lock
-          && exec /usr/local/bin/firecracker-smoke
-          -execution-mode direct
-          -direct-config /var/lib/agent-runtime/firecracker-direct/kvm-config.json
-          -direct-fixture-source-map /var/lib/agent-runtime/firecracker-direct/fixture-source-map.json
-          -fixture-lock /var/lib/agent-runtime/firecracker-fixtures/home-server/fixtures.lock
-          -report $report_path
-          -vm-id $vm_id
-          -uid 1000 -gid 1000
-          -cgroup-parent agent-runtime/firecracker-direct
-          -stack-resource firecracker-direct-kvm
-          -external-owner firecracker-direct-limits
-          -timeout 2m
-      securityContext:
-        privileged: true
-        readOnlyRootFilesystem: true
-        allowPrivilegeEscalation: true
-        capabilities: { drop: ["ALL"] }
-      resources:
-        requests: { cpu: "1000m", memory: "1024Mi" }
-        limits: { cpu: "2000m", memory: "2048Mi" }
-      volumeMounts:
-        - { name: tmp, mountPath: /tmp }
-        - { name: kvm, mountPath: /dev/kvm }
-        - { name: direct-config, mountPath: /var/lib/agent-runtime/firecracker-direct/kvm-config.json, readOnly: true }
-        - { name: fixture-map, mountPath: /var/lib/agent-runtime/firecracker-direct/fixture-source-map.json, readOnly: true }
-        - { name: fixtures, mountPath: /var/lib/agent-runtime/firecracker-fixtures/home-server, readOnly: true }
-        - { name: evidence, mountPath: /var/lib/agent-runtime/firecracker-evidence/home-server }
-        - { name: jailer, mountPath: /var/lib/agent-runtime/firecracker-jailer }
-        # Bind only the delegated parent. The Jailer can create and remove its
-        # own per-VM child, but cannot inspect or modify sibling/host cgroups.
-        - { name: cgroup, mountPath: /sys/fs/cgroup/agent-runtime/firecracker-direct, readOnly: false }
-  volumes:
-    - name: tmp
-      emptyDir: { sizeLimit: 2Gi }
-    - name: kvm
-      hostPath: { path: /dev/kvm, type: CharDevice }
-    - name: direct-config
-      hostPath: { path: /var/lib/agent-runtime/firecracker-direct/kvm-config.json, type: File }
-    - name: fixture-map
-      hostPath: { path: /var/lib/agent-runtime/firecracker-direct/fixture-source-map.json, type: File }
-    - name: fixtures
-      hostPath: { path: /var/lib/agent-runtime/firecracker-fixtures/home-server, type: Directory }
-    - name: evidence
-      hostPath: { path: /var/lib/agent-runtime/firecracker-evidence/home-server, type: Directory }
-    - name: jailer
-      hostPath: { path: /var/lib/agent-runtime/firecracker-jailer, type: Directory }
-    - name: cgroup
-      hostPath: { path: /sys/fs/cgroup/agent-runtime/firecracker-direct, type: Directory }
+  # The public render path is inert. execute writes a private unsuspended copy
+  # only after creating the fixed immutable image-pull secret.
+  suspend: true
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 300
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/part-of: agent-runtime
+        agent-runtime.dev/direct-kvm-run: "$run_id"
+    spec:
+      automountServiceAccountToken: false
+      imagePullSecrets:
+        - name: $registry_secret_name
+      restartPolicy: Never
+      terminationGracePeriodSeconds: 5
+      containers:
+        - name: firecracker
+          image: $image
+          imagePullPolicy: Always
+          command: ["/bin/sh", "-ec"]
+          args:
+            - >-
+              /usr/local/bin/firecracker-direct-preflight
+              -config /var/lib/agent-runtime/firecracker-direct/kvm-config.json
+              -fixture-lock /var/lib/agent-runtime/firecracker-fixtures/home-server/fixtures.lock
+              && exec /usr/local/bin/firecracker-smoke
+              -execution-mode direct
+              -direct-config /var/lib/agent-runtime/firecracker-direct/kvm-config.json
+              -direct-fixture-source-map /var/lib/agent-runtime/firecracker-direct/fixture-source-map.json
+              -fixture-lock /var/lib/agent-runtime/firecracker-fixtures/home-server/fixtures.lock
+              -report $report_path
+              -vm-id $vm_id
+              -uid 1000 -gid 1000
+              -cgroup-parent agent-runtime/firecracker-direct
+              -stack-resource firecracker-direct-kvm
+              -external-owner firecracker-direct-limits
+              -timeout 2m
+          securityContext:
+            privileged: true
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: true
+            capabilities: { drop: ["ALL"] }
+          resources:
+            requests: { cpu: "1000m", memory: "1024Mi" }
+            limits: { cpu: "2000m", memory: "2048Mi" }
+          volumeMounts:
+            - { name: tmp, mountPath: /tmp }
+            - { name: kvm, mountPath: /dev/kvm }
+            - { name: direct-config, mountPath: /var/lib/agent-runtime/firecracker-direct/kvm-config.json, readOnly: true }
+            - { name: fixture-map, mountPath: /var/lib/agent-runtime/firecracker-direct/fixture-source-map.json, readOnly: true }
+            - { name: fixtures, mountPath: /var/lib/agent-runtime/firecracker-fixtures/home-server, readOnly: true }
+            - { name: evidence, mountPath: /var/lib/agent-runtime/firecracker-evidence/home-server }
+            - { name: jailer, mountPath: /var/lib/agent-runtime/firecracker-jailer }
+            # Bind only the delegated parent. The Jailer can create and remove its
+            # own per-VM child, but cannot inspect or modify sibling/host cgroups.
+            - { name: cgroup, mountPath: /sys/fs/cgroup/agent-runtime/firecracker-direct, readOnly: false }
+      volumes:
+        - name: tmp
+          emptyDir: { sizeLimit: 2Gi }
+        - name: kvm
+          hostPath: { path: /dev/kvm, type: CharDevice }
+        - name: direct-config
+          hostPath: { path: /var/lib/agent-runtime/firecracker-direct/kvm-config.json, type: File }
+        - name: fixture-map
+          hostPath: { path: /var/lib/agent-runtime/firecracker-direct/fixture-source-map.json, type: File }
+        - name: fixtures
+          hostPath: { path: /var/lib/agent-runtime/firecracker-fixtures/home-server, type: Directory }
+        - name: evidence
+          hostPath: { path: /var/lib/agent-runtime/firecracker-evidence/home-server, type: Directory }
+        - name: jailer
+          hostPath: { path: /var/lib/agent-runtime/firecracker-jailer, type: Directory }
+        - name: cgroup
+          hostPath: { path: /sys/fs/cgroup/agent-runtime/firecracker-direct, type: Directory }
 EOF
 }
 
 execute() {
-  local run_id="" image="" kubeconfig="" context_value="" evidence="" approved=false manifest=""
+  local run_id="" image="" kubeconfig="" context_value="" registry_docker_config="" evidence="" approved=false manifest="" active_manifest=""
   while [[ $# -gt 0 ]]; do case "$1" in
-    --run-id) run_id="$2"; shift 2;; --image) image="$2"; shift 2;; --kubeconfig) kubeconfig="$2"; shift 2;; --context) context_value="$2"; shift 2;; --evidence-file) evidence="$2"; shift 2;; --execute-authorized-direct-kvm) approved=true; shift;; *) usage;;
+    --run-id) run_id="$2"; shift 2;; --image) image="$2"; shift 2;; --kubeconfig) kubeconfig="$2"; shift 2;; --context) context_value="$2"; shift 2;; --registry-docker-config) registry_docker_config="$2"; shift 2;; --evidence-file) evidence="$2"; shift 2;; --execute-authorized-direct-kvm) approved=true; shift;; *) usage;;
   esac; done
-  [[ "$approved" == true && -n "$run_id" && -n "$image" && -n "$kubeconfig" && -n "$context_value" && -n "$evidence" ]] || usage
+  [[ "$approved" == true && -n "$run_id" && -n "$image" && -n "$kubeconfig" && -n "$context_value" && -n "$registry_docker_config" && -n "$evidence" ]] || usage
   identity "$run_id"; valid_image "$image" || fail "image must be the pinned reviewed direct-runner repository digest"; valid_context "$context_value" || fail "invalid Kubernetes context"
-  require_file "$kubeconfig" "kubeconfig"; require_new_absolute "$evidence" "evidence file"
+  require_file "$kubeconfig" "kubeconfig"; require_file "$registry_docker_config" "registry Docker config"; validate_registry_docker_config "$registry_docker_config"; require_new_absolute "$evidence" "evidence file"
   command -v kubectl >/dev/null || fail "kubectl is required"; command -v jq >/dev/null || fail "jq is required"
   kubectl --kubeconfig "$kubeconfig" config get-contexts -o name | grep -Fx -- "$context_value" >/dev/null || fail "explicit context is unavailable"
   [[ -z "$(kubectl --kubeconfig "$kubeconfig" --context "$context_value" get "namespace/$namespace" --ignore-not-found -o name)" ]] || fail "namespace already exists; runner will not take it over"
-  manifest="$(mktemp)"; trap 'rm -f -- "${manifest:-}"' EXIT
+  manifest="$(mktemp)"; active_manifest="$(mktemp)"; rm -f -- "$manifest" "$active_manifest"
+  trap 'rm -f -- "${manifest:-}" "${active_manifest:-}"' EXIT
   render --run-id "$run_id" --image "$image" --output "$manifest"
-  local cleanup=true result=0 phase logs
-  trap 'if [[ "${cleanup:-false}" == true ]]; then kubectl --kubeconfig "$kubeconfig" --context "$context_value" delete "namespace/$namespace" --ignore-not-found --wait=false >/dev/null || true; kubectl --kubeconfig "$kubeconfig" --context "$context_value" wait --for=delete "namespace/$namespace" --timeout=180s >/dev/null 2>&1 || echo "direct KVM cleanup failed; delete namespace $namespace" >&2; fi; rm -f -- "${manifest:-}"' EXIT
-  kubectl --kubeconfig "$kubeconfig" --context "$context_value" apply -f "$manifest" >/dev/null
-  if ! kubectl --kubeconfig "$kubeconfig" --context "$context_value" wait --for=jsonpath='{.status.phase}'=Succeeded "pod/$pod" --namespace "$namespace" --timeout=180s >/dev/null; then result=1; fi
-  phase="$(kubectl --kubeconfig "$kubeconfig" --context "$context_value" get "pod/$pod" --namespace "$namespace" -o jsonpath='{.status.phase}' 2>/dev/null || true)"
-  logs="$(kubectl --kubeconfig "$kubeconfig" --context "$context_value" logs "pod/$pod" --namespace "$namespace" --timestamps 2>&1 || true)"
-  jq -n --arg namespace "$namespace" --arg pod "$pod" --arg context "$context_value" --arg image "$image" --arg report "$report_path" --arg phase "$phase" --arg logs "$logs" --argjson succeeded "$([[ "$result" == 0 ]] && echo true || echo false)" '{version:1,kind:"agent-runtime.direct-kvm-run/v1",namespace:$namespace,pod:$pod,context:$context,image:$image,host_report:$report,pod_phase:$phase,succeeded:$succeeded,pod_logs:$logs,cleanup:"namespace deletion follows this record"}' >"$evidence"
+  sed 's/^  suspend: true$/  suspend: false/' "$manifest" >"$active_manifest"
+  grep -Fqx '  suspend: false' "$active_manifest" || fail "could not prepare explicit runnable KVM manifest"
+  local cleanup=true namespace_created=false result=0 status logs
+  trap 'if [[ "${cleanup:-false}" == true && "${namespace_created:-false}" == true ]]; then kubectl --kubeconfig "$kubeconfig" --context "$context_value" delete "namespace/$namespace" --ignore-not-found --wait=false >/dev/null 2>&1 || true; kubectl --kubeconfig "$kubeconfig" --context "$context_value" wait --for=delete "namespace/$namespace" --timeout=180s >/dev/null 2>&1 || echo "direct KVM cleanup failed; delete namespace $namespace" >&2; fi; rm -f -- "${manifest:-}" "${active_manifest:-}"' EXIT
+  kubectl --kubeconfig "$kubeconfig" --context "$context_value" create namespace "$namespace" >/dev/null
+  namespace_created=true
+  kubectl --kubeconfig "$kubeconfig" --context "$context_value" label "namespace/$namespace" app.kubernetes.io/part-of=agent-runtime "agent-runtime.dev/direct-kvm-run=$run_id" pod-security.kubernetes.io/enforce=privileged pod-security.kubernetes.io/audit=privileged pod-security.kubernetes.io/warn=privileged >/dev/null
+  kubectl --kubeconfig "$kubeconfig" --context "$context_value" --namespace "$namespace" create secret generic "$registry_secret_name" --type=kubernetes.io/dockerconfigjson --from-file=.dockerconfigjson="$registry_docker_config" --dry-run=client -o yaml | kubectl --kubeconfig "$kubeconfig" --context "$context_value" apply -f - >/dev/null
+  kubectl --kubeconfig "$kubeconfig" --context "$context_value" --namespace "$namespace" patch "secret/$registry_secret_name" --type merge -p '{"immutable":true}' >/dev/null
+  if ! kubectl --kubeconfig "$kubeconfig" --context "$context_value" apply -f "$active_manifest" >/dev/null; then result=1
+  elif ! kubectl --kubeconfig "$kubeconfig" --context "$context_value" wait --for=condition=complete "job/$pod" --namespace "$namespace" --timeout=180s >/dev/null; then result=1; fi
+  status="$(kubectl --kubeconfig "$kubeconfig" --context "$context_value" get "job/$pod" --namespace "$namespace" -o jsonpath='{.status.conditions[0].type}' 2>/dev/null || true)"
+  logs="$(kubectl --kubeconfig "$kubeconfig" --context "$context_value" logs "job/$pod" --namespace "$namespace" --timestamps 2>&1 | redact_logs || true)"
+  jq -n --arg namespace "$namespace" --arg job "$pod" --arg context "$context_value" --arg image "$image" --arg report "$report_path" --arg status "$status" --arg logs "$logs" --arg registry_secret "$registry_secret_name" --argjson succeeded "$([[ "$result" == 0 ]] && echo true || echo false)" '{version:1,kind:"agent-runtime.direct-kvm-run/v1",namespace:$namespace,job:$job,context:$context,image:$image,host_report:$report,image_pull_secret:$registry_secret,job_status:$status,succeeded:$succeeded,redacted_logs:$logs,cleanup:"namespace deletion follows this record"}' >"$evidence"
   kubectl --kubeconfig "$kubeconfig" --context "$context_value" delete "namespace/$namespace" --wait=false >/dev/null
   kubectl --kubeconfig "$kubeconfig" --context "$context_value" wait --for=delete "namespace/$namespace" --timeout=180s >/dev/null
   cleanup=false
-  [[ "$result" == 0 ]] || fail "Firecracker pod did not reach Succeeded; redacted logs are in $evidence"
+  [[ "$result" == 0 ]] || fail "Firecracker Job did not complete; redacted logs are in $evidence"
   echo "direct KVM smoke completed; evidence: $evidence"
 }
 
 self_test() {
-  local tmp manifest
+  local tmp manifest invalid_registry
   tmp="$(mktemp -d)"; trap 'rm -rf -- "${tmp:-}"' EXIT
   manifest="$tmp/runner.yaml"
+  invalid_registry="$tmp/invalid-registry.json"
+  printf '%s\n' '{"auths":{"ghcr.io":{"auth":"not-base64!"}}}' >"$invalid_registry"
   render --run-id smoke-test --image "ghcr.io/0x63616c/agent-runtime-direct-runner@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" --output "$manifest"
   grep -Fqx '    pod-security.kubernetes.io/enforce: privileged' "$manifest"
   grep -Fqx '  policyTypes: [Ingress, Egress]' "$manifest"
-  grep -Fqx '  automountServiceAccountToken: false' "$manifest"
-  grep -Fqx '      imagePullPolicy: Always' "$manifest"
-  grep -Fqx '        - { name: tmp, mountPath: /tmp }' "$manifest"
-  grep -Fqx '      emptyDir: { sizeLimit: 2Gi }' "$manifest"
-  grep -Fqx '      hostPath: { path: /dev/kvm, type: CharDevice }' "$manifest"
-  grep -Fqx '      hostPath: { path: /var/lib/agent-runtime/firecracker-direct/kvm-config.json, type: File }' "$manifest"
-  grep -Fqx '        - { name: jailer, mountPath: /var/lib/agent-runtime/firecracker-jailer }' "$manifest"
-  grep -Fqx '        - { name: cgroup, mountPath: /sys/fs/cgroup/agent-runtime/firecracker-direct, readOnly: false }' "$manifest"
-  grep -Fqx '      hostPath: { path: /var/lib/agent-runtime/firecracker-jailer, type: Directory }' "$manifest"
-  grep -Fqx '          -report /var/lib/agent-runtime/firecracker-evidence/home-server/smoke-test.json' "$manifest"
+  grep -Fqx '  suspend: true' "$manifest"
+  grep -Fqx "        - name: $registry_secret_name" "$manifest"
+  grep -Fqx '      automountServiceAccountToken: false' "$manifest"
+  grep -Fqx '          imagePullPolicy: Always' "$manifest"
+  grep -Fqx '            - { name: tmp, mountPath: /tmp }' "$manifest"
+  grep -Fqx '          emptyDir: { sizeLimit: 2Gi }' "$manifest"
+  grep -Fqx '          hostPath: { path: /dev/kvm, type: CharDevice }' "$manifest"
+  grep -Fqx '          hostPath: { path: /var/lib/agent-runtime/firecracker-direct/kvm-config.json, type: File }' "$manifest"
+  grep -Fqx '            - { name: jailer, mountPath: /var/lib/agent-runtime/firecracker-jailer }' "$manifest"
+  grep -Fqx '            - { name: cgroup, mountPath: /sys/fs/cgroup/agent-runtime/firecracker-direct, readOnly: false }' "$manifest"
+  grep -Fqx '          hostPath: { path: /var/lib/agent-runtime/firecracker-jailer, type: Directory }' "$manifest"
+  grep -Fqx '              -report /var/lib/agent-runtime/firecracker-evidence/home-server/smoke-test.json' "$manifest"
   if "$0" render --run-id upperCase --image "ghcr.io/0x63616c/agent-runtime-direct-runner@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" --output "$tmp/bad" >/dev/null 2>&1; then fail "accepted invalid run ID"; fi
   if "$0" render --run-id smoke-test --image "example.invalid/unpinned:latest" --output "$tmp/bad" >/dev/null 2>&1; then fail "accepted unreviewed image"; fi
-  if "$0" execute --run-id smoke-test --image "ghcr.io/0x63616c/agent-runtime-direct-runner@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" --kubeconfig /dev/null --context home-server --evidence-file "$tmp/evidence.json" >/dev/null 2>&1; then fail "execute accepted no explicit authorization flag"; fi
-  echo "direct KVM runner renders one pinned-image, privileged, no-network disposable namespace and refuses unpinned inputs"
+  if "$0" execute --run-id smoke-test --image "ghcr.io/0x63616c/agent-runtime-direct-runner@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" --kubeconfig /dev/null --context home-server --registry-docker-config /dev/null --evidence-file "$tmp/evidence.json" >/dev/null 2>&1; then fail "execute accepted no explicit authorization flag"; fi
+  if "$0" execute --run-id smoke-test --image "ghcr.io/0x63616c/agent-runtime-direct-runner@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" --kubeconfig /dev/null --context home-server --registry-docker-config "$invalid_registry" --evidence-file "$tmp/evidence.json" --execute-authorized-direct-kvm >/dev/null 2>&1; then fail "execute accepted an invalid registry config"; fi
+  echo "direct KVM runner renders a suspended pinned-image, privileged, no-network Job and refuses implicit execution"
 }
 
 case "${1:-}" in
