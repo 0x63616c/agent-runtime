@@ -232,7 +232,8 @@ spec:
               readelf --version 2>&1 | grep -F '2.44' >/dev/null
               work="\$(mktemp -d /work/fixture.XXXXXX)"
               trap 'rm -rf "\$work"' EXIT
-              /workspace/tools/firecracker/build-guest-agent.sh "\$work/guest-agent"
+              mkdir -p /work/tmp /work/go-cache
+              TMPDIR=/work/tmp GOCACHE=/work/go-cache /workspace/tools/firecracker/build-guest-agent.sh "\$work/guest-agent"
               SOURCE_DATE_EPOCH=$epoch /workspace/tools/firecracker/build-rootfs.sh "\$work/guest-agent" "\$work/rootfs.ext4" $rootfs_bytes $rootfs_uuid "\$work/rootfs-attestation.json"
               /workspace/tools/firecracker/assemble-fixtures.sh "\$work/assembled" $revision $firecracker_version /input-parent/home-server/firecracker.tgz "$kernel_url" $kernel_version_id /input-parent/home-server/vmlinux "\$work/rootfs.ext4" "\$work/rootfs-attestation.json" $epoch
               stage=/var/lib/agent-runtime/firecracker-fixtures/.home-server-$run_id.staged
