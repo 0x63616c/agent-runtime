@@ -93,6 +93,25 @@ func TestLinuxJailerStarterExposesTheBoundedNonDaemonizedSerialOutput(t *testing
 	}
 }
 
+func TestClassifyJailerStartupDiagnosticsRetainsOnlyFixedFailureCategories(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		output string
+		want   JailerStartupDiagnostic
+	}{
+		{name: "permission", output: "cannot open /private/operator-secret: permission denied", want: JailerStartupDiagnosticPermissionDenied},
+		{name: "kvm", output: "KVM_CREATE_VM failed for /private/operator-secret", want: JailerStartupDiagnosticKVMInitialization},
+		{name: "api socket", output: "failed to create API socket /private/operator-secret", want: JailerStartupDiagnosticAPIInitialization},
+		{name: "unknown", output: "arbitrary host failure /private/operator-secret", want: JailerStartupDiagnosticExited},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if got := classifyJailerStartupDiagnostics([]byte(test.output)); got != test.want {
+				t.Fatalf("classifyJailerStartupDiagnostics() = %q, want %q", got, test.want)
+			}
+		})
+	}
+}
+
 func TestLinuxJailerStarterRefusesAnUnboundAuthorityOrStageBeforeHostIO(t *testing.T) {
 	plan := mustCompile(t, validProfile())
 	fixtures := verifiedPlanFixtures(plan)

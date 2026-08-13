@@ -73,6 +73,27 @@ type JailerSerialObserver interface {
 	AwaitSerial(context.Context, string) error
 }
 
+// JailerStartupDiagnosticObserver exposes one redacted, fixed startup result
+// after a Jailer has been started. It never exposes command arguments, host
+// paths, or captured process output. The smoke command uses this only to
+// distinguish an absent Firecracker API socket from an exited Jailer process.
+type JailerStartupDiagnosticObserver interface {
+	StartupDiagnostic() JailerStartupDiagnostic
+}
+
+// JailerStartupDiagnostic is a fixed, safe-to-retain classification of the
+// Jailer/Firecracker startup boundary.
+type JailerStartupDiagnostic string
+
+const (
+	JailerStartupDiagnosticUnavailable       JailerStartupDiagnostic = "unavailable"
+	JailerStartupDiagnosticStillRunning      JailerStartupDiagnostic = "still-running"
+	JailerStartupDiagnosticExited            JailerStartupDiagnostic = "exited"
+	JailerStartupDiagnosticAPIInitialization JailerStartupDiagnostic = "api-initialization-failed"
+	JailerStartupDiagnosticKVMInitialization JailerStartupDiagnostic = "kvm-initialization-failed"
+	JailerStartupDiagnosticPermissionDenied  JailerStartupDiagnostic = "permission-denied"
+)
+
 // FirecrackerHTTPPort sends one bounded JSON request over the exact private Firecracker API socket.
 type FirecrackerHTTPPort interface {
 	Bind(context.Context, string) error
@@ -577,6 +598,9 @@ func (host *LinuxJailerHost) Launch(ctx context.Context, request LaunchRequest) 
 		}
 	}
 	if err := callWithContextFence(ctx, "await Firecracker API socket", http.WaitReady); err != nil {
+		if observer, ok := process.(JailerStartupDiagnosticObserver); ok {
+			err = withJailerStartupDiagnostic(err, observer.StartupDiagnostic())
+		}
 		return host.failLaunch(err)
 	}
 	for _, call := range []struct {
@@ -595,6 +619,18 @@ func (host *LinuxJailerHost) Launch(ctx context.Context, request LaunchRequest) 
 	}
 	host.finishLaunch(true)
 	return nil
+}
+
+func withJailerStartupDiagnostic(err error, diagnostic JailerStartupDiagnostic) error {
+	if err == nil {
+		return nil
+	}
+	switch diagnostic {
+	case JailerStartupDiagnosticExited, JailerStartupDiagnosticAPIInitialization, JailerStartupDiagnosticKVMInitialization, JailerStartupDiagnosticPermissionDenied:
+		return fmt.Errorf("%w: Jailer startup diagnostic: %s", err, diagnostic)
+	default:
+		return err
+	}
 }
 
 // AwaitSerial observes the exact immutable guest marker through the injected guest channel.

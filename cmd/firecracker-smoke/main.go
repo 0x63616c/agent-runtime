@@ -235,7 +235,18 @@ func smokeObservationFailureReason(err error) string {
 		// private API socket before the bounded launch context ended. Keep the
 		// host-specific Jailer stderr out of the durable report while retaining
 		// the actionable lifecycle boundary.
-		return prefix + ": Firecracker API socket was not observed"
+		switch {
+		case strings.Contains(message, "Jailer startup diagnostic: exited"):
+			return prefix + ": Jailer exited before Firecracker API readiness"
+		case strings.Contains(message, "Jailer startup diagnostic: api-initialization-failed"):
+			return prefix + ": Firecracker API socket initialization failed"
+		case strings.Contains(message, "Jailer startup diagnostic: kvm-initialization-failed"):
+			return prefix + ": Firecracker KVM initialization failed"
+		case strings.Contains(message, "Jailer startup diagnostic: permission-denied"):
+			return prefix + ": Firecracker startup was denied by the host"
+		default:
+			return prefix + ": Firecracker API socket was not observed"
+		}
 	case strings.Contains(message, "launch jailer:"):
 		return prefix + ": Jailer or Firecracker launch failed"
 	case strings.Contains(message, "await guest serial marker:"):

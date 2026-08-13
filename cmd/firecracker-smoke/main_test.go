@@ -20,6 +20,10 @@ func TestSmokeObservationFailureReasonRetainsOnlyTheFailedProofBoundary(t *testi
 	}{
 		{name: "stage", err: errors.New("prepare jailed rootfs: arbitrary host path /private/secret"), want: prefix + ": Jailer fixture staging failed"},
 		{name: "api readiness", err: errors.New("launch jailer: await Firecracker API socket: arbitrary Jailer diagnostic"), want: prefix + ": Firecracker API socket was not observed"},
+		{name: "jailer exited before readiness", err: errors.New("launch jailer: await Firecracker API socket: context deadline exceeded: Jailer startup diagnostic: exited: arbitrary host stderr /private/secret"), want: prefix + ": Jailer exited before Firecracker API readiness"},
+		{name: "api initialization", err: errors.New("launch jailer: await Firecracker API socket: context deadline exceeded: Jailer startup diagnostic: api-initialization-failed: arbitrary host stderr /private/secret"), want: prefix + ": Firecracker API socket initialization failed"},
+		{name: "kvm initialization", err: errors.New("launch jailer: await Firecracker API socket: context deadline exceeded: Jailer startup diagnostic: kvm-initialization-failed: arbitrary host stderr /private/secret"), want: prefix + ": Firecracker KVM initialization failed"},
+		{name: "startup permission", err: errors.New("launch jailer: await Firecracker API socket: context deadline exceeded: Jailer startup diagnostic: permission-denied: arbitrary host stderr /private/secret"), want: prefix + ": Firecracker startup was denied by the host"},
 		{name: "launch", err: errors.New("launch jailer: arbitrary Jailer diagnostic"), want: prefix + ": Jailer or Firecracker launch failed"},
 		{name: "jailer permission", err: fmt.Errorf("launch jailer: start Jailer: %w", fs.ErrPermission), want: prefix + ": Jailer executable was denied by the host"},
 		{name: "jailer permission text", err: errors.New("launch jailer: start Jailer: fork/exec: permission denied"), want: prefix + ": Jailer executable was denied by the host"},

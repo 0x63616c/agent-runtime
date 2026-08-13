@@ -316,6 +316,28 @@ func (process *linuxJailerProcess) AwaitSerial(ctx context.Context, marker strin
 	return process.serial.AwaitSerial(ctx, marker)
 }
 
+// StartupDiagnostic returns a fixed classification derived from the bounded
+// Jailer stderr stream only after the process has exited. It deliberately does
+// not return stderr, an exit string, or a filesystem value: callers may retain
+// this category in operator evidence without leaking host details.
+func (process *linuxJailerProcess) StartupDiagnostic() JailerStartupDiagnostic {
+	if process == nil || process.serial == nil {
+		return JailerStartupDiagnosticUnavailable
+	}
+	select {
+	case <-process.waitDone:
+	default:
+		return JailerStartupDiagnosticStillRunning
+	}
+	process.mu.Lock()
+	defer process.mu.Unlock()
+	command, ok := process.command.(*osJailerCommand)
+	if !ok || command.diagnostics == nil {
+		return JailerStartupDiagnosticExited
+	}
+	return classifyJailerStartupDiagnostics(command.diagnostics.snapshot())
+}
+
 // Terminate sends SIGTERM to the one authority-bound Jailer process and waits only until ctx expires.
 func (process *linuxJailerProcess) Terminate(ctx context.Context) error {
 	if err := contextError(ctx); err != nil {
@@ -421,6 +443,20 @@ func (command *osJailerCommand) Signal(signal os.Signal) error {
 
 func (command *osJailerCommand) SerialOutput() *boundedJailerOutput { return command.serial }
 
+func classifyJailerStartupDiagnostics(output []byte) JailerStartupDiagnostic {
+	message := strings.ToLower(string(output))
+	switch {
+	case strings.Contains(message, "permission denied"):
+		return JailerStartupDiagnosticPermissionDenied
+	case strings.Contains(message, "kvm_create_vm"), strings.Contains(message, "failed to initialize kvm"), strings.Contains(message, "failed to create kvm"):
+		return JailerStartupDiagnosticKVMInitialization
+	case strings.Contains(message, "api socket"), strings.Contains(message, "api_sock"), strings.Contains(message, "api-sock"):
+		return JailerStartupDiagnosticAPIInitialization
+	default:
+		return JailerStartupDiagnosticExited
+	}
+}
+
 type boundedJailerOutput struct {
 	mu        sync.Mutex
 	remaining int
@@ -492,6 +528,15 @@ func (output *boundedJailerOutput) Close() {
 	}
 	output.closed = true
 	output.signalLocked()
+}
+
+func (output *boundedJailerOutput) snapshot() []byte {
+	if output == nil {
+		return nil
+	}
+	output.mu.Lock()
+	defer output.mu.Unlock()
+	return append([]byte(nil), output.data...)
 }
 
 func (output *boundedJailerOutput) signalLocked() {
