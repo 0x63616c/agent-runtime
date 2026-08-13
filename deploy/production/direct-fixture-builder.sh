@@ -142,10 +142,10 @@ spec:
               test ! -e /var/lib/agent-runtime/firecracker-fixtures/home-server
               test ! -e /etc/agent-runtime/firecracker-direct-fixtures.json
               for input in firecracker.tgz vmlinux rootfs-builder.json; do
-                test -f "/input/\$input"
-                test "\$(stat -c '%u %a' "/input/\$input")" = '0 600'
+                test -f "/input-parent/home-server/\$input"
+                test "\$(stat -c '%u %a' "/input-parent/home-server/\$input")" = '0 600'
               done
-              python3 - /input/rootfs-builder.json "$revision" <<'PY'
+              python3 - /input-parent/home-server/rootfs-builder.json "$revision" <<'PY'
               import hashlib, json, pathlib, re, sys
               manifest, revision = sys.argv[1:]
               value = json.load(open(manifest, encoding='utf-8'))
@@ -164,7 +164,7 @@ spec:
               trap 'rm -rf "\$work"' EXIT
               /workspace/tools/firecracker/build-guest-agent.sh "\$work/guest-agent"
               SOURCE_DATE_EPOCH=$epoch /workspace/tools/firecracker/build-rootfs.sh "\$work/guest-agent" "\$work/rootfs.ext4" $rootfs_bytes $rootfs_uuid "\$work/rootfs-attestation.json"
-              /workspace/tools/firecracker/assemble-fixtures.sh "\$work/assembled" $revision $firecracker_version /input/firecracker.tgz "$kernel_url" $kernel_version_id /input/vmlinux "\$work/rootfs.ext4" "\$work/rootfs-attestation.json" $epoch
+              /workspace/tools/firecracker/assemble-fixtures.sh "\$work/assembled" $revision $firecracker_version /input-parent/home-server/firecracker.tgz "$kernel_url" $kernel_version_id /input-parent/home-server/vmlinux "\$work/rootfs.ext4" "\$work/rootfs-attestation.json" $epoch
               stage=/var/lib/agent-runtime/firecracker-fixtures/.home-server-$run_id.staged
               test ! -e "\$stage"
               cp -a "\$work/assembled" "\$stage"
@@ -182,14 +182,14 @@ spec:
             limits: { cpu: "2000m", memory: "2048Mi" }
           volumeMounts:
             - { name: work, mountPath: /work }
-            - { name: inputs, mountPath: /input, readOnly: true }
+            - { name: inputs, mountPath: /input-parent, readOnly: true }
             - { name: fixtures, mountPath: /var/lib/agent-runtime/firecracker-fixtures }
             - { name: direct-config, mountPath: /etc/agent-runtime }
       volumes:
         - name: work
           emptyDir: { sizeLimit: 2Gi }
         - name: inputs
-          hostPath: { path: /var/lib/agent-runtime/firecracker-fixture-inputs/home-server, type: Directory }
+          hostPath: { path: /var/lib/agent-runtime/firecracker-fixture-inputs, type: Directory }
         - name: fixtures
           hostPath: { path: /var/lib/agent-runtime/firecracker-fixtures, type: DirectoryOrCreate }
         - name: direct-config
