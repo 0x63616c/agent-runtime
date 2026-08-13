@@ -6,6 +6,11 @@ import (
 	"sync"
 )
 
+// maximumOutputChunkBytes bounds one adapter-to-core output handoff. The
+// host-control protocol uses the same ceiling, so an adapter cannot bypass the
+// bounded-I/O invariant by presenting an arbitrarily large in-memory chunk.
+const maximumOutputChunkBytes = 256 << 10
+
 type literalRedactor struct {
 	patterns [][]byte
 	pending  []byte
@@ -152,6 +157,9 @@ func (spool *processOutputSpool) writeLocked(stream OutputKind, chunk []byte) er
 	redactor, found := spool.redactors[stream]
 	if !found {
 		return newFailure(FailureInvalidArgument, "output stream is invalid", RetryNever)
+	}
+	if len(chunk) > maximumOutputChunkBytes {
+		return newFailure(FailureResourceLimitExceeded, "output chunk exceeds the finite limit", RetryNever)
 	}
 	if spool.produced+uint64(len(chunk)) > spool.producedLimit {
 		return newFailure(FailureResourceLimitExceeded, "produced output limit was exceeded", RetryNever)

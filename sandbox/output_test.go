@@ -43,6 +43,18 @@ func TestProcessOutputSpoolStopsAtProducedLimit(t *testing.T) {
 	}
 }
 
+func TestProcessOutputSpoolRejectsUnboundedAdapterChunk(t *testing.T) {
+	spool, err := newProcessOutputSpool(maximumOutputChunkBytes+1, maximumOutputChunkBytes+1, nil)
+	if err != nil {
+		t.Fatalf("newProcessOutputSpool() error = %v", err)
+	}
+	err = spool.Write(OutputStdout, make([]byte, maximumOutputChunkBytes+1))
+	failureCode(t, err, FailureResourceLimitExceeded)
+	if got := spool.Events(); len(got) != 0 {
+		t.Fatalf("events = %#v, want rejected chunk to leave no retained output", got)
+	}
+}
+
 func TestProcessOutputSpoolMarksOnlyChunksWhoseBytesWereRedacted(t *testing.T) {
 	spool, err := newProcessOutputSpool(64, 64, []string{"secret"})
 	if err != nil {
