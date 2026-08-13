@@ -76,6 +76,7 @@ fi
 echo "two-Stack diagnostics will be retained at $diagnostics_dir"
 created_a=false
 created_b=false
+local_kubeconfig=""
 runtime_role_ids='["api","orchestration","model","tool","blob-role","codec","sandbox-control","sandbox-host"]'
 
 runtime_roles_ready() {
@@ -238,6 +239,7 @@ local_file() {
 remove_local_state() {
   local stack="$1"
   rm -f -- "$(local_file "$stack" stack)" "$(local_file "$stack" secrets)" "$(local_file "$stack" state)" \
+    "$root/.runtime/dev/$stack.bootstrap-capability.json" "$root/.runtime/dev/$stack.operator-audit.jsonl" \
     "$root/.runtime/dev/$stack.ci.bootstrap.json" "$root/.runtime/dev/$stack.ci.operator-audit.jsonl"
 }
 
@@ -250,7 +252,7 @@ require_absent_local_state() {
       exit 1
     fi
   done
-  if [[ -e "$root/.runtime/dev/$stack.ci.bootstrap.json" || -e "$root/.runtime/dev/$stack.ci.operator-audit.jsonl" ]]; then
+  if [[ -e "$root/.runtime/dev/$stack.bootstrap-capability.json" || -e "$root/.runtime/dev/$stack.operator-audit.jsonl" || -e "$root/.runtime/dev/$stack.ci.bootstrap.json" || -e "$root/.runtime/dev/$stack.ci.operator-audit.jsonl" ]]; then
     echo "refuse to adopt pre-existing CI Stack authority state for $stack" >&2
     exit 1
   fi
@@ -383,10 +385,35 @@ cleanup() {
   if [[ "$created_b" == true ]]; then
     down_stack "$stack_b" "$namespace_b"
   fi
+	if [[ -n "$local_kubeconfig" ]]; then
+		rm -f -- "$local_kubeconfig"
+	fi
   trap - EXIT
   exit "$original_status"
 }
 trap cleanup EXIT
+
+# The local reconciler refuses ambient credentials.  Create one private,
+# context-scoped kubeconfig for its short-lived state record so the same
+# identity used by this smoke script is carried into stackctl.  The EXIT trap
+# removes it along with both contained Stack namespaces.
+if [[ "$profile" == "local" ]]; then
+	local_kubeconfig="$(mktemp "${TMPDIR:-/tmp}/agent-runtime-two-stack-kubeconfig.XXXXXX")"
+	chmod 600 "$local_kubeconfig"
+	kubectl config view --raw -o json | jq --arg context "$context" '
+		.contexts |= map(select(.name == $context)) |
+		.contexts[0] as $selected |
+		.clusters |= map(select(.name == $selected.context.cluster)) |
+		.users |= map(select(.name == $selected.context.user)) |
+		."current-context" = $context
+	' >"$local_kubeconfig"
+	jq -e --arg context "$context" '
+		.contexts | length == 1 and .[0].name == $context
+	' "$local_kubeconfig" >/dev/null || {
+		echo "failed to create a context-scoped local kubeconfig" >&2
+		exit 1
+	}
+fi
 
 capture_stack_diagnostics() {
   local stack="$1"
@@ -422,6 +449,11 @@ start_stack() {
     # side-effect free, and stackctl must create the Namespace before Tilt can
     # apply the same reviewed topology.
     deploy/dev/bootstrap-ci-stack.sh --stack="$stack" --context="$context" >/dev/null 2>&1 || ci_status=$?
+	else
+		go run ./tools/dev prepare --stack="$stack" --root=. --kubeconfig="$local_kubeconfig" --actor=two-stack-smoke >/dev/null 2>&1 || ci_status=$?
+		if [[ "$ci_status" == 0 ]]; then
+			go run ./tools/dev bootstrap --stack="$stack" --root=. >/dev/null 2>&1 || ci_status=$?
+		fi
   fi
   # Do not retain Tilt output: it may contain workload environment or headers.
   # The allowlisted summary below records only bounded readiness metadata.

@@ -49,7 +49,7 @@ func main() {
 
 func run(ctx context.Context, arguments []string, output io.Writer) error {
 	if len(arguments) == 0 {
-		return fmt.Errorf("run local development command: render, secrets, preflight, up, reconcile, status, reset, or down is required")
+		return fmt.Errorf("run local development command: render, secrets, preflight, prepare, bootstrap, up, reconcile, status, reset, or down is required")
 	}
 	switch arguments[0] {
 	case "render":
@@ -85,6 +85,22 @@ func run(ctx context.Context, arguments []string, output io.Writer) error {
 			return err
 		}
 		return preflight(ctx, root, kubeconfig, output)
+	case "prepare":
+		stack, root, kubeconfig, actor, scenario, err := parseUpArguments(arguments[1:])
+		if err != nil {
+			return err
+		}
+		return prepare(ctx, stack, root, kubeconfig, actor, scenario, output)
+	case "bootstrap":
+		stack, root, err := parseStackAndRoot("bootstrap", arguments[1:])
+		if err != nil {
+			return err
+		}
+		state, err := loadState(root, stack)
+		if err != nil {
+			return err
+		}
+		return bootstrap(ctx, stack, root, state.Kubeconfig, state.OperatorActor, output)
 	case "up":
 		stack, root, kubeconfig, actor, scenario, err := parseUpArguments(arguments[1:])
 		if err != nil {
@@ -821,12 +837,43 @@ func up(ctx context.Context, stack, root, kubeconfig, actor string, scenario loc
 	if err := preflight(ctx, root, kubeconfig, output); err != nil {
 		return err
 	}
-	stackPath := filepath.Join(root, ".runtime", "dev", stack+".stack.json")
+	if err := prepare(ctx, stack, root, kubeconfig, actor, scenario, output); err != nil {
+		return err
+	}
+	state, err := loadState(root, stack)
+	if err != nil {
+		return err
+	}
+	if err := bootstrap(ctx, stack, root, kubeconfig, actor, output); err != nil {
+		return err
+	}
+	command := exec.CommandContext(ctx, "tilt", localTiltUpArguments(stack, state.DashboardPort, scenario)...)
+	command.Env = commandEnvironment(kubeconfig)
+	command.Dir = root
+	command.Stdout, command.Stderr = output, output
+	if err := command.Run(); err != nil {
+		return fmt.Errorf("start isolated local Tilt Stack %s: %w", stack, err)
+	}
+	// Tilt has applied the declared Kubernetes resources. Reconcile provider
+	// resources only after its migration and Temporal deployments are ready:
+	// bootstrap alone cannot create a Temporal namespace before Temporal exists.
+	return reconcile(ctx, stack, root, output)
+}
+
+// prepare writes the private local lifecycle state before Tilt applies the
+// declared namespace. It intentionally does not bootstrap or reconcile: both
+// actions require the reviewed Kubernetes objects to exist first.
+func prepare(_ context.Context, stack, root, kubeconfig, actor string, scenario localFixtureScenario, _ io.Writer) error {
+	if _, err := os.Stat(statePath(root, stack)); err == nil {
+		return fmt.Errorf("prepare local Stack lifecycle: private state already exists for %s", stack)
+	} else if !os.IsNotExist(err) {
+		return fmt.Errorf("prepare local Stack lifecycle: inspect existing private state: %w", err)
+	}
 	document, err := renderStack(stack, "local", scenario)
 	if err != nil {
 		return err
 	}
-	if err := writePrivate(stackPath, document); err != nil {
+	if err := writePrivate(filepath.Join(root, ".runtime", "dev", stack+".stack.json"), document); err != nil {
 		return err
 	}
 	port, err := allocatePort()
@@ -840,20 +887,7 @@ func up(ctx context.Context, stack, root, kubeconfig, actor string, scenario loc
 	if err := writePrivate(statePath(root, stack), state); err != nil {
 		return err
 	}
-	if err := bootstrap(ctx, stack, root, kubeconfig, actor, output); err != nil {
-		return err
-	}
-	command := exec.CommandContext(ctx, "tilt", localTiltUpArguments(stack, port, scenario)...)
-	command.Env = commandEnvironment(kubeconfig)
-	command.Dir = root
-	command.Stdout, command.Stderr = output, output
-	if err := command.Run(); err != nil {
-		return fmt.Errorf("start isolated local Tilt Stack %s: %w", stack, err)
-	}
-	// Tilt has applied the declared Kubernetes resources. Reconcile provider
-	// resources only after its migration and Temporal deployments are ready:
-	// bootstrap alone cannot create a Temporal namespace before Temporal exists.
-	return reconcile(ctx, stack, root, output)
+	return nil
 }
 
 func localTiltUpArguments(stack string, port int, scenario localFixtureScenario) []string {
@@ -868,6 +902,9 @@ func reconcile(ctx context.Context, stack, root string, output io.Writer) error 
 	if err := verifyNamespace(ctx, state); err != nil {
 		return err
 	}
+	if err := bootstrap(ctx, stack, root, state.Kubeconfig, state.OperatorActor, output); err != nil {
+		return fmt.Errorf("bootstrap verified local Stack authority before reconciliation: %w", err)
+	}
 	for _, deployment := range []string{"migration-runner", "temporal"} {
 		ready := exec.CommandContext(ctx, "kubectl", "--kubeconfig", state.Kubeconfig, "--context", "orbstack", "--namespace", state.Namespace, "rollout", "status", "deployment/"+deployment, "--timeout=120s")
 		ready.Dir, ready.Stdout, ready.Stderr = root, output, output
@@ -878,11 +915,9 @@ func reconcile(ctx context.Context, stack, root string, output io.Writer) error 
 	if err := runStackctl(ctx, root, output, "reconcile", state); err != nil {
 		return fmt.Errorf("reconcile verified local Stack providers: %w", err)
 	}
-	ready := exec.CommandContext(ctx, "kubectl", "--kubeconfig", state.Kubeconfig, "--context", "orbstack", "--namespace", state.Namespace, "rollout", "status", "deployment/orchestration", "--timeout=120s")
-	ready.Dir, ready.Stdout, ready.Stderr = root, output, output
-	if err := ready.Run(); err != nil {
-		return fmt.Errorf("wait for reconciled local Stack orchestration readiness: %w", err)
-	}
+	// Tilt owns the orchestration Deployment and intentionally waits for this
+	// local resource first. Waiting for that Deployment here would form a
+	// dependency cycle and prevent Tilt from ever applying it.
 	return nil
 }
 

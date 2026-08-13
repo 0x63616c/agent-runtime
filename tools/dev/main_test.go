@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"io"
 	"os"
@@ -674,6 +675,27 @@ func TestLocalLifecyclePinsKubeconfigAndActorInPrivateState(t *testing.T) {
 		if !strings.HasPrefix(path, filepath.Join(root, ".runtime", "dev")+string(filepath.Separator)) {
 			t.Fatalf("local lifecycle path escapes private state root: %s", path)
 		}
+	}
+}
+
+func TestPrepareCreatesOnePrivateLifecycleStateForTiltReconciliation(t *testing.T) {
+	root := t.TempDir()
+	err := prepare(context.Background(), "tilt-smoke", root, "/explicit/kubeconfig", "two-stack-smoke", localFixtureScenarioWorkspaceApprovalReset, io.Discard)
+	if err != nil {
+		t.Fatalf("prepare local lifecycle: %v", err)
+	}
+	state, err := loadState(root, "tilt-smoke")
+	if err != nil {
+		t.Fatalf("load prepared state: %v", err)
+	}
+	if state.Kubeconfig != "/explicit/kubeconfig" || state.OperatorActor != "two-stack-smoke" || state.Namespace != "ar-tilt-smoke" {
+		t.Fatalf("prepared local state = %#v", state)
+	}
+	if _, err := os.Stat(filepath.Join(root, ".runtime", "dev", "tilt-smoke.stack.json")); err != nil {
+		t.Fatalf("prepared Stack document: %v", err)
+	}
+	if err := prepare(context.Background(), "tilt-smoke", root, "/explicit/kubeconfig", "two-stack-smoke", localFixtureScenarioWorkspaceApprovalReset, io.Discard); err == nil {
+		t.Fatal("prepare adopted pre-existing private state")
 	}
 }
 

@@ -93,7 +93,7 @@ var _ = Describe("Typed Kubernetes manifests", func() {
 		var compact bytes.Buffer
 		Expect(json.Compact(&compact, manifests.JSON())).To(Succeed())
 		Expect(compact.String()).To(ContainSubstring(`"configMap":{"name":"runtime-config","items":[{"key":"mode","path":"mode"}]}`))
-		Expect(compact.String()).To(ContainSubstring(`"mountPath":"/etc/runtime/mode","readOnly":true`))
+		Expect(compact.String()).To(ContainSubstring(`"mountPath":"/etc/runtime/mode","subPath":"mode","readOnly":true`))
 	})
 
 	It("renders an explicit replica count and declared ingress service route", func() {

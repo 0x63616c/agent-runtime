@@ -323,6 +323,7 @@ type kubernetesSecretKeyReference struct {
 type kubernetesVolumeMount struct {
 	Name      string `json:"name"`
 	MountPath string `json:"mountPath"`
+	SubPath   string `json:"subPath,omitempty"`
 	ReadOnly  bool   `json:"readOnly,omitempty"`
 }
 
@@ -363,7 +364,10 @@ func marshalWorkloadSpec(resource Resource, namespace, stack string, profile Pro
 		configMap := resources[mount.ConfigMap].Kubernetes
 		volumeName := string(mount.ConfigMap)
 		volumes = append(volumes, kubernetesVolume{Name: volumeName, ConfigMap: &kubernetesConfigMapVolume{Name: configMap.Name, Items: []kubernetesConfigMapVolumeItem{{Key: mount.Key, Path: mount.Key}}}})
-		mounts = append(mounts, kubernetesVolumeMount{Name: volumeName, MountPath: mount.Path, ReadOnly: true})
+		// A ConfigMap volume is a directory. The Stack contract names Path as a
+		// file path, so project its one declared key through subPath rather than
+		// replacing that file with a directory.
+		mounts = append(mounts, kubernetesVolumeMount{Name: volumeName, MountPath: mount.Path, SubPath: mount.Key, ReadOnly: true})
 	}
 	container := kubernetesContainer{
 		Name: object.Name, Image: object.Image, Command: append([]string(nil), object.Command...), Args: append([]string(nil), object.Arguments...), Env: environment, Ports: ports,
