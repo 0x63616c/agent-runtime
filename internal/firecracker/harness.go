@@ -75,6 +75,11 @@ const (
 	FixtureSourceVersionedObject FixtureSourceKind = "versioned-object"
 	// FixtureSourceProjectBuild identifies an output rebuilt from one project commit.
 	FixtureSourceProjectBuild FixtureSourceKind = "project-build"
+	// FixtureSourceProjectReleaseAsset identifies a project-controlled immutable
+	// release asset retained verbatim from an independently reviewed upstream
+	// input. It is deliberately limited to the kernel fixture: unlike project
+	// build bundles it has no build recipe or generated provenance to assert.
+	FixtureSourceProjectReleaseAsset FixtureSourceKind = "project-release-asset"
 )
 
 // FixturePlatform records the operating-system and processor identity of a bootable fixture.
@@ -368,6 +373,9 @@ func validFixtureSource(source LockedSource) bool {
 	case FixtureSourceProjectBuild:
 		revision, ok := strings.CutPrefix(source.Reference, "commit:")
 		return ok && validRevision(revision) && source.Format == FixtureSourceTarGzip && validProjectBuildSourceURL(parsed, revision)
+	case FixtureSourceProjectReleaseAsset:
+		revision, ok := strings.CutPrefix(source.Reference, "commit:")
+		return ok && validRevision(revision) && source.Format == FixtureSourceFile && validProjectKernelSourceURL(parsed, revision)
 	default:
 		return false
 	}
@@ -394,7 +402,7 @@ func validArtifactDerivation(artifact LockedArtifact, source LockedSource) bool 
 	case FixtureFirecracker, FixtureJailer:
 		return source.Kind == FixtureSourceReleaseArchive && source.Format == FixtureSourceTarGzip && artifact.Build == nil
 	case FixtureKernel:
-		return source.Kind == FixtureSourceVersionedObject && source.Format == FixtureSourceFile && artifact.Build == nil
+		return (source.Kind == FixtureSourceVersionedObject || source.Kind == FixtureSourceProjectReleaseAsset) && source.Format == FixtureSourceFile && artifact.Build == nil
 	case FixtureRootFS:
 		return source.Kind == FixtureSourceProjectBuild && source.Format == FixtureSourceTarGzip && validBuildProvenance(artifact.Build, false) && provenanceMatchesSource(artifact.Build, source) && artifact.Member != artifact.Build.InputsMember && artifact.Member != artifact.Build.SBOMMember && artifact.Member != artifact.Build.AttestationMember
 	case FixtureGuestAgent:
@@ -468,6 +476,10 @@ func validBuildProvenanceMember(member string, digest sandbox.Digest, sizeBytes 
 }
 
 func validProjectBuildSourceURL(parsed *url.URL, revision string) bool {
+	return validProjectReleaseAssetURL(parsed, revision) && strings.HasSuffix(parsed.Path, ".tar.gz")
+}
+
+func validProjectReleaseAssetURL(parsed *url.URL, revision string) bool {
 	if parsed.Host != "github.com" || parsed.RawPath != "" || parsed.RawQuery != "" || parsed.ForceQuery {
 		return false
 	}
@@ -477,6 +489,10 @@ func validProjectBuildSourceURL(parsed *url.URL, revision string) bool {
 	}
 	asset := strings.TrimPrefix(parsed.Path, prefix)
 	return asset != "" && !strings.Contains(asset, "/") && path.Clean(asset) == asset && asset != "." && asset != ".."
+}
+
+func validProjectKernelSourceURL(parsed *url.URL, revision string) bool {
+	return validProjectReleaseAssetURL(parsed, revision) && path.Base(parsed.Path) == "kernel-vmlinux"
 }
 
 func provenanceMatchesSource(provenance *BuildProvenance, source LockedSource) bool {

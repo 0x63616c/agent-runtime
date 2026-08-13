@@ -59,6 +59,7 @@ tar -tzf "$firecracker_archive" | grep -Fx "$jailer_member" >/dev/null
 mkdir -p "$output_dir/input" "$output_dir/bundles"
 cp "$firecracker_archive" "$output_dir/input/firecracker-${firecracker_version}-x86_64.tgz"
 cp "$kernel_file" "$output_dir/input/vmlinux"
+cp "$kernel_file" "$output_dir/bundles/kernel-vmlinux"
 
 agent="$output_dir/guest-agent"
 ./tools/firecracker/build-guest-agent.sh "$agent"
@@ -135,7 +136,7 @@ root_inputs_d,root_inputs_s=json_item('rootfs-inputs.json'); root_sbom_d,root_sb
 base='https://github.com/0x63616c/agent-runtime/releases/download/commit-'+revision+'/'
 lock={'version':'firecracker.fixtures/v2','fixture_version':'smoke-'+revision[:12], 'sources':[
  {'id':'firecracker-release','kind':'release-archive','url':'https://github.com/firecracker-microvm/firecracker/releases/download/'+version+'/firecracker-'+version+'-x86_64.tgz','immutable_reference':'release:'+version,'format':'tar.gz','sha256':fc_d,'size_bytes':fc_s,'license':'Apache-2.0'},
- {'id':'kernel','kind':'versioned-object','url':kernel_url,'immutable_reference':'version-id:'+version_id,'format':'file','sha256':kernel_d,'size_bytes':kernel_s,'license':'GPL-2.0-only'},
+ {'id':'kernel','kind':'project-release-asset','url':base+'kernel-vmlinux','immutable_reference':'commit:'+revision,'format':'file','sha256':kernel_d,'size_bytes':kernel_s,'license':'GPL-2.0-only'},
  {'id':'rootfs','kind':'project-build','url':base+'rootfs-bundle.tar.gz','immutable_reference':'commit:'+revision,'format':'tar.gz','sha256':root_bundle_d,'size_bytes':root_bundle_s,'license':'LicenseRef-agent-runtime-rootfs-sbom'},
  {'id':'guest-agent','kind':'project-build','url':base+'guest-agent-bundle.tar.gz','immutable_reference':'commit:'+revision,'format':'tar.gz','sha256':agent_bundle_d,'size_bytes':agent_bundle_s,'license':'MIT'}],
  'artifacts':[
@@ -149,4 +150,4 @@ with open(os.path.join(out,'fixtures.lock.candidate.json'),'w') as f: json.dump(
 PY
 
 echo "candidate lock: $output_dir/fixtures.lock.candidate.json"
-echo "publish only the two bundles to the exact commit-$revision GitHub release after review; then copy the reviewed candidate to tools/firecracker/fixtures.lock."
+echo "review the original versioned kernel identity recorded in *-inputs.json, then publish kernel-vmlinux and the two bundles to the exact commit-$revision GitHub release; after independent byte verification, copy the reviewed candidate to tools/firecracker/fixtures.lock."

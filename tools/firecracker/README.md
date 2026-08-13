@@ -17,9 +17,13 @@ reference, source and member/output SHA-256 and size, Linux/amd64 architecture,
 SPDX/license data, and the rootfs/agent build recipe, source revision,
 toolchain, input-manifest and SBOM member SHA-256/size pairs. Release archives use an exact
 `release:vX.Y.Z` URL identity, object sources use the URL's exact
-`version-id:...`, and project outputs use `commit:<40-lowercase-hex>` from the
-exact `github.com/0x63616c/agent-runtime` `commit-<revision>` release-asset
-trust root. Project outputs are tar.gz bundles: each has an exact artifact
+`version-id:...`. When a versioned upstream kernel object cannot be fetched
+anonymously, a reviewer may first retain those exact verified bytes as the
+sole `kernel-vmlinux` asset on this project's `commit:<40-lowercase-hex>`
+release. That project-controlled release asset is an immutable mirror, not a
+rebuilt kernel, and is accepted only for the kernel. Project build outputs use
+the same exact `github.com/0x63616c/agent-runtime` `commit-<revision>`
+release-asset trust root. Project outputs are tar.gz bundles: each has an exact artifact
 member plus bounded, separately verified input-manifest and SBOM members. A
 digest assertion without its corresponding bounded bytes is not accepted.
 Project-bundle traversal permits only its lock-declared regular members (at most
@@ -115,7 +119,8 @@ a clean detached checkout so the recorded source-tree digest and source
 revision describe the bytes that built the guest agent.
 
 Review the emitted `fixtures.lock.candidate.json`, the input manifests and
-SBOMs, and the exact archive/member identities. Then publish only the two
+SBOMs, the original versioned-kernel identity, and the exact archive/member
+identities. Then publish the byte-identical `kernel-vmlinux` mirror and two
 project bundles to the exact `commit-<revision>` GitHub release URLs named in
 the candidate. A separate review must verify those uploaded bytes before the
 candidate is copied to `tools/firecracker/fixtures.lock`; without that review

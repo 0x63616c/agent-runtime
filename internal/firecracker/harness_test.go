@@ -180,6 +180,40 @@ func TestFixtureLockV2RejectsMutableAndMismatchedSourceReferencesBeforeStaging(t
 	}
 }
 
+func TestFixtureLockV2AllowsProjectControlledKernelReleaseAsset(t *testing.T) {
+	lock := validFixtureLock()
+	const revision = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	lock.Sources[1].Kind = FixtureSourceProjectReleaseAsset
+	lock.Sources[1].URL = "https://github.com/0x63616c/agent-runtime/releases/download/commit-" + revision + "/kernel-vmlinux"
+	lock.Sources[1].Reference = "commit:" + revision
+	if err := lock.Validate(); err != nil {
+		t.Fatalf("Validate() error = %v, want project-controlled immutable kernel asset accepted", err)
+	}
+}
+
+func TestFixtureLockV2RefusesProjectReleaseAssetForNonKernel(t *testing.T) {
+	lock := validFixtureLock()
+	const revision = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	lock.Sources[0].Kind = FixtureSourceProjectReleaseAsset
+	lock.Sources[0].URL = "https://github.com/0x63616c/agent-runtime/releases/download/commit-" + revision + "/firecracker"
+	lock.Sources[0].Reference = "commit:" + revision
+	lock.Sources[0].Format = FixtureSourceFile
+	if err := lock.Validate(); !errors.Is(err, ErrFixtureLock) {
+		t.Fatalf("Validate() error = %v, want non-kernel project release asset refused", err)
+	}
+}
+
+func TestFixtureLockV2RefusesNonCanonicalProjectKernelReleaseAssetName(t *testing.T) {
+	lock := validFixtureLock()
+	const revision = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	lock.Sources[1].Kind = FixtureSourceProjectReleaseAsset
+	lock.Sources[1].URL = "https://github.com/0x63616c/agent-runtime/releases/download/commit-" + revision + "/vmlinux"
+	lock.Sources[1].Reference = "commit:" + revision
+	if err := lock.Validate(); !errors.Is(err, ErrFixtureLock) {
+		t.Fatalf("Validate() error = %v, want non-canonical kernel asset name refused", err)
+	}
+}
+
 func TestFixtureLockV2RejectsCredentialedFragmentedAndPresignedSourceURLs(t *testing.T) {
 	for _, mutate := range []func(*FixtureLock){
 		func(lock *FixtureLock) {
