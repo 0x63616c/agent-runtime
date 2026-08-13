@@ -32,7 +32,10 @@ const (
 	// directJailerBaseDirectory is the separately reviewed direct-run root. Talos
 	// keeps /srv immutable, so this lives on its durable writable state volume.
 	// It is not a caller-selected host path.
-	directJailerBaseDirectory = "/var/lib/agent-runtime/firecracker-jailer"
+	// Keep this path deliberately short. A Unix-domain socket pathname is
+	// bounded by Linux's sun_path buffer, and the direct runner has to reach
+	// the API socket through the complete host-visible Jailer root.
+	directJailerBaseDirectory = "/var/lib/f"
 )
 
 // NetworkMode identifies the only host-network authority represented by a profile.

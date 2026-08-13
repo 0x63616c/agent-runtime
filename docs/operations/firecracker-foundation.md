@@ -114,7 +114,9 @@ descriptor, and rejects a reused, changed, or symlinked input before creating a
 Jailer namespace. The private rootfs must fit the plan's finite root-disk limit.
 The compiler permits only two declared Jailer bases: the protected runner's
 `/srv/agent-runtime/jailer` and the separately selected direct Talos runner's
-`/var/lib/agent-runtime/firecracker-jailer`. Neither is caller-selectable.
+`/var/lib/f`. Neither is caller-selectable. The direct base is deliberately
+short: the host-visible path to the jailed Firecracker API Unix socket must fit
+Linux's 107-byte pathname limit.
 The production stager checks that the selected base, every ancestor to `/`, and an
 existing executable directory are root-owned, non-symlinked, and not group- or
 world-writable; those operator-owned paths are its trusted filesystem root, so
