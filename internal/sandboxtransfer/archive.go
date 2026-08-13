@@ -468,20 +468,28 @@ func (workspace *Workspace) writeArchiveDirectory(ctx context.Context, writer *t
 			return fmt.Errorf("copy sandbox workspace directory out: %w", ErrPathDenied)
 		}
 		if info.IsDir() {
+			if limited.entries >= maximumArchiveEntries {
+				return fmt.Errorf("copy sandbox workspace directory out: %w", ErrIntegrity)
+			}
 			if err := writer.WriteHeader(&tar.Header{Name: guestName, Mode: 0o700, Typeflag: tar.TypeDir}); err != nil {
 				return fmt.Errorf("copy sandbox workspace directory out: write directory header: %w", err)
 			}
+			limited.entries++
 			if err := workspace.writeArchiveDirectory(ctx, writer, member, guestName, limited); err != nil {
 				return err
 			}
 			continue
 		}
-		if !info.Mode().IsRegular() || info.Size() < 0 || limited.files >= maximumArchiveEntries {
+		if !info.Mode().IsRegular() || info.Size() < 0 {
 			return fmt.Errorf("copy sandbox workspace directory out: %w", ErrPathDenied)
+		}
+		if limited.entries >= maximumArchiveEntries {
+			return fmt.Errorf("copy sandbox workspace directory out: %w", ErrIntegrity)
 		}
 		if err := writer.WriteHeader(&tar.Header{Name: guestName, Mode: 0o600, Size: info.Size(), Typeflag: tar.TypeReg}); err != nil {
 			return fmt.Errorf("copy sandbox workspace directory out: write file header: %w", err)
 		}
+		limited.entries++
 		file, err := workspace.root.Open(member)
 		if err != nil {
 			return fmt.Errorf("copy sandbox workspace directory out: open source file: %w", err)
@@ -491,7 +499,6 @@ func (workspace *Workspace) writeArchiveDirectory(ctx context.Context, writer *t
 		if copyErr != nil || closeErr != nil || written != info.Size() {
 			return fmt.Errorf("copy sandbox workspace directory out: %w", ErrIntegrity)
 		}
-		limited.files++
 	}
 	return nil
 }
@@ -499,7 +506,7 @@ func (workspace *Workspace) writeArchiveDirectory(ctx context.Context, writer *t
 type archiveLimitWriter struct {
 	writer    io.Writer
 	remaining uint64
-	files     uint64
+	entries   uint64
 }
 
 func (writer *archiveLimitWriter) Write(data []byte) (int, error) {

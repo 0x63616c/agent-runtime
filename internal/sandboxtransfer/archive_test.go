@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -166,6 +167,33 @@ func TestGuestWorkspaceBindingDirectoryCopyOutRefusesSymlinksAndCleansStagingAft
 	entries, err := os.ReadDir(root)
 	if err != nil || len(entries) != 1 || entries[0].Name() != "results" {
 		t.Fatalf("workspace after cancelled directory copy-out = %#v, %v; want only results", entries, err)
+	}
+}
+
+func TestGuestWorkspaceBindingDirectoryCopyOutNeverEmitsAnArchiveBeyondTheImportEntryLimit(t *testing.T) {
+	root := t.TempDir()
+	binding, err := BindGuestWorkspace("sandbox-001", root, 16<<20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = binding.Close() }()
+	if err := os.Mkdir(filepath.Join(root, "results"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	// Directories are members too. This used to count only regular files, which
+	// let CopyOut produce an archive the corresponding CopyArchiveIn rejects.
+	for index := 0; index < maximumArchiveEntries+1; index++ {
+		if err := os.Mkdir(filepath.Join(root, "results", fmt.Sprintf("dir-%04d", index)), 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	request := sandbox.CopyOutRequest{SandboxID: "sandbox-001", Source: "/workspace/results", MediaType: ArchiveMediaType}
+	if _, err := binding.CopyOut(context.Background(), &recordingSink{}, request); !errors.Is(err, ErrIntegrity) {
+		t.Fatalf("CopyOut(too many directory entries) = %v, want bounded integrity refusal", err)
+	}
+	entries, err := os.ReadDir(root)
+	if err != nil || len(entries) != 1 || entries[0].Name() != "results" {
+		t.Fatalf("workspace after entry-limit refusal = %#v, %v; want only results", entries, err)
 	}
 }
 
