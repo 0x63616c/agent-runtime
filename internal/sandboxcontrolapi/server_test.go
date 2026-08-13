@@ -187,6 +187,30 @@ func TestControlHandlerAdmitsStableOpaqueVolumeProjection(t *testing.T) {
 	}
 }
 
+func TestControlHandlerServesPrincipalScopedDurableProcessProjection(t *testing.T) {
+	now := time.Date(2030, 8, 7, 2, 0, 0, 0, time.UTC)
+	fakeClock, _ := clock.NewFake(now)
+	store := &processReadStore{MemoryLedger: sandboxcontrol.NewMemoryLedger(), resources: sandboxcontrol.NewMemoryResourceReadModel()}
+	process := sandbox.ProcessInfo{ID: "prc_durable_process", SandboxID: "sbx_durable_parent", State: sandbox.ProcessRunning}
+	if err := store.resources.ProjectProcess(context.Background(), "tenant:subject", process); err != nil {
+		t.Fatal(err)
+	}
+	authenticator := mapAuthenticator{
+		"Bearer token":       {Authority: "issuer", Tenant: "tenant", Subject: "subject", Principal: "tenant:subject"},
+		"Bearer other-token": {Authority: "issuer", Tenant: "tenant", Subject: "other", Principal: "tenant:other"},
+	}
+	server := newTestServer(t, testServerConfig(store, authenticator, fakeClock, bytes.Repeat([]byte{0x57}, 32)))
+	client := newPublicClient(t, server, "token")
+	got, err := client.GetProcess(context.Background(), process.ID)
+	if err != nil || got.ID != process.ID || got.SandboxID != process.SandboxID || got.State != sandbox.ProcessRunning {
+		t.Fatalf("GetProcess() = %#v, %v", got, err)
+	}
+	other := newPublicClient(t, server, "other-token")
+	if _, err := other.GetProcess(context.Background(), process.ID); failureCode(err) != sandbox.FailureNotFoundOrDenied {
+		t.Fatalf("GetProcess(cross principal) error = %v", err)
+	}
+}
+
 // volumeAdmissionStore is a test-only control admission seam. Production uses
 // PostgresResourceReadModel, whose acceptance/projection transaction is
 // covered by the PostgreSQL integration suite.
@@ -195,6 +219,15 @@ type volumeAdmissionStore struct {
 	resources *sandboxcontrol.MemoryResourceReadModel
 	volume    sandbox.VolumeInfo
 	binding   *sandboxcontrol.ResourceProjectionBinding
+}
+
+type processReadStore struct {
+	*sandboxcontrol.MemoryLedger
+	resources *sandboxcontrol.MemoryResourceReadModel
+}
+
+func (store *processReadStore) GetProcess(ctx context.Context, principal string, id sandbox.ProcessID) (sandbox.ProcessInfo, error) {
+	return store.resources.GetProcess(ctx, principal, id)
 }
 
 func (store *volumeAdmissionStore) AcceptVolume(ctx context.Context, operation sandboxcontrol.Operation, value sandbox.VolumeInfo) (sandboxcontrol.Operation, bool, error) {

@@ -26,6 +26,7 @@ const (
 	bindPath              = "/sandbox.control/v1/bind"
 	operationsPath        = "/sandbox.control/v1/operations"
 	capabilitiesPath      = "/sandbox.control/v1/capabilities"
+	processPath           = "/sandbox.control/v1/processes/{id}"
 	processOutputPath     = "/sandbox.control/v1/processes/{id}/output"
 	volumesPath           = "/sandbox.control/v1/volumes"
 	bindingHeader         = "Sandbox-Binding"
@@ -86,6 +87,9 @@ func NewHandler(config Config) (http.Handler, error) {
 	mux.HandleFunc("GET "+operationsPath+"/{id}/wait", server.wait)
 	mux.HandleFunc("GET "+operationsPath+"/{id}/events", server.watch)
 	mux.HandleFunc("GET "+capabilitiesPath, server.capabilities)
+	if _, ok := config.Store.(sandboxcontrol.ProcessReadModel); ok {
+		mux.HandleFunc("GET "+processPath, server.getProcess)
+	}
 	mux.HandleFunc("GET "+processOutputPath, server.replayOutput)
 	if _, ok := config.Store.(sandboxcontrol.VolumeReadModel); ok {
 		mux.HandleFunc("GET "+volumesPath, server.listVolumes)
@@ -143,6 +147,12 @@ type outputEventsResponse struct {
 	Version string                `json:"version"`
 	Kind    string                `json:"kind"`
 	Events  []sandbox.OutputEvent `json:"events"`
+}
+
+type processResponse struct {
+	Version string              `json:"version"`
+	Kind    string              `json:"kind"`
+	Process sandbox.ProcessInfo `json:"process"`
 }
 
 type volumeResponse struct {
@@ -230,6 +240,33 @@ func (server *server) replayOutput(writer http.ResponseWriter, request *http.Req
 		return
 	}
 	writeJSON(writer, http.StatusOK, outputEventsResponse{Version: controlVersion, Kind: "output-events", Events: events})
+}
+
+func (server *server) getProcess(writer http.ResponseWriter, request *http.Request) {
+	identity, ok := server.authenticateBound(writer, request)
+	if !ok {
+		return
+	}
+	model, ok := server.config.Store.(sandboxcontrol.ProcessReadModel)
+	if !ok {
+		writeUnavailable(writer)
+		return
+	}
+	id := sandbox.ProcessID(request.PathValue("id"))
+	if id == "" || len(id) > 128 {
+		writeFailure(writer, http.StatusBadRequest, sandbox.Failure{Code: sandbox.FailureInvalidArgument, Message: "process identifier is invalid", Retry: sandbox.RetryNever})
+		return
+	}
+	process, err := model.GetProcess(request.Context(), identity.Principal, id)
+	if err != nil {
+		writeStoreError(writer, err)
+		return
+	}
+	if process.ID != id {
+		writeUnavailable(writer)
+		return
+	}
+	writeJSON(writer, http.StatusOK, processResponse{Version: controlVersion, Kind: "process-response", Process: process})
 }
 
 func (server *server) getVolume(writer http.ResponseWriter, request *http.Request) {

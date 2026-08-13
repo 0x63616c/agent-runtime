@@ -235,8 +235,19 @@ func (client *httpControlClient) Capabilities(ctx context.Context) (CapabilitySn
 func (client *httpControlClient) GetSandbox(context.Context, SandboxID) (SandboxInfo, error) {
 	return SandboxInfo{}, newFailure(FailureUnavailable, "sandbox resource transport is not implemented", RetryAfterReconcile)
 }
-func (client *httpControlClient) GetProcess(context.Context, ProcessID) (ProcessInfo, error) {
-	return ProcessInfo{}, newFailure(FailureUnavailable, "sandbox resource transport is not implemented", RetryAfterReconcile)
+func (client *httpControlClient) GetProcess(ctx context.Context, id ProcessID) (ProcessInfo, error) {
+	if !validProcessID(id) {
+		return ProcessInfo{}, newFailure(FailureInvalidArgument, "sandbox process ID is invalid", RetryNever)
+	}
+	response, err := client.do(ctx, http.MethodGet, processesRouteV1+url.PathEscape(string(id)), nil)
+	if err != nil {
+		return ProcessInfo{}, err
+	}
+	process, err := decodeProcessResponseV1(response)
+	if err != nil || process.ID != id {
+		return ProcessInfo{}, newFailure(FailureUnavailable, "sandbox process response is invalid", RetryAfterReconcile)
+	}
+	return process, nil
 }
 func (client *httpControlClient) ReplayOutput(ctx context.Context, id ProcessID, from OutputCursor) (OutputStream, error) {
 	if id == "" || len(id) > 128 {

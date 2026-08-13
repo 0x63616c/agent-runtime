@@ -18,6 +18,7 @@ const (
 	operationEventsKind      = "operation-events"
 	capabilitiesResponseKind = "capabilities-response"
 	outputEventsResponseKind = "output-events"
+	processResponseKind      = "process-response"
 	volumeResponseKind       = "volume-response"
 	volumePageResponseKind   = "volume-page-response"
 	failureResponseKind      = "failure-response"
@@ -57,6 +58,12 @@ type outputEventsResponseEnvelope struct {
 	Version string        `json:"version"`
 	Kind    string        `json:"kind"`
 	Events  []OutputEvent `json:"events"`
+}
+
+type processResponseEnvelope struct {
+	Version string      `json:"version"`
+	Kind    string      `json:"kind"`
+	Process ProcessInfo `json:"process"`
 }
 
 type volumeResponseEnvelope struct {
@@ -192,6 +199,17 @@ func decodeOutputEventsV1(data []byte) ([]OutputEvent, error) {
 		seen[event.Cursor] = struct{}{}
 	}
 	return copyOutputEvents(envelope.Events), nil
+}
+
+func decodeProcessResponseV1(data []byte) (ProcessInfo, error) {
+	var envelope processResponseEnvelope
+	if err := decodeControlV1(data, processResponseKind, &envelope); err != nil {
+		return ProcessInfo{}, err
+	}
+	if !validProcessID(envelope.Process.ID) || !validSandboxID(envelope.Process.SandboxID) {
+		return ProcessInfo{}, newFailure(FailureInvalidArgument, "process response violates sandbox.control/v1", RetryNever)
+	}
+	return copyProcessInfo(envelope.Process), nil
 }
 
 func decodeVolumeResponseV1(data []byte) (VolumeInfo, error) {

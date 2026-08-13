@@ -43,6 +43,13 @@ type VolumeReadModel interface {
 	ListVolumes(context.Context, string, sandbox.Page) (sandbox.VolumePage, error)
 }
 
+// ProcessReadModel is the narrow durable projection required to serve public
+// process inspection. It does not imply that process admission or execution is
+// implemented by the configured control service.
+type ProcessReadModel interface {
+	GetProcess(context.Context, string, sandbox.ProcessID) (sandbox.ProcessInfo, error)
+}
+
 // OutputReplayStore is the separately authenticated, durable output window
 // behind the public replay transport. It returns only retained redacted bytes;
 // callers cannot derive output from host metadata headers.
