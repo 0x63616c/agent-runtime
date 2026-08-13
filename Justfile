@@ -75,6 +75,12 @@ firecracker-direct-smoke report="" vm_id="" uid="0" gid="0" cgroup_parent="" sta
 firecracker-direct-runner-manifest run_id="smoke-test" image="" output="/tmp/agent-runtime-direct-kvm.yaml":
     deploy/production/direct-kvm-runner.sh render --run-id "{{ run_id }}" --image "{{ image }}" --output "{{ output }}"
 
+# Offline-only manifest for staging the two exact upstream bytes consumed by
+# the no-network fixture builder. Applying it requires its explicit consent
+# flag and deletes the disposable privileged namespace afterwards.
+firecracker-direct-fixture-input-manifest run_id="fixture-input-test" revision="" rootfs_builder_manifest="" output="/tmp/agent-runtime-direct-fixture-inputs.yaml":
+    deploy/production/direct-fixture-input-stager.sh render --run-id "{{ run_id }}" --revision "{{ revision }}" --rootfs-builder-manifest "{{ rootfs_builder_manifest }}" --output "{{ output }}"
+
 # Compatibility alias for the protected boot harness. It is not the enrolled
 # public runtime-command integration suite.
 firecracker-integration report="evidence/firecracker-integration.json" vm_id="" uid="0" gid="0" cgroup_parent="" stack_resource="" external_owner="" fixture_lock="tools/firecracker/fixtures.lock":
