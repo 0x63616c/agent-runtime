@@ -31,14 +31,25 @@ usage:
     --kubeconfig /absolute/KUBECONFIG --context CONTEXT \
     --evidence-file /absolute/EVIDENCE.json \
     --execute-authorized-direct-fixture-input-stage
+  direct-fixture-input-stager.sh rotate \
+    --run-id ID --revision GIT-SHA \
+    --rootfs-builder-manifest /absolute/rootfs-builder.json \
+    --kubeconfig /absolute/KUBECONFIG --context CONTEXT \
+    --evidence-file /absolute/EVIDENCE.json \
+    --execute-authorized-direct-fixture-input-rotate
   direct-fixture-input-stager.sh --self-test
 
-render is offline: it only writes a new manifest. execute is the only
-mutating mode and requires its literal consent flag. It creates one uniquely
-named privileged namespace, downloads only the pinned Firecracker v1.16.1
-archive and reviewed kernel over HTTPS, verifies the exact digest, byte size,
-and kernel S3 VersionId before atomically publishing root-owned 0600 inputs,
-then deletes and waits for deletion of that namespace even on failure.
+render is offline: it only writes a new manifest. execute is the only initial
+mutating mode and requires its literal consent flag; it refuses a pre-existing
+input directory. rotate is a separately authorized mutating mode for replacing
+that directory after a rootfs-builder revision changes. Both create one uniquely
+named privileged namespace, download only the pinned Firecracker v1.16.1 archive
+and reviewed kernel over HTTPS, verify the exact digest, byte size, and kernel
+S3 VersionId, then publish root-owned 0600 inputs. rotate also re-verifies the
+existing fixed Firecracker and kernel bytes before replacing it. The old input
+directory is retained until the new directory has been renamed into place, and
+is restored if that publish rename fails. The namespace is deleted and awaited
+even on failure.
 
 The sole host path it may create is:
   /var/lib/agent-runtime/firecracker-fixture-inputs/home-server
@@ -106,11 +117,12 @@ PY
 }
 
 render() {
-  local run_id='' revision='' builder_manifest='' output='' manifest_contents=''
+  local run_id='' revision='' builder_manifest='' output='' manifest_contents='' replace_existing=false
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --run-id) run_id=${2:-}; shift 2;; --revision) revision=${2:-}; shift 2;;
       --rootfs-builder-manifest) builder_manifest=${2:-}; shift 2;; --output) output=${2:-}; shift 2;;
+      --replace-existing) replace_existing=true; shift;;
       *) usage;;
     esac
   done
@@ -239,7 +251,6 @@ spec:
           args:
             - |
               umask 077
-              test ! -e $host_input_directory
               test -f /download/firecracker.tgz
               test -f /download/vmlinux
               test -f /download/kernel.headers
@@ -260,7 +271,37 @@ spec:
               for input in firecracker.tgz vmlinux rootfs-builder.json; do
                 test "\$(stat -c '%u %a' "\$stage/\$input")" = '0 600'
               done
-              mv "\$stage" $host_input_directory
+              if [ '$replace_existing' = false ]; then
+                # Initial publication is deliberately create-only. A caller
+                # must use the separately authorized rotate mode to replace it.
+                test ! -e $host_input_directory
+                mv "\$stage" $host_input_directory
+              else
+                # Do not replace an arbitrary path. Verify the previous fixed
+                # inputs before accepting it as a rotation candidate.
+                test -d $host_input_directory
+                test ! -L $host_input_directory
+                test "\$(stat -c '%u %a' $host_input_directory)" = '0 700'
+                for input in firecracker.tgz vmlinux rootfs-builder.json; do
+                  test -f "$host_input_directory/\$input"
+                  test "\$(stat -c '%u %a' "$host_input_directory/\$input")" = '0 600'
+                done
+                test "\$(sha256sum $host_input_directory/firecracker.tgz | awk '{print \$1}')" = '$firecracker_sha256'
+                test "\$(wc -c < $host_input_directory/firecracker.tgz | tr -d ' ')" = '$firecracker_size_bytes'
+                test "\$(sha256sum $host_input_directory/vmlinux | awk '{print \$1}')" = '$kernel_sha256'
+                test "\$(wc -c < $host_input_directory/vmlinux | tr -d ' ')" = '$kernel_size_bytes'
+                previous=$host_input_parent/.home-server-$run_id.previous
+                test ! -e "\$previous"
+                # Each mv is a rename(2) within this one hostPath filesystem.
+                # Preserve the verified old directory until the replacement is
+                # published, and restore it if the second rename fails.
+                mv $host_input_directory "\$previous"
+                if ! mv "\$stage" $host_input_directory; then
+                  mv "\$previous" $host_input_directory
+                  exit 1
+                fi
+                rm -rf -- "\$previous"
+              fi
               test "\$(stat -c '%u %a' $host_input_directory)" = '0 700'
               echo 'pinned Firecracker fixture inputs staged'
           securityContext:
@@ -288,16 +329,20 @@ EOF
 }
 
 execute() {
-  local run_id='' revision='' builder_manifest='' kubeconfig='' context_value='' evidence='' authorized=false manifest=''
+  local expected_authorization="$1"
+  shift
+  local run_id='' revision='' builder_manifest='' kubeconfig='' context_value='' evidence='' authorization='' manifest=''
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --run-id) run_id=${2:-}; shift 2;; --revision) revision=${2:-}; shift 2;;
       --rootfs-builder-manifest) builder_manifest=${2:-}; shift 2;; --kubeconfig) kubeconfig=${2:-}; shift 2;;
       --context) context_value=${2:-}; shift 2;; --evidence-file) evidence=${2:-}; shift 2;;
-      --execute-authorized-direct-fixture-input-stage) authorized=true; shift;; *) usage;;
+      --execute-authorized-direct-fixture-input-stage) authorization=initial; shift;;
+      --execute-authorized-direct-fixture-input-rotate) authorization=rotate; shift;;
+      *) usage;;
     esac
   done
-  [[ "$authorized" == true && -n "$run_id" && -n "$revision" && -n "$builder_manifest" && -n "$kubeconfig" && -n "$context_value" && -n "$evidence" ]] || usage
+  [[ "$authorization" == "$expected_authorization" && -n "$run_id" && -n "$revision" && -n "$builder_manifest" && -n "$kubeconfig" && -n "$context_value" && -n "$evidence" ]] || usage
   identity "$run_id"; valid_revision "$revision" || fail 'revision must be an exact lowercase 40-character commit'; valid_context "$context_value" || fail 'invalid Kubernetes context'
   require_file "$builder_manifest" 'rootfs builder manifest'; validate_rootfs_builder_manifest "$builder_manifest" "$revision"
   require_file "$kubeconfig" 'kubeconfig'; require_new_absolute "$evidence" 'evidence file'
@@ -307,7 +352,11 @@ execute() {
   manifest="$(mktemp)"
   rm -f -- "$manifest"
   trap 'rm -f -- "${manifest:-}"' EXIT
-  render --run-id "$run_id" --revision "$revision" --rootfs-builder-manifest "$builder_manifest" --output "$manifest"
+  if [[ "$authorization" == rotate ]]; then
+    render --run-id "$run_id" --revision "$revision" --rootfs-builder-manifest "$builder_manifest" --output "$manifest" --replace-existing
+  else
+    render --run-id "$run_id" --revision "$revision" --rootfs-builder-manifest "$builder_manifest" --output "$manifest"
+  fi
   local cleanup=true result=0 status logs
   trap 'if [[ "${cleanup:-false}" == true ]]; then kubectl --kubeconfig "$kubeconfig" --context "$context_value" delete "namespace/$namespace" --ignore-not-found --wait=false >/dev/null || true; kubectl --kubeconfig "$kubeconfig" --context "$context_value" wait --for=delete "namespace/$namespace" --timeout=180s >/dev/null 2>&1 || echo "fixture input-stager cleanup failed; delete namespace $namespace" >&2; fi; rm -f -- "${manifest:-}"' EXIT
   kubectl --kubeconfig "$kubeconfig" --context "$context_value" apply -f "$manifest" >/dev/null
@@ -324,7 +373,7 @@ execute() {
 }
 
 self_test() {
-  local tmp manifest rootfs_manifest revision digest
+  local tmp manifest rotate_manifest rootfs_manifest revision digest
   tmp="$(mktemp -d)"; trap 'rm -rf -- "${tmp:-}"' EXIT
   revision='0123456789abcdef0123456789abcdef01234567'
   digest="$(printf 'a%.0s' {1..64})"
@@ -334,6 +383,8 @@ self_test() {
 EOF
   manifest="$tmp/stager.yaml"
   render --run-id fixture-input-test --revision "$revision" --rootfs-builder-manifest "$rootfs_manifest" --output "$manifest"
+  rotate_manifest="$tmp/rotate.yaml"
+  render --run-id fixture-input-rotate --revision "$revision" --rootfs-builder-manifest "$rootfs_manifest" --output "$rotate_manifest" --replace-existing
   grep -Fqx '    pod-security.kubernetes.io/enforce: privileged' "$manifest"
   grep -Fqx '  policyTypes: [Ingress, Egress]' "$manifest"
   grep -Fqx '      hostNetwork: false' "$manifest"
@@ -346,15 +397,21 @@ EOF
   grep -Fqx "              test \"\$(wc -c < /download/vmlinux | tr -d ' ')\" = '$kernel_size_bytes'" "$manifest"
   grep -Fqx "              tr -d '\\r' < /download/kernel.headers | grep -E -i '^x-amz-version-id: $kernel_version_id\$' >/dev/null" "$manifest"
   grep -Fqx "          hostPath: { path: $host_input_parent, type: DirectoryOrCreate }" "$manifest"
+  grep -Fqx "                test \"\$(sha256sum $host_input_directory/firecracker.tgz | awk '{print \$1}')\" = '$firecracker_sha256'" "$rotate_manifest"
+  grep -Fqx "                test \"\$(wc -c < $host_input_directory/vmlinux | tr -d ' ')\" = '$kernel_size_bytes'" "$rotate_manifest"
+  grep -Fqx "                if ! mv \"\$stage\" $host_input_directory; then" "$rotate_manifest"
   if "$0" render --run-id bad_ID --revision "$revision" --rootfs-builder-manifest "$rootfs_manifest" --output "$tmp/bad.yaml" >/dev/null 2>&1; then fail 'accepted an invalid run ID'; fi
   if "$0" render --run-id fixture-input-test --revision "$revision" --rootfs-builder-manifest "$rootfs_manifest" --output "$tmp/stager.yaml" >/dev/null 2>&1; then fail 'overwrote an existing manifest'; fi
   if "$0" execute --run-id fixture-input-test --revision "$revision" --rootfs-builder-manifest "$rootfs_manifest" --kubeconfig /dev/null --context home-server --evidence-file "$tmp/evidence.json" >/dev/null 2>&1; then fail 'execute accepted no explicit authorization flag'; fi
-  echo 'direct fixture input stager renders a pinned, verified, disposable staging job and refuses implicit execution'
+  if "$0" rotate --run-id fixture-input-rotate --revision "$revision" --rootfs-builder-manifest "$rootfs_manifest" --kubeconfig /dev/null --context home-server --evidence-file "$tmp/rotate-evidence.json" >/dev/null 2>&1; then fail 'rotate accepted no separate authorization flag'; fi
+  if "$0" rotate --run-id fixture-input-rotate --revision "$revision" --rootfs-builder-manifest "$rootfs_manifest" --kubeconfig /dev/null --context home-server --evidence-file "$tmp/rotate-evidence.json" --execute-authorized-direct-fixture-input-stage >/dev/null 2>&1; then fail 'rotate accepted initial-stage authorization'; fi
+  echo 'direct fixture input stager renders pinned disposable initial and separately authorized rotation jobs'
 }
 
 case "${1:-}" in
   render) shift; render "$@";;
-  execute) shift; execute "$@";;
+  execute) shift; execute initial "$@";;
+  rotate) shift; execute rotate "$@";;
   --self-test) self_test;;
   *) usage;;
 esac
