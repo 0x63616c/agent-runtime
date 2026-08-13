@@ -1,7 +1,27 @@
 #!/usr/bin/env bash
-# Runs a disposable local rehearsal of the M5 operations drill. This is not a
-# protected run and deliberately creates no evidence artifact.
+# Runs a disposable local rehearsal of the M5 operations drill. The optional
+# direct-lab mode retains a separately typed, redacted lab artifact; it is not
+# protected-run or production evidence.
 set -euo pipefail
+
+direct_report=""
+direct_authorized=false
+usage() {
+  echo "usage: run-rehearsal.sh [--direct-lab-report /absolute/new/report.json --execute-authorized-disposable-lab]" >&2
+  exit 2
+}
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --direct-lab-report) direct_report="${2:-}"; shift 2 ;;
+    --execute-authorized-disposable-lab) direct_authorized=true; shift ;;
+    *) usage ;;
+  esac
+done
+if [[ -n "$direct_report" ]]; then
+  [[ "$direct_authorized" == true && "$direct_report" == /* && ! -e "$direct_report" && -d "$(dirname "$direct_report")" ]] || usage
+elif [[ "$direct_authorized" == true ]]; then
+  usage
+fi
 
 repository_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)
 compose_file="$repository_root/deploy/runtimeoperations/local/compose.yaml"
@@ -66,30 +86,34 @@ for _ in $(seq 1 50); do [ -s "$working_directory/audit.address" ] && break; sle
 if [ ! -s "$working_directory/audit.address" ]; then cat "$working_directory/audit.log" >&2; exit 1; fi
 audit_address=$(cat "$working_directory/audit.address")
 
-# This deliberately uses the *same names and values* as the GitHub Environment
-# contract, but invokes only the non-writing preflight mode. The values below
-# are synthetic local assertions, not a claim that this shell is GitHub or an
-# authorized runner. This detects contract drift before the protected run.
-RUNTIME_OPERATIONS_REHEARSAL=local-only \
-RUNTIME_OPERATIONS_RUNNER_CONTRACT="$runner_contract" \
-GITHUB_ACTIONS=true \
-GITHUB_REF_PROTECTED=true \
-GITHUB_WORKFLOW="$workflow_name" \
-RUNNER_ENVIRONMENT=self-hosted \
-RUNNER_OS=Linux \
-RUNNER_ARCH=X64 \
-RUNTIME_OPERATIONS_GITHUB_ENVIRONMENT="$github_environment" \
-RUNTIME_OPERATIONS_RUNNER_LABELS="$runner_labels" \
-AR_RUNTIME_OPERATIONS_DATABASE_DSN="$source_dsn" \
-AR_RUNTIME_OPERATIONS_PITR_RESTORE_DSN="$restore_dsn" \
-AR_RUNTIME_OPERATIONS_AUDIT_SINK_URL="https://localhost:${audit_address##*:}/audit" \
-AR_RUNTIME_OPERATIONS_AUDIT_RETENTION_URL="https://localhost:${audit_address##*:}/retention" \
-AR_RUNTIME_OPERATIONS_RETENTION_TENANT="$retention_tenant" \
-AR_RUNTIME_OPERATIONS_RETENTION_AUTHORIZATION_ID="$retention_authorization" \
-AR_RUNTIME_OPERATIONS_PITR_TENANT="$pitr_tenant" \
-AR_RUNTIME_OPERATIONS_PITR_AUTHORIZATION_ID="$pitr_authorization" \
-AR_RUNTIME_OPERATIONS_PITR_RECOVERY_POINT="$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-AR_RUNTIME_OPERATIONS_PITR_EXPECTED_GENERATION=7 \
-GITHUB_SHA="$(git -C "$repository_root" rev-parse HEAD)" \
-AR_RUNTIME_OPERATIONS_REHEARSAL_CA_FILE="$working_directory/audit.crt" \
-go run "$repository_root/cmd/runtime-operations-drill" -preflight
+common_environment=(
+  "AR_RUNTIME_OPERATIONS_DATABASE_DSN=$source_dsn"
+  "AR_RUNTIME_OPERATIONS_PITR_RESTORE_DSN=$restore_dsn"
+  "AR_RUNTIME_OPERATIONS_AUDIT_SINK_URL=https://localhost:${audit_address##*:}/audit"
+  "AR_RUNTIME_OPERATIONS_AUDIT_RETENTION_URL=https://localhost:${audit_address##*:}/retention"
+  "AR_RUNTIME_OPERATIONS_RETENTION_TENANT=$retention_tenant"
+  "AR_RUNTIME_OPERATIONS_RETENTION_AUTHORIZATION_ID=$retention_authorization"
+  "AR_RUNTIME_OPERATIONS_PITR_TENANT=$pitr_tenant"
+  "AR_RUNTIME_OPERATIONS_PITR_AUTHORIZATION_ID=$pitr_authorization"
+  "AR_RUNTIME_OPERATIONS_PITR_RECOVERY_POINT=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  "AR_RUNTIME_OPERATIONS_PITR_EXPECTED_GENERATION=7"
+  "AR_RUNTIME_OPERATIONS_REHEARSAL_CA_FILE=$working_directory/audit.crt"
+  "AR_RUNTIME_OPERATIONS_SOURCE_REVISION=$(git -C "$repository_root" rev-parse HEAD)"
+)
+if [[ -n "$direct_report" ]]; then
+  env RUNTIME_OPERATIONS_DIRECT_LAB=authorized-disposable-v1 "${common_environment[@]}" \
+    go run "$repository_root/cmd/runtime-operations-direct-lab" -report "$direct_report" -execute-authorized-disposable-lab
+  go run "$repository_root/cmd/runtime-operations-direct-lab" -validate "$direct_report"
+  echo "direct authorized disposable lab passed; retained redacted lab evidence at $direct_report"
+else
+  # The default rehearsal uses the protected contract only for a no-write
+  # drift check. It cannot create either protected or direct-lab evidence.
+  env RUNTIME_OPERATIONS_REHEARSAL=local-only \
+    RUNTIME_OPERATIONS_RUNNER_CONTRACT="$runner_contract" \
+    GITHUB_ACTIONS=true GITHUB_REF_PROTECTED=true GITHUB_WORKFLOW="$workflow_name" \
+    RUNNER_ENVIRONMENT=self-hosted RUNNER_OS=Linux RUNNER_ARCH=X64 \
+    RUNTIME_OPERATIONS_GITHUB_ENVIRONMENT="$github_environment" \
+    RUNTIME_OPERATIONS_RUNNER_LABELS="$runner_labels" \
+    GITHUB_SHA="$(git -C "$repository_root" rev-parse HEAD)" "${common_environment[@]}" \
+    go run "$repository_root/cmd/runtime-operations-drill" -preflight
+fi

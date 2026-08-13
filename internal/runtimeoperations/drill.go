@@ -26,8 +26,10 @@ import (
 )
 
 const (
-	RunnerContract = "protected-runtime-operations-v1"
-	SchemaVersion  = "agent-runtime.operations-evidence/v1"
+	RunnerContract         = "protected-runtime-operations-v1"
+	SchemaVersion          = "agent-runtime.operations-evidence/v1"
+	DirectLabSchemaVersion = "agent-runtime.direct-lab-evidence/v1"
+	DirectLabProofLevel    = "direct_authorized_disposable_operational_lab"
 )
 
 // Config contains only the explicit protected-run authority. It is never
@@ -49,6 +51,23 @@ type Evidence struct {
 	Result         string            `json:"result"`
 	OccurredAt     string            `json:"occurred_at"`
 	SourceRevision string            `json:"source_revision"`
+	Database       DatabaseEvidence  `json:"database"`
+	AuditSink      AuditSinkEvidence `json:"audit_sink"`
+	PITR           PITREvidence      `json:"pitr"`
+	Limitations    []string          `json:"limitations"`
+}
+
+// DirectLabEvidence records the same observable database, audit-sink, and
+// isolated-restore exercise as the protected drill, but is intentionally a
+// different schema and proof level. It cannot be mistaken for production or
+// protected-run evidence.
+type DirectLabEvidence struct {
+	SchemaVersion  string            `json:"schema_version"`
+	ProofLevel     string            `json:"proof_level"`
+	Result         string            `json:"result"`
+	OccurredAt     string            `json:"occurred_at"`
+	SourceRevision string            `json:"source_revision"`
+	Environment    string            `json:"environment"`
 	Database       DatabaseEvidence  `json:"database"`
 	AuditSink      AuditSinkEvidence `json:"audit_sink"`
 	PITR           PITREvidence      `json:"pitr"`
@@ -214,6 +233,25 @@ func RunRehearsal(ctx context.Context, config Config, localCAPEM []byte) (Eviden
 		return Evidence{}, errors.New("runtime operations rehearsal: local audit CA is invalid")
 	}
 	return run(ctx, config, &http.Client{Timeout: 15 * time.Second, Transport: &http.Transport{TLSClientConfig: &tls.Config{RootCAs: pool, MinVersion: tls.VersionTLS12}}})
+}
+
+// RunDirectLab performs a deliberately authorized disposable operational lab.
+// The returned record is separate from protected evidence and contains no
+// endpoints, credentials, tenant IDs, or authority identifiers.
+func RunDirectLab(ctx context.Context, config Config, localCAPEM []byte) (DirectLabEvidence, error) {
+	observed, err := RunRehearsal(ctx, config, localCAPEM)
+	if err != nil {
+		return DirectLabEvidence{}, err
+	}
+	return DirectLabEvidence{
+		SchemaVersion: DirectLabSchemaVersion, ProofLevel: DirectLabProofLevel, Result: observed.Result,
+		OccurredAt: observed.OccurredAt, SourceRevision: observed.SourceRevision, Environment: "disposable_local_or_home_lab",
+		Database: observed.Database, AuditSink: observed.AuditSink, PITR: observed.PITR,
+		Limitations: []string{
+			"This artifact records one explicitly authorized disposable direct lab, not production or protected-run evidence.",
+			"No credentials, DSNs, audit endpoint, authority identifier, tenant identifier, or infrastructure address are retained.",
+		},
+	}, nil
 }
 
 func run(ctx context.Context, config Config, client *http.Client) (Evidence, error) {
@@ -426,6 +464,33 @@ func (evidence Evidence) Validate() error {
 	return nil
 }
 
+// Validate checks the direct-lab schema without accepting it as protected
+// operational evidence.
+func (evidence DirectLabEvidence) Validate() error {
+	if evidence.SchemaVersion != DirectLabSchemaVersion || evidence.ProofLevel != DirectLabProofLevel || evidence.Result != "passed" || evidence.SourceRevision == "" || evidence.Environment != "disposable_local_or_home_lab" {
+		return errors.New("validate direct-lab evidence: required identity is invalid")
+	}
+	if _, err := time.Parse(time.RFC3339, evidence.OccurredAt); err != nil {
+		return errors.New("validate direct-lab evidence: occurred_at is invalid")
+	}
+	if !evidence.Database.AppRoleMember || !evidence.Database.OperatorRoleMember || !evidence.Database.RetentionScheduled || !evidence.Database.RetentionExecuted || evidence.Database.PartitionCount != 4 {
+		return errors.New("validate direct-lab evidence: database proof is incomplete")
+	}
+	if evidence.AuditSink.OutageStatus < 500 || evidence.AuditSink.OutageStatus > 599 || evidence.AuditSink.RecoveryStatus < 200 || evidence.AuditSink.RecoveryStatus > 299 || evidence.AuditSink.RetentionSeconds < 1 {
+		return errors.New("validate direct-lab evidence: audit sink proof is incomplete")
+	}
+	if !evidence.PITR.ArchiveModeOn || !evidence.PITR.SourcePrimary || !evidence.PITR.IsolatedTarget || evidence.PITR.RecoveredGeneration < 1 {
+		return errors.New("validate direct-lab evidence: PITR proof is incomplete")
+	}
+	if _, err := time.Parse(time.RFC3339, evidence.PITR.RecoveryPoint); err != nil {
+		return errors.New("validate direct-lab evidence: recovery point is invalid")
+	}
+	if len(evidence.Limitations) < 2 {
+		return errors.New("validate direct-lab evidence: explicit limitations are required")
+	}
+	return nil
+}
+
 // WriteEvidence creates a report only after a successful validated run. It
 // never replaces an earlier artifact, preventing a local retry from masking a
 // protected-run record.
@@ -476,6 +541,58 @@ func ReadEvidence(path string) (evidence Evidence, err error) {
 	}
 	if err := evidence.Validate(); err != nil {
 		return Evidence{}, err
+	}
+	return evidence, nil
+}
+
+// WriteDirectLabEvidence writes a new redacted direct-lab record. Its schema
+// is intentionally incompatible with WriteEvidence and protected artifacts.
+func WriteDirectLabEvidence(path string, evidence DirectLabEvidence) error {
+	if err := evidence.Validate(); err != nil {
+		return err
+	}
+	if path == "" || filepath.Dir(path) == "." && filepath.Base(path) == "." {
+		return errors.New("write direct-lab evidence: report path is required")
+	}
+	data, err := json.MarshalIndent(evidence, "", "  ")
+	if err != nil {
+		return err
+	}
+	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		return fmt.Errorf("write direct-lab evidence: %w", err)
+	}
+	if _, err := file.Write(append(data, '\n')); err != nil {
+		_ = file.Close()
+		return fmt.Errorf("write direct-lab evidence: %w", err)
+	}
+	if err := file.Close(); err != nil {
+		return fmt.Errorf("close direct-lab evidence: %w", err)
+	}
+	return nil
+}
+
+// ReadDirectLabEvidence accepts only the explicitly non-production lab schema.
+func ReadDirectLabEvidence(path string) (evidence DirectLabEvidence, err error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return DirectLabEvidence{}, err
+	}
+	defer func() {
+		if closeErr := file.Close(); closeErr != nil && err == nil {
+			err = fmt.Errorf("close direct-lab evidence: %w", closeErr)
+		}
+	}()
+	decoder := json.NewDecoder(io.LimitReader(file, 64*1024))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&evidence); err != nil {
+		return DirectLabEvidence{}, err
+	}
+	if err := requireJSONEOF(decoder); err != nil {
+		return DirectLabEvidence{}, fmt.Errorf("read direct-lab evidence: trailing JSON: %w", err)
+	}
+	if err := evidence.Validate(); err != nil {
+		return DirectLabEvidence{}, err
 	}
 	return evidence, nil
 }

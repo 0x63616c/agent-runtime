@@ -132,6 +132,41 @@ func TestEvidenceRoundTripIsStrictAndNeverOverwritesAnExistingArtifact(t *testin
 	}
 }
 
+func TestDirectLabEvidenceIsStrictAndCannotBeReadAsProtectedEvidence(t *testing.T) {
+	evidence := DirectLabEvidence{
+		SchemaVersion: DirectLabSchemaVersion, ProofLevel: DirectLabProofLevel, Result: "passed", OccurredAt: time.Date(2026, 8, 13, 12, 0, 0, 0, time.UTC).Format(time.RFC3339), SourceRevision: "abcdef0123456789", Environment: "disposable_local_or_home_lab",
+		Database:    DatabaseEvidence{AppRoleMember: true, OperatorRoleMember: true, RetentionScheduled: true, RetentionExecuted: true, PartitionCount: 4},
+		AuditSink:   AuditSinkEvidence{OutageStatus: 503, RecoveryStatus: 202, RetentionSeconds: 86400},
+		PITR:        PITREvidence{ArchiveModeOn: true, SourcePrimary: true, IsolatedTarget: true, RecoveredGeneration: 7, RecoveryPoint: "2026-08-13T12:00:00Z"},
+		Limitations: []string{"disposable lab only", "redacted values only"},
+	}
+	path := filepath.Join(t.TempDir(), "direct-lab.json")
+	if err := WriteDirectLabEvidence(path, evidence); err != nil {
+		t.Fatalf("write direct-lab evidence: %v", err)
+	}
+	loaded, err := ReadDirectLabEvidence(path)
+	if err != nil || !reflect.DeepEqual(loaded, evidence) {
+		t.Fatalf("read direct-lab evidence = %#v, %v", loaded, err)
+	}
+	if _, err := ReadEvidence(path); err == nil {
+		t.Fatal("protected evidence reader accepted direct-lab artifact")
+	}
+	protectedPath := filepath.Join(t.TempDir(), "protected.json")
+	protected := Evidence{
+		SchemaVersion: SchemaVersion, ProofLevel: "protected_authorized_operational_drill", Result: "passed", OccurredAt: evidence.OccurredAt, SourceRevision: evidence.SourceRevision,
+		Database: evidence.Database, AuditSink: evidence.AuditSink, PITR: evidence.PITR, Limitations: []string{"protected only"},
+	}
+	if err := WriteEvidence(protectedPath, protected); err != nil {
+		t.Fatalf("write protected evidence: %v", err)
+	}
+	if _, err := ReadDirectLabEvidence(protectedPath); err == nil {
+		t.Fatal("direct-lab reader accepted protected artifact")
+	}
+	if err := WriteDirectLabEvidence(path, evidence); err == nil {
+		t.Fatal("overwrote direct-lab artifact")
+	}
+}
+
 func TestRetentionEvidenceRequiresACompletedCollectionAndASeparateFutureSchedule(t *testing.T) {
 	completed := time.Date(2026, 8, 11, 12, 0, 0, 0, time.UTC)
 	planned := completed.Add(24 * time.Hour)
