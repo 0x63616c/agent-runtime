@@ -103,6 +103,7 @@
         "website/src/content/docs/docs/reference/temporal-payloads.mdx",
         "website/src/content/docs/docs/security/verified-boundaries.mdx",
         "website/src/content/docs/docs/start-here/index.mdx",
+        "website/src/content/docs/docs/tutorials/workspace-agent.mdx",
         "website/src/styles/custom.css",
         "website/tsconfig.json"
       ],
@@ -144,6 +145,7 @@
     "website/src/content/docs/docs/reference/sandbox-host-control.mdx",
     "website/src/content/docs/docs/reference/temporal-payloads.mdx",
     "website/src/content/docs/docs/security/verified-boundaries.mdx",
-    "website/src/content/docs/docs/start-here/index.mdx"
+    "website/src/content/docs/docs/start-here/index.mdx",
+    "website/src/content/docs/docs/tutorials/workspace-agent.mdx"
   ]
 }

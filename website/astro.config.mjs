@@ -28,7 +28,13 @@ export default defineConfig({
       ],
       sidebar: [
         {label: 'Start here', items: [{label: 'Foundation', slug: 'docs/start-here'}]},
-        {label: 'Tutorials', items: [{label: 'Build a durable chat', slug: 'docs/tutorials/durable-chat'}]},
+        {
+          label: 'Tutorials',
+          items: [
+            {label: 'Build a durable chat', slug: 'docs/tutorials/durable-chat'},
+            {label: 'Inspect Workspace approvals', slug: 'docs/tutorials/workspace-agent'},
+          ],
+        },
         {
           label: 'Build and run',
           items: [

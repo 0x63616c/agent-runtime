@@ -1,0 +1,65 @@
+---
+title: Inspect Workspace approvals
+description: Run the public Workspace Agent approval inbox without claiming sandbox execution.
+---
+
+Workspace Agent is a public-SDK application for an owner-scoped Approval
+inbox. It can inspect, approve, deny, or cancel the Turn behind an Approval.
+It does not receive action arguments, capability material, sandbox descriptors,
+or a sandbox-control credential.
+
+This guide starts the same loopback API used by the local foundation. That API
+starts with no pending Approvals, so the empty inbox proves the client and
+browser boundary, not a complete Workspace execution or a Firecracker claim.
+
+## Start the local API
+
+From the repository root, set two local credentials and run the API:
+
+```sh
+export AGENT_RUNTIME_ADMIN_TOKEN='replace-with-at-least-16-bytes'
+export AGENT_RUNTIME_DEVELOPER_TOKEN='replace-with-at-least-16-bytes'
+go run ./cmd/agent-runtime-api --config "$PWD/deploy/runtimeapi/api.example.json"
+```
+
+The local process listens at `http://127.0.0.1:8088`. It uses in-memory
+storage and loopback networking only.
+
+## Open the approval inbox
+
+In a second terminal, start the loopback web UI:
+
+```sh
+go run ./examples/workspace-agent/cmd/workspace-agent \
+  --mode=web \
+  --runtime-url=http://127.0.0.1:8088
+```
+
+Open the printed `http://127.0.0.1:8091` address. The UI keeps the runtime
+bearer in its own process. Browser mutations require its current per-process
+CSRF token and the exact loopback HTTP Origin; a browser page cannot use that
+credential directly.
+
+## Use the terminal UI
+
+Stop the web UI or use another terminal for the interactive client:
+
+```sh
+go run ./examples/workspace-agent/cmd/workspace-agent \
+  --mode=terminal \
+  --runtime-url=http://127.0.0.1:8088
+```
+
+Use `approvals` to list the owner-scoped inbox. The terminal intentionally
+does not inspect or decide an Approval. When an operator-composed runtime
+creates a pending Approval for that caller, use the browser inbox to inspect
+it and submit an approve, deny, or cancel decision with a caller-chosen
+idempotency key. The local API alone does not seed an Approval or authorize a
+Tool execution.
+
+## What remains outside this tutorial
+
+Workspace sandbox execution is unavailable until the protected Firecracker
+profile has retained Linux/KVM evidence. This approval-inbox guide therefore
+does not claim a runnable sandbox, a model-provider path, or a production
+deployment.
