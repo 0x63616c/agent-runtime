@@ -38,12 +38,24 @@ var _ = Describe("README landing page", func() {
 		root, err := filepath.Abs(filepath.Join("..", ".."))
 		Expect(err).NotTo(HaveOccurred())
 		config := filepath.Join(root, "deploy", "runtimeapi", "api.example.json")
-		command := exec.Command("go", "run", "./cmd/agent-runtime-api", "--config", config, "--check")
-		command.Dir = root
-		command.Env = append(os.Environ(),
+		env := append(os.Environ(),
 			"AGENT_RUNTIME_ADMIN_TOKEN=readme-admin-token-0000",
 			"AGENT_RUNTIME_DEVELOPER_TOKEN=readme-developer-token-0000",
 		)
+
+		// Build separately: `go run` may write module-download progress to stderr
+		// on a clean runner. The executable invocation below still asserts that the
+		// runtime's check mode itself is silent and successful.
+		binary := filepath.Join(GinkgoT().TempDir(), "agent-runtime-api")
+		build := exec.Command("go", "build", "-o", binary, "./cmd/agent-runtime-api")
+		build.Dir = root
+		build.Env = env
+		buildOutput, err := build.CombinedOutput()
+		Expect(err).NotTo(HaveOccurred(), string(buildOutput))
+
+		command := exec.Command(binary, "--config", config, "--check")
+		command.Dir = root
+		command.Env = env
 		output, err := command.CombinedOutput()
 		Expect(err).NotTo(HaveOccurred(), string(output))
 		Expect(strings.TrimSpace(string(output))).To(BeEmpty())
